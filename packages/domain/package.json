@@ -1,0 +1,22 @@
+{
+  "name": "@fyrden/domain",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Fyrden domain model: principals, repos, pull requests, issues, rulesets, events. No Cloudflare imports.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "fast-check": "catalog:",
+    "@vitest/coverage-istanbul": "catalog:"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "$schema": "./node_modules/turbo/schema.json",
+  "ui": "stream",
+  // Root files every task reads: compiler options, lint rules (the import
+  // boundary test runs Biome) and the dependency catalog.
+  "globalDependencies": ["tsconfig.base.json", "biome.json", "pnpm-workspace.yaml"],
+  "tasks": {
+    // Internal packages are consumed as TypeScript source, so a package's
+    // checks must rerun when a workspace dependency's source changes. This
+    // no-op task chains every package's hash to its dependencies' hashes
+    // without serialising the work (turborepo.dev "transit nodes").
+    "transit": {
+      "dependsOn": ["^transit"]
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", "build/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["transit"]
+    },
+    "test": {
+      "dependsOn": ["transit"]
+    },
+    "test:coverage": {
+      "dependsOn": ["transit"],
+      "outputs": ["coverage/**"]
+    },
+    "test:shuffle": {
+      "cache": false,
+      "env": ["SHUFFLE_RUNS"]
+    },
+    "test:e2e": {
+      "dependsOn": ["@fyrden/web#build"],
+      "cache": false
+    },
+    // Uses the package's own build output (the web Worker's), built once and
+    // shared with test:e2e instead of rebuilt underneath it.
+    "deploy:dry-run": {
+      "dependsOn": ["transit", "^build", "build"]
+    },
+    "mutation": {
+      "cache": false
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
+  },
+  "agentGuidance": false
+}

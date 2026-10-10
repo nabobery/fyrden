@@ -1,0 +1,387 @@
+import { chmod, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { API_DEPLOY_CONFIG, type DeployDeps, deploy } from "../src/commands/deploy.ts";
+import { doctor } from "../src/commands/doctor.ts";
+import { parseJsonc } from "../src/jsonc.ts";
+import type { WranglerRunner } from "../src/wrangler.ts";
+import { fakeWrangler } from "./fake-wrangler.ts";
+
+const realRoot = resolve(import.meta.dirname, "../../..");
+let repoRoot = "";
+
+beforeEach(async () => {
+  // A copy of the real API config and migrations, so the plan is the real one.
+  repoRoot = await mkdtemp(join(tmpdir(), "fyrden-cli-"));
+  await mkdir(join(repoRoot, "apps", "web"), { recursive: true });
+  await cp(join(realRoot, "apps/api/wrangler.jsonc"), join(repoRoot, "apps/api/wrangler.jsonc"));
+  await cp(join(realRoot, "apps/web/wrangler.jsonc"), join(repoRoot, "apps/web/wrangler.jsonc"));
+  await cp(join(realRoot, "apps/api/migrations"), join(repoRoot, "apps/api/migrations"), {
+    recursive: true,
+  });
+});
+afterEach(() => rm(repoRoot, { recursive: true, force: true }));
+
+function deps(runner: WranglerRunner, overrides: Partial<DeployDeps> = {}) {
+  const generated: string[] = [];
+  const lines: string[] = [];
+  const d: DeployDeps = {
+    repoRoot,
+    plan: "paid",
+    runner,
+    buildWeb: async () => {},
+    randomSecret: () => "s3cret-value",
+    onSecretGenerated: (s) => generated.push(s),
+    log: (l) => lines.push(l),
+    ...overrides,
+  };
+  return { d, generated, lines };
+}
+
+const generatedConfig = async () =>
+  parseJsonc<
+    Record<string, unknown> & {
+      d1_databases: { database_id: string }[];
+      kv_namespaces: { id: string }[];
+    }
+  >(await readFile(join(repoRoot, "apps/api", API_DEPLOY_CONFIG), "utf8"));
+
+describe("fyrden deploy", () => {
+  it("creates every resource, including all four buckets and fyrden-assets", async () => {
+    const fake = fakeWrangler();
+    const result = await deploy(deps(fake.runner).d);
+    expect([...fake.state.r2].sort()).toEqual([
+      "fyrden-assets",
+      "fyrden-ci",
+      "fyrden-git",
+      "fyrden-search",
+    ]);
+    expect([...fake.state.queues].sort()).toEqual([
+      "fyrden-ci-dispatch",
+      "fyrden-events",
+      "fyrden-indexing",
+      "fyrden-webhooks",
+    ]);
+    expect([...fake.state.d1.keys()].sort()).toEqual(["fyrden-directory", "fyrden-org"]);
+    expect([...fake.state.kv.keys()]).toEqual(["fyrden-api-cache"]);
+    expect(result.created).toHaveLength(11);
+  });
+
+  it("uploads the required secret with the first API deploy and reports a generated one", async () => {
+    const fake = fakeWrangler();
+    const { d, generated } = deps(fake.runner);
+    await deploy(d);
+    expect(fake.state.secrets.get("BOOTSTRAP_SECRET")).toBe("s3cret-value");
+    expect(generated).toEqual(["s3cret-value"]);
+    // Never in a command line; the file is gone after the deploy.
+    expect(fake.calls.some((c) => c.args.join(" ").includes("s3cret-value"))).toBe(false);
+    const file = fake.calls.find((c) => c.args.includes("--secrets-file"))?.args.at(-1) as string;
+    await expect(stat(file)).rejects.toThrow();
+  });
+
+  it("is idempotent: a second run creates nothing and keeps the secret", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    const before = fake.calls.length;
+    const second = deps(fake.runner, { randomSecret: () => "other" });
+    const result = await deploy(second.d);
+    expect(result.created).toEqual([]);
+    expect(second.generated).toEqual([]);
+    expect(fake.state.secrets.get("BOOTSTRAP_SECRET")).toBe("s3cret-value");
+    const later = fake.calls.slice(before);
+    expect(
+      later.filter((c) => c.args.includes("create") || c.args.includes("--secrets-file")),
+    ).toEqual([]);
+  });
+
+  it("reports a generated secret before a later step fails", async () => {
+    const fake = fakeWrangler();
+    const { d, generated } = deps(fake.runner, {
+      buildWeb: async () => {
+        throw new Error("web build failed");
+      },
+    });
+    await expect(deploy(d)).rejects.toThrow(/web build failed/);
+    expect(generated).toEqual(["s3cret-value"]);
+  });
+
+  it("uses a preset secret without reporting it", async () => {
+    const fake = fakeWrangler();
+    const { d, generated, lines } = deps(fake.runner, { presetBootstrapSecret: "from-ci" });
+    await deploy(d);
+    expect(fake.state.secrets.get("BOOTSTRAP_SECRET")).toBe("from-ci");
+    expect(generated).toEqual([]);
+    expect(lines.join("\n")).not.toContain("from-ci");
+  });
+
+  it("fails without deploying when no secret is preset and generating one is disabled (CI)", async () => {
+    const fake = fakeWrangler();
+    const { d, generated, lines } = deps(fake.runner, { randomSecret: undefined });
+    await expect(deploy(d)).rejects.toThrow(/set FYRDEN_BOOTSTRAP_SECRET/);
+    expect(fake.state.deployed).toEqual([]);
+    expect(fake.state.secrets.size).toBe(0);
+    expect(generated).toEqual([]);
+    expect(lines.join("\n")).not.toContain("BOOTSTRAP_SECRET=");
+  });
+
+  it.each([
+    ["is missing", (dir: string) => rm(dir, { recursive: true })],
+    ["cannot be read", (dir: string) => chmod(dir, 0o000)],
+  ])("stops before deploying when a migrations folder %s", async (_, breakDir) => {
+    const dir = join(repoRoot, "apps/api/migrations/directory");
+    await breakDir(dir);
+    const fake = fakeWrangler();
+    try {
+      await expect(deploy(deps(fake.runner).d)).rejects.toThrow(/ENOENT|EACCES/);
+      expect(fake.state.migrated).toEqual([]);
+      expect(fake.state.deployed).toEqual([]);
+    } finally {
+      await chmod(dir, 0o755).catch(() => {});
+    }
+  });
+
+  it("writes resource ids into a generated config and leaves the committed one alone", async () => {
+    const fake = fakeWrangler();
+    const original = await readFile(join(repoRoot, "apps/api/wrangler.jsonc"), "utf8");
+    await deploy(deps(fake.runner).d);
+    expect(await readFile(join(repoRoot, "apps/api/wrangler.jsonc"), "utf8")).toBe(original);
+    const generated = await generatedConfig();
+    expect(generated.d1_databases.every((db) => db.database_id?.startsWith("d1-"))).toBe(true);
+    expect(generated.kv_namespaces[0]?.id).toMatch(/^kv-/);
+    expect(generated.vars).toMatchObject({ FYRDEN_PLAN: "paid" });
+    expect(generated.tail_consumers).toEqual([{ service: "fyrden-web" }]);
+  });
+
+  it("attaches the Tail Worker only after fyrden-web exists on a first Paid deploy", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.deployed).toEqual(["fyrden-api", "fyrden-web", "fyrden-api"]);
+    expect(fake.state.tailAttached).toBe(true);
+    // Later deploys find fyrden-web and deploy the API once, with the consumer.
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.deployed.slice(3)).toEqual(["fyrden-api", "fyrden-web"]);
+    expect(fake.state.tailAttached).toBe(true);
+  });
+
+  it("fails instead of replacing the secret when secrets cannot be listed", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    const flaky: WranglerRunner = {
+      run: async (args, options) =>
+        args[0] === "secret"
+          ? { code: 1, stdout: "", stderr: "fetch failed: network timeout" }
+          : fake.runner.run(args, options),
+    };
+    await expect(deploy(deps(flaky, { randomSecret: () => "replacement" }).d)).rejects.toThrow(
+      /network timeout/,
+    );
+    expect(fake.state.secrets.get("BOOTSTRAP_SECRET")).toBe("s3cret-value");
+  });
+
+  it("drops Paid-only features (Tail Workers) in Free mode", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner, { plan: "free" }).d);
+    expect(fake.state.deployed).toEqual(["fyrden-api", "fyrden-web"]);
+    const generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_PLAN: "free" });
+    expect(generated).not.toHaveProperty("tail_consumers");
+  });
+
+  it("migrates D1 before deploying, and deploys the API before the web Worker", async () => {
+    const fake = fakeWrangler();
+    const result = await deploy(deps(fake.runner).d);
+    expect(fake.state.migrated).toEqual(["fyrden-directory"]);
+    expect(fake.state.deployed.slice(0, 2)).toEqual(["fyrden-api", "fyrden-web"]);
+    expect(result.apiUrl).toBe("https://fyrden-api.acct.workers.dev");
+    const migrateIndex = fake.calls.findIndex((c) => c.args[1] === "migrations");
+    const deployIndex = fake.calls.findIndex((c) => c.args[0] === "deploy");
+    expect(migrateIndex).toBeLessThan(deployIndex);
+  });
+
+  it("treats an R2 error other than not-found as a failure, not as a missing bucket", async () => {
+    const fake = fakeWrangler();
+    const failing: WranglerRunner = {
+      run: async (args, options) =>
+        args[0] === "r2"
+          ? {
+              code: 1,
+              stdout: "",
+              stderr: "Please enable R2 through the Cloudflare Dashboard. [code: 10042]",
+            }
+          : fake.runner.run(args, options),
+    };
+    await expect(deploy(deps(failing).d)).rejects.toThrow(/10042/);
+    expect(fake.calls.some((c) => c.args.includes("create") && c.args[0] === "r2")).toBe(false);
+    expect(fake.state.deployed).toEqual([]);
+  });
+
+  it("says to enable Analytics Engine when the API deploy needs it", async () => {
+    const fake = fakeWrangler();
+    const runner: WranglerRunner = {
+      run: (args, options) =>
+        args[0] === "deploy"
+          ? Promise.resolve({
+              code: 1,
+              stdout: "",
+              stderr:
+                "You need to enable Analytics Engine. Head to the Cloudflare Dashboard. [code: 10089]",
+            })
+          : fake.runner.run(args, options),
+    };
+    await expect(deploy(deps(runner).d)).rejects.toThrow(
+      /^Workers Analytics Engine is not enabled on this account/,
+    );
+  });
+
+  it("accepts a resource that someone else created in the meantime", async () => {
+    const fake = fakeWrangler();
+    const racing: WranglerRunner = {
+      run: async (args, options) => {
+        if (args[0] !== "queues" || args[1] !== "create") return fake.runner.run(args, options);
+        fake.state.queues.add(args[2] as string);
+        return { code: 1, stdout: "", stderr: "Queue name already taken [code: 11009]" };
+      },
+    };
+    await deploy(deps(racing).d);
+    expect(fake.state.deployed).toContain("fyrden-web");
+  });
+});
+
+describe("Cloudflare account selection", () => {
+  it("names the account it checks", async () => {
+    const lines: string[] = [];
+    await doctor(repoRoot, fakeWrangler().runner, (l) => lines.push(l), undefined);
+    expect(lines[0]).toBe("ok   wrangler is logged in; checking account Test account (acct-1)");
+  });
+
+  it("pins every wrangler call after whoami to the resolved account", async () => {
+    const fake = fakeWrangler();
+    const { d, lines } = deps(fake.runner);
+    await deploy(d);
+    expect(lines[0]).toBe("deploying to account Test account (acct-1)");
+    const [whoami, ...rest] = fake.calls;
+    expect(whoami?.args[0]).toBe("whoami");
+    expect(rest.length).toBeGreaterThan(10);
+    expect(rest.every((c) => c.account === "acct-1")).toBe(true);
+  });
+
+  it("uses CLOUDFLARE_ACCOUNT_ID to choose among several accounts", async () => {
+    const fake = fakeWrangler();
+    fake.state.accounts.push({ id: "acct-2", name: "Second" });
+    const { d, lines } = deps(fake.runner, { envAccountId: "acct-2" });
+    await deploy(d);
+    expect(lines[0]).toBe("deploying to account Second (acct-2)");
+    expect(fake.calls.slice(1).every((c) => c.account === "acct-2")).toBe(true);
+  });
+
+  it("writes the account into the generated config and refuses a conflicting one", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    expect((await generatedConfig()).account_id).toBe("acct-1");
+  });
+
+  it.each(["apps/api/wrangler.jsonc", "apps/web/wrangler.jsonc"])(
+    "refuses to start when %s names another account (wrangler would prefer it)",
+    async (file) => {
+      const path = join(repoRoot, file);
+      await writeFile(
+        path,
+        (await readFile(path, "utf8")).replace("{", '{ "account_id": "acct-9",'),
+      );
+      const fake = fakeWrangler();
+      await expect(deploy(deps(fake.runner).d)).rejects.toThrow(`${file} sets account_id acct-9`);
+      expect(fake.calls.map((c) => c.args[0])).toEqual(["whoami"]);
+    },
+  );
+
+  it("trusts CLOUDFLARE_ACCOUNT_ID when listing accounts is denied to a scoped token", async () => {
+    const fake = fakeWrangler();
+    const denied = {
+      code: 1,
+      stdout: "",
+      stderr:
+        "A request to the Cloudflare API (/accounts) failed. Authentication error [code: 10000]",
+    };
+    const { d, lines } = deps(
+      {
+        run: (args, options) =>
+          args[0] === "whoami" ? Promise.resolve(denied) : fake.runner.run(args, options),
+      },
+      { envAccountId: "acct-1" },
+    );
+    await deploy(d);
+    expect(lines[0]).toMatch(/\(acct-1\)$/);
+    // Without an explicit account there is nothing to trust.
+    await expect(
+      deploy(
+        deps({
+          run: (args, options) =>
+            args[0] === "whoami" ? Promise.resolve(denied) : fake.runner.run(args, options),
+        }).d,
+      ),
+    ).rejects.toThrow(/not logged in/);
+  });
+
+  it("trusts CLOUDFLARE_ACCOUNT_ID when a scoped API token cannot list accounts", async () => {
+    const fake = fakeWrangler();
+    const { d, lines } = deps(
+      {
+        run: (args, options) =>
+          args[0] === "whoami"
+            ? Promise.resolve({ code: 0, stdout: JSON.stringify({ loggedIn: true }), stderr: "" })
+            : fake.runner.run(args, options),
+      },
+      { envAccountId: "acct-1" },
+    );
+    await deploy(d);
+    expect(lines[0]).toMatch(/^deploying to account .* \(acct-1\)$/);
+  });
+
+  it.each([
+    [
+      "not logged in",
+      (f: ReturnType<typeof fakeWrangler>) => {
+        f.state.loggedIn = false;
+      },
+      undefined,
+      /not logged in/,
+    ],
+    ["an unknown CLOUDFLARE_ACCOUNT_ID", () => {}, "acct-x", /acct-x is not an account/],
+    [
+      "several accounts and no choice",
+      (f: ReturnType<typeof fakeWrangler>) => {
+        f.state.accounts.push({ id: "acct-2", name: "Second" });
+      },
+      undefined,
+      /2 accounts .*set CLOUDFLARE_ACCOUNT_ID/,
+    ],
+  ])("refuses to deploy when %s", async (_, arrange, envAccountId, message) => {
+    const fake = fakeWrangler();
+    arrange(fake);
+    await expect(deploy(deps(fake.runner, { envAccountId }).d)).rejects.toThrow(message);
+    expect(fake.calls.map((c) => c.args[0])).toEqual(["whoami"]);
+  });
+});
+
+describe("fyrden doctor", () => {
+  it("reports missing resources without creating any", async () => {
+    const fake = fakeWrangler();
+    const lines: string[] = [];
+    const report = await doctor(repoRoot, fake.runner, (l) => lines.push(l), undefined);
+    expect(report.authenticated).toBe(true);
+    expect(report.missing).toContain("r2:fyrden-assets");
+    expect(fake.calls.some((c) => c.args.includes("create"))).toBe(false);
+    expect(lines.join("\n")).toContain("free 100 MB");
+  });
+});
+
+describe("parseJsonc", () => {
+  it("strips comments and trailing commas but leaves strings untouched", () => {
+    expect(
+      parseJsonc(
+        '{ // c\n "url": "https://x//y", /* b */ "a": [1, 2,], "m": "keep,}", "n": "keep,]", "q": "a\\"b,]" , }',
+      ),
+    ).toEqual({ url: "https://x//y", a: [1, 2], m: "keep,}", n: "keep,]", q: 'a"b,]' });
+  });
+});

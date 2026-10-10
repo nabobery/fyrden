@@ -1,0 +1,12 @@
+{
+  // Test-only Worker config: runs this package's tests inside workerd and
+  // generates runtime types. Nothing here is deployed.
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "fyrden-adapters-cloudflare-test",
+  "main": "test/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "durable_objects": {
+    "bindings": [{ "name": "MIGRATION_PROBE", "class_name": "MigrationProbeDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MigrationProbeDO"] }]
+}

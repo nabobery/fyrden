@@ -1,0 +1,21 @@
+{
+  "name": "@fyrden/git-core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pure TypeScript git engine: pkt-line, protocol v2, packs, deltas, commit graph, merge. No Cloudflare imports.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "@vitest/coverage-istanbul": "catalog:"
+  }
+}

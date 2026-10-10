@@ -1,0 +1,21 @@
+{
+  "name": "@fyrden/runner-providers",
+  "version": "0.0.0",
+  "private": true,
+  "description": "CI runner provider plugins (BYO, Hetzner, Cloudflare Containers).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "@vitest/coverage-istanbul": "catalog:"
+  }
+}

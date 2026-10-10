@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "fyrden-web",
+  "main": "./workers/app.ts",
+  // Pinned and bumped deliberately.
+  "compatibility_date": "2026-10-01",
+  "observability": {
+    "enabled": true,
+    // Query strings can carry tokens; never store them in logs or traces.
+    "redact_query_string": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    // Sampled to keep trace volume low; raise while debugging.
+    "traces": { "enabled": true, "head_sampling_rate": 0.1 }
+  },
+  "upload_source_maps": true,
+  "services": [{ "binding": "API", "service": "fyrden-api", "entrypoint": "ApiRpc" }]
+}

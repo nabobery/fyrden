@@ -1,0 +1,38 @@
+{
+  "name": "@fyrden/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "fyrden-web Worker: React Router SSR UI that calls fyrden-api over a service binding.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "react-router dev",
+    "build": "react-router build",
+    "types": "wrangler types && react-router typegen",
+    "typecheck": "wrangler types --check && react-router typegen && tsc -p .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "deploy:dry-run": "wrangler deploy --dry-run"
+  },
+  "dependencies": {
+    "isbot": "5.2.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-router": "8.4.0",
+    "@fyrden/adapters-cloudflare": "workspace:*",
+    "@fyrden/api-contract": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "catalog:",
+    "@fyrden/domain": "workspace:*",
+    "@fyrden/testing": "workspace:*",
+    "@vitest/coverage-istanbul": "catalog:",
+    "@react-router/dev": "8.4.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

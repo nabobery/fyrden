@@ -1,0 +1,35 @@
+{
+  "name": "@fyrden/adapters-cloudflare",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cloudflare implementations of the git-core and domain ports (R2, Durable Object SQLite, D1, Queues, KV, Cache API).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./migrations": "./src/migrations/index.ts",
+    "./obs": "./src/obs/index.ts",
+    "./auth": "./src/auth/index.ts",
+    "./net": "./src/net/index.ts"
+  },
+  "scripts": {
+    "typecheck": "wrangler types --check && tsc -p .",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "types": "wrangler types",
+    "test:shuffle": "fyrden-shuffle-guard"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "@vitest/coverage-istanbul": "catalog:",
+    "@cloudflare/vitest-plugin": "catalog:",
+    "wrangler": "catalog:",
+    "@fyrden/testing": "workspace:*",
+    "msw": "catalog:",
+    "@msw/cloudflare": "catalog:"
+  },
+  "dependencies": {
+    "@fyrden/domain": "workspace:*"
+  }
+}

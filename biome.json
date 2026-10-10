@@ -1,0 +1,55 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "includes": [
+      "**",
+      "!**/worker-configuration.d.ts",
+      "!**/.react-router",
+      "!**/coverage",
+      "!**/dist"
+    ]
+  },
+  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "linter": {
+    "rules": {
+      "preset": "recommended",
+      "style": { "useImportType": "error", "useExportType": "error" }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["packages/git-core/**", "packages/domain/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "wrangler": "git-core and domain must not depend on Cloudflare.",
+                  "miniflare": "git-core and domain must not depend on Cloudflare."
+                },
+                "patterns": [
+                  {
+                    "group": [
+                      "cloudflare:*",
+                      "@cloudflare/*",
+                      "@fyrden/adapters-cloudflare",
+                      "@fyrden/adapters-cloudflare/*"
+                    ],
+                    "message": "git-core and domain must not depend on Cloudflare."
+                  },
+                  {
+                    "group": ["**/adapters-cloudflare/**", "**/apps/**"],
+                    "message": "git-core and domain must not reach into adapters or apps by relative path."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

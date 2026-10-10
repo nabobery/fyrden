@@ -1,0 +1,22 @@
+{
+  "$schema": "../../node_modules/turbo/schema.json",
+  "extends": ["//"],
+  // The deploy tests run against the real API config and migrations, which
+  // live in apps/api (not a dependency of this package).
+  "tasks": {
+    "test": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/api/wrangler.jsonc",
+        "$TURBO_ROOT$/apps/api/migrations/**"
+      ]
+    },
+    "test:coverage": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/api/wrangler.jsonc",
+        "$TURBO_ROOT$/apps/api/migrations/**"
+      ]
+    }
+  }
+}

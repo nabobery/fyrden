@@ -1,0 +1,31 @@
+{
+  "name": "@fyrden/testing",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared test helpers: ids, fixtures, git CLI harness, port fakes.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./git-cli": "./src/git-cli.ts",
+    "./log-capture": "./src/log-capture.ts",
+    "./ssrf-cases": "./src/security/ssrf-cases.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "@types/node": "catalog:",
+    "@vitest/coverage-istanbul": "catalog:"
+  },
+  "bin": {
+    "fyrden-shuffle-guard": "./bin/shuffle-guard.mjs"
+  },
+  "dependencies": {
+    "@fyrden/domain": "workspace:*"
+  }
+}

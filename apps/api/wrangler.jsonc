@@ -1,0 +1,95 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "fyrden-api",
+  "main": "src/index.ts",
+  // Pinned and bumped deliberately. From 2026-08-04 nodejs_compat is on by default.
+  "compatibility_date": "2026-10-01",
+  "observability": {
+    "enabled": true,
+    // Query strings can carry tokens; never store them in logs or traces.
+    "redact_query_string": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    // Sampled to keep trace volume low; raise while debugging.
+    "traces": { "enabled": true, "head_sampling_rate": 0.1 }
+  },
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "REPO", "class_name": "RepoDO" },
+      { "name": "NETWORK", "class_name": "NetworkDO" },
+      { "name": "ORG", "class_name": "OrgDO" },
+      { "name": "USER", "class_name": "UserDO" },
+      { "name": "RUN", "class_name": "RunDO" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RepoDO", "NetworkDO", "OrgDO", "UserDO", "RunDO"] }
+  ],
+
+  // Database ids are filled in per deployment by `fyrden deploy`.
+  "d1_databases": [
+    {
+      "binding": "DIRECTORY",
+      "database_name": "fyrden-directory",
+      "migrations_dir": "migrations/directory"
+    },
+    // Read models for the deployment's org (one org per deployment for now).
+    { "binding": "ORG_READ", "database_name": "fyrden-org", "migrations_dir": "migrations/org" }
+  ],
+
+  "r2_buckets": [
+    { "binding": "GIT", "bucket_name": "fyrden-git" },
+    { "binding": "CI", "bucket_name": "fyrden-ci" },
+    { "binding": "SEARCH", "bucket_name": "fyrden-search" },
+    // Release assets, attachments, audit archives and org exports.
+    { "binding": "ASSETS", "bucket_name": "fyrden-assets" }
+    // fyrden-lfs is reserved for Git LFS and not bound yet.
+  ],
+
+  "queues": {
+    "producers": [
+      { "binding": "EVENTS", "queue": "fyrden-events" },
+      { "binding": "WEBHOOKS", "queue": "fyrden-webhooks" },
+      { "binding": "CI_DISPATCH", "queue": "fyrden-ci-dispatch" },
+      { "binding": "INDEXING", "queue": "fyrden-indexing" }
+    ],
+    "consumers": [
+      { "queue": "fyrden-events" },
+      { "queue": "fyrden-webhooks" },
+      { "queue": "fyrden-ci-dispatch" },
+      { "queue": "fyrden-indexing" }
+    ]
+  },
+
+  // Cache only; never an authoritative store.
+  "kv_namespaces": [{ "binding": "CACHE" }],
+
+  "ratelimits": [
+    { "name": "RATE_LIMIT_READ", "namespace_id": "1001", "simple": { "limit": 600, "period": 60 } },
+    {
+      "name": "RATE_LIMIT_WRITE",
+      "namespace_id": "1002",
+      "simple": { "limit": 120, "period": 60 }
+    },
+    {
+      "name": "RATE_LIMIT_HEALTHZ",
+      "namespace_id": "1003",
+      "simple": { "limit": 10, "period": 60 }
+    },
+    // Per client address, before any token lookup.
+    {
+      "name": "RATE_LIMIT_AUTH",
+      "namespace_id": "1004",
+      "simple": { "limit": 1200, "period": 60 }
+    }
+  ],
+
+  // Uploaded with the first deploy by `fyrden deploy` (--secrets-file); only first-run setup uses it.
+  "secrets": { "required": ["BOOTSTRAP_SECRET"] },
+
+  "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "fyrden_metrics" }],
+
+  // fyrden-web's tail() handler turns fyrden-api exceptions and CPU-limit
+  // errors into alert metrics, so alerting needs no third Worker.
+  "tail_consumers": [{ "service": "fyrden-web" }]
+}

@@ -1,0 +1,25 @@
+# Weekly dependency updates, grouped into one PR per ecosystem, so upgrades
+# land as dedicated PRs. The cooldown keeps brand-new releases out,
+# like minimumReleaseAge in pnpm-workspace.yaml. GitHub Actions stay pinned to
+# commit SHAs; Dependabot updates the SHA and its version comment together.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 5
+    groups:
+      npm:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    groups:
+      actions:
+        patterns: ["*"]

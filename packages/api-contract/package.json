@@ -1,0 +1,25 @@
+{
+  "name": "@fyrden/api-contract",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Zod operation registry that generates REST routes, the OpenAPI document and MCP tools.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "@vitest/coverage-istanbul": "catalog:"
+  },
+  "dependencies": {
+    "@fyrden/domain": "workspace:*",
+    "zod": "catalog:"
+  }
+}

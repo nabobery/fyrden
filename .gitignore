@@ -1,6 +1,7 @@
 # Dependencies and build output
 node_modules/
 dist/
+build/
 coverage/
 *.tsbuildinfo
 
@@ -17,3 +18,12 @@ coverage/
 # Logs and OS files
 *.log
 .DS_Store
+
+# React Router typegen output
+.react-router/
+
+# Turborepo
+.turbo/
+
+# Generated per account by `fyrden deploy`
+**/wrangler.deploy.jsonc

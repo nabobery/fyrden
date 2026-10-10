@@ -1,0 +1,61 @@
+packages:
+  - apps/*
+  - packages/*
+  - tools/*
+
+# Exact pins for test and deploy tooling: upgrade in dedicated PRs.
+catalog:
+  "@biomejs/biome": 2.5.15
+  "@cloudflare/vite-plugin": 1.63.1
+  "@cloudflare/vitest-plugin": 1.4.0
+  "@modelcontextprotocol/server": 2.3.1
+  "@msw/cloudflare": 0.2.0
+  "@types/node": 24.19.1
+  "@vitest/coverage-istanbul": 5.0.3
+  fast-check: 4.10.2
+  hono: 4.13.13
+  msw: 3.0.2
+  turbo: 2.11.7
+  typescript: 7.0.2
+  vite: 8.3.4
+  vitest: 5.0.3
+  wrangler: 4.149.0
+  zod: 4.6.5
+
+# Supply-chain policy. These match or tighten pnpm's defaults and are written
+# out so a pnpm upgrade cannot loosen them silently.
+# A release must be public for a day before it can be installed. Setting it
+# explicitly also turns on strict mode: resolution fails when no version in
+# the requested range is old enough (an older eligible version is still fine).
+minimumReleaseAge: 1440
+# Refuse a package whose new version lost the trust evidence (provenance or
+# trusted publishing) that an earlier version had: the shape of a hijacked
+# maintainer account.
+trustPolicy: no-downgrade
+trustPolicyExclude:
+  # Reviewed 2026-10-10: the CVE-2022-25883 backport, published 2023-07-10 by
+  # an npm CLI maintainer without provenance, three days after 7.5.4 shipped
+  # with it. Pulled in by @babel/core (via @react-router/dev). Exact version only.
+  - semver@6.3.1
+# Only direct dependencies may come from git or tarball URLs.
+blockExoticSubdeps: true
+# Install fails on any dependency build script not reviewed below.
+strictDepBuilds: true
+engineStrict: true
+# New dependencies are added as exact versions (catalog pins are exact too).
+savePrefix: ""
+
+# Dependency build scripts reviewed and allowed to run (strictDepBuilds
+# fails the install on any other); `false` would record a refusal.
+allowBuilds:
+  esbuild: true
+  workerd: true
+
+peerDependencyRules:
+  allowedVersions:
+    # Vitest's mocker declares msw 2 for browser-mode mocking, which Fyrden
+    # does not use; outbound mocks use msw 3 through @msw/cloudflare.
+    "@vitest/mocker>msw": "3"
+
+overrides:
+  "@types/node": "catalog:"

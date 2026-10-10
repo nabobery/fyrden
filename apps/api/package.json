@@ -1,0 +1,34 @@
+{
+  "name": "@fyrden/api",
+  "version": "0.0.0",
+  "private": true,
+  "description": "fyrden-api Worker: REST, MCP, git smart HTTP, runner protocol and all Durable Objects.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "types": "wrangler types",
+    "typecheck": "wrangler types --check && tsc -p .",
+    "test": "vitest run",
+    "deploy:dry-run": "wrangler deploy --dry-run --outdir dist",
+    "test:shuffle": "fyrden-shuffle-guard",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "hono": "catalog:",
+    "@fyrden/api-contract": "workspace:*",
+    "@fyrden/adapters-cloudflare": "workspace:*",
+    "@fyrden/domain": "workspace:*",
+    "zod": "catalog:",
+    "@modelcontextprotocol/server": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "catalog:",
+    "@vitest/coverage-istanbul": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:",
+    "@fyrden/testing": "workspace:*",
+    "@types/node": "catalog:"
+  }
+}

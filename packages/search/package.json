@@ -1,0 +1,21 @@
+{
+  "name": "@fyrden/search",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Trigram code-search shard writer and reader.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "@vitest/coverage-istanbul": "catalog:"
+  }
+}
