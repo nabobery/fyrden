@@ -16,9 +16,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Dependabot cannot sign off its commits; a skipped job still satisfies the
+  # required check. The PR author is set by GitHub, so it cannot be spoofed.
   dco:
     name: DCO sign-off
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
