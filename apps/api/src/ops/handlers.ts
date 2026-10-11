@@ -1,8 +1,41 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
+import {
+  abortUploadSession,
+  completeUploadSession,
+  createUploadSession,
+  getUploadSession,
+} from "../git/chunked/operations.js";
+import { getRepoImport, startImport } from "../git/import/operations.js";
+import { forkRepoOperation } from "../network/operations.js";
+import {
+  canAccess,
+  defaultBranchOf,
+  INITIAL_BRANCH,
+  type RepoEntry,
+  resolveRepo,
+} from "../repos/directory.js";
 import { clock, newId, tokenStore } from "../services.js";
 import { type Handlers, OperationError } from "./execute.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The read-model database a repository's rows go to. A deployment binds one
+ * org database (`ORG_READ`) for now; this names it until shards exist.
+ */
+const DEFAULT_ORG_SHARD = "default";
+
+function repoOutput(repo: RepoEntry, defaultBranch: string) {
+  return {
+    id: repo.id,
+    owner: repo.ownerHandle,
+    name: repo.name,
+    full_name: `${repo.ownerHandle}/${repo.name}`,
+    visibility: repo.visibility,
+    default_branch: defaultBranch,
+    created_at: repo.createdAt,
+  };
+}
 
 // D1 reports a unique-index violation in the error message.
 const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
@@ -70,4 +103,84 @@ export const handlers: Handlers = {
       expires_at: minted.expiresAt,
     };
   },
+
+  "repos.create": async ({ env, auth, requestId, metrics }, { name }) => {
+    const db = env.DIRECTORY.withSession("first-primary");
+    const taken = () =>
+      new OperationError(409, "name_taken", `You already have a repository named ${name}.`);
+    metrics.count("d1.query", { db: "directory", op: "repo_name_check" });
+    const existing = await db
+      .prepare(
+        "SELECT 1 AS one FROM repos WHERE owner_id = ? AND name = ? COLLATE NOCASE AND state <> 'deleted'",
+      )
+      .bind(auth.principalId, name)
+      .first();
+    if (existing) throw taken();
+
+    // Storage first: if the directory insert then fails, the new object is
+    // unreachable and empty, never a listed repository without storage.
+    const id = newId("rep");
+    const networkId = newId("net");
+    const init = await env.REPO.getByName(id).initGitStorage(
+      networkId,
+      `refs/heads/${INITIAL_BRANCH}`,
+    );
+    if (!init.ok) throw new Error(`initializing repository storage failed: ${init.error}`);
+
+    const now = clock();
+    metrics.count("d1.query", { db: "directory", op: "repo_create" }, 2);
+    try {
+      await env.DIRECTORY.batch([
+        env.DIRECTORY.prepare(
+          `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'private', ?, ?)`,
+        ).bind(id, auth.principalId, name, networkId, DEFAULT_ORG_SHARD, now, now),
+        auditStatement(
+          env.DIRECTORY,
+          now,
+          { actorId: auth.principalId, requestId },
+          "repo.create",
+          id,
+          { name },
+        ),
+      ]);
+    } catch (error) {
+      // Lost a race with another create of the same name.
+      if (error instanceof Error && UNIQUE_VIOLATION.test(error.message)) throw taken();
+      throw error;
+    }
+    return repoOutput(
+      {
+        id,
+        ownerId: auth.principalId,
+        ownerHandle: auth.principalHandle ?? "",
+        name,
+        networkId,
+        visibility: "private",
+        createdAt: now,
+      },
+      INITIAL_BRANCH,
+    );
+  },
+
+  "repos.get": async ({ env, auth, metrics }, { owner, repo }) => {
+    const entry = await resolveRepo(env, owner, repo, { metrics });
+    // Missing and not visible look the same, so private names do not leak.
+    if (!entry || !canAccess(auth, entry, "read"))
+      throw new OperationError(404, "repo_not_found", `No repository ${owner}/${repo} was found.`);
+    // HEAD is the repository object's (an import or a fork sets it from its source).
+    metrics.count("do.request", { class: "RepoDO", method: "headTarget" });
+    return repoOutput(entry, defaultBranchOf(await env.REPO.getByName(entry.id).headTarget()));
+  },
+
+  // Forks share the parent's packs in its fork network (network/).
+  "repos.fork": forkRepoOperation,
+
+  // Chunked pack uploads and server-side import (git/chunked, git/import).
+  "uploads.create": createUploadSession,
+  "uploads.get": getUploadSession,
+  "uploads.complete": completeUploadSession,
+  "uploads.abort": abortUploadSession,
+  "imports.create": startImport,
+  "imports.get": getRepoImport,
 };

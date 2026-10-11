@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import { createLogger, createMetrics } from "@fyrden/adapters-cloudflare/obs";
+import { createFakeDataset } from "@fyrden/adapters-cloudflare/obs/testing";
 import { AUTHENTICATED, defineOperation, INSTANCE_ADMIN } from "@fyrden/api-contract";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -40,8 +41,9 @@ function ctx(mode: "read" | "write", fresh: boolean): OpContext {
       ),
     },
     log: createLogger({}, () => {}),
-    metrics: createMetrics({ writeDataPoint: () => {} }),
+    metrics: createMetrics(createFakeDataset().dataset),
     requestId: "req-exec",
+    requestHost: "api.fyrden.test",
     waitUntil: () => {},
   };
 }

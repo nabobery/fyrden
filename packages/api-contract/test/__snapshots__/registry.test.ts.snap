@@ -265,6 +265,1252 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}": {
+      "get": {
+        "description": "Returns a repository the caller can see. A repository that does not exist and one the caller cannot see both answer 404.",
+        "operationId": "repos.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "1-100 letters, digits, '.', '_' and '-'; not '.' or '..'; must not end in '.git'. Unique per owner, ignoring case.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "default_branch": {
+                      "type": "string",
+                    },
+                    "full_name": {
+                      "description": "owner/name",
+                      "type": "string",
+                    },
+                    "id": {
+                      "description": "Immutable repository id (rep_ prefix).",
+                      "type": "string",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "owner": {
+                      "description": "The owner's handle.",
+                      "type": "string",
+                    },
+                    "visibility": {
+                      "enum": [
+                        "public",
+                        "internal",
+                        "private",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "owner",
+                    "name",
+                    "full_name",
+                    "visibility",
+                    "default_branch",
+                    "created_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a repository",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/forks": {
+      "post": {
+        "description": "Creates a fork of a repository the caller can read, owned by the caller, in the same fork network: it starts with the parent's branches, tags and default branch, and shares the parent's stored objects, so no data is copied. The fork can be cloned as soon as this returns. Answers 409 \`network_busy\` while the network's storage is being collected; retry after a few seconds.",
+        "operationId": "repos.fork",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The parent's owner handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The parent repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "description": "The fork's name. Default: the parent's name.",
+                    "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "default_branch": {
+                      "type": "string",
+                    },
+                    "full_name": {
+                      "description": "owner/name",
+                      "type": "string",
+                    },
+                    "id": {
+                      "description": "Immutable repository id (rep_ prefix).",
+                      "type": "string",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "owner": {
+                      "description": "The owner's handle.",
+                      "type": "string",
+                    },
+                    "visibility": {
+                      "enum": [
+                        "public",
+                        "internal",
+                        "private",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "owner",
+                    "name",
+                    "full_name",
+                    "visibility",
+                    "default_branch",
+                    "created_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Fork a repository",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/import": {
+      "get": {
+        "description": "Returns the progress or outcome of the repository's latest import.",
+        "operationId": "imports.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "bytes_received": {
+                      "description": "Pack bytes fetched so far.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "default_branch": {
+                      "description": "The branch the source's HEAD names, when it was imported.",
+                      "type": "string",
+                    },
+                    "error": {
+                      "type": "string",
+                    },
+                    "id": {
+                      "type": "string",
+                    },
+                    "refs_imported": {
+                      "description": "Branches and tags created, once committed.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "refs_skipped": {
+                      "description": "Refs of the source that were not imported, e.g. a name that is not valid UTF-8 (shown with \\xNN escapes).",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "reason": {
+                            "type": "string",
+                          },
+                          "ref": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "ref",
+                          "reason",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "source_url": {
+                      "type": "string",
+                    },
+                    "started_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "enum": [
+                        "fetching",
+                        "indexing",
+                        "committing",
+                        "committed",
+                        "failed",
+                      ],
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "source_url",
+                    "bytes_received",
+                    "refs_imported",
+                    "refs_skipped",
+                    "started_at",
+                    "updated_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get the repository's import",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Fetches every branch and tag of a public git repository over HTTPS (smart HTTP, protocol version 2) into this repository, which must be empty, checking the objects as a push is checked. Runs in the background; follow it with the get operation. Needs write access. The source URL must be a public https URL: private and internal addresses and this deployment's own hostnames are refused.",
+        "operationId": "imports.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "url": {
+                    "description": "The repository URL as \`git clone\` takes it, e.g. https://github.com/o/r.git.",
+                    "maxLength": 2048,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "url",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "bytes_received": {
+                      "description": "Pack bytes fetched so far.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "default_branch": {
+                      "description": "The branch the source's HEAD names, when it was imported.",
+                      "type": "string",
+                    },
+                    "error": {
+                      "type": "string",
+                    },
+                    "id": {
+                      "type": "string",
+                    },
+                    "refs_imported": {
+                      "description": "Branches and tags created, once committed.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "refs_skipped": {
+                      "description": "Refs of the source that were not imported, e.g. a name that is not valid UTF-8 (shown with \\xNN escapes).",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "reason": {
+                            "type": "string",
+                          },
+                          "ref": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "ref",
+                          "reason",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "source_url": {
+                      "type": "string",
+                    },
+                    "started_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "enum": [
+                        "fetching",
+                        "indexing",
+                        "committing",
+                        "committed",
+                        "failed",
+                      ],
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "source_url",
+                    "bytes_received",
+                    "refs_imported",
+                    "refs_skipped",
+                    "started_at",
+                    "updated_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Import a public git repository",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/uploads": {
+      "post": {
+        "description": "Starts an upload session for a pack too large for one push request: declare the pack's size and the ref updates it carries, upload the parts, then complete. Needs write access to the repository. \`fyrden push --chunked\` does all of this.",
+        "operationId": "uploads.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "ref_updates": {
+                    "items": {
+                      "properties": {
+                        "new": {
+                          "anyOf": [
+                            {
+                              "description": "A full object id (40 lowercase hex).",
+                              "pattern": "^[0-9a-f]{40}$",
+                              "type": "string",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                          "description": "The new value; null deletes the ref.",
+                        },
+                        "old": {
+                          "anyOf": [
+                            {
+                              "description": "A full object id (40 lowercase hex).",
+                              "pattern": "^[0-9a-f]{40}$",
+                              "type": "string",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                          "description": "The value the ref must have now (compare-and-set); null when the ref must not exist yet.",
+                        },
+                        "ref": {
+                          "description": "Full ref name, e.g. refs/heads/main. Checked as git checks ref names.",
+                          "maxLength": 1024,
+                          "minLength": 1,
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "ref",
+                        "old",
+                        "new",
+                      ],
+                      "type": "object",
+                    },
+                    "maxItems": 1000,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                  "size": {
+                    "description": "The pack's exact length in bytes (git pack-objects output).",
+                    "maximum": 9007199254740991,
+                    "minimum": 32,
+                    "type": "integer",
+                  },
+                },
+                "required": [
+                  "size",
+                  "ref_updates",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                    },
+                    "expires_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "id": {
+                      "type": "string",
+                    },
+                    "part_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "part_size": {
+                      "description": "Every part but the last is exactly this long; the last holds the rest.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "parts_received": {
+                      "description": "Part numbers stored so far.",
+                      "items": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer",
+                      },
+                      "type": "array",
+                    },
+                    "parts_url": {
+                      "description": "Upload part n with PUT <parts_url>/<n> (path on this host; git credentials).",
+                      "type": "string",
+                    },
+                    "refs": {
+                      "description": "Per-ref outcome, once the upload is complete.",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "reason": {
+                            "type": "string",
+                          },
+                          "ref": {
+                            "type": "string",
+                          },
+                          "status": {
+                            "enum": [
+                              "ok",
+                              "rejected",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "ref",
+                          "status",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "size": {
+                      "description": "The pack's length in bytes.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "description": "receiving: parts may be uploaded; indexing: completing (call complete again); committed or rejected: done.",
+                      "enum": [
+                        "receiving",
+                        "indexing",
+                        "committed",
+                        "rejected",
+                        "expired",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "size",
+                    "part_size",
+                    "part_count",
+                    "parts_received",
+                    "parts_url",
+                    "expires_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Start a chunked pack upload",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/uploads/{upload_id}": {
+      "delete": {
+        "description": "Ends an upload session that has not committed and deletes what it stored.",
+        "operationId": "uploads.abort",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "description": "The upload session id.",
+              "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                    },
+                    "expires_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "id": {
+                      "type": "string",
+                    },
+                    "part_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "part_size": {
+                      "description": "Every part but the last is exactly this long; the last holds the rest.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "parts_received": {
+                      "description": "Part numbers stored so far.",
+                      "items": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer",
+                      },
+                      "type": "array",
+                    },
+                    "parts_url": {
+                      "description": "Upload part n with PUT <parts_url>/<n> (path on this host; git credentials).",
+                      "type": "string",
+                    },
+                    "refs": {
+                      "description": "Per-ref outcome, once the upload is complete.",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "reason": {
+                            "type": "string",
+                          },
+                          "ref": {
+                            "type": "string",
+                          },
+                          "status": {
+                            "enum": [
+                              "ok",
+                              "rejected",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "ref",
+                          "status",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "size": {
+                      "description": "The pack's length in bytes.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "description": "receiving: parts may be uploaded; indexing: completing (call complete again); committed or rejected: done.",
+                      "enum": [
+                        "receiving",
+                        "indexing",
+                        "committed",
+                        "rejected",
+                        "expired",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "size",
+                    "part_size",
+                    "part_count",
+                    "parts_received",
+                    "parts_url",
+                    "expires_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Abort a chunked pack upload",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "Returns an upload session started by the caller: which parts are stored, and the outcome once complete.",
+        "operationId": "uploads.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "description": "The upload session id.",
+              "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                    },
+                    "expires_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "id": {
+                      "type": "string",
+                    },
+                    "part_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "part_size": {
+                      "description": "Every part but the last is exactly this long; the last holds the rest.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "parts_received": {
+                      "description": "Part numbers stored so far.",
+                      "items": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer",
+                      },
+                      "type": "array",
+                    },
+                    "parts_url": {
+                      "description": "Upload part n with PUT <parts_url>/<n> (path on this host; git credentials).",
+                      "type": "string",
+                    },
+                    "refs": {
+                      "description": "Per-ref outcome, once the upload is complete.",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "reason": {
+                            "type": "string",
+                          },
+                          "ref": {
+                            "type": "string",
+                          },
+                          "status": {
+                            "enum": [
+                              "ok",
+                              "rejected",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "ref",
+                          "status",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "size": {
+                      "description": "The pack's length in bytes.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "description": "receiving: parts may be uploaded; indexing: completing (call complete again); committed or rejected: done.",
+                      "enum": [
+                        "receiving",
+                        "indexing",
+                        "committed",
+                        "rejected",
+                        "expired",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "size",
+                    "part_size",
+                    "part_count",
+                    "parts_received",
+                    "parts_url",
+                    "expires_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a chunked pack upload",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/uploads/{upload_id}/complete": {
+      "post": {
+        "description": "Assembles the parts, indexes and checks the pack as a push is checked, and applies the ref updates in one transaction. Answers state \`indexing\` while a large pack is still being indexed: call it again. Must be called with the token that started the session.",
+        "operationId": "uploads.complete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "description": "The upload session id.",
+              "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                    },
+                    "expires_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "id": {
+                      "type": "string",
+                    },
+                    "part_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "part_size": {
+                      "description": "Every part but the last is exactly this long; the last holds the rest.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "parts_received": {
+                      "description": "Part numbers stored so far.",
+                      "items": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer",
+                      },
+                      "type": "array",
+                    },
+                    "parts_url": {
+                      "description": "Upload part n with PUT <parts_url>/<n> (path on this host; git credentials).",
+                      "type": "string",
+                    },
+                    "refs": {
+                      "description": "Per-ref outcome, once the upload is complete.",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "reason": {
+                            "type": "string",
+                          },
+                          "ref": {
+                            "type": "string",
+                          },
+                          "status": {
+                            "enum": [
+                              "ok",
+                              "rejected",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "ref",
+                          "status",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "size": {
+                      "description": "The pack's length in bytes.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "description": "receiving: parts may be uploaded; indexing: completing (call complete again); committed or rejected: done.",
+                      "enum": [
+                        "receiving",
+                        "indexing",
+                        "committed",
+                        "rejected",
+                        "expired",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "size",
+                    "part_size",
+                    "part_count",
+                    "parts_received",
+                    "parts_url",
+                    "expires_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Complete a chunked pack upload",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/user": {
       "get": {
         "description": "Returns the principal and token that authenticated this request.",
@@ -366,6 +1612,109 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "agent",
           "installation",
         ],
+      },
+    },
+    "/user/repos": {
+      "post": {
+        "description": "Creates an empty private repository owned by the authenticated user. Clone and push it at \`/<owner>/<name>.git\`.",
+        "operationId": "repos.create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "description": "1-100 letters, digits, '.', '_' and '-'; not '.' or '..'; must not end in '.git'. Unique per owner, ignoring case.",
+                    "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "name",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "default_branch": {
+                      "type": "string",
+                    },
+                    "full_name": {
+                      "description": "owner/name",
+                      "type": "string",
+                    },
+                    "id": {
+                      "description": "Immutable repository id (rep_ prefix).",
+                      "type": "string",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "owner": {
+                      "description": "The owner's handle.",
+                      "type": "string",
+                    },
+                    "visibility": {
+                      "enum": [
+                        "public",
+                        "internal",
+                        "private",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "owner",
+                    "name",
+                    "full_name",
+                    "visibility",
+                    "default_branch",
+                    "created_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create a repository",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
       },
     },
   },

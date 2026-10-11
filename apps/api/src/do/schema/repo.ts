@@ -1,3 +1,4 @@
+import { GIT_STORAGE_TABLES_V1 } from "@fyrden/adapters-cloudflare/git";
 import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
 
 /**
@@ -19,5 +20,12 @@ export const repoSchema: readonly DoMigration[] = [
         created_at INTEGER NOT NULL
       ) STRICT;
     `,
+  },
+  {
+    version: 2,
+    // Refs, reflog, pack registry, commit graph, uploads, leases, locks and
+    // jobs. The SQL lives with the adapters that query it and is frozen.
+    name: "git_storage",
+    sql: GIT_STORAGE_TABLES_V1,
   },
 ];

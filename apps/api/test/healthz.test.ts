@@ -1,5 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
 import { deepHealth } from "../src/health.js";
 
@@ -70,8 +71,9 @@ describe("GET /healthz", () => {
 describe("bindings", () => {
   it("binds every R2 bucket, including fyrden-assets", async () => {
     for (const bucket of [env.GIT, env.CI, env.SEARCH, env.ASSETS]) {
-      await bucket.put("binding-check", "x");
-      expect(await (await bucket.get("binding-check"))?.text()).toBe("x");
+      const key = uniqueId("binding-check");
+      await bucket.put(key, "x");
+      expect(await (await bucket.get(key))?.text()).toBe("x");
     }
   });
 

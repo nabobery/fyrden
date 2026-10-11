@@ -18,6 +18,7 @@ export function opContext(c: AppContext): OpContext {
     log: c.get("log"),
     metrics: c.get("metrics"),
     requestId: c.get("requestId"),
+    requestHost: new URL(c.req.url).hostname,
     waitUntil: (p) => c.executionCtx.waitUntil(p),
   };
 }
