@@ -167,10 +167,10 @@ jobs:
         working-directory: packages/git-core
         run: |
           if [ -z "$RESTORED" ]; then
-            # Every mutant, at most 3 at a time (a 4-vCPU runner less one,
-            # what the nightly run gets by default), each running Vitest.
+            # Every mutant, one fewer at a time than the runner has vCPUs
+            # (4 on public repositories, 2 on private ones), each running Vitest.
             echo "::warning::No nightly mutation results for $SCOPE; running every mutant of the scope."
-            FYRDEN_MUTATION_SCOPE="$SCOPE" pnpm exec stryker run --concurrency 3
+            FYRDEN_MUTATION_SCOPE="$SCOPE" pnpm exec stryker run --concurrency "$(( $(nproc) > 1 ? $(nproc) - 1 : 1 ))"
           else
             FYRDEN_MUTATION_SCOPE="$SCOPE" pnpm exec stryker run --incremental
           fi
