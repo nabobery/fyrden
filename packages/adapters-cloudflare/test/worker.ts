@@ -2,6 +2,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { applyDoMigrations, type DoMigration, dumpSchema } from "../src/migrations/index.js";
 
+export { GitStoreProbeDO } from "./git/probe-do.js";
+
 export class MigrationProbeDO extends DurableObject {
   // Errors are returned rather than thrown: an exception crossing the RPC
   // boundary is also reported by workerd as uncaught, which fails the run.

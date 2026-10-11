@@ -6,7 +6,14 @@
   "main": "test/worker.ts",
   "compatibility_date": "2026-10-01",
   "durable_objects": {
-    "bindings": [{ "name": "MIGRATION_PROBE", "class_name": "MigrationProbeDO" }]
+    "bindings": [
+      { "name": "MIGRATION_PROBE", "class_name": "MigrationProbeDO" },
+      { "name": "GIT_STORE_PROBE", "class_name": "GitStoreProbeDO" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MigrationProbeDO"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["MigrationProbeDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["GitStoreProbeDO"] }
+  ],
+  "r2_buckets": [{ "binding": "GIT", "bucket_name": "fyrden-git-test" }]
 }
