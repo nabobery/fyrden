@@ -1,7 +1,8 @@
 # Contributing to Fyrden
 
 Thanks for helping. Fyrden is early; issues that describe a problem or a use
-case are as welcome as pull requests.
+case are as welcome as pull requests. Everyone taking part follows the
+[code of conduct](CODE_OF_CONDUCT.md).
 
 ## Licence and sign-off
 
@@ -45,4 +46,4 @@ There is no CLA.
 ## Reporting security issues
 
 Do not open a public issue for a vulnerability. Use GitHub's private
-vulnerability reporting on this repository.
+vulnerability reporting on this repository; see [SECURITY.md](SECURITY.md).
