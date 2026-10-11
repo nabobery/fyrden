@@ -37,6 +37,8 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
     });
     child.on("error", fail);
     child.on("close", (code) => done({ code, stdout, stderr }));
+    // The command may exit without reading its input; the exit code reports that.
+    child.stdin.on("error", () => {});
     child.stdin.end(options.input ?? "");
   });
 }

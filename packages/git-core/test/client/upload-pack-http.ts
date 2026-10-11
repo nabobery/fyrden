@@ -52,6 +52,8 @@ function runUploadPack(
     child.stdout.on("data", (d: Buffer) => out.push(d));
     child.on("error", reject);
     child.on("close", () => resolve(Buffer.concat(out)));
+    // git may exit without reading its input (an advertisement does).
+    child.stdin.on("error", () => {});
     child.stdin.end(input);
   });
 }

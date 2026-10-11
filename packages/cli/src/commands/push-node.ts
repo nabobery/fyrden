@@ -32,6 +32,8 @@ function runGit(
         stderr: Buffer.concat(err).toString("utf8"),
       }),
     );
+    // git may exit without reading its input; the exit code reports that.
+    child.stdin.on("error", () => {});
     child.stdin.end(input ?? "");
   });
 }
@@ -62,6 +64,8 @@ export const nodeGit: GitRunner = {
           })
           .catch(reject);
       });
+      // git may exit without reading its input; the exit code reports that.
+      child.stdin.on("error", () => {});
       child.stdin.end(revs);
     });
   },
