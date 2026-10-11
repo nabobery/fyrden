@@ -2,14 +2,15 @@
   "name": "@fyrden/ci-tools",
   "version": "0.0.0",
   "private": true,
-  "description": "Scripts the monorepo CI runs: DCO sign-off check and smoke tests.",
+  "description": "Scripts the monorepo CI runs: DCO sign-off check, smoke tests and the git interoperability matrix.",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "vitest run -c vitest.e2e.config.ts"
+    "test:e2e": "vitest run -c vitest.e2e.config.ts",
+    "test:interop": "vitest run -c vitest.interop.config.ts"
   },
   "devDependencies": {
     "@fyrden/testing": "workspace:*",

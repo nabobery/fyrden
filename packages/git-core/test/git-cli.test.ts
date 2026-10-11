@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createGitSandbox, type GitSandbox, gitVersion } from "../src/git-cli.js";
+import { createGitSandbox, type GitSandbox, gitVersion } from "../testing/git-cli.js";
 
 async function headAfterOneCommit(sandbox: GitSandbox): Promise<string> {
   await sandbox.git(["init", "-q", "-b", "main"]);

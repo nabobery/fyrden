@@ -9,8 +9,10 @@
     ".": "./src/index.ts",
     "./migrations": "./src/migrations/index.ts",
     "./obs": "./src/obs/index.ts",
+    "./obs/testing": "./src/obs/fake-dataset.ts",
     "./auth": "./src/auth/index.ts",
-    "./net": "./src/net/index.ts"
+    "./net": "./src/net/index.ts",
+    "./git": "./src/git/index.ts"
   },
   "scripts": {
     "typecheck": "wrangler types --check && tsc -p .",
@@ -20,16 +22,18 @@
     "test:shuffle": "fyrden-shuffle-guard"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "catalog:",
+    "@fyrden/testing": "workspace:*",
+    "@msw/cloudflare": "catalog:",
+    "@vitest/coverage-istanbul": "catalog:",
+    "fast-check": "catalog:",
+    "msw": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "@vitest/coverage-istanbul": "catalog:",
-    "@cloudflare/vitest-plugin": "catalog:",
-    "wrangler": "catalog:",
-    "@fyrden/testing": "workspace:*",
-    "msw": "catalog:",
-    "@msw/cloudflare": "catalog:"
+    "wrangler": "catalog:"
   },
   "dependencies": {
-    "@fyrden/domain": "workspace:*"
+    "@fyrden/domain": "workspace:*",
+    "@fyrden/git-core": "workspace:*"
   }
 }

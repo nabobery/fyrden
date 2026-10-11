@@ -1,0 +1,818 @@
+{
+  "description": "Protocol inputs that must be refused with a typed ProtocolError (code). Modelled on git's t5704-protocol-violations and pkt-line tests. input parts: a string (one byte per character), {pkt, count?} (a pkt-line, repeated), {repeat, count}. git: the git service (stateless-rpc) that also refuses the input; absent where Fyrden is stricter than git or the limit is Fyrden's own.",
+  "cases": [
+    {
+      "name": "length with a non-hex digit",
+      "target": "pkt-line",
+      "input": ["00g4abcd"],
+      "code": "invalid-length",
+      "git": "upload-pack",
+      "source": "git t/t0070-fundamental.sh and pkt-line.c packet_read_with_status"
+    },
+    {
+      "name": "length with a sign",
+      "target": "pkt-line",
+      "input": ["-004"],
+      "code": "invalid-length",
+      "git": "upload-pack"
+    },
+    {
+      "name": "length with a space",
+      "target": "pkt-line",
+      "input": [" 004"],
+      "code": "invalid-length",
+      "git": "upload-pack"
+    },
+    {
+      "name": "length 0003",
+      "target": "pkt-line",
+      "input": ["0003"],
+      "code": "invalid-length",
+      "git": "upload-pack",
+      "source": "git t/t0070-fundamental.sh and pkt-line.c packet_read_with_status"
+    },
+    {
+      "name": "length above git's buffer (ffff)",
+      "target": "pkt-line",
+      "input": ["ffff"],
+      "code": "line-too-long",
+      "git": "upload-pack"
+    },
+    {
+      "name": "length 65521, one above the documented maximum",
+      "target": "pkt-line",
+      "input": [
+        "fff1",
+        {
+          "repeat": "x",
+          "count": 65517
+        }
+      ],
+      "code": "line-too-long"
+    },
+    {
+      "name": "header cut short",
+      "target": "pkt-line",
+      "input": ["0005a00"],
+      "code": "truncated"
+    },
+    {
+      "name": "payload cut short",
+      "target": "pkt-line",
+      "input": ["0009ab"],
+      "code": "truncated"
+    },
+    {
+      "name": "more lines than allowed",
+      "target": "pkt-line",
+      "input": [
+        "0000",
+        {
+          "repeat": "0000",
+          "count": 9
+        }
+      ],
+      "code": "too-many-lines",
+      "limits": {
+        "maxLines": 8
+      }
+    },
+    {
+      "name": "more bytes than allowed",
+      "target": "pkt-line",
+      "input": [
+        {
+          "pkt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "pkt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "code": "too-many-bytes",
+      "limits": {
+        "maxBytes": 100
+      }
+    },
+    {
+      "name": "side-band packet without a band byte",
+      "target": "sideband",
+      "input": ["0004"],
+      "code": "missing-band"
+    },
+    {
+      "name": "side-band 0",
+      "target": "sideband",
+      "input": ["0006\u0000x"],
+      "code": "bad-band"
+    },
+    {
+      "name": "side-band 4",
+      "target": "sideband",
+      "input": ["0006\u0004x"],
+      "code": "bad-band"
+    },
+    {
+      "name": "side-band stream without a flush",
+      "target": "sideband",
+      "input": ["0006\u0001x"],
+      "code": "truncated"
+    },
+    {
+      "name": "delim inside a side-band stream",
+      "target": "sideband",
+      "input": ["0006\u0001x0001"],
+      "code": "unexpected-packet"
+    },
+    {
+      "name": "extra delim packet in v2 ls-refs args",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=ls-refs\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        "0001"
+      ],
+      "code": "unexpected-packet",
+      "git": "upload-pack",
+      "source": "git t/t5704-protocol-violations.sh"
+    },
+    {
+      "name": "extra delim packet in v2 fetch args",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        "0001"
+      ],
+      "code": "unexpected-packet",
+      "git": "upload-pack",
+      "source": "git t/t5704-protocol-violations.sh"
+    },
+    {
+      "name": "response-end packet in a v2 request",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        "0002"
+      ],
+      "code": "unexpected-packet",
+      "git": "upload-pack"
+    },
+    {
+      "name": "unadvertised capability",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "frobnicate=1"
+        },
+        "0000"
+      ],
+      "code": "unknown-capability",
+      "git": "upload-pack"
+    },
+    {
+      "name": "unknown command",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=frobnicate\n"
+        },
+        "0000"
+      ],
+      "code": "unknown-command",
+      "git": "upload-pack"
+    },
+    {
+      "name": "two commands in one request",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "command=ls-refs\n"
+        },
+        "0000"
+      ],
+      "code": "duplicate-command",
+      "git": "upload-pack"
+    },
+    {
+      "name": "capabilities without a command",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "agent=x/1"
+        },
+        "0000"
+      ],
+      "code": "no-command",
+      "git": "upload-pack"
+    },
+    {
+      "name": "SHA-256 object format",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha256"
+        },
+        "0000"
+      ],
+      "code": "object-format-mismatch",
+      "git": "upload-pack"
+    },
+    {
+      "name": "capability value with a NUL",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "agent=a\u0000b"
+        },
+        "0000"
+      ],
+      "code": "bad-capability"
+    },
+    {
+      "name": "capability value that is not UTF-8",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "agent=caf\u00e9"
+        },
+        "0000"
+      ],
+      "code": "bad-capability"
+    },
+    {
+      "name": "request cut short after the command",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        "00"
+      ],
+      "code": "truncated",
+      "git": "upload-pack"
+    },
+    {
+      "name": "request without the final flush",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "done\n"
+        }
+      ],
+      "code": "truncated",
+      "git": "upload-pack"
+    },
+    {
+      "name": "bad length inside a request",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        "0001",
+        "zzzz"
+      ],
+      "code": "invalid-length",
+      "git": "upload-pack"
+    },
+    {
+      "name": "want with a short object id",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "want a776c30ab4d5ecc43f0fd7746c73095827c929d\n"
+        },
+        "0000"
+      ],
+      "code": "malformed-line",
+      "git": "upload-pack"
+    },
+    {
+      "name": "want with a non-hex object id",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "want gggggggggggggggggggggggggggggggggggggggg\n"
+        },
+        "0000"
+      ],
+      "code": "malformed-line",
+      "git": "upload-pack"
+    },
+    {
+      "name": "have with trailing text",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "have a776c30ab4d5ecc43f0fd7746c73095827c929d6 x\n"
+        },
+        "0000"
+      ],
+      "code": "malformed-line"
+    },
+    {
+      "name": "deepen 0",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "deepen 0\n"
+        },
+        "0000"
+      ],
+      "code": "bad-argument",
+      "git": "upload-pack"
+    },
+    {
+      "name": "deepen in hex",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "deepen 0x10\n"
+        },
+        "0000"
+      ],
+      "code": "bad-argument"
+    },
+    {
+      "name": "deepen together with deepen-since",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "deepen 1\n"
+        },
+        {
+          "pkt": "deepen-since 5\n"
+        },
+        "0000"
+      ],
+      "code": "bad-argument"
+    },
+    {
+      "name": "unknown fetch argument",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "frobnicate\n"
+        },
+        "0000"
+      ],
+      "code": "unexpected-argument",
+      "git": "upload-pack"
+    },
+    {
+      "name": "unadvertised filter argument",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "filter blob:none\n"
+        },
+        "0000"
+      ],
+      "code": "unexpected-argument",
+      "git": "upload-pack"
+    },
+    {
+      "name": "unknown ls-refs argument",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=ls-refs\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "peeled\n"
+        },
+        "0000"
+      ],
+      "code": "unexpected-argument",
+      "git": "upload-pack"
+    },
+    {
+      "name": "oversized want list",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "want a776c30ab4d5ecc43f0fd7746c73095827c929d6\n",
+          "count": 5
+        },
+        {
+          "pkt": "done\n"
+        },
+        "0000"
+      ],
+      "code": "too-many-wants",
+      "limits": {
+        "maxWants": 4
+      }
+    },
+    {
+      "name": "oversized have list",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "have a776c30ab4d5ecc43f0fd7746c73095827c929d6\n",
+          "count": 5
+        },
+        "0000"
+      ],
+      "code": "too-many-haves",
+      "limits": {
+        "maxHaves": 4
+      }
+    },
+    {
+      "name": "oversized shallow list",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "shallow a776c30ab4d5ecc43f0fd7746c73095827c929d6\n",
+          "count": 5
+        },
+        "0000"
+      ],
+      "code": "too-many-shallows",
+      "limits": {
+        "maxShallow": 4
+      }
+    },
+    {
+      "name": "endless request",
+      "target": "v2-request",
+      "input": [
+        {
+          "pkt": "command=fetch\n"
+        },
+        {
+          "pkt": "object-format=sha1"
+        },
+        "0001",
+        {
+          "pkt": "have a776c30ab4d5ecc43f0fd7746c73095827c929d6\n",
+          "count": 100
+        }
+      ],
+      "code": "too-many-lines",
+      "limits": {
+        "maxLines": 50
+      }
+    },
+    {
+      "name": "command with a bad old id",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/main\u0000 report-status"
+        },
+        "0000"
+      ],
+      "code": "malformed-line",
+      "git": "receive-pack"
+    },
+    {
+      "name": "command without a ref name",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6"
+        },
+        "0000"
+      ],
+      "code": "malformed-line",
+      "git": "receive-pack"
+    },
+    {
+      "name": "command with an empty ref name",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6 \u0000 report-status"
+        },
+        "0000"
+      ],
+      "code": "malformed-line"
+    },
+    {
+      "name": "capabilities on a later command",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/a\u0000 quiet"
+        },
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/b\u0000 quiet"
+        },
+        "0000"
+      ],
+      "code": "malformed-line"
+    },
+    {
+      "name": "shallow line with a bad id",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "shallow a776c30ab4d5ecc43f0f"
+        },
+        "0000"
+      ],
+      "code": "malformed-line",
+      "git": "receive-pack"
+    },
+    {
+      "name": "shallow line after a command",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/a\u0000 quiet"
+        },
+        {
+          "pkt": "shallow a776c30ab4d5ecc43f0fd7746c73095827c929d6"
+        },
+        "0000"
+      ],
+      "code": "malformed-line"
+    },
+    {
+      "name": "bad capability list",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/a\u0000 quiet\tatomic"
+        },
+        "0000"
+      ],
+      "code": "bad-capability"
+    },
+    {
+      "name": "SHA-256 push",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/a\u0000 object-format=sha256"
+        },
+        "0000"
+      ],
+      "code": "object-format-mismatch",
+      "git": "receive-pack"
+    },
+    {
+      "name": "push certificate",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "push-cert\u0000 report-status\n"
+        },
+        {
+          "pkt": "certificate version 0.1\n"
+        },
+        "0000"
+      ],
+      "code": "unsupported"
+    },
+    {
+      "name": "command list without a flush",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/a\u0000 quiet"
+        }
+      ],
+      "code": "truncated",
+      "git": "receive-pack"
+    },
+    {
+      "name": "bad length in the command list",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/a\u0000 quiet"
+        },
+        "00x0"
+      ],
+      "code": "invalid-length",
+      "git": "receive-pack"
+    },
+    {
+      "name": "delim in the command list",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/a\u0000 quiet"
+        },
+        "0001"
+      ],
+      "code": "unexpected-packet"
+    },
+    {
+      "name": "too many ref updates",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/a\u0000 quiet"
+        },
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/b",
+          "count": 4
+        },
+        "0000"
+      ],
+      "code": "too-many-commands",
+      "limits": {
+        "maxCommands": 4
+      }
+    },
+    {
+      "name": "too many push options",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/a\u0000 push-options"
+        },
+        "0000",
+        {
+          "pkt": "ci.skip",
+          "count": 4
+        },
+        "0000"
+      ],
+      "code": "too-many-push-options",
+      "limits": {
+        "maxPushOptions": 3
+      }
+    },
+    {
+      "name": "push options without a flush",
+      "target": "receive-pack",
+      "input": [
+        {
+          "pkt": "0000000000000000000000000000000000000000 a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/a\u0000 push-options"
+        },
+        "0000",
+        {
+          "pkt": "ci.skip"
+        }
+      ],
+      "code": "truncated"
+    },
+    {
+      "name": "ref advertisement without capabilities",
+      "target": "ref-advertisement",
+      "input": [
+        {
+          "pkt": "a776c30ab4d5ecc43f0fd7746c73095827c929d6 refs/heads/main\n"
+        },
+        "0000"
+      ],
+      "code": "malformed-line"
+    },
+    {
+      "name": "ref advertisement with a bad id",
+      "target": "ref-advertisement",
+      "input": [
+        {
+          "pkt": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz refs/heads/main\u0000quiet\n"
+        },
+        "0000"
+      ],
+      "code": "malformed-line"
+    },
+    {
+      "name": "v2 advertisement without its version line",
+      "target": "v2-advertisement",
+      "input": [
+        {
+          "pkt": "agent=git/2\n"
+        },
+        "0000"
+      ],
+      "code": "malformed-line"
+    },
+    {
+      "name": "v2 advertisement with a bad key",
+      "target": "v2-advertisement",
+      "input": [
+        {
+          "pkt": "version 2\n"
+        },
+        {
+          "pkt": "a b\n"
+        },
+        "0000"
+      ],
+      "code": "bad-capability"
+    }
+  ]
+}

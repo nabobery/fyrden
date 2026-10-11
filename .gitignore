@@ -27,3 +27,7 @@ coverage/
 
 # Generated per account by `fyrden deploy`
 **/wrangler.deploy.jsonc
+
+# Stryker mutation testing
+.stryker-tmp/
+**/reports/mutation/

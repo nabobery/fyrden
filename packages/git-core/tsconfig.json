@@ -4,5 +4,6 @@
     "lib": ["es2024", "webworker"],
     "types": []
   },
-  "include": ["src", "test"]
+  // Engine source only: it must compile without Node or Workers globals.
+  "include": ["src"]
 }

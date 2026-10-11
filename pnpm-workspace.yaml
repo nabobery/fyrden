@@ -10,6 +10,8 @@ catalog:
   "@cloudflare/vitest-plugin": 1.4.0
   "@modelcontextprotocol/server": 2.3.1
   "@msw/cloudflare": 0.2.0
+  "@stryker-mutator/core": 10.0.0
+  "@stryker-mutator/vitest-runner": 10.0.0
   "@types/node": 24.19.1
   "@vitest/coverage-istanbul": 5.0.3
   fast-check: 4.10.2
