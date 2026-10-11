@@ -39,3 +39,143 @@ jobs:
       - run: pnpm turbo run test:shuffle
         env:
           SHUFFLE_RUNS: "10"
+
+  # Every case of the git interoperability catalogue, on the pinned git
+  # releases (built from checked tarballs, cached) and on the runner image's
+  # own git (newest, unpinned: an early warning for new releases). JGit, the
+  # second protocol v2 client, runs with the current git.
+  interop:
+    name: git interop (git ${{ matrix.git }}, ${{ matrix.plan }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { git: "2.53.0", plan: free, jgit: true }
+          - { git: "2.53.0", plan: paid, jgit: false }
+          - { git: "2.43.7", plan: free, jgit: false }
+          - { git: "2.39.5", plan: free, jgit: false }
+          - { git: runner, plan: free, jgit: false }
+    env:
+      GIT_VERSION: ${{ matrix.git }}
+      FYRDEN_INTEROP_FULL: "1"
+      FYRDEN_INTEROP_PLAN: ${{ matrix.plan }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Runner image (part of the git build's cache key)
+        id: image
+        run: echo "os=$ImageOS" >> "$GITHUB_OUTPUT"
+      - name: Cached git build
+        id: git-cache
+        if: matrix.git != 'runner'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fyrden-git/${{ matrix.git }}
+          key: git-${{ matrix.git }}-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ hashFiles('tools/ci/interop/git-versions.txt', 'tools/ci/interop/build-git.sh') }}
+      - name: Build git from its checked release tarball
+        if: matrix.git != 'runner' && steps.git-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libcurl4-openssl-dev zlib1g-dev
+          tools/ci/interop/build-git.sh "$GIT_VERSION" "$HOME/.cache/fyrden-git/$GIT_VERSION"
+      - name: Select git
+        run: |
+          if [ "$GIT_VERSION" = runner ]; then
+            echo "FYRDEN_GIT_BINARY=$(command -v git)" >> "$GITHUB_ENV"
+          else
+            echo "FYRDEN_GIT_BINARY=$HOME/.cache/fyrden-git/$GIT_VERSION/bin/git" >> "$GITHUB_ENV"
+          fi
+      - name: Cached JGit jars
+        if: matrix.jgit
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fyrden-jgit
+          key: jgit-${{ hashFiles('tools/ci/interop/jgit/jars.txt') }}
+      - name: JGit (pinned jars, SHA-256 checked; the runner's default Java)
+        if: matrix.jgit
+        run: |
+          echo "FYRDEN_JGIT_CLASSPATH=$(tools/ci/interop/jgit/fetch-jars.sh "$HOME/.cache/fyrden-jgit")" >> "$GITHUB_ENV"
+          echo "FYRDEN_JGIT_REQUIRED=1" >> "$GITHUB_ENV"
+          java -version
+      - name: Interop matrix, every case
+        run: |
+          "$FYRDEN_GIT_BINARY" --version
+          pnpm --filter @fyrden/ci-tools test:interop
+
+  # Long-budget mutation fuzzing of the byte parsers (pack, idx, delta,
+  # pkt-line and protocol v2, receive-pack bodies, objects, .gitmodules).
+  # A finding fails the job and its input is kept as an artifact.
+  fuzz:
+    name: Parser fuzzing
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      FYRDEN_FUZZ_SECONDS: "150"
+      FYRDEN_FUZZ_OUT: ${{ github.workspace }}/fuzz-findings
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @fyrden/git-core fuzz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: fuzz-findings
+          path: fuzz-findings
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # Full Stryker run per scope. Each writes the incremental file pull
+  # requests start from (saved to the cache), and fails below its baseline.
+  mutation:
+    name: Mutation (${{ matrix.scope }}, full)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        scope:
+          [protocol, object, hash, refs, pack, pack-write, graph, reader, receive-pack, upload-pack]
+    env:
+      SCOPE: ${{ matrix.scope }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Stryker, every mutant (break below the recorded baseline)
+        working-directory: packages/git-core
+        run: FYRDEN_MUTATION_SCOPE="$SCOPE" pnpm exec stryker run --incremental --force
+      - name: Save the results for incremental pull request runs
+        if: success() || failure()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: packages/git-core/reports/mutation/${{ matrix.scope }}.incremental.json
+          key: mutation-incremental-${{ matrix.scope }}-${{ github.sha }}-${{ github.run_id }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: success() || failure()
+        with:
+          name: mutation-${{ matrix.scope }}
+          path: packages/git-core/reports/mutation/${{ matrix.scope }}.json
+          if-no-files-found: ignore
+          retention-days: 14

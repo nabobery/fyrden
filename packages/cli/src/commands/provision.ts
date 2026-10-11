@@ -41,12 +41,33 @@ async function d1Ids(runner: WranglerRunner): Promise<Record<string, string>> {
   return Object.fromEntries(list.map((d) => [d.name, d.uuid]));
 }
 
-async function kvIds(runner: WranglerRunner): Promise<Record<string, string>> {
+/**
+ * The id of each KV namespace titled one of `titles`, the one lookup deploy
+ * (to bind) and destroy (to delete) share. Creating a second namespace with a
+ * title the account already has is refused (verified:
+ * developers.cloudflare.com/api/resources/kv/subresources/namespaces/methods/create/),
+ * but renames and jurisdictions are not documented to keep titles unique
+ * [U]. So a title more than one namespace holds is an error, never a guess:
+ * a guess could bind one namespace and later delete another.
+ */
+export async function kvNamespaceIds(
+  runner: WranglerRunner,
+  titles: readonly string[],
+): Promise<Map<string, string>> {
   const list = JSON.parse(await wrangler(runner, ["kv", "namespace", "list"])) as {
     id: string;
     title: string;
   }[];
-  return Object.fromEntries(list.map((k) => [k.title, k.id]));
+  const ids = new Map<string, string>();
+  for (const title of titles) {
+    const matches = list.filter((k) => k.title === title).map((k) => k.id);
+    if (matches.length > 1)
+      throw new Error(
+        `${matches.length} KV namespaces in this account are titled ${title} (ids ${matches.join(", ")}); Fyrden cannot tell which one is its own and will not guess. Rename or delete the ones that are not Fyrden's, then rerun.`,
+      );
+    if (matches[0] !== undefined) ids.set(title, matches[0]);
+  }
+  return ids;
 }
 
 /**
@@ -91,10 +112,11 @@ export async function provision(
     ]);
   }
 
-  let kv = await kvIds(runner);
+  const titles = plan.kv.map((ns) => ns.title);
+  let kv = await kvNamespaceIds(runner, titles);
   for (const ns of plan.kv)
-    await ensure(`kv:${ns.title}`, ns.title in kv, ["kv", "namespace", "create", ns.title]);
-  if (created.some((c) => c.startsWith("kv:"))) kv = await kvIds(runner);
+    await ensure(`kv:${ns.title}`, kv.has(ns.title), ["kv", "namespace", "create", ns.title]);
+  if (created.some((c) => c.startsWith("kv:"))) kv = await kvNamespaceIds(runner, titles);
 
   return {
     created,
@@ -103,7 +125,10 @@ export async function provision(
       plan.d1.filter((db) => d1[db.name]).map((db) => [db.binding, d1[db.name] as string]),
     ),
     kvIds: Object.fromEntries(
-      plan.kv.filter((ns) => kv[ns.title]).map((ns) => [ns.binding, kv[ns.title] as string]),
+      plan.kv.flatMap((ns) => {
+        const id = kv.get(ns.title);
+        return id === undefined ? [] : [[ns.binding, id]];
+      }),
     ),
   };
 }
