@@ -182,6 +182,8 @@ describe("delta size varints", () => {
   });
 
   it("rejects a value above the cap while decoding, and a varint that runs off the end", () => {
+    const atCap = encodeDeltaSize(CAP);
+    expect(decodeDeltaSize(atCap, 0, CAP)).toEqual({ value: CAP, next: atCap.length });
     expect(codeOf(() => decodeDeltaSize(encodeDeltaSize(CAP + 1), 0, CAP))).toBe(
       "object-too-large",
     );

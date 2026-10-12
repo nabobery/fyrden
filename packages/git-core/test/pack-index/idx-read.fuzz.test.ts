@@ -130,6 +130,8 @@ describe("idx readers on corrupted input", () => {
     };
     expect(code(good)).toBe("ok");
     expect(code(good.subarray(0, 100))).toBe("truncated");
+    // Past the header, but short of the tables the fanout counts.
+    expect(code(good.subarray(0, good.length - 8))).toBe("truncated");
     const badMagic = good.slice();
     badMagic[0] = 0;
     expect(code(badMagic)).toBe("bad-header");
@@ -153,10 +155,12 @@ describe("idx readers on corrupted input", () => {
     const bad = good.slice();
     const offsetsAt = 8 + 1024 + 5 * 24;
     new DataView(bad.buffer).setUint32(offsetsAt, 0x80000000);
+    // Rejected for the reference itself, before any read of the table.
+    const message = "bad-large-offset: entry 0 refers to large offset 0 of 0";
     const idx = PackIdx.parse(bad);
-    expect(() => idx.offsetAt(0)).toThrow(IdxError);
+    expect(() => idx.offsetAt(0)).toThrow(message);
     const ranged = await openRangedIdx(countingReader(bad), { byteLength: bad.length });
-    await expect(ranged.offsetAt(0)).rejects.toThrow(IdxError);
+    await expect(ranged.offsetAt(0)).rejects.toThrow(message);
     // Without the length, the reader lands on the pack checksum, which is not
     // a valid large offset (every value in that table is at least 2^31).
     const unbounded = await openRangedIdx(countingReader(bad));
