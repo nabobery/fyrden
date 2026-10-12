@@ -109,7 +109,8 @@ assertion or a local variable does). They are listed below.
 | `src/pack-write` | 68.7% | 65.2% | 1,132 | `compaction-plan.ts` | 68 | 2026-10-11 |
 | `src/graph` | 67.0% | 59.3% | 570 | `bitset.ts`, `generation.ts`, `merge-base.ts`, `reachability.ts` | 59 | 2026-10-11 \* |
 | `src/reader` | 74.5% | 61.4% | 581 | | 61 | 2026-10-11 \* |
-| `src/receive-pack` | 66.4% | 61.1% | 2,831 | | 61 | 2026-10-11 \* |
+| `src/receive-pack` without the push object checks | not yet | | | | 61 | † |
+| `push-fsck`: `fsck.ts`, `gitmodules.ts`, `special-names.ts`, `git-config.ts` in `src/receive-pack` | not yet | | | | 61 | † |
 | `src/upload-pack` | 56.0% | 55.6% | 932 | `commits.ts`, `reach.ts`, `shallow.ts` | 56 | 2026-10-11 |
 
 The baseline counts timed-out mutants as detected, as Stryker does.
@@ -117,6 +118,10 @@ The baseline counts timed-out mutants as detected, as Stryker does.
 slow runs were counted as timeouts (detected); their `break` is the share
 killed outright, rounded down, until the nightly full run (60 s timeout)
 re-records them. The other rows were measured with the 60 s timeout.
+† `src/receive-pack` (66.4%, 61.1% killed outright, 2,831 mutants on
+2026-10-11) grew past what one CI job can run (3,409 mutants, about six hours)
+and was split: the push object checks became `push-fsck`, which runs only
+their own tests. Both keep `break` 61 until a full run records them.
 
 ## Writing git-core tests
 

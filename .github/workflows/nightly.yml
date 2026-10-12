@@ -145,12 +145,24 @@ jobs:
   mutation:
     name: Mutation (${{ matrix.scope }}, full)
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
         scope:
-          [protocol, object, hash, refs, pack, pack-write, graph, reader, receive-pack, upload-pack]
+          [
+            protocol,
+            object,
+            hash,
+            refs,
+            pack,
+            pack-write,
+            graph,
+            reader,
+            receive-pack,
+            push-fsck,
+            upload-pack,
+          ]
     env:
       SCOPE: ${{ matrix.scope }}
     steps:

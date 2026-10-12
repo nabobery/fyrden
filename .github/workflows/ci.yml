@@ -115,19 +115,37 @@ jobs:
   # results for unchanged code come from the last nightly full run (cached).
   # Without that baseline (no nightly run yet, or the cache was evicted) the
   # changed scope runs in full, as the nightly job does, so the gate never
-  # passes without checking; hence the nightly job's timeout.
+  # passes without checking; hence the nightly job's timeout (receive-pack, the
+  # largest scope, takes about three hours on a 4-vCPU runner).
   mutation:
     name: Mutation (${{ matrix.scope }}, incremental)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
         scope:
-          [protocol, object, hash, refs, pack, pack-write, graph, reader, receive-pack, upload-pack]
+          [
+            protocol,
+            object,
+            hash,
+            refs,
+            pack,
+            pack-write,
+            graph,
+            reader,
+            receive-pack,
+            push-fsck,
+            upload-pack,
+          ]
+        # A scope whose code is part of another directory (stryker.config.mjs).
+        include:
+          - scope: push-fsck
+            dir: receive-pack
     env:
       SCOPE: ${{ matrix.scope }}
+      SCOPE_DIR: ${{ matrix.dir || matrix.scope }}
       BASE: ${{ github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -137,7 +155,7 @@ jobs:
       - name: Did this pull request change the scope's code or the mutation setup?
         id: changed
         run: |
-          if git diff --quiet "$BASE" HEAD -- "packages/git-core/src/$SCOPE" \
+          if git diff --quiet "$BASE" HEAD -- "packages/git-core/src/$SCOPE_DIR" \
             packages/git-core/stryker.config.mjs packages/git-core/stryker; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else

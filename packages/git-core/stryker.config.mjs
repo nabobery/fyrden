@@ -15,7 +15,13 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** @type {Record<string, { tests: string[]; exclude?: string[]; break: number }>} */
+const PUSH_FSCK = ["fsck.ts", "gitmodules.ts", "special-names.ts", "git-config.ts"];
+
+/**
+ * A scope mutates `src/<dir>` (default: the scope's name), or only `files`
+ * there; `skip` leaves files of the directory to another scope.
+ * @type {Record<string, { dir?: string; files?: string[]; skip?: string[]; tests: string[]; exclude?: string[]; break: number }>}
+ */
 const SCOPES = {
   protocol: { tests: ["test/protocol/"], break: 84 },
   object: { tests: ["test/object/"], break: 77 },
@@ -38,8 +44,24 @@ const SCOPES = {
   },
   reader: { tests: ["test/reader/"], break: 61 },
   "receive-pack": {
+    skip: PUSH_FSCK,
     tests: ["test/receive-pack/"],
     exclude: ["**/receive-pack.git-push.test.ts"],
+    break: 61,
+  },
+  // The push object checks: parsers with their own fast tests, apart from
+  // the receive-pack tests (a git-oracle round trip and a budget test per
+  // mutant) that made a full receive-pack run outlast a CI job.
+  "push-fsck": {
+    dir: "receive-pack",
+    files: PUSH_FSCK,
+    tests: [
+      "test/receive-pack/push-fsck.policy.test.ts",
+      "test/receive-pack/push-fsck.git-oracle.test.ts",
+      "test/receive-pack/receive-pack.property.test.ts",
+      "test/receive-pack/receive-pack.long-pathname.test.ts",
+      "test/object/tag.long-name.test.ts",
+    ],
     break: 61,
   },
   "upload-pack": {
@@ -68,11 +90,15 @@ if (!scope) {
  * code avoids them (a non-null assertion or a local variable does).
  */
 const UNSAFE = [/\bas\s+[\w.<>[\]]+\)+\s*(?:\|(?!\|)|&(?!&))/, /\bas\s+[\w.<>[\]]+\)(?:\+\+|--)/];
-const sources = readdirSync(`src/${name}`, { recursive: true })
-  .map(String)
-  .filter((file) => file.endsWith(".ts"));
+const dir = scope.dir ?? name;
+const sources = (
+  scope.files ??
+  readdirSync(`src/${dir}`, { recursive: true })
+    .map(String)
+    .filter((file) => file.endsWith(".ts"))
+).filter((file) => !(scope.skip ?? []).includes(file));
 const unsafe = sources.filter((file) => {
-  const text = readFileSync(join("src", name, file), "utf8");
+  const text = readFileSync(join("src", dir, file), "utf8");
   return UNSAFE.some((pattern) => pattern.test(text));
 });
 if (unsafe.length > 0) {
@@ -93,7 +119,7 @@ export default {
   packageManager: "pnpm",
   testRunner: "command",
   commandRunner: { command },
-  mutate: [`src/${name}/**/*.ts`, ...unsafe.map((file) => `!src/${name}/${file}`)],
+  mutate: sources.filter((file) => !unsafe.includes(file)).map((file) => `src/${dir}/${file}`),
   coverageAnalysis: "off",
   reporters: ["clear-text", "progress", "json"],
   jsonReporter: { fileName: `reports/mutation/${name}.json` },
