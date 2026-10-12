@@ -26,7 +26,7 @@ const SCOPES = {
   protocol: { tests: ["test/protocol/"], break: 84 },
   object: { tests: ["test/object/"], break: 77 },
   hash: { tests: ["test/hash/"], exclude: ["**/*-throughput.test.ts"], break: 88 },
-  refs: { tests: ["test/refs/"], break: 81 },
+  refs: { tests: ["test/refs/"], break: 87 },
   pack: {
     tests: ["test/pack/", "test/pack-index/"],
     exclude: ["**/pack-parse.fuzz.test.ts", "**/*.perf.test.ts"],

@@ -104,7 +104,7 @@ assertion or a local variable does). They are listed below.
 | `src/protocol` | 86.2% | 84.8% | 1,249 | | 84 | 2026-10-11 \* |
 | `src/object` | 80.1% | 77.7% | 1,178 | | 77 | 2026-10-11 \* |
 | `src/hash` | 89.4% | 88.3% | 751 | `sha1dc.ts` | 88 | 2026-10-11 \* |
-| `src/refs` | 86.3% | 81.7% | 131 | | 81 | 2026-10-11 \* |
+| `src/refs` | 87.4% | 83.3% | 246 | | 87 | 2026-10-11 |
 | `src/pack` | 77.1% | 73.6% | 1,728 | `crc32.ts`, `existence-filter.ts` | 77 | 2026-10-11 |
 | `src/pack-write` | 68.7% | 65.2% | 1,132 | `compaction-plan.ts` | 68 | 2026-10-11 |
 | `src/graph` | 67.0% | 59.3% | 570 | `bitset.ts`, `generation.ts`, `merge-base.ts`, `reachability.ts` | 59 | 2026-10-11 \* |
