@@ -19,7 +19,8 @@ Signed-off-by: Your Name <you@example.com>
 
 `git commit -s` adds it, using the name and email from your git config; the
 email must match the commit's author email. CI checks every commit in a pull
-request, merge commits included, and fails if one is missing. To fix a branch,
+request, merge commits included, and fails if one is missing (except in
+Dependabot's pull requests: a bot cannot certify the DCO). To fix a branch,
 run `git rebase --signoff main` and force-push. Update a branch by rebasing,
 not by merging `main` into it.
 
