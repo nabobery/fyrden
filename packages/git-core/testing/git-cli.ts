@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -54,6 +54,9 @@ export async function createGitSandbox(): Promise<GitSandbox> {
   const home = join(root, "home");
   const dir = join(root, "work");
   await run("mkdir", ["-p", home, dir]);
+  // git commit, fetch and others start `git maintenance run --auto` detached;
+  // a repack it decides on would delete packs while a test reads them.
+  await writeFile(join(home, ".gitconfig"), "[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n");
   const baseEnv: Record<string, string> = {
     PATH: process.env.PATH ?? "",
     HOME: home,
