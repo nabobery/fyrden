@@ -71,6 +71,11 @@ whole command runs per mutant, each scope runs a fast subset of the tests
 (its own test directory without the slow git-oracle files); the full suite
 still runs on every pull request. Tests run under a private `TMPDIR` that is
 removed after each mutant, since `--bail` skips the tests' cleanup hooks.
+Each mutant's run is also capped at 3 GB of resident memory
+(`FYRDEN_MUTANT_MAX_RSS_MB`): some mutants allocate without bound (a growth
+condition mutated to `true` doubles typed arrays on every call) and would
+exhaust the machine, a CI runner included, long before Stryker's timeout. A
+run over the cap is killed and its mutant counts as detected.
 
 The score must not drop below the recorded baseline, which the config
 enforces as `break` (the baseline rounded down; see the note under the
