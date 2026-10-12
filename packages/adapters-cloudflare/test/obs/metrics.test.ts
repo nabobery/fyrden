@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   createFakeDataset,
   type RecordedPoint,
@@ -27,6 +27,14 @@ function recording() {
 }
 
 const named = (points: Point[], name: string) => points.filter((p) => p.name === name);
+
+// A write refused outside any invocation is counted per isolate and reported
+// by the next invocation that ends (by design). A test that leaves one behind
+// would add it to another test's `metrics.dropped`: hand it to a throwaway
+// invocation first.
+beforeEach(async () => {
+  await measureInvocation(recording().metrics, { where: "worker", op: "drain" }, () => {});
+});
 
 describe("metric catalogue", () => {
   const names = Object.keys(METRICS) as MetricName[];
