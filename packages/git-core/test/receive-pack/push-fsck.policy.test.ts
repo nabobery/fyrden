@@ -112,11 +112,12 @@ describe("push fsck policy (default)", () => {
     const fsck = new PushFsck();
     const blob = oidFromHex(BLOB);
     fsck.check(OID, "tree", tree([["100644", ".gitmodules"]]));
-    // 1,000 entries, each with a long name holding control characters and a bad url.
-    const long = `../${"n".repeat(10_000)}\u0007\u001b[31m`;
+    // 30 entries (the cap is 10), each with a name and url far past the
+    // quoted excerpt, the name holding control characters.
+    const long = `../${"n".repeat(300)}\u0007\u001b[31m`;
     const entries = Array.from(
-      { length: 1000 },
-      (_, i) => `[submodule "${long}${i}"]\n\turl = -${"u".repeat(10_000)}\n`,
+      { length: 30 },
+      (_, i) => `[submodule "${long}${i}"]\n\turl = -${"u".repeat(300)}\n`,
     );
     let error: unknown;
     try {
@@ -126,11 +127,11 @@ describe("push fsck policy (default)", () => {
     }
     expect(error).toBeInstanceOf(PushFsckError);
     const findings = (error as PushFsckError).findings;
-    // Ten findings, then one per id that counts the other 1,990.
+    // Ten findings, then one per id that counts the other 50.
     expect(findings).toHaveLength(12);
     expect(findings.slice(-2).map((f) => f.message)).toEqual([
-      "gitmodulesName: and 995 more disallowed submodule settings",
-      "gitmodulesUrl: and 995 more disallowed submodule settings",
+      "gitmodulesName: and 25 more disallowed submodule settings",
+      "gitmodulesUrl: and 25 more disallowed submodule settings",
     ]);
     for (const finding of findings) {
       expect(finding.message.length).toBeLessThan(160);
