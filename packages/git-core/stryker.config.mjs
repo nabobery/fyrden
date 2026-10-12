@@ -62,7 +62,7 @@ const SCOPES = {
       "test/receive-pack/receive-pack.long-pathname.test.ts",
       "test/object/tag.long-name.test.ts",
     ],
-    break: 61,
+    break: 69,
   },
   "upload-pack": {
     tests: ["test/upload-pack/"],

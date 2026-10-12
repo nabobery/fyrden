@@ -105,12 +105,12 @@ assertion or a local variable does). They are listed below.
 | `src/object` | 80.1% | 77.7% | 1,178 | | 77 | 2026-10-11 \* |
 | `src/hash` | 89.4% | 88.3% | 751 | `sha1dc.ts` | 88 | 2026-10-11 \* |
 | `src/refs` | 87.4% | 83.3% | 246 | | 87 | 2026-10-11 |
-| `src/pack` | 77.1% | 73.6% | 1,728 | `crc32.ts`, `existence-filter.ts` | 77 | 2026-10-11 |
+| `src/pack` | 77.7% | 74.7% | 1,924 | `crc32.ts`, `existence-filter.ts` | 77 | 2026-10-12 |
 | `src/pack-write` | 68.7% | 65.2% | 1,132 | `compaction-plan.ts` | 68 | 2026-10-11 |
 | `src/graph` | 67.0% | 59.3% | 570 | `bitset.ts`, `generation.ts`, `merge-base.ts`, `reachability.ts` | 59 | 2026-10-11 \* |
 | `src/reader` | 74.5% | 61.4% | 581 | | 61 | 2026-10-11 \* |
-| `src/receive-pack` without the push object checks | not yet | | | | 61 | † |
-| `push-fsck`: `fsck.ts`, `gitmodules.ts`, `special-names.ts`, `git-config.ts` in `src/receive-pack` | not yet | | | | 61 | † |
+| `src/receive-pack` without the push object checks † | 61.5% | 57.6% | 1,778 | | 61 | 2026-10-12 |
+| `push-fsck` †: `fsck.ts`, `gitmodules.ts`, `special-names.ts`, `git-config.ts` in `src/receive-pack` | 69.7% | 66.2% | 1,631 | | 69 | 2026-10-12 |
 | `src/upload-pack` | 56.0% | 55.6% | 932 | `commits.ts`, `reach.ts`, `shallow.ts` | 56 | 2026-10-11 |
 
 The baseline counts timed-out mutants as detected, as Stryker does.
@@ -121,13 +121,16 @@ re-records them. The other rows were measured with the 60 s timeout.
 † `src/receive-pack` (66.4%, 61.1% killed outright, 2,831 mutants on
 2026-10-11) grew past what one CI job can run (3,409 mutants, about six hours)
 and was split: the push object checks became `push-fsck`, which runs only
-their own tests. Both keep `break` 61 until a full run records them.
+their own tests.
 
 ## Writing git-core tests
 
 - Tests come first (see `AGENTS.md`). Parsers get a fast-check property suite
   (encode then parse round-trips) and a fuzz test that mutates valid objects
   and expects only typed errors.
+- Give every bound a fixed case too (the value at a limit, the first one
+  past it). Property inputs are random, so a mutant that only they can catch
+  dies in some runs and not others, and the mutation score moves with it.
 - Compare with git itself wherever git can be the oracle. The object tests
   write a seeded corpus of well-formed and mutated trees, commits and tags
   with `git hash-object --literally` and require `git fsck` to report the same
