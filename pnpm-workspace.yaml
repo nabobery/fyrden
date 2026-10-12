@@ -12,7 +12,7 @@ catalog:
   "@msw/cloudflare": 0.2.0
   "@stryker-mutator/core": 10.0.0
   "@stryker-mutator/vitest-runner": 10.0.0
-  "@types/node": 24.19.1
+  "@types/node": 26.6.5
   "@vitest/coverage-istanbul": 5.0.3
   fast-check: 4.10.2
   hono: 4.13.13
