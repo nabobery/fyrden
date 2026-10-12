@@ -5,12 +5,18 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { type DeployDeps, deploy, type Plan } from "./commands/deploy.ts";
+import { destroy } from "./commands/destroy.ts";
 import { doctor } from "./commands/doctor.ts";
+import { PUSH_USAGE, parsePushArgs, push } from "./commands/push.ts";
+import { nodePushDeps } from "./commands/push-node.ts";
 import { nodeWranglerRunner } from "./wrangler.ts";
 
 const USAGE = `usage:
   fyrden deploy [--plan free|paid]   create resources, migrate and deploy both Workers
-  fyrden doctor                      check login and resources without changing anything`;
+  fyrden doctor                      check login and resources without changing anything
+  fyrden destroy [--yes]             list what deploy created; with --yes delete it all (data loss)
+  ${PUSH_USAGE}
+                                     push, checking the size first; --chunked uploads a large push in parts`;
 
 function findRepoRoot(from: string): string {
   let dir = resolve(from);
@@ -42,7 +48,17 @@ export function envDeployOptions(
 export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   const log = (line: string) => console.log(line);
-  if (command !== "deploy" && command !== "doctor") {
+  if (command === "push") {
+    // Runs in any git repository, not only a Fyrden checkout.
+    const parsed = parsePushArgs(rest, process.env);
+    if ("error" in parsed) {
+      console.error(parsed.error);
+      return 2;
+    }
+    return push(parsed, nodePushDeps());
+  }
+  const known = command === "deploy" || command === "doctor" || command === "destroy";
+  if (!known || (command === "destroy" && rest.some((arg) => arg !== "--yes"))) {
     console.error(USAGE);
     return 2;
   }
@@ -51,6 +67,17 @@ export async function main(argv: string[]): Promise<number> {
   if (command === "doctor") {
     const report = await doctor(repoRoot, runner, log);
     return report.authenticated && report.missing.length === 0 ? 0 : 1;
+  }
+  if (command === "destroy") {
+    // Without --yes (in CI too) this is a dry run.
+    const result = await destroy({
+      repoRoot,
+      runner,
+      confirmed: rest.includes("--yes"),
+      envAccountId: process.env.CLOUDFLARE_ACCOUNT_ID || undefined,
+      log,
+    });
+    return result.complete ? 0 : 1;
   }
   const planIndex = rest.indexOf("--plan");
   const plan = (planIndex >= 0 ? rest[planIndex + 1] : "paid") as Plan;

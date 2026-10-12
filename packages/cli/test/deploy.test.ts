@@ -64,7 +64,7 @@ describe("fyrden deploy", () => {
       "fyrden-webhooks",
     ]);
     expect([...fake.state.d1.keys()].sort()).toEqual(["fyrden-directory", "fyrden-org"]);
-    expect([...fake.state.kv.keys()]).toEqual(["fyrden-api-cache"]);
+    expect([...fake.state.kv.values()]).toEqual(["fyrden-api-cache"]);
     expect(result.created).toHaveLength(11);
   });
 
@@ -232,6 +232,16 @@ describe("fyrden deploy", () => {
     await expect(deploy(deps(runner).d)).rejects.toThrow(
       /^Workers Analytics Engine is not enabled on this account/,
     );
+  });
+
+  it("refuses to bind a KV namespace whose title another namespace shares", async () => {
+    const fake = fakeWrangler();
+    fake.state.kv.set("kv-unrelated", "fyrden-api-cache");
+    fake.state.kv.set("kv-other", "fyrden-api-cache");
+    await expect(deploy(deps(fake.runner).d)).rejects.toThrow(
+      "2 KV namespaces in this account are titled fyrden-api-cache (ids kv-unrelated, kv-other)",
+    );
+    expect(fake.state.deployed).toEqual([]);
   });
 
   it("accepts a resource that someone else created in the meantime", async () => {

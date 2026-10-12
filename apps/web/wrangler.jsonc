@@ -13,5 +13,8 @@
     "traces": { "enabled": true, "head_sampling_rate": 0.1 }
   },
   "upload_source_maps": true,
-  "services": [{ "binding": "API", "service": "fyrden-api", "entrypoint": "ApiRpc" }]
+  "services": [{ "binding": "API", "service": "fyrden-api", "entrypoint": "ApiRpc" }],
+  // The tail() handler writes fyrden-api's per-invocation CPU and wall time
+  // here, into the same dataset as fyrden-api's own metrics.
+  "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "fyrden_metrics" }]
 }

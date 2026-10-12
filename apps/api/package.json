@@ -15,12 +15,13 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "hono": "catalog:",
-    "@fyrden/api-contract": "workspace:*",
     "@fyrden/adapters-cloudflare": "workspace:*",
+    "@fyrden/api-contract": "workspace:*",
     "@fyrden/domain": "workspace:*",
-    "zod": "catalog:",
-    "@modelcontextprotocol/server": "catalog:"
+    "@fyrden/git-core": "workspace:*",
+    "@modelcontextprotocol/server": "catalog:",
+    "hono": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "catalog:",

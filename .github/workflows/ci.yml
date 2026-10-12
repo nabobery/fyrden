@@ -57,10 +57,11 @@ jobs:
         run: pnpm lint:ci
       - name: Typecheck (and generated Worker types are current)
         run: pnpm turbo run typecheck
+      # Every package runs to the end, so one run reports every failure.
       - name: Unit and workerd integration tests with Istanbul coverage
-        run: pnpm turbo run test:coverage
+        run: pnpm turbo run test:coverage --continue=dependencies-successful
       - name: Shuffle guard (order-dependent workerd tests)
-        run: pnpm turbo run test:shuffle
+        run: pnpm turbo run test:shuffle --continue=dependencies-successful
       - name: Dry-run deploy of both Workers
         run: pnpm turbo run deploy:dry-run
       - name: Both Workers together locally, through the service binding
@@ -73,6 +74,128 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # The git interoperability matrix, pull request subset: the pinned current
+  # git (built once from its checked tarball and cached) against fyrden-api
+  # under wrangler dev. The nightly workflow runs every case on more versions.
+  interop:
+    name: git interop (git 2.53.0, PR subset)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GIT_VERSION: "2.53.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Runner image (part of the git build's cache key)
+        id: image
+        run: echo "os=$ImageOS" >> "$GITHUB_OUTPUT"
+      - name: Cached git build
+        id: git-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fyrden-git/${{ env.GIT_VERSION }}
+          key: git-${{ env.GIT_VERSION }}-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ hashFiles('tools/ci/interop/git-versions.txt', 'tools/ci/interop/build-git.sh') }}
+      - name: Build git from its checked release tarball
+        if: steps.git-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libcurl4-openssl-dev zlib1g-dev
+          tools/ci/interop/build-git.sh "$GIT_VERSION" "$HOME/.cache/fyrden-git/$GIT_VERSION"
+      - name: Interop matrix, pull request subset
+        run: |
+          export FYRDEN_GIT_BINARY="$HOME/.cache/fyrden-git/$GIT_VERSION/bin/git"
+          "$FYRDEN_GIT_BINARY" --version
+          pnpm --filter @fyrden/ci-tools test:interop
+
+  # Mutation testing of the scopes a pull request changes, incrementally:
+  # results for unchanged code come from the last nightly full run (cached).
+  # Without that baseline (no nightly run yet, or the cache was evicted) the
+  # changed scope runs in full, as the nightly job does, so the gate never
+  # passes without checking; hence the nightly job's timeout (receive-pack, the
+  # largest scope, takes about three hours on a 4-vCPU runner).
+  mutation:
+    name: Mutation (${{ matrix.scope }}, incremental)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        scope:
+          [
+            protocol,
+            object,
+            hash,
+            refs,
+            pack,
+            pack-write,
+            graph,
+            reader,
+            receive-pack,
+            push-fsck,
+            upload-pack,
+          ]
+        # A scope whose code is part of another directory (stryker.config.mjs).
+        include:
+          - scope: push-fsck
+            dir: receive-pack
+    env:
+      SCOPE: ${{ matrix.scope }}
+      SCOPE_DIR: ${{ matrix.dir || matrix.scope }}
+      BASE: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Did this pull request change the scope's code or the mutation setup?
+        id: changed
+        run: |
+          if git diff --quiet "$BASE" HEAD -- "packages/git-core/src/$SCOPE_DIR" \
+            packages/git-core/stryker.config.mjs packages/git-core/stryker; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        if: steps.changed.outputs.changed == 'true'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.changed.outputs.changed == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - if: steps.changed.outputs.changed == 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Last nightly results for this scope
+        id: baseline
+        if: steps.changed.outputs.changed == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: packages/git-core/reports/mutation/${{ matrix.scope }}.incremental.json
+          key: mutation-incremental-${{ matrix.scope }}-${{ github.sha }}
+          restore-keys: mutation-incremental-${{ matrix.scope }}-
+      - name: Stryker, incremental (break below the recorded baseline)
+        if: steps.changed.outputs.changed == 'true'
+        env:
+          RESTORED: ${{ steps.baseline.outputs.cache-matched-key }}
+        working-directory: packages/git-core
+        run: |
+          if [ -z "$RESTORED" ]; then
+            # Every mutant, one fewer at a time than the runner has vCPUs
+            # (4 on public repositories, 2 on private ones), each running Vitest.
+            echo "::warning::No nightly mutation results for $SCOPE; running every mutant of the scope."
+            FYRDEN_MUTATION_SCOPE="$SCOPE" pnpm exec stryker run --concurrency "$(( $(nproc) > 1 ? $(nproc) - 1 : 1 ))"
+          else
+            FYRDEN_MUTATION_SCOPE="$SCOPE" pnpm exec stryker run --incremental
+          fi
+
   # Paid staging and the Free smoke account. Each target is a
   # GitHub environment holding CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and
   # FYRDEN_BOOTSTRAP_SECRET secrets and FYRDEN_API_URL / FYRDEN_WEB_URL
@@ -80,7 +203,7 @@ jobs:
   # forks and fresh clones stay green.
   deploy:
     name: Deploy ${{ matrix.target }}
-    needs: [check]
+    needs: [check, interop]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30

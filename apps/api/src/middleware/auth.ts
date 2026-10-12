@@ -43,6 +43,55 @@ export const invalidToken = (c: Context) =>
     "WWW-Authenticate": 'Bearer realm="fyrden", error="invalid_token"',
   });
 
+export type Authentication =
+  | { ok: true; state: AuthState }
+  | { ok: false; reason: "missing" | "rate_limited" | "invalid" };
+
+/**
+ * Verifies the request's token in `mode`. Every attempt is rate limited per
+ * client address before the token is looked up, so a stream of made-up
+ * tokens cannot drive unbounded D1 reads. On success the request's logger
+ * names the principal.
+ */
+export async function authenticate(
+  c: Context<{ Bindings: Env; Variables: AuthVariables }>,
+  mode: VerifyMode,
+): Promise<Authentication> {
+  const token = extractToken(c.req.header("Authorization"));
+  if (!token) return { ok: false, reason: "missing" };
+  const client = c.req.header("CF-Connecting-IP") ?? "unknown";
+  if (!(await c.env.RATE_LIMIT_AUTH.limit({ key: client })).success) {
+    return { ok: false, reason: "rate_limited" };
+  }
+
+  const store = tokenStore(c.env, {
+    defer: (p) => c.executionCtx.waitUntil(p),
+    metrics: c.get("metrics"),
+  });
+  const result = await store.verify(token, mode);
+  c.get("metrics").count("auth.token", {
+    type: result.ok ? result.record.type : "unknown",
+    outcome: result.ok ? "ok" : result.reason,
+  });
+  if (!result.ok) return { ok: false, reason: "invalid" };
+
+  c.set(
+    "log",
+    c.get("log").child({
+      principalId: result.record.principalId,
+      principalType: result.record.principalType,
+    }),
+  );
+  return {
+    ok: true,
+    state: {
+      record: result.record,
+      mode,
+      verifyForWrite: () => store.verify(token, "write"),
+    },
+  };
+}
+
 /**
  * Requires a valid token.
  *
@@ -51,49 +100,25 @@ export const invalidToken = (c: Context) =>
  *   the HTTP method is the operation's method.
  * - `read`: always read mode. Used by MCP, where every call is a POST; the
  *   operation executor re-verifies on the primary before any write.
- *
- * Every attempt is rate limited per client address before the token is
- * looked up, so a stream of made-up tokens cannot drive unbounded D1 reads.
  */
 export const requireAuth = (policy: "by-method" | "read" = "by-method") =>
   createMiddleware<{ Bindings: Env; Variables: AuthVariables }>(async (c, next) => {
-    const token = extractToken(c.req.header("Authorization"));
-    if (!token) {
-      return problem(c, 401, "unauthenticated", "A token is required.", {
-        "WWW-Authenticate": 'Bearer realm="fyrden"',
-      });
-    }
-    const client = c.req.header("CF-Connecting-IP") ?? "unknown";
-    if (!(await c.env.RATE_LIMIT_AUTH.limit({ key: client })).success) {
-      return problem(c, 429, "rate_limited", "Too many authentication attempts.", {
-        "Retry-After": "60",
-      });
-    }
-
-    const store = tokenStore(c.env, {
-      defer: (p) => c.executionCtx.waitUntil(p),
-      metrics: c.get("metrics"),
-    });
     const mode: VerifyMode = policy === "read" || READ_METHODS.has(c.req.method) ? "read" : "write";
-    const result = await store.verify(token, mode);
-    c.get("metrics").count("auth.token", {
-      type: result.ok ? result.record.type : "unknown",
-      outcome: result.ok ? "ok" : result.reason,
-    });
-    if (!result.ok) return invalidToken(c);
-
-    c.set("auth", result.record);
-    c.set("authState", {
-      record: result.record,
-      mode,
-      verifyForWrite: () => store.verify(token, "write"),
-    });
-    c.set(
-      "log",
-      c.get("log").child({
-        principalId: result.record.principalId,
-        principalType: result.record.principalType,
-      }),
-    );
+    const auth = await authenticate(c, mode);
+    if (!auth.ok) {
+      if (auth.reason === "missing") {
+        return problem(c, 401, "unauthenticated", "A token is required.", {
+          "WWW-Authenticate": 'Bearer realm="fyrden"',
+        });
+      }
+      if (auth.reason === "rate_limited") {
+        return problem(c, 429, "rate_limited", "Too many authentication attempts.", {
+          "Retry-After": "60",
+        });
+      }
+      return invalidToken(c);
+    }
+    c.set("auth", auth.state.record);
+    c.set("authState", auth.state);
     await next();
   });

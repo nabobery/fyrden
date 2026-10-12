@@ -20,6 +20,8 @@ export interface OpContext {
   log: Logger;
   metrics: Metrics;
   requestId: string;
+  /** The hostname the request arrived on (this deployment's own host). */
+  requestHost: string;
   waitUntil(promise: Promise<unknown>): void;
 }
 

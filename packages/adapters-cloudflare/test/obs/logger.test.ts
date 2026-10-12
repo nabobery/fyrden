@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { createFakeDataset } from "../../src/obs/fake-dataset.js";
 import { createLogger, type LogLevel, requestMeta } from "../../src/obs/logger.js";
 import { createMetrics } from "../../src/obs/metrics.js";
 
@@ -47,12 +48,8 @@ describe("createLogger", () => {
 
 describe("createMetrics", () => {
   it("writes the name as the index and dimensions in their declared order", () => {
-    const dataset = { writeDataPoint: vi.fn() };
+    const { dataset, points } = createFakeDataset();
     createMetrics(dataset).count("r2.class_a", { op: "put", bucket: "fyrden-git" }, 2);
-    expect(dataset.writeDataPoint).toHaveBeenCalledWith({
-      indexes: ["r2.class_a"],
-      blobs: ["fyrden-git", "put"],
-      doubles: [2],
-    });
+    expect(points).toEqual([{ name: "r2.class_a", blobs: ["fyrden-git", "put"], value: 2 }]);
   });
 });

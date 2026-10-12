@@ -26,6 +26,7 @@
     "fyrden-shuffle-guard": "./bin/shuffle-guard.mjs"
   },
   "dependencies": {
-    "@fyrden/domain": "workspace:*"
+    "@fyrden/domain": "workspace:*",
+    "@fyrden/git-core": "workspace:*"
   }
 }

@@ -1,0 +1,8 @@
+# JGit core and its runtime dependencies from Maven Central, with the SHA-256
+# of each jar (they match the .sha256/.sha1 files Central publishes beside them).
+# JGit's client speaks protocol v2 for fetch since 5.11, and requests it by default:
+# https://wiki.eclipse.org/JGit/New_and_Noteworthy/5.11
+org/eclipse/jgit/org.eclipse.jgit/7.8.0.202609011348-r/org.eclipse.jgit-7.8.0.202609011348-r.jar cc63976f92e8058d05a543f320a6237accf2f17b745ab20946f246ac0b54dfd6
+com/googlecode/javaewah/JavaEWAH/1.2.3/JavaEWAH-1.2.3.jar d65226949713c4c61a784f41c51167e7b0316f93764398ebba9e4336b3d954c2
+org/slf4j/slf4j-api/2.0.18/slf4j-api-2.0.18.jar 44508fd1576500688c790b190acdd16fec4f8c79a3e0b900afd70503cf055f55
+commons-codec/commons-codec/1.22.1/commons-codec-1.22.1.jar 78a5d732fbd715e2d10bd7150d2f8030bae57267f8aacc5c88f642cb6c2e5d3f

@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  // Tests and test support (fakes, contract suites, the git CLI harness) run on Node.
+  "include": ["src", "test", "testing", "fuzz", "vitest.config.ts", "vitest.fuzz.config.ts"]
+}

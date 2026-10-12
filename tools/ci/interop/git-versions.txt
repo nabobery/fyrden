@@ -1,0 +1,8 @@
+# git releases in the interoperability matrix: version, then the SHA-256 of
+# git-<version>.tar.xz from https://mirrors.edge.kernel.org/pub/software/scm/git/sha256sums.asc
+# 2.53.0  current release; the version pull requests run against
+# 2.43.7  newest maintenance release of the 2.43 line Ubuntu 24.04 LTS ships
+# 2.39.5  newest maintenance release of the 2.39 line Debian 12 ships
+2.53.0 5818bd7d80b061bbbdfec8a433d609dc8818a05991f731ffc4a561e2ca18c653
+2.43.7 657e2374455d9e62f6cdb3e7c55d867b6db5404d744e97e112cc5b0db687a19f
+2.39.5 c58da92c378df4a986ca33266897a7397e86c22ee266a284d8c2432c39066b59

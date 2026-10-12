@@ -19,20 +19,28 @@
     "typecheck": {
       "dependsOn": ["transit"]
     },
+    // The vitest configs cap local workers unless CI is set, and
+    // FYRDEN_TEST_WORKERS overrides the cap. Strict env mode would hide both
+    // from the task; they change concurrency, not results, so they pass
+    // through without entering the cache key.
     "test": {
-      "dependsOn": ["transit"]
+      "dependsOn": ["transit"],
+      "passThroughEnv": ["FYRDEN_TEST_WORKERS", "CI"]
     },
     "test:coverage": {
       "dependsOn": ["transit"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**"],
+      "passThroughEnv": ["FYRDEN_TEST_WORKERS", "CI"]
     },
     "test:shuffle": {
       "cache": false,
-      "env": ["SHUFFLE_RUNS"]
+      "env": ["SHUFFLE_RUNS"],
+      "passThroughEnv": ["FYRDEN_TEST_WORKERS", "CI"]
     },
     "test:e2e": {
       "dependsOn": ["@fyrden/web#build"],
-      "cache": false
+      "cache": false,
+      "passThroughEnv": ["FYRDEN_TEST_WORKERS", "CI"]
     },
     // Uses the package's own build output (the web Worker's), built once and
     // shared with test:e2e instead of rebuilt underneath it.

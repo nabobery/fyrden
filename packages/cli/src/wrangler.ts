@@ -48,6 +48,8 @@ export function nodeWranglerRunner(defaultCwd: string): WranglerRunner {
         });
         child.on("error", reject);
         child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+        // wrangler may exit without reading its input; the exit code reports that.
+        child.stdin.on("error", () => {});
         child.stdin.end(options.input ?? "");
       });
     },

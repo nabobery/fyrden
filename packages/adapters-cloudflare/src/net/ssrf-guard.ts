@@ -1,3 +1,4 @@
+import { countSubrequests } from "../obs/invocation.js";
 import { isPublicAddress, parseIPv4 } from "./ip.js";
 
 /**
@@ -97,6 +98,7 @@ export async function guardedFetch(
 ): Promise<Response> {
   const check = await checkOutboundUrl(raw, policy);
   if (!check.ok) throw new SsrfError(check.reason);
+  countSubrequests("external");
   const response = await fetch(check.url, { ...init, redirect: "manual" });
   if (response.status >= 300 && response.status < 400) {
     await response.body?.cancel();
@@ -115,6 +117,7 @@ interface DohAnswer {
 /** Resolves A and AAAA records over DNS-over-HTTPS (JSON API). */
 export function dohResolver(endpoint = DOH_ENDPOINT): Resolver {
   const query = async (name: string, type: "A" | "AAAA") => {
+    countSubrequests("external");
     const res = await fetch(`${endpoint}?name=${encodeURIComponent(name)}&type=${type}`, {
       headers: { Accept: "application/dns-json" },
     });

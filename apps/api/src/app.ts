@@ -2,6 +2,7 @@ import { createLogger, requestMeta } from "@fyrden/adapters-cloudflare/obs";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { requestId } from "hono/request-id";
+import { gitRouter } from "./git/router.js";
 import { deepHealth } from "./health.js";
 import { problem } from "./http/problem.js";
 import { mountMcp } from "./mcp/mount.js";
@@ -38,6 +39,7 @@ export function createApp() {
   app.route("/v0/admin/bootstrap", bootstrap);
   mountRest(app);
   mountMcp(app);
+  app.route("/", gitRouter);
 
   return app;
 }

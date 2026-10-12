@@ -1,0 +1,322 @@
+# Limits
+
+What a Fyrden deployment accepts and serves for git, why, and which limits an
+operator can change. Engine metrics are described in [metrics.md](metrics.md).
+
+Every number on this page is one of three kinds:
+
+- **Platform limit:** set by Cloudflare. Linked to Cloudflare's documentation;
+  it can change without a Fyrden release.
+- **Measured:** observed by the Fyrden project on a real deployment, with the
+  date and plan. Paid-plan measurements have not been made yet unless stated.
+- **Default:** a Fyrden setting chosen as a starting point. Defaults may change
+  in later releases as they are tuned under load. Those with a variable can be
+  set per deployment (see [Configuration variables](#configuration-variables)).
+
+## Push
+
+### Request body limit
+
+Cloudflare refuses a request whose body is larger than the zone plan allows,
+before the Worker runs, with its own HTTP 413 page. Fyrden cannot change that
+answer or show a better message.
+
+| Cloudflare plan of the hostname | Request body limit |
+|---|---|
+| Free, Pro (and `*.workers.dev`) | 100 MB ([platform limit](https://developers.cloudflare.com/workers/platform/limits/#request-and-response-limits)). **Measured** on 2026-10-10 on Workers Free, `workers.dev`: exactly 104,857,600 bytes (100 MiB) accepted, 104,857,601 refused, both with and without `Content-Length` |
+| Business | 200 MB ([platform limit](https://developers.cloudflare.com/workers/platform/limits/#request-and-response-limits)); not measured |
+| Enterprise | Up to 5 GB, set on the zone ([platform limit](https://developers.cloudflare.com/workers/platform/limits/#request-and-response-limits)); not measured |
+
+A push is one request, so a stock `git push` whose request is larger than the
+limit fails with an HTTP 413 error. No refs change and nothing is stored,
+because Fyrden never saw the request.
+
+Use `fyrden push` instead of `git push` for large pushes:
+
+- `fyrden push <remote> <refspec...>` builds the pack git would send, checks its
+  size first and, when it fits, runs `git push`. When it does not fit, it stops
+  and names the limit and `fyrden push --chunked`.
+- `fyrden push --chunked <remote> <refspec...>` uploads the pack in parts
+  through an upload session (each part one request under the limit, retried on
+  failure), then completes the session, which checks and commits it exactly as
+  a push.
+- Both forms talk to the remote's push URL (`remote.<name>.pushurl`, else its
+  `url`), as `git push` does; a remote with several push URLs is refused, so
+  name the URL instead. The token is `FYRDEN_TOKEN`, else the password in
+  the push URL, else what git's credential helpers have for it. A token the
+  CLI holds reaches its own `git` calls through a helper set for that one
+  call, never in a URL or on the command line.
+- The CLI assumes 104,857,600 bytes. On a Business or Enterprise zone, pass
+  `--body-limit <bytes>` or set `FYRDEN_PUSH_BODY_LIMIT`, and raise
+  `GIT_PUSH_MAX_BODY_BYTES` on the server to match.
+
+The server's own check, `GIT_PUSH_MAX_BODY_BYTES` (default 104,857,600), refuses
+a larger push with a git error message rather than a 413, for bodies the edge
+let through.
+
+How a push body is stored is the same on every plan: the Worker writes the
+request body to R2 with one upload, and the repository's Durable Object reads,
+checks and indexes it from there. An uncompressed body with a
+`Content-Length` (what git sends behind Cloudflare's edge) is streamed to R2
+as it arrives: the Worker runs no code per chunk. Two kinds of body are read
+into the Worker's memory first, since their length is known only at the end:
+
+- **Compressed bodies** (`Content-Encoding: gzip`; JGit and EGit compress
+  every push, git never does). The Worker inflates the body and holds the
+  inflated bytes, inside an isolate's 128 MB of memory
+  ([platform limit](https://developers.cloudflare.com/workers/platform/limits/#memory)),
+  so their limit is lower: `GIT_PUSH_MAX_GZIP_BODY_BYTES`, default 33,554,432
+  (32 MiB) of inflated bytes, or `GIT_PUSH_MAX_BODY_BYTES` if that is smaller.
+  A larger compressed push is refused with a git error message naming the
+  limit. Push it uncompressed (with git) or with `fyrden push --chunked`.
+- **Bodies without a `Content-Length`** (chunked transfer encoding). The edge
+  supplies the length on a deployment (**measured** on 2026-10-10 on Workers
+  Free), so this happens only without it, as under `wrangler dev`.
+
+### Objects and packs
+
+| Limit | Value | Kind |
+|---|---|---|
+| Largest object, delta base or delta result | 32 MiB | Product limit (not configurable) |
+| Objects in one pack | 1,000,000 | Default (not configurable yet) |
+| Longest delta chain in a pushed pack | 50, git's own `pack.depth` default | Default (not configurable yet). A client that raised `pack.depth` can be refused |
+| Ref updates in one push request | 10,000 | Default |
+| Push options in one push | 100 | Default |
+
+### Pack count
+
+Every push adds a pack, and every fetch consults every live pack, so a
+repository may hold at most `GIT_PACK_CAP` of its own live packs (default 16,
+minimum 2). A push that would go over merges the smallest packs into one as it
+commits, within a budget of `GIT_TAIL_MERGE_MAX_BYTES` (default 64 MiB) and
+`GIT_TAIL_MERGE_MAX_OBJECTS` (default 500,000). When no merge within budget
+makes room (for example while clones are reading the packs it would merge),
+each ref gets "try the push again later" and a background merge is
+scheduled; the retried push succeeds.
+
+### Push policy
+
+- **Ref names** follow git's own rules (`git check-ref-format`), must start
+  with `refs/`, must be valid UTF-8, and are at most 1,024 bytes. git itself
+  accepts any bytes in ref names; Fyrden refuses names that are not UTF-8 with
+  "ref name must be valid UTF-8", because every other surface (REST, MCP,
+  webhooks, the web UI) is JSON.
+- **A ref named twice** in one push is refused.
+- **Hidden refs:** `refs/pull/` is managed by Fyrden; pushes cannot create,
+  update or delete refs there.
+- **The default branch** cannot be deleted by a push.
+- **Branches** (`refs/heads/...`) must point to commits.
+- **Object checks** are git's `fsck` checks with git's own severities, on
+  every pushed object, for `git push`, `fyrden push --chunked` and imports
+  alike. Anything `git fsck` reports as an error refuses the push, and so do
+  the warnings that protect people who clone the repository: `.git` in a tree
+  (including NTFS and HFS+ look-alikes), `.` or `..` entries, names
+  containing `/`, empty names, and entries naming the null object id. The
+  `.gitmodules` and `.gitattributes` errors refuse too (a symlinked
+  `.gitmodules`, unsafe submodule names, paths and URLs, oversized
+  `.gitattributes`). Other warnings and info-level findings are accepted and
+  shown to the client as warnings: zero-padded tree modes, unusual file
+  modes, very long names, a NUL byte in a commit message, tags without a
+  tagger or with an unusual name. Many long-lived repositories have these in
+  their history; GitLab, for example, turns off the zero-padded mode check
+  on push for that reason
+  ([Gitaly consistency checks](https://docs.gitlab.com/administration/gitaly/consistency_checks/)).
+  git's own `receive.fsckObjects` is stricter (it refuses every warning
+  unless `receive.fsck.<id>` relaxes it), and stock git checks nothing on
+  receive by default.
+- **SHA-1 collision attacks** are detected (SHA-1DC, as in git and on
+  GitHub); a colliding object refuses the push.
+- **Connectivity:** every object a new ref needs must be in the push or
+  already in the repository, with the right type.
+- **Shallow pushes** (from a shallow clone, when the push depends on the
+  shallow boundary) are refused as a whole.
+- **Atomic pushes** (`git push --atomic`) apply every ref or none. Without
+  `--atomic`, each ref succeeds or fails on its own.
+- **Compare-and-swap:** a ref whose current value is not the one the client
+  expected (for example `--force-with-lease`) fails with git's reason.
+
+## Fetch and clone
+
+- **Protocol v2 only** for fetch and clone (git 2.26 or later, the default
+  since 2.26). A protocol v0 or v1 fetch gets an error naming protocol v2.
+  Pushes use git's receive-pack, as protocol v2 defines no push.
+- **Shallow clones and fetches:** `--depth`, `--shallow-since`,
+  `--shallow-exclude` and `--deepen` are supported.
+- **Thin packs** are sent to clients that ask for them on incremental fetches.
+- **Not supported:** partial clone (`--filter`), `wait-for-done`,
+  `server-option`, `object-info`, `bundle-uri` and packfile URIs. Dumb HTTP is
+  not served.
+- **Request size:** a fetch request (the wants and haves) may be at most
+  16 MiB after decompression, with at most 100,000 wants and 100,000 haves.
+
+### Free and Paid serving
+
+The deployment's plan is the `FYRDEN_PLAN` variable that
+`fyrden deploy --plan free|paid` sets.
+
+| | Free (or unset) | Paid |
+|---|---|---|
+| Response framing | The repository's Durable Object writes a side-band framed copy of the pack set to R2 once; the Worker then streams it with native pipes | The Worker frames the pack while it streams it |
+| Why | A Free Worker gets about 10 ms of CPU per request ([platform limit](https://developers.cloudflare.com/workers/platform/limits/#cpu-time)). **Measured** on Workers Free (2026-10-10): native pipes cost 1 to 4 ms of CPU for 100 MiB to 1 GiB, while framing in Worker code costs 240 to 353 ms per 100 MiB, and a framed 1 GiB clone was stopped for CPU after 632 MB with the response already started | Framing measured at about 2.4 to 3.7 ms of CPU per MiB (Free account, 2026-10-10), well within Paid's 30 s default |
+
+On both plans, a clone that cannot be served from the stored packs as they are
+(the packs hold objects the refs no longer reach, for example) gets a pack
+regenerated by the Durable Object and stored in R2 before the Worker streams
+it.
+
+### Subrequest budgets
+
+Each Worker request and each Durable Object invocation has a budget of calls
+([platform limit](https://developers.cloudflare.com/workers/platform/limits/#subrequests)):
+
+| Budget | Free | Paid |
+|---|---|---|
+| Calls to internal services: R2, D1, Durable Objects | 1,000 per invocation. **Measured** (2026-10-10): R2 binding calls, D1 queries and Durable Object calls share these 1,000, from a Worker and from a Durable Object | 10,000 by default (platform limit; not measured) |
+| Outbound `fetch` and Cache API calls | 50 per invocation. **Measured** (2026-10-10): the Cache API and `fetch` share these 50 | 10,000 for `fetch`; 1,000 Cache API calls per request (platform limits; not measured) |
+
+**Measured** (2026-10-10): every request into a Durable Object starts with a
+fresh budget, so the repository object's work does not use the Worker's.
+
+What this means for clones:
+
+- Pack bytes are read from R2 in large ranges (whole packs when serving them
+  as they are), so a clone makes few R2 calls. Counted in local integration
+  tests (2026-10-11), cloning a one-pack repository took: on Free, 1 R2 read in
+  the Worker and 3 R2 calls in the Durable Object the first time, then 1 and 1;
+  on Paid, 1 and 1; a regenerated pack on Free, 1 and 4 plus 2 Cache API calls.
+- A repository may have at most 16 own live packs (the pack-count cap), which
+  bounds the R2 calls of a clone served as stored.
+- The Durable Object caches pack blocks in the Cache API for reads that need
+  random access. It stops calling the Cache API once the invocation (a
+  request or an alarm, with every indexing phase or job it runs) has made 40
+  external calls (default), Cache API and outbound `fetch` together, under
+  Free's 50. A Cache API call that fails is treated as a miss.
+- Background jobs start no new slice once the invocation has made 800 calls to
+  R2, D1 and Durable Objects (Proposed), under Free's 1,000; the alarm
+  continues them in a new invocation.
+- A cold clone of a 1 GB repository has not been measured yet on Paid.
+
+### Durable Object CPU
+
+A Durable Object gets 30 s of CPU per request and per alarm by default
+([platform limit](https://developers.cloudflare.com/durable-objects/platform/limits/)).
+**Measured** on Workers Free (2026-10-10): an alarm that used 27.0 s of CPU
+completed, one at 32.5 s was reset and retried. A reset loses the writes of
+that invocation, so Fyrden's long work is sliced and saves its place:
+
+- Push indexing runs for up to `GIT_PUSH_INDEX_BUDGET_MS` (default 10 s) in
+  each request, then continues in the object's alarm. The Worker waits (no
+  CPU) and keeps the client's connection alive.
+- Repack and garbage collection slices stop after 20 s, 200,000 objects,
+  256 MiB written or 500 R2 calls (defaults), whichever comes first.
+
+Not measured yet: the CPU needed to parse the largest packs, as the first
+parsing pass of one pack runs in one invocation.
+
+Each Durable Object has 128 MB of memory
+([platform limit](https://developers.cloudflare.com/workers/platform/limits/#memory));
+Fyrden's git operations in one repository share a 72 MiB pool (default) and
+wait for room rather than exceed it.
+
+## Chunked upload sessions
+
+The `uploads.*` operations (and `fyrden push --chunked`) take a pack in parts:
+
+| Limit | Value | Variable |
+|---|---|---|
+| Part size (every part but the last) | 16 MiB (default; at least 5 MiB, and below the request body limit) | `GIT_UPLOAD_PART_BYTES` |
+| Parts per session | 10,000 ([R2 platform limit](https://developers.cloudflare.com/r2/objects/upload-objects/)) | |
+| Largest pack per session | 8 GiB (default) | `GIT_UPLOAD_MAX_BYTES` |
+| Ref updates per session | 1 to 1,000 | |
+| How long one `complete` call waits for indexing before answering `indexing` | 20 s (default); call again | `GIT_UPLOAD_COMPLETE_WAIT_MS` |
+| Session lifetime | An upload not committed within 24 hours (default) is removed with its parts | |
+
+Only the token that started a session can complete it, and the push is
+re-authorized when it commits. A part can be uploaded again; the last upload
+wins. One request at a time uploads a given part: another upload of the same
+part meanwhile is refused with `part_in_progress` (HTTP 409, `Retry-After`),
+and `complete` waits (`parts_in_progress`) until no part is being uploaded. A
+request that stalls for 10 minutes (default) loses the part to the next
+upload; its own late answer is then refused (`part_superseded`) and the part
+must be uploaded again. `fyrden push --chunked` retries both.
+
+## Server-side import
+
+An import copies a repository from another git server into an empty Fyrden
+repository:
+
+- The source URL must be `https://`, at most 2,048 characters, without
+  credentials, query or fragment. Its host must resolve to public addresses
+  only (checked on every request; redirects are refused), and must not be the
+  deployment itself.
+- **Own hosts:** the deployment's own hostnames are refused, so an import
+  cannot loop back through Fyrden. They are the host the request arrived on;
+  on `workers.dev`, both Fyrden Workers on the same account subdomain; and any
+  extra hostnames in `FYRDEN_OWN_HOSTS` (comma separated). Set it to every
+  custom domain routed to either Worker.
+- The source must speak git protocol v2.
+- Only `refs/heads/*` and `refs/tags/*` are imported, at most 10,000 refs.
+  Refs whose names are invalid or not UTF-8 are skipped and listed in the
+  import's report.
+- At most `GIT_IMPORT_MAX_BYTES` (default 4 GiB) and `GIT_IMPORT_MAX_MS`
+  (default 10 minutes) of fetching per import.
+- The imported pack is checked like any push.
+
+## Maintenance and retention
+
+Repack, garbage collection and cleanup run in each repository's Durable Object
+alarm. These periods are defaults and are not configurable in this version:
+
+| What | When it is deleted |
+|---|---|
+| Packs replaced by a repack or collection | 30 days after they were replaced, and never while a clone that started before still reads them |
+| Unreachable objects (moved to a garbage pack by collection) | Condemned 1 day after the garbage pack was last touched, then deleted after the 30-day retention |
+| Reflog entries | After 90 days, by a pass that commits schedule (at most daily). Objects reachable only from the reflog are kept until then |
+| Uncommitted uploads and their stored bytes | 24 hours after the upload started |
+| Stored fetch responses (regenerated or framed packs) | 1 hour after the last clone that read them |
+| Outputs of an interrupted repack | 24 hours |
+
+A repack that replaces packs a clone is reading waits up to 1 hour for that
+clone before it switches; the old packs stay readable either way.
+
+## Configuration variables
+
+Set these as Worker variables of `fyrden-api`: add a `"vars"` object to
+`apps/api/wrangler.jsonc` before `fyrden deploy` (variables set only in the
+Cloudflare dashboard are replaced by the next deploy unless `keep_vars` is set,
+see [Wrangler configuration](https://developers.cloudflare.com/workers/wrangler/configuration/)).
+A value that is missing, not a whole number, or below the minimum is ignored
+and the default applies.
+
+| Variable | Default | Minimum | What it controls |
+|---|---|---|---|
+| `FYRDEN_PLAN` | unset (Free) | | `paid` selects Paid serving; anything else is Free. `fyrden deploy --plan` sets it |
+| `FYRDEN_OWN_HOSTS` | unset | | Extra hostnames of this deployment (comma separated), refused as import sources |
+| `GIT_PUSH_MAX_BODY_BYTES` | 104,857,600 | 0 | Largest push request the Worker accepts |
+| `GIT_PUSH_MAX_GZIP_BODY_BYTES` | 33,554,432 (32 MiB) | 0 | Largest inflated size of a compressed push request |
+| `GIT_PUSH_INDEX_BUDGET_MS` | 10,000 | 0 | Indexing time per request before the alarm takes over |
+| `GIT_PUSH_POLL_MS` | 1,000 | 0 | First wait before the Worker asks whether indexing is done |
+| `GIT_PUSH_MAX_POLL_MS` | 5,000 | 0 | Longest wait between two such calls |
+| `GIT_PUSH_MAX_WAIT_MS` | 900,000 (15 min) | 0 | Longest the Worker waits for indexing before giving up |
+| `GIT_PACK_CAP` | 16 | 2 | Most own live packs per repository |
+| `GIT_TAIL_MERGE_MAX_BYTES` | 67,108,864 (64 MiB) | 1 | Most bytes one merge at push time copies |
+| `GIT_TAIL_MERGE_MAX_OBJECTS` | 500,000 | 1 | Most objects one merge at push time copies |
+| `GIT_UPLOAD_PART_BYTES` | 16,777,216 (16 MiB) | 5,242,880 | Part size of upload sessions |
+| `GIT_UPLOAD_MAX_BYTES` | 8,589,934,592 (8 GiB) | 32 | Largest pack per upload session |
+| `GIT_UPLOAD_COMPLETE_WAIT_MS` | 20,000 | 0 | How long one `complete` call waits |
+| `GIT_IMPORT_MAX_BYTES` | 4,294,967,296 (4 GiB) | 32 | Largest pack an import fetches |
+| `GIT_IMPORT_MAX_MS` | 600,000 (10 min) | 1,000 | Longest an import's fetch may take |
+
+`fyrden-api` also needs the secret `BOOTSTRAP_SECRET`, which `fyrden deploy`
+sets. The `fyrden` CLI reads `FYRDEN_TOKEN` (the token for `fyrden push`),
+`FYRDEN_PUSH_BODY_LIMIT` (its body limit) and `FYRDEN_GIT_BINARY` (the `git`
+to run) from its own environment.
+
+## Not supported
+
+- Git LFS.
+- SHA-256 repositories (`object-format=sha256`); repositories use SHA-1.
+- Protocol v0 and v1 for fetch and clone, and the dumb HTTP protocol.
+- Server-side hooks (`pre-receive`, `update`, `post-receive`).
+- Partial clone (`--filter`) and the other fetch features listed above.
+- SSH; git is served over HTTPS.
