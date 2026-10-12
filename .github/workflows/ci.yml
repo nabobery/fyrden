@@ -55,10 +55,11 @@ jobs:
         run: pnpm lint:ci
       - name: Typecheck (and generated Worker types are current)
         run: pnpm turbo run typecheck
+      # Every package runs to the end, so one run reports every failure.
       - name: Unit and workerd integration tests with Istanbul coverage
-        run: pnpm turbo run test:coverage
+        run: pnpm turbo run test:coverage --continue=dependencies-successful
       - name: Shuffle guard (order-dependent workerd tests)
-        run: pnpm turbo run test:shuffle
+        run: pnpm turbo run test:shuffle --continue=dependencies-successful
       - name: Dry-run deploy of both Workers
         run: pnpm turbo run deploy:dry-run
       - name: Both Workers together locally, through the service binding
