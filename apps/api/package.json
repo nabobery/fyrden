@@ -26,6 +26,7 @@
   "devDependencies": {
     "@cloudflare/vitest-plugin": "catalog:",
     "@vitest/coverage-istanbul": "catalog:",
+    "fast-check": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:",

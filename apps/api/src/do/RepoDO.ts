@@ -425,6 +425,17 @@ export class RepoDO extends MigratingDO {
     return this.#imports().begin(input);
   }
 
+  /**
+   * The row and data of an event too large for its queue message, as the
+   * JSON `{ row, data }`, by event key; null once its retention has passed.
+   */
+  eventPayload(key: string): string | null {
+    const stored = this.ctx.storage.sql
+      .exec<{ payload: string }>("SELECT payload FROM event_payloads WHERE event_key = ?", key)
+      .toArray()[0];
+    return stored?.payload ?? null;
+  }
+
   /** The latest import's progress or outcome. */
   importRecord(): Promise<ImportRecord | undefined> {
     return this.#imports().record();

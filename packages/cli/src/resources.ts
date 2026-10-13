@@ -13,7 +13,10 @@ interface ApiConfig {
   name: string;
   d1_databases?: { binding: string; database_name: string; migrations_dir?: string }[];
   r2_buckets?: { bucket_name: string }[];
-  queues?: { producers?: { queue: string }[]; consumers?: { queue: string }[] };
+  queues?: {
+    producers?: { queue: string }[];
+    consumers?: { queue: string; dead_letter_queue?: string }[];
+  };
   kv_namespaces?: { binding: string }[];
 }
 
@@ -25,6 +28,7 @@ export function resourcePlan(config: ApiConfig): ResourcePlan {
   const queues = new Set([
     ...(config.queues?.producers ?? []).map((q) => q.queue),
     ...(config.queues?.consumers ?? []).map((q) => q.queue),
+    ...(config.queues?.consumers ?? []).flatMap((q) => q.dead_letter_queue ?? []),
   ]);
   return {
     d1: (config.d1_databases ?? []).map((d) => ({

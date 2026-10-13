@@ -34,6 +34,7 @@ const EVERY_RESOURCE = [
   "queue:fyrden-webhooks",
   "queue:fyrden-ci-dispatch",
   "queue:fyrden-indexing",
+  "queue:fyrden-events-dlq",
   "r2:fyrden-git",
   "r2:fyrden-ci",
   "r2:fyrden-search",

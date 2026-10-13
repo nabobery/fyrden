@@ -2,6 +2,7 @@ import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { RepoDO } from "../do/RepoDO.js";
 import { allocateEpoch } from "../events/epochs.js";
+import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
 import type { RewriteState } from "../git/maintenance/rewrite.js";
 import { packCapPolicy } from "../git/maintenance/tail-merge-plan.js";
 import { defaultBranchOf, type RepoEntry } from "../repos/directory.js";
@@ -48,8 +49,6 @@ const COMMIT_PAGE = 2_000;
 const COPY_CALLS = 400;
 /** Wall time after which a copy step starts no new page. Proposed: inside 30 s of CPU per invocation. */
 const COPY_STEP_MS = 10_000;
-/** The org database a repository's rows go to (one per deployment for now). */
-const DEFAULT_ORG_SHARD = "default";
 
 export interface ForkRequest {
   readonly parent: RepoEntry;

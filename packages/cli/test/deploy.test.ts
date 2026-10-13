@@ -60,12 +60,13 @@ describe("fyrden deploy", () => {
     expect([...fake.state.queues].sort()).toEqual([
       "fyrden-ci-dispatch",
       "fyrden-events",
+      "fyrden-events-dlq",
       "fyrden-indexing",
       "fyrden-webhooks",
     ]);
     expect([...fake.state.d1.keys()].sort()).toEqual(["fyrden-directory", "fyrden-org"]);
     expect([...fake.state.kv.values()]).toEqual(["fyrden-api-cache"]);
-    expect(result.created).toHaveLength(11);
+    expect(result.created).toHaveLength(12);
   });
 
   it("uploads the required secret with the first API deploy and reports a generated one", async () => {
@@ -191,7 +192,7 @@ describe("fyrden deploy", () => {
   it("migrates D1 before deploying, and deploys the API before the web Worker", async () => {
     const fake = fakeWrangler();
     const result = await deploy(deps(fake.runner).d);
-    expect(fake.state.migrated).toEqual(["fyrden-directory"]);
+    expect(fake.state.migrated).toEqual(["fyrden-directory", "fyrden-org"]);
     expect(fake.state.deployed.slice(0, 2)).toEqual(["fyrden-api", "fyrden-web"]);
     expect(result.apiUrl).toBe("https://fyrden-api.acct.workers.dev");
     const migrateIndex = fake.calls.findIndex((c) => c.args[1] === "migrations");

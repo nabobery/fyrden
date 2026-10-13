@@ -54,7 +54,15 @@
       { "binding": "INDEXING", "queue": "fyrden-indexing" }
     ],
     "consumers": [
-      { "queue": "fyrden-events" },
+      // Batch size, retries and the dead-letter queue are Proposed, sized for
+      // the consumer's CPU and D1 query budgets on Free.
+      {
+        "queue": "fyrden-events",
+        "max_batch_size": 5,
+        "max_batch_timeout": 5,
+        "max_retries": 10,
+        "dead_letter_queue": "fyrden-events-dlq"
+      },
       { "queue": "fyrden-webhooks" },
       { "queue": "fyrden-ci-dispatch" },
       { "queue": "fyrden-indexing" }

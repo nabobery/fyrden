@@ -9,6 +9,7 @@ function localWorkers(): { maxWorkers?: number } {
 
 export default defineConfig(async () => {
   const directoryMigrations = await readD1Migrations("./migrations/directory");
+  const orgMigrations = await readD1Migrations("./migrations/org");
   return {
     plugins: [
       cloudflareTest({
@@ -16,6 +17,7 @@ export default defineConfig(async () => {
         miniflare: {
           bindings: {
             DIRECTORY_MIGRATIONS: directoryMigrations,
+            ORG_MIGRATIONS: orgMigrations,
             BOOTSTRAP_SECRET: "test-bootstrap-secret",
           },
         },

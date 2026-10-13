@@ -1,5 +1,6 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
 import { allocateEpoch } from "../events/epochs.js";
+import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
 import {
   abortUploadSession,
   completeUploadSession,
@@ -19,12 +20,6 @@ import { clock, newId, tokenStore } from "../services.js";
 import { type Handlers, OperationError } from "./execute.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * The read-model database a repository's rows go to. A deployment binds one
- * org database (`ORG_READ`) for now; this names it until shards exist.
- */
-const DEFAULT_ORG_SHARD = "default";
 
 function repoOutput(repo: RepoEntry, defaultBranch: string) {
   return {
