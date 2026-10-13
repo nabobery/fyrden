@@ -60,6 +60,8 @@ export interface ForkRequest {
   readonly ownerId: string;
   readonly ownerHandle: string;
   readonly name: string;
+  /** When the fork is deleted (Unix ms); null to keep it. */
+  readonly expiresAt?: number | null;
   readonly requestId?: string;
   readonly metrics?: Metrics;
 }
@@ -181,8 +183,8 @@ export async function forkRepository(
       claimNameStatement(env.DIRECTORY, request.ownerId, request.name),
       env.DIRECTORY.prepare(
         `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, parent_id,
-           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           expires_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         forkId,
         request.ownerId,
@@ -191,6 +193,7 @@ export async function forkRepository(
         DEFAULT_ORG_SHARD,
         parent.visibility,
         parent.id,
+        request.expiresAt ?? null,
         now,
         now,
       ),
@@ -229,6 +232,7 @@ export async function forkRepository(
       nameGen: 0,
       parentId: parent.id,
       isTemplate: false,
+      expiresAt: request.expiresAt ?? null,
     },
     defaultBranch: defaultBranchOf(exported.head),
     publishMs,

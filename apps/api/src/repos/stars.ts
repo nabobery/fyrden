@@ -4,7 +4,14 @@ import { repoFor } from "../git/chunked/operations.js";
 import { decodeSeekCursor, encodeSeekCursor } from "../ops/cursor.js";
 import type { OpContext } from "../ops/execute.js";
 import { clock } from "../services.js";
-import { authorize, defaultBranchOf, entryOf, type RepoEntry, type RepoRow } from "./directory.js";
+import {
+  authorize,
+  defaultBranchOf,
+  entryOf,
+  REPO_COLUMNS,
+  type RepoEntry,
+  type RepoRow,
+} from "./directory.js";
 import { readModelDetails } from "./listing.js";
 import { repoOutput, starCounts, visibleParents } from "./output.js";
 
@@ -119,8 +126,7 @@ async function listStars(
   const before = page.before ?? { at: Number.MAX_SAFE_INTEGER, id: "" };
   const { results } = await env.DIRECTORY.withSession("first-primary")
     .prepare(
-      `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-         r.name_gen, r.parent_id, r.is_template, s.created_at AS starred_at
+      `SELECT ${REPO_COLUMNS}, s.created_at AS starred_at
        FROM stars s JOIN repos r ON r.id = s.repo_id JOIN principals p ON p.id = r.owner_id
        WHERE s.user_id = ? AND r.state = 'active' AND p.disabled_at IS NULL
          AND (s.created_at, s.repo_id) < (?, ?)

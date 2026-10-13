@@ -38,7 +38,7 @@ import {
   listCommitsOperation,
   listTagsOperation,
 } from "../repos/browse.js";
-import { createRepository } from "../repos/create.js";
+import { checkedExpiry, createRepository } from "../repos/create.js";
 import { deleteRepoOperation, deleteReposOperation } from "../repos/delete.js";
 import { authorize, defaultBranchOf, resolveRepo } from "../repos/directory.js";
 import {
@@ -123,11 +123,12 @@ export const handlers: Handlers = {
     };
   },
 
-  "repos.create": ({ env, auth, requestId, metrics }, { name }) =>
+  "repos.create": ({ env, auth, requestId, metrics }, { name, expires_at }) =>
     createRepository(env, { id: auth.principalId, handle: auth.principalHandle ?? "" }, name, {
       actorId: auth.principalId,
       requestId,
       metrics,
+      expiresAt: checkedExpiry(expires_at),
     }),
 
   // A user's own repositories: it administers them all.

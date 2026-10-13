@@ -52,28 +52,44 @@ type Deletion = { step: DeletionStep; requested_by: string | null; org_shard: st
 export async function markDeletions(
   env: Env,
   repos: readonly Pick<RepoEntry, "id" | "ownerHandle" | "name">[],
-  options: { actorId: string; requestId?: string; metrics?: Metrics },
+  options: {
+    /** Who deletes them; null for the instance itself (an expiry). */
+    actorId: string | null;
+    requestId?: string;
+    /**
+     * An expiry: only repositories that have expired by this time (Unix
+     * ms) are marked, checked in the batch, so one whose expiry was just
+     * cleared or extended is kept. Audited as `repo.expire`.
+     */
+    expiredBy?: number;
+    metrics?: Metrics;
+  },
 ): Promise<Set<string>> {
   if (repos.length === 0) return new Set();
   const db = env.DIRECTORY;
   const now = clock();
   const ids = JSON.stringify(repos.map((r) => r.id));
   const inIds = "id IN (SELECT value FROM json_each(?1))";
+  // ?5 is the expiry cutoff, or null for any active repository.
+  const eligible =
+    "state = 'active' AND (?5 IS NULL OR (expires_at IS NOT NULL AND expires_at <= ?5))";
+  const expiry = options.expiredBy ?? null;
   options.metrics?.count("d1.query", { db: "directory", op: "repo_delete" }, 5);
   const results = await db.batch<{ id: string }>([
     db
       .prepare(
         `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
-         SELECT ?2, ?3, 'repo.delete', id, json_object('name', name), ?4 FROM repos
-         WHERE ${inIds} AND state = 'active'`,
+         SELECT ?2, ?3, CASE WHEN ?5 IS NULL THEN 'repo.delete' ELSE 'repo.expire' END,
+           id, json_object('name', name), ?4 FROM repos
+         WHERE ${inIds} AND ${eligible}`,
       )
-      .bind(ids, now, options.actorId, options.requestId ?? null),
+      .bind(ids, now, options.actorId, options.requestId ?? null, expiry),
     db
       .prepare(
         `UPDATE repos SET state = 'deleting', updated_at = ?2
-         WHERE ${inIds} AND state = 'active' RETURNING id`,
+         WHERE ${inIds} AND ${eligible} RETURNING id`,
       )
-      .bind(ids, now),
+      .bind(ids, now, null, null, expiry),
     db
       .prepare(
         `INSERT INTO repo_deletions (repo_id, step, attempts, updated_at, requested_by)
@@ -82,7 +98,10 @@ export async function markDeletions(
       )
       .bind(ids, now, options.actorId),
     db
-      .prepare("DELETE FROM repo_redirects WHERE repo_id IN (SELECT value FROM json_each(?1))")
+      .prepare(
+        `DELETE FROM repo_redirects WHERE repo_id IN (SELECT value FROM json_each(?1))
+         AND EXISTS (SELECT 1 FROM repos WHERE id = repo_redirects.repo_id AND state = 'deleting')`,
+      )
       .bind(ids),
     db
       .prepare(
@@ -91,11 +110,14 @@ export async function markDeletions(
       )
       .bind(ids),
   ]);
+  const marked = new Set((results[1]?.results ?? []).map((row) => row.id));
+  // An expiry leaves what it did not mark alone; a deletion forgets even one already under way.
   for (const repo of repos) {
+    if (options.expiredBy !== undefined && !marked.has(repo.id)) continue;
     forgetResolved(repo.ownerHandle, repo.name);
     forgetRepo(repo.id);
   }
-  return new Set((results[1]?.results ?? []).map((row) => row.id));
+  return marked;
 }
 
 /**

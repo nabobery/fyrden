@@ -1,12 +1,21 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { getRepo, Output } from "@fyrden/api-contract";
+import { expiryProblem } from "@fyrden/domain";
 import { allocateEpoch } from "../events/epochs.js";
 import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
 import { OperationError } from "../ops/execute.js";
 import { clock, newId } from "../services.js";
 import { claimNameStatement, forgetResolved, INITIAL_BRANCH } from "./directory.js";
 import { repoOutput } from "./output.js";
+
+/** An expiry a request gives, checked against the clock; null without one. */
+export function checkedExpiry(expiresAt: number | undefined): number | null {
+  if (expiresAt === undefined) return null;
+  const problem = expiryProblem(expiresAt, clock());
+  if (problem) throw new OperationError(422, "invalid_expiry", problem);
+  return expiresAt;
+}
 
 // D1 reports a unique-index violation in the error message.
 const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
@@ -27,9 +36,12 @@ export async function createRepository(
     readonly metrics: Metrics;
     /** The template it will be generated from: it takes no other write until then. */
     readonly templateId?: string;
+    /** When it is deleted (Unix ms, checked by `checkedExpiry`); null to keep it. */
+    readonly expiresAt?: number | null;
   },
 ): Promise<Output<typeof getRepo>> {
   const { metrics } = request;
+  const expiresAt = request.expiresAt ?? null;
   const taken = () =>
     new OperationError(
       409,
@@ -65,10 +77,11 @@ export async function createRepository(
       claimNameStatement(db, owner.id, name),
       db
         .prepare(
-          `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'private', ?, ?)`,
+          `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, expires_at,
+             created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'private', ?, ?, ?)`,
         )
-        .bind(id, owner.id, name, networkId, DEFAULT_ORG_SHARD, now, now),
+        .bind(id, owner.id, name, networkId, DEFAULT_ORG_SHARD, expiresAt, now, now),
       auditStatement(
         db,
         now,
@@ -100,6 +113,7 @@ export async function createRepository(
       nameGen: 0,
       parentId: null,
       isTemplate: false,
+      expiresAt,
     },
     { defaultBranch: INITIAL_BRANCH, description: null, stars: 0 },
   );

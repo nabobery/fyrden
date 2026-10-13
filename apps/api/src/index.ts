@@ -1,6 +1,7 @@
 import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { createApp } from "./app.js";
 import { archiveDirectoryAudit } from "./cron/directory-audit-archiver.js";
+import { reapExpiredRepos } from "./cron/expiry-reaper.js";
 import { sweepEffects } from "./effects/dispatcher.js";
 import { EFFECT_SINKS } from "./effects/sinks.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "./events/read-model.js";
@@ -40,7 +41,11 @@ export default {
           now: () => Date.now(),
           metrics,
         }),
-        advanceDeletions(env, { metrics }),
+        // Expired repositories first, so their deletions start in the same run;
+        // deletions advance even when reaping fails.
+        reapExpiredRepos(env, { now: Date.now(), metrics }).finally(() =>
+          advanceDeletions(env, { metrics }),
+        ),
         sweepEffects({
           db: readModelFor(env, DEFAULT_ORG_SHARD),
           env,

@@ -6,3 +6,4 @@ export * from "./events/snapshots.js";
 export * from "./ids.js";
 export * from "./principals/principal.js";
 export * from "./principals/token.js";
+export * from "./repos/expiry.js";

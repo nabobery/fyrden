@@ -32,7 +32,13 @@ export interface RepoEntry {
   readonly parentId: string | null;
   /** Whether new repositories can be generated from it. */
   readonly isTemplate: boolean;
+  /** When it is deleted (Unix ms); null to keep it. */
+  readonly expiresAt: number | null;
 }
+
+/** The columns of a repository entry (`repos r` joined with its owner, `principals p`). */
+export const REPO_COLUMNS = `r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility,
+  r.created_at, r.name_gen, r.parent_id, r.is_template, r.expires_at`;
 
 export type RepoRow = {
   id: string;
@@ -45,6 +51,7 @@ export type RepoRow = {
   name_gen: number;
   parent_id: string | null;
   is_template: number;
+  expires_at: number | null;
 };
 
 // Found repositories, per isolate, for 30 s (the token cache's bound): a
@@ -85,14 +92,12 @@ export async function resolveRepo(
     // `state <> 'deleted'` lets the partial (owner_id, name) index serve it.
     return session
       .prepare(
-        `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-           r.name_gen, r.parent_id, r.is_template, 0 AS redirected
+        `SELECT ${REPO_COLUMNS}, 0 AS redirected
          FROM principals p JOIN repos r ON r.owner_id = p.id
          WHERE p.handle = ?1 COLLATE NOCASE AND p.disabled_at IS NULL
            AND r.name = ?2 COLLATE NOCASE AND r.state <> 'deleted' AND r.state = 'active'
          UNION ALL
-         SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-           r.name_gen, r.parent_id, r.is_template, 1
+         SELECT ${REPO_COLUMNS}, 1
          FROM principals p JOIN repo_redirects d ON d.owner_id = p.id
            JOIN repos r ON r.id = d.repo_id AND r.owner_id = d.owner_id
          WHERE p.handle = ?1 COLLATE NOCASE AND p.disabled_at IS NULL
@@ -124,6 +129,7 @@ export function entryOf(row: RepoRow): RepoEntry {
     nameGen: row.name_gen,
     parentId: row.parent_id ?? null,
     isTemplate: row.is_template === 1,
+    expiresAt: row.expires_at,
   };
 }
 
@@ -148,8 +154,7 @@ export async function listOwnedForks(
   const after = page.after ?? { at: -1, id: "" };
   const { results } = await env.DIRECTORY.withSession("first-primary")
     .prepare(
-      `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-         r.name_gen, r.parent_id, r.is_template
+      `SELECT ${REPO_COLUMNS}
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.parent_id = ? AND r.owner_id = ? AND r.state = 'active'
          AND p.disabled_at IS NULL
@@ -180,8 +185,7 @@ export async function findReposById(
   metrics?.count("d1.query", { db: "directory", op: "repos_by_id" });
   const { results } = await env.DIRECTORY.withSession("first-primary")
     .prepare(
-      `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-         r.name_gen, r.parent_id, r.is_template
+      `SELECT ${REPO_COLUMNS}
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.id IN (SELECT value FROM json_each(?)) AND r.state = 'active'
          AND p.disabled_at IS NULL`,
@@ -207,8 +211,7 @@ export async function listOwnedRepos(
   const { results } = await env.DIRECTORY.withSession("first-primary")
     .prepare(
       // `state <> 'deleted'` lets the partial (owner_id, name) index serve the query.
-      `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-         r.name_gen, r.parent_id, r.is_template
+      `SELECT ${REPO_COLUMNS}
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.owner_id = ?1 AND r.state <> 'deleted' AND r.state = 'active'
          AND r.name > ?2 COLLATE NOCASE
@@ -230,8 +233,7 @@ export async function findOwnedRepos(
   metrics?.count("d1.query", { db: "directory", op: "repo_find" });
   const { results } = await env.DIRECTORY.withSession("first-primary")
     .prepare(
-      `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-         r.name_gen, r.parent_id, r.is_template
+      `SELECT ${REPO_COLUMNS}
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.owner_id = ?1 AND r.state <> 'deleted' AND r.state = 'active'
          AND r.name COLLATE NOCASE IN (SELECT value FROM json_each(?2))`,
@@ -328,40 +330,56 @@ export async function renameRepo(
 }
 
 /**
- * Marks an active repository as a template, or not, and audits a change.
- * Returns the flag the directory now holds, or undefined when the
+ * Changes the settings the directory holds for an active repository
+ * (whether it is a template, when it expires) in one batch, auditing a
+ * change. Returns the settings it now has, or undefined when the
  * repository is not active. This isolate forgets the repository's name at
  * once; others see the change within the cache's bound.
  */
-export async function setTemplate(
+export async function updateDirectorySettings(
   env: Env,
   repo: Pick<RepoEntry, "id" | "ownerHandle" | "name">,
-  isTemplate: boolean,
+  change: { readonly isTemplate?: boolean; readonly expiresAt?: number | null },
   options: { actorId: string; requestId?: string; metrics?: Metrics },
-): Promise<boolean | undefined> {
+): Promise<Pick<RepoEntry, "isTemplate" | "expiresAt"> | undefined> {
   const db = env.DIRECTORY;
   const now = clock();
-  const flag = isTemplate ? 1 : 0;
-  options.metrics?.count("d1.query", { db: "directory", op: "repo_set_template" }, 2);
-  const [, updated] = await db.batch<{ is_template: number }>([
+  // ?2 and ?3 are the new values, or null and 0 to keep the column.
+  const template = change.isTemplate === undefined ? null : change.isTemplate ? 1 : 0;
+  const expiry = change.expiresAt === undefined ? 0 : 1;
+  const next = `coalesce(?2, is_template)`;
+  const nextExpiry = `CASE WHEN ?3 THEN ?4 ELSE expires_at END`;
+  options.metrics?.count("d1.query", { db: "directory", op: "repo_settings" }, 2);
+  const [, updated] = await db.batch<{ is_template: number; expires_at: number | null }>([
     db
       .prepare(
         `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
-         SELECT ?3, ?4, 'repo.template', id, json_object('is_template', json(?2)), ?5 FROM repos
-         WHERE id = ?1 AND state = 'active' AND is_template <> ?2`,
+         SELECT ?5, ?6, 'repo.settings', id,
+           json_object('is_template', ${next}, 'expires_at', ${nextExpiry}), ?7 FROM repos
+         WHERE id = ?1 AND state = 'active'
+           AND (is_template <> ${next} OR expires_at IS NOT ${nextExpiry})`,
       )
-      .bind(repo.id, flag, now, options.actorId, options.requestId ?? null),
+      .bind(
+        repo.id,
+        template,
+        expiry,
+        change.expiresAt ?? null,
+        now,
+        options.actorId,
+        options.requestId ?? null,
+      ),
     db
       .prepare(
-        `UPDATE repos SET is_template = ?2, updated_at = CASE WHEN is_template = ?2
-           THEN updated_at ELSE ?3 END
-         WHERE id = ?1 AND state = 'active' RETURNING is_template`,
+        `UPDATE repos SET is_template = ${next}, expires_at = ${nextExpiry},
+           updated_at = CASE WHEN is_template <> ${next} OR expires_at IS NOT ${nextExpiry}
+             THEN ?5 ELSE updated_at END
+         WHERE id = ?1 AND state = 'active' RETURNING is_template, expires_at`,
       )
-      .bind(repo.id, flag, now),
+      .bind(repo.id, template, expiry, change.expiresAt ?? null, now),
   ]);
   forgetResolved(repo.ownerHandle, repo.name);
   const row = updated?.results[0];
-  return row && row.is_template === 1;
+  return row && { isTemplate: row.is_template === 1, expiresAt: row.expires_at };
 }
 
 /** Access git asks for: fetch and clone read the contents, push writes them. */

@@ -29,6 +29,7 @@ export function repoOutput(
     fork: repo.parentId !== null,
     is_template: repo.isTemplate,
     stargazers_count: details.stars,
+    expires_at: repo.expiresAt,
     parent_id: details.parentVisible ? repo.parentId : null,
     created_at: repo.createdAt,
   };

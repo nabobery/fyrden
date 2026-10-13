@@ -3,7 +3,7 @@ import { orgRepoRole, type RepoRole } from "@fyrden/domain";
 import { accountRoleOf, canUseAccount, findAccount } from "../accounts/account.js";
 import { BASE_ROLE } from "../do/OrgDO.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
-import { createRepository } from "./create.js";
+import { checkedExpiry, createRepository } from "./create.js";
 import { advanceDeletion, markDeletions } from "./deletion.js";
 import { allowedWithRole, authorize, resolveRepo } from "./directory.js";
 import { committerOf } from "./file-writes.js";
@@ -52,6 +52,7 @@ export async function generateRepoOperation(
     requestId: ctx.requestId,
     metrics,
     templateId: template.id,
+    expiresAt: checkedExpiry(input.expires_at),
   });
   metrics.count("do.request", { class: "RepoDO", method: "generateFrom" });
   const generated = await env.REPO.getByName(created.id)

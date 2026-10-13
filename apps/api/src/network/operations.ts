@@ -2,6 +2,7 @@ import type { forkRepo, Input, listForks, Output } from "@fyrden/api-contract";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeSeekCursor, encodeSeekCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { checkedExpiry } from "../repos/create.js";
 import { defaultBranchOf, listOwnedForks } from "../repos/directory.js";
 import { readModelDetails } from "../repos/listing.js";
 import { repoOutput, starCounts } from "../repos/output.js";
@@ -27,6 +28,7 @@ export async function forkRepoOperation(
     ownerId: ctx.auth.principalId,
     ownerHandle: ctx.auth.principalHandle ?? "",
     name,
+    expiresAt: checkedExpiry(input.expires_at),
     requestId: ctx.requestId,
     metrics: ctx.metrics,
   });

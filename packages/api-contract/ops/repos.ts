@@ -9,6 +9,13 @@ import { defineOperation } from "../src/op.js";
  */
 export const REPO_NAME_PATTERN = /^(?!\.{1,2}$)(?!.*\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$/;
 
+const ExpiresAt = z
+  .number()
+  .int()
+  .describe(
+    "Delete the repository at this time (Unix milliseconds): in the future, at most one year ahead. Every 5 minutes, expired repositories are marked for deletion (a bounded number per run, oldest expiry first) and deleted like any other.",
+  );
+
 const RepoName = z
   .string()
   .regex(REPO_NAME_PATTERN)
@@ -29,6 +36,11 @@ export const Repo = z.object({
     .boolean()
     .describe("Whether new repositories can be generated from it (`/generate`)."),
   stargazers_count: z.number().int().describe("How many users starred it."),
+  expires_at: z
+    .number()
+    .int()
+    .nullable()
+    .describe("When it is deleted (Unix time in milliseconds); null to keep it."),
   parent_id: z.string().nullable().describe("The id of the repository it was forked from."),
   created_at: z.number().int().describe("Unix time in milliseconds."),
 });
@@ -40,7 +52,7 @@ export const createRepo = defineOperation({
   summary: "Create a repository",
   description:
     "Creates an empty private repository owned by the authenticated user. Clone and push it at `/<owner>/<name>.git`.",
-  input: z.object({ name: RepoName }),
+  input: z.object({ name: RepoName, expires_at: ExpiresAt.optional() }),
   output: Repo,
   permission: "repos:create",
   principals: ["user"],
@@ -117,7 +129,7 @@ export const updateRepo = defineOperation({
   path: "/repos/{owner}/{repo}",
   summary: "Update a repository",
   description:
-    "Renames a repository, changes its description or default branch, or marks it as a template; fields left out are kept. After a rename the old name keeps working for clone, fetch, push and this API, until a repository takes that name again.",
+    "Renames a repository, changes its description or default branch, marks it as a template, or sets or clears its expiry; fields left out are kept. After a rename the old name keeps working for clone, fetch, push and this API, until a repository takes that name again.",
   input: z
     .object({
       owner: z.string().regex(HANDLE_PATTERN).describe("The owner's handle."),
@@ -139,14 +151,18 @@ export const updateRepo = defineOperation({
         .boolean()
         .optional()
         .describe("Whether new repositories can be generated from it."),
+      expires_at: ExpiresAt.nullable()
+        .optional()
+        .describe("A new expiry; null clears it (the repository is kept)."),
     })
     .refine(
       (input) =>
         input.name !== undefined ||
         input.description !== undefined ||
         input.default_branch !== undefined ||
-        input.is_template !== undefined,
-      "Give at least one of name, description, default_branch and is_template.",
+        input.is_template !== undefined ||
+        input.expires_at !== undefined,
+      "Give at least one of name, description, default_branch, is_template and expires_at.",
     ),
   output: Repo,
   permission: "administration:write",
@@ -273,6 +289,7 @@ export const forkRepo = defineOperation({
     owner: z.string().regex(HANDLE_PATTERN).describe("The parent's owner handle."),
     repo: RepoName.describe("The parent repository's name."),
     name: RepoName.optional().describe("The fork's name. Default: the parent's name."),
+    expires_at: ExpiresAt.optional(),
   }),
   output: Repo,
   permission: "repos:create",
@@ -305,6 +322,7 @@ export const generateRepo = defineOperation({
       .optional()
       .describe("Who owns the new repository: the caller (default) or an organization."),
     name: RepoName.describe("The new repository's name."),
+    expires_at: ExpiresAt.optional(),
   }),
   output: Repo,
   permission: "repos:create",
@@ -331,6 +349,7 @@ export const createOrgRepo = defineOperation({
   input: z.object({
     org: z.string().regex(HANDLE_PATTERN).describe("The organization's handle."),
     name: RepoName,
+    expires_at: ExpiresAt.optional(),
   }),
   output: Repo,
   permission: "repos:create",

@@ -735,6 +735,19 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "expires_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "When it is deleted (Unix time in milliseconds); null to keep it.",
+                          },
                           "fork": {
                             "description": "Whether the repository was forked from another.",
                             "type": "boolean",
@@ -791,6 +804,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "fork",
                           "is_template",
                           "stargazers_count",
+                          "expires_at",
                           "parent_id",
                           "created_at",
                         ],
@@ -852,6 +866,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "application/json": {
               "schema": {
                 "properties": {
+                  "expires_at": {
+                    "description": "Delete the repository at this time (Unix milliseconds): in the future, at most one year ahead. Every 5 minutes, expired repositories are marked for deletion (a bounded number per run, oldest expiry first) and deleted like any other.",
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer",
+                  },
                   "name": {
                     "description": "1-100 letters, digits, '.', '_' and '-'; not '.' or '..'; must not end in '.git'. Unique per owner, ignoring case.",
                     "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
@@ -888,6 +908,19 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "expires_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "When it is deleted (Unix time in milliseconds); null to keep it.",
                     },
                     "fork": {
                       "description": "Whether the repository was forked from another.",
@@ -945,6 +978,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "fork",
                     "is_template",
                     "stargazers_count",
+                    "expires_at",
                     "parent_id",
                     "created_at",
                   ],
@@ -1705,6 +1739,19 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "expires_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "When it is deleted (Unix time in milliseconds); null to keep it.",
+                    },
                     "fork": {
                       "description": "Whether the repository was forked from another.",
                       "type": "boolean",
@@ -1761,6 +1808,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "fork",
                     "is_template",
                     "stargazers_count",
+                    "expires_at",
                     "parent_id",
                     "created_at",
                   ],
@@ -1794,7 +1842,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "patch": {
-        "description": "Renames a repository, changes its description or default branch, or marks it as a template; fields left out are kept. After a rename the old name keeps working for clone, fetch, push and this API, until a repository takes that name again.",
+        "description": "Renames a repository, changes its description or default branch, marks it as a template, or sets or clears its expiry; fields left out are kept. After a rename the old name keeps working for clone, fetch, push and this API, until a repository takes that name again.",
         "operationId": "repos.update",
         "parameters": [
           {
@@ -1841,6 +1889,20 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     ],
                     "description": "A short description; null or an empty string clears it.",
                   },
+                  "expires_at": {
+                    "anyOf": [
+                      {
+                        "description": "Delete the repository at this time (Unix milliseconds): in the future, at most one year ahead. Every 5 minutes, expired repositories are marked for deletion (a bounded number per run, oldest expiry first) and deleted like any other.",
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer",
+                      },
+                      {
+                        "type": "null",
+                      },
+                    ],
+                    "description": "A new expiry; null clears it (the repository is kept).",
+                  },
                   "is_template": {
                     "description": "Whether new repositories can be generated from it.",
                     "type": "boolean",
@@ -1879,6 +1941,19 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "expires_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "When it is deleted (Unix time in milliseconds); null to keep it.",
                     },
                     "fork": {
                       "description": "Whether the repository was forked from another.",
@@ -1936,6 +2011,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "fork",
                     "is_template",
                     "stargazers_count",
+                    "expires_at",
                     "parent_id",
                     "created_at",
                   ],
@@ -5019,6 +5095,19 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "expires_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "When it is deleted (Unix time in milliseconds); null to keep it.",
+                          },
                           "fork": {
                             "description": "Whether the repository was forked from another.",
                             "type": "boolean",
@@ -5075,6 +5164,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "fork",
                           "is_template",
                           "stargazers_count",
+                          "expires_at",
                           "parent_id",
                           "created_at",
                         ],
@@ -5146,6 +5236,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "application/json": {
               "schema": {
                 "properties": {
+                  "expires_at": {
+                    "description": "Delete the repository at this time (Unix milliseconds): in the future, at most one year ahead. Every 5 minutes, expired repositories are marked for deletion (a bounded number per run, oldest expiry first) and deleted like any other.",
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer",
+                  },
                   "name": {
                     "description": "The fork's name. Default: the parent's name.",
                     "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
@@ -5180,6 +5276,19 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "expires_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "When it is deleted (Unix time in milliseconds); null to keep it.",
                     },
                     "fork": {
                       "description": "Whether the repository was forked from another.",
@@ -5237,6 +5346,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "fork",
                     "is_template",
                     "stargazers_count",
+                    "expires_at",
                     "parent_id",
                     "created_at",
                   ],
@@ -6848,6 +6958,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "application/json": {
               "schema": {
                 "properties": {
+                  "expires_at": {
+                    "description": "Delete the repository at this time (Unix milliseconds): in the future, at most one year ahead. Every 5 minutes, expired repositories are marked for deletion (a bounded number per run, oldest expiry first) and deleted like any other.",
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer",
+                  },
                   "name": {
                     "description": "The new repository's name.",
                     "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
@@ -6889,6 +7005,19 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "expires_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "When it is deleted (Unix time in milliseconds); null to keep it.",
                     },
                     "fork": {
                       "description": "Whether the repository was forked from another.",
@@ -6946,6 +7075,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "fork",
                     "is_template",
                     "stargazers_count",
+                    "expires_at",
                     "parent_id",
                     "created_at",
                   ],
@@ -7143,6 +7273,19 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "expires_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "When it is deleted (Unix time in milliseconds); null to keep it.",
+                          },
                           "fork": {
                             "description": "Whether the repository was forked from another.",
                             "type": "boolean",
@@ -7199,6 +7342,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "fork",
                           "is_template",
                           "stargazers_count",
+                          "expires_at",
                           "parent_id",
                           "created_at",
                         ],
@@ -7248,6 +7392,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "application/json": {
               "schema": {
                 "properties": {
+                  "expires_at": {
+                    "description": "Delete the repository at this time (Unix milliseconds): in the future, at most one year ahead. Every 5 minutes, expired repositories are marked for deletion (a bounded number per run, oldest expiry first) and deleted like any other.",
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer",
+                  },
                   "name": {
                     "description": "1-100 letters, digits, '.', '_' and '-'; not '.' or '..'; must not end in '.git'. Unique per owner, ignoring case.",
                     "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
@@ -7284,6 +7434,19 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "expires_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "When it is deleted (Unix time in milliseconds); null to keep it.",
                     },
                     "fork": {
                       "description": "Whether the repository was forked from another.",
@@ -7341,6 +7504,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "fork",
                     "is_template",
                     "stargazers_count",
+                    "expires_at",
                     "parent_id",
                     "created_at",
                   ],
@@ -7538,6 +7702,19 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "expires_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "When it is deleted (Unix time in milliseconds); null to keep it.",
+                          },
                           "fork": {
                             "description": "Whether the repository was forked from another.",
                             "type": "boolean",
@@ -7600,6 +7777,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "fork",
                           "is_template",
                           "stargazers_count",
+                          "expires_at",
                           "parent_id",
                           "created_at",
                           "starred_at",

@@ -373,6 +373,21 @@ branch moves, and the branch moves only from the head the commit was built on.
 | Retrying a write | `Idempotency-Key` is not replayed yet: a retried single-file write answers `sha_mismatch`; give `expected_head` to make a multi-file retry safe |
 | Signature | Unsigned for now |
 
+## Repository expiry
+
+A repository may carry `expires_at` (Unix milliseconds), set when it is
+created (also by fork or generation) or by an update, and cleared with
+`null`. The cron, every 5 minutes, marks expired repositories for deletion
+and advances their deletions in the same run; they go through the ordinary
+deletion, audited as `repo.expire` with no actor.
+
+| What | Value |
+|---|---|
+| Earliest | Any time in the future; a past time answers 422 `invalid_expiry` |
+| Latest | One year ahead |
+| Repositories marked per cron run | 50; the rest in later runs |
+| Deletions advanced per cron run | 10 (as for any deletion) |
+
 ## Templates
 
 `POST /repos/{template_owner}/{template_repo}/generate` makes a repository

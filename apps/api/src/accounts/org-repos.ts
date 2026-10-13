@@ -2,7 +2,7 @@ import type { createOrgRepo, Input, listOrgRepos, Output } from "@fyrden/api-con
 import { orgRepoRole } from "@fyrden/domain";
 import { BASE_ROLE } from "../do/OrgDO.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
-import { createRepository } from "../repos/create.js";
+import { checkedExpiry, createRepository } from "../repos/create.js";
 import { listAccountRepos } from "../repos/listing.js";
 import { accountRoleOf, findAccount, orgFor } from "./account.js";
 
@@ -16,6 +16,7 @@ export async function createOrgRepoOperation(
     actorId: ctx.auth.principalId,
     requestId: ctx.requestId,
     metrics: ctx.metrics,
+    expiresAt: checkedExpiry(input.expires_at),
   });
 }
 
