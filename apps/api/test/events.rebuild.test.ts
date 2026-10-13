@@ -37,7 +37,8 @@ async function commit(repoId: string, n: number) {
         { name: "refs/heads/main", oldOid: n === 1 ? null : oid(n - 1), newOid: oid(n) },
       ],
       expectedVersion: version,
-      actor: { principal: "usr_pusher", via: "push" },
+      // The owner: it may write without an ACL snapshot.
+      actor: { principal: repo.events.account()?.ownerId as string, via: "push" },
     });
     expect(result.ok).toBe(true);
   });

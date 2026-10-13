@@ -1,7 +1,7 @@
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import { authenticate } from "../middleware/auth.js";
 import {
-  canAccess,
+  authorize,
   GIT_PERMISSION,
   type RepoAccess,
   type RepoEntry,
@@ -71,7 +71,7 @@ export async function authorizeGit(
     consistency: access === "write" ? "primary" : "cached",
     metrics: c.get("metrics"),
   });
-  if (!repo || !canAccess(auth, repo, GIT_PERMISSION[access]))
+  if (!repo || !(await authorize(c.env, auth, repo, GIT_PERMISSION[access], c.get("metrics"))))
     return fail(gitText(c, 404, REPO_NOT_FOUND));
 
   c.set("auth", auth);

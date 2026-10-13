@@ -18,7 +18,7 @@ import {
   measureInvocation,
   type RequestMeta,
 } from "@fyrden/adapters-cloudflare/obs";
-import type { Envelope } from "@fyrden/domain";
+import type { Envelope, RepoRole } from "@fyrden/domain";
 import type { BlockCache, LsRefsArgs } from "@fyrden/git-core";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
@@ -40,6 +40,7 @@ import { scheduleAfterCommit } from "../git/maintenance/schedule.js";
 import { packCapCompactionHandler } from "../git/maintenance/tail-merge-job.js";
 import { type PackCapPolicy, packCapPolicy } from "../git/maintenance/tail-merge-plan.js";
 import type { PushDecision } from "../git/push/commit.js";
+import { ACCESS_LOST } from "../git/push/reauthorize.js";
 import {
   type BeginPushInput,
   type BeginPushResult,
@@ -68,6 +69,8 @@ import {
 } from "./base/audit-archiver.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
+import type { AclSnapshot } from "./OrgDO.js";
+import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { type EraseOutcome, eraseRepository, recordNetwork } from "./repo/erase.js";
 import {
   REPO_DELETED,
@@ -119,6 +122,12 @@ export class RepoDO extends MigratingDO {
   /** Sends one outbox batch to the events queue. Tests may replace it. */
   sendEvents: (envelope: Envelope) => Promise<void>;
 
+  /** Access decisions, from the account's ACL snapshot. */
+  readonly acl: RepoAcl;
+
+  /** Pulls the account's ACL snapshot for this repository. Tests may replace it. */
+  pullAcl: (accountId: string) => Promise<AclSnapshot>;
+
   /** Where audit records are archived. Tests may replace it. */
   auditBucket: Pick<R2Bucket, "put">;
 
@@ -150,6 +159,24 @@ export class RepoDO extends MigratingDO {
       doClass: this.git.context.doClass,
     });
     this.events = new RepoEvents(this.git, this.outbox, () => this.#repoId());
+    this.pullAcl = async (accountId) => {
+      this.git.context.metrics.count("do.request", { class: "OrgDO", method: "snapshotFor" });
+      return env.ORG.getByName(accountId).snapshotFor(this.#repoId());
+    };
+    this.acl = new RepoAcl({
+      storage: ctx.storage,
+      now: this.git.context.now,
+      metrics: this.git.context.metrics,
+      account: () => this.events.account(),
+      pull: (accountId) => this.pullAcl(accountId),
+    });
+    // The commit point: the initiating principal may still write, under a
+    // snapshot within the write window (a commit without one is the
+    // repository's own, such as maintenance). A refusal refuses the commit.
+    this.git.refStore.authorizeCommit = (context) => {
+      const principal = context.request.actor?.principal;
+      return principal && !this.acl.allows(principal, "write") ? ACCESS_LOST : undefined;
+    };
     this.git.refStore.inCommit = (context) => this.events.onCommit(context);
     this.git.refStore.onHeadChanged = () => this.events.onHeadChanged();
     // Every commit (push, import, merge) schedules the maintenance it calls
@@ -277,6 +304,19 @@ export class RepoDO extends MigratingDO {
     return { headTarget: this.git.refStore.head(), description: this.events.description() };
   }
 
+  /**
+   * `principalId`'s role on the repository for a read or a write (its ACL
+   * snapshot, pulled again past its window; null when none is usable).
+   */
+  roleOf(principalId: string, purpose: AclPurpose): Promise<RepoRole | null> {
+    return this.#measured("roleOf", () => this.acl.roleOf(principalId, purpose));
+  }
+
+  /** The account committed ACL `(epochGen, version)`: an older snapshot is not used again. */
+  invalidateAcl(epochGen: number, version: number): void {
+    this.acl.invalidate(epochGen, version);
+  }
+
   /** Whether the branch `name` (without `refs/heads/`) exists. */
   hasBranch(name: string): boolean {
     return this.git.refStore.hasRef(`refs/heads/${name}`);
@@ -293,12 +333,25 @@ export class RepoDO extends MigratingDO {
     defaultBranch?: string;
     actor: RefActor | null;
   }): Promise<
-    { ok: true; details: RepoDetails } | { ok: false; code: "branch_not_found" | "repo_deleted" }
+    | { ok: true; details: RepoDetails }
+    | { ok: false; code: "branch_not_found" | "repo_deleted" | "access_lost" }
   > {
     return this.#measured("updateSettings", async () => {
       await this.checkEpoch();
+      // The actor administers the repository now: the Worker checked it
+      // before this call; access may have been revoked since. Pulled for a
+      // write, then checked with no await before the change.
+      const principal = input.actor?.principal;
+      if (principal) await this.acl.roleOf(principal, "write");
       // Its deletion started after the caller found it.
       if (this.events.isDeleted()) return { ok: false as const, code: "repo_deleted" as const };
+      if (principal && !this.acl.allows(principal, "admin")) {
+        // The directory's name is recorded even so: a rename already happened there.
+        if (input.name) this.events.update({ name: input.name, actor: input.actor });
+        this.#armOutbox();
+        this.#ensureAuditArchive();
+        return { ok: false as const, code: "access_lost" as const };
+      }
       const head =
         input.defaultBranch === undefined ? undefined : `refs/heads/${input.defaultBranch}`;
       if (head !== undefined && !this.git.refStore.hasRef(head)) {
@@ -401,6 +454,11 @@ export class RepoDO extends MigratingDO {
         return this.#blocks;
       },
     );
+    this.#pushes.accessCheck = async (principal) => {
+      // Pulls a snapshot past its write window first (fail closed).
+      await this.acl.roleOf(principal, "write");
+      return this.acl.allows(principal, "write") ? undefined : ACCESS_LOST;
+    };
     return this.#pushes;
   }
 
@@ -535,6 +593,7 @@ export class RepoDO extends MigratingDO {
       this.git.context.metrics,
       this.#log(),
       () => this.importNetwork,
+      (principalId) => this.acl.roleOf(principalId, "write"),
     );
     return this.#importer;
   }

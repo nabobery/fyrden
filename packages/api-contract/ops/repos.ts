@@ -251,3 +251,53 @@ export const forkRepo = defineOperation({
     readOnly: false,
   },
 });
+
+export const createOrgRepo = defineOperation({
+  id: "orgs.repos.create",
+  method: "POST",
+  path: "/orgs/{org}/repos",
+  summary: "Create an organization repository",
+  description:
+    "Creates an empty private repository owned by an organization. Members may create them; owners administer every repository of the organization, and members can read them.",
+  input: z.object({
+    org: z.string().regex(HANDLE_PATTERN).describe("The organization's handle."),
+    name: RepoName,
+  }),
+  output: Repo,
+  permission: "repos:create",
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  successStatus: 201,
+  mcp: {
+    tool: "create_org_repo",
+    title: "Create an organization repository",
+    description: "Create an empty private repository in an organization you are a member of.",
+    readOnly: false,
+  },
+});
+
+export const listOrgRepos = defineOperation({
+  id: "orgs.repos.list",
+  method: "GET",
+  path: "/orgs/{org}/repos",
+  summary: "List an organization's repositories",
+  description:
+    "Lists an organization's repositories, by name (ignoring case), for its members. A repository created a moment ago is listed; its `default_branch` can lag behind a change by a few seconds.",
+  input: z.object({
+    org: z.string().regex(HANDLE_PATTERN).describe("The organization's handle."),
+    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+    cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
+  }),
+  output: RepoList,
+  permission: "metadata:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "list_org_repos",
+    title: "List organization repositories",
+    description: "List the repositories of an organization you belong to, a page at a time.",
+    readOnly: true,
+  },
+});

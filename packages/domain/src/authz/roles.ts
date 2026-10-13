@@ -1,3 +1,14 @@
+import { isId } from "../ids.js";
+
+/**
+ * Whether `principalId` owns the user account `ownerId` names: a user
+ * administers its own repositories outright. An organization's owners get
+ * their role from its ACL instead.
+ */
+export function ownsUserAccount(principalId: string, ownerId: string): boolean {
+  return principalId === ownerId && isId(ownerId, "usr");
+}
+
 /** Repository roles, weakest first; each can do everything the ones before it can (GitHub's five). */
 export const REPO_ROLES = ["read", "triage", "write", "maintain", "admin"] as const;
 export type RepoRole = (typeof REPO_ROLES)[number];

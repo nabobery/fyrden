@@ -139,4 +139,24 @@ export const repoSchema: readonly DoMigration[] = [
             AND json_extract(CAST(cursor AS TEXT), '$.oldNetworkId') IS NOT NULL;
     `,
   },
+  {
+    version: 7,
+    // The ACL snapshot this repository decides access from: pulled from its
+    // account's object, with when it was pulled (its age bounds staleness;
+    // 0: none), and the floor no snapshot may be below: the newest
+    // (epoch_gen, version) seen, from a pull or an invalidation.
+    name: "acl_snapshot",
+    sql: `
+      CREATE TABLE acl_snapshot (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        account_id TEXT NOT NULL DEFAULT '',
+        epoch_gen INTEGER NOT NULL DEFAULT 0,
+        version INTEGER NOT NULL DEFAULT 0,
+        pulled_at INTEGER NOT NULL DEFAULT 0,
+        roles TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(roles)),
+        floor_epoch INTEGER NOT NULL DEFAULT 0,
+        floor_version INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+    `,
+  },
 ];

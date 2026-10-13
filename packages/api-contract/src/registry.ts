@@ -3,11 +3,13 @@ import { createImport, getImport } from "../ops/imports.js";
 import { whoami } from "../ops/meta.js";
 import { createOrg, listMembers, removeMembership, setMembership } from "../ops/orgs.js";
 import {
+  createOrgRepo,
   createRepo,
   deleteRepo,
   deleteRepos,
   forkRepo,
   getRepo,
+  listOrgRepos,
   listRepos,
   updateRepo,
 } from "../ops/repos.js";
@@ -30,6 +32,8 @@ export const registry = defineRegistry([
   setMembership,
   removeMembership,
   listMembers,
+  createOrgRepo,
+  listOrgRepos,
   createUpload,
   getUpload,
   completeUpload,

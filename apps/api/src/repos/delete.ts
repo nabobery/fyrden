@@ -2,7 +2,7 @@ import type { deleteRepo, deleteRepos, Input, Output } from "@fyrden/api-contrac
 import { repoFor } from "../git/chunked/operations.js";
 import type { OpContext } from "../ops/execute.js";
 import { advanceDeletion, DELETION_POLICY, markDeletions } from "./deletion.js";
-import { canAccess, findOwnedRepos, forgetResolved } from "./directory.js";
+import { canAccessOwn, findOwnedRepos, forgetResolved } from "./directory.js";
 
 /** The `repos.delete` operation: marks the deletion, then advances it as far as it can. */
 export async function deleteRepoOperation(
@@ -38,7 +38,7 @@ export async function deleteReposOperation(
   const found = await findOwnedRepos(env, auth.principalId, names, metrics);
   const byName = new Map(
     found
-      .filter((entry) => canAccess(auth, entry, "administration:write"))
+      .filter((entry) => canAccessOwn(auth, entry, "administration:write"))
       .map((entry) => [entry.name.toLowerCase(), entry]),
   );
   const marked = await markDeletions(env, [...byName.values()], {

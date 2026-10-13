@@ -144,6 +144,13 @@ export class SqliteRefStore implements RefStore {
   inCommit: ((context: CommitContext) => void) | undefined;
 
   /**
+   * The owner's check of every commit, in its transaction before any write,
+   * after the request's own `authorize`: a refusal message refuses the
+   * commit as that one does (the repository's access control).
+   */
+  authorizeCommit: ((context: CommitContext) => string | undefined) | undefined;
+
+  /**
    * Runs after `setHead` moved HEAD to another target, in the caller's
    * transaction when there is one (the owner's snapshot of the default
    * branch). A throw undoes the move inside a transaction.
@@ -344,7 +351,7 @@ export class SqliteRefStore implements RefStore {
       const next = version + 1;
       const now = this.context.now();
       const context: CommitContext = { version: next, now, request };
-      const refusal = request.authorize?.(context);
+      const refusal = request.authorize?.(context) ?? this.authorizeCommit?.(context);
       if (refusal !== undefined)
         return { result: { ok: false, reason: "refused", message: refusal } as const, written: 0 };
 

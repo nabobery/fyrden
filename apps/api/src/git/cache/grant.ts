@@ -1,6 +1,7 @@
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
-  canAccess,
+  authorize,
   GIT_PERMISSION,
   type RepoAccess,
   type RepoEntry,
@@ -32,12 +33,14 @@ export class RepoAccessGrant {
   }
 
   /** The grant when `auth` may access `repo` that way; undefined otherwise. */
-  static check(
+  static async check(
+    env: Env,
     auth: TokenRecord,
     repo: RepoEntry,
     access: RepoAccess,
-  ): RepoAccessGrant | undefined {
-    if (!canAccess(auth, repo, GIT_PERMISSION[access])) return undefined;
+    metrics?: Metrics,
+  ): Promise<RepoAccessGrant | undefined> {
+    if (!(await authorize(env, auth, repo, GIT_PERMISSION[access], metrics))) return undefined;
     return new RepoAccessGrant(repo.id, repo.networkId, repo.visibility, auth.principalId, access);
   }
 

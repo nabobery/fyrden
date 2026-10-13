@@ -4,6 +4,7 @@ import {
   type RepoGitStorage,
 } from "@fyrden/adapters-cloudflare/git";
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
+import type { RepoRole } from "@fyrden/domain";
 import { FetchClientError, ProtocolError, SmartHttpClient } from "@fyrden/git-core";
 import { buildCommandHead, readPushReport } from "../chunked/head.js";
 import type { RepoPush } from "../push/repo-push.js";
@@ -88,6 +89,8 @@ export class RepoImports {
     private readonly log: Logger,
     /** Read on each fetch, so tests can replace it. */
     private readonly network: () => ImportNetwork,
+    /** A principal's role for a write, from the repository's ACL snapshot. */
+    private readonly writerRole: (principalId: string) => Promise<RepoRole | null>,
   ) {}
 
   async record(): Promise<ImportRecord | undefined> {
@@ -279,7 +282,7 @@ export class RepoImports {
   }
 
   async #commit(record: ImportRecord): Promise<ImportRecord> {
-    const decision = await reauthorizeImport(this.env.DIRECTORY, record);
+    const decision = await reauthorizeImport(this.env.DIRECTORY, record, this.writerRole);
     const report = readPushReport(
       await this.push.finalize(record.uploadId, decision, { repoId: record.repoId }),
     );

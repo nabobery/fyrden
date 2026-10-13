@@ -130,6 +130,16 @@ export class RepoEvents {
     return this.#meta()?.description ?? null;
   }
 
+  /** The account the repository belongs to and its owner; undefined before its identity is recorded. */
+  account(): { accountId: string; ownerId: string } | undefined {
+    const row = this.#storage.sql
+      .exec<{ org_id: string; owner_id: string | null }>(
+        "SELECT org_id, owner_id FROM repo_meta WHERE id = 1",
+      )
+      .toArray()[0];
+    return row?.owner_id ? { accountId: row.org_id, ownerId: row.owner_id } : undefined;
+  }
+
   /** The organization (or account) the repository belongs to, or null before its creation is recorded. */
   orgId(): string | null {
     return (

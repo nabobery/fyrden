@@ -130,6 +130,12 @@ export interface PushLogMeta {
 export class RepoPush {
   readonly #cursors: PushCursorStore;
 
+  /**
+   * The repository's access check for the principal that started a push,
+   * just before its commit: a refusal message, or undefined to go on.
+   */
+  accessCheck: ((principal: string) => Promise<string | undefined>) | undefined;
+
   constructor(
     private readonly git: RepoGitStorage,
     private readonly metrics: Metrics,
@@ -389,7 +395,9 @@ export class RepoPush {
           : undefined;
         const result = await finalizePush(plan, indexed, uploadId, {
           commitGraph: this.git.commitGraph,
-          reauthorize: async () => decision.refusal,
+          // The caller's decision (token, repository), then the object's
+          // own access check for the pusher.
+          reauthorize: async () => decision.refusal ?? (await this.accessCheck?.(upload.principal)),
           commit: pushCommitter(
             this.git,
             upload,

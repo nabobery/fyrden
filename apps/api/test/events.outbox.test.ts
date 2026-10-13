@@ -274,7 +274,8 @@ const commit = (repo: RepoDO, n: number, extra: { onCommitted?: () => void } = {
     removePacks: [],
     refUpdates: [{ name: "refs/heads/main", oldOid: n === 1 ? null : oid(n - 1), newOid: oid(n) }],
     expectedVersion: n - 1,
-    actor: { principal: "usr_pusher", tokenId: "tok_1", via: "push" },
+    // The owner: it may write without an ACL snapshot.
+    actor: { principal: repo.events.account()?.ownerId as string, tokenId: "tok_1", via: "push" },
     ...extra,
   });
 
@@ -316,7 +317,7 @@ describe("repository events", () => {
   });
 
   it("emits a snapshot, the ref updates and an audit row with every commit", async () => {
-    const { stub, repoId } = await newRepoWithEvents();
+    const { stub, repoId, owner } = await newRepoWithEvents();
     const result = await inRepo(stub, (repo) => {
       commit(repo, 1);
       const audit = repo.git.context.storage.sql
@@ -341,7 +342,7 @@ describe("repository events", () => {
     expect(result.audit).toEqual([
       {
         epoch_gen: 3,
-        actor_id: "usr_pusher",
+        actor_id: owner.principalId,
         token_id: "tok_1",
         action: "refs.update",
         target_id: repoId,

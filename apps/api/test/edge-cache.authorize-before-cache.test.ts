@@ -72,7 +72,12 @@ describe("response cache", () => {
     const authorities = loggingAuthorities(log);
 
     // Alice reads the blob through A: checked, then cached under A's key.
-    const aliceGrant = RepoAccessGrant.check(tokenRecord(alice.principalId), entryA, "read");
+    const aliceGrant = await RepoAccessGrant.check(
+      env,
+      tokenRecord(alice.principalId),
+      entryA,
+      "read",
+    );
     expect(aliceGrant).toBeDefined();
     const aliceBlob = await ObjectGrant.authorize(
       aliceGrant as RepoAccessGrant,
@@ -98,14 +103,16 @@ describe("response cache", () => {
 
     // Bob may not read A: no grant, so no cache and no object check for A.
     log.length = 0;
-    expect(RepoAccessGrant.check(tokenRecord(bob.principalId), entryA, "read")).toBeUndefined();
     expect(
-      RepoAccessGrant.check(tokenRecord(alice.principalId, [repoB.id]), entryA, "read"),
+      await RepoAccessGrant.check(env, tokenRecord(bob.principalId), entryA, "read"),
+    ).toBeUndefined();
+    expect(
+      await RepoAccessGrant.check(env, tokenRecord(alice.principalId, [repoB.id]), entryA, "read"),
     ).toBeUndefined();
     expect(log).toEqual([]);
 
     // Bob reads the same blob (same SHA) through B: a miss on B's own key, never A's entry.
-    const bobGrant = RepoAccessGrant.check(tokenRecord(bob.principalId), entryB, "read");
+    const bobGrant = await RepoAccessGrant.check(env, tokenRecord(bob.principalId), entryB, "read");
     expect(bobGrant).toBeDefined();
     const bobBlob = await ObjectGrant.authorize(bobGrant as RepoAccessGrant, authorities, blobAt);
     expect(bobBlob?.object).toEqual(aliceBlob?.object);
@@ -133,11 +140,12 @@ describe("response cache", () => {
     const log: string[] = [];
     const { open } = spyCaches(log);
     const authorities = loggingAuthorities(log);
-    const grant = RepoAccessGrant.check(
+    const grant = (await RepoAccessGrant.check(
+      env,
       tokenRecord(alice.principalId),
       entryA,
       "read",
-    ) as RepoAccessGrant;
+    )) as RepoAccessGrant;
     const cache = authorizedCache(grant, { open });
     // Making the cache touches nothing; the cache opens on first use.
     expect(log).toEqual([]);
@@ -177,11 +185,12 @@ describe("response cache", () => {
     }
 
     // A real grant with a forged object proof: refused before any cache call.
-    const grant = RepoAccessGrant.check(
+    const grant = (await RepoAccessGrant.check(
+      env,
       tokenRecord(alice.principalId),
       entryA,
       "read",
-    ) as RepoAccessGrant;
+    )) as RepoAccessGrant;
     const cache = authorizedCache(grant, { open });
     const fakeObject = Object.freeze({
       grant,

@@ -2,7 +2,14 @@ import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import { TokenCache } from "@fyrden/adapters-cloudflare/auth";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { REPO_NAME_PATTERN } from "@fyrden/api-contract";
-import { evaluate, isValidHandle, type RepoPermission } from "@fyrden/domain";
+import {
+  evaluate,
+  isValidHandle,
+  ownsUserAccount,
+  PERMISSIONS,
+  type RepoPermission,
+  type RepoRole,
+} from "@fyrden/domain";
 import { clock } from "../services.js";
 
 /** A name `repos.create` would accept; anything else cannot exist. */
@@ -256,30 +263,69 @@ export const GIT_PERMISSION = {
   write: "contents:write",
 } as const satisfies Record<RepoAccess, RepoPermission>;
 
-/**
- * Whether a token may use `permission` on a repository. Until organizations
- * and collaborators exist, a principal's only role is admin of the
- * repositories it owns. Every repository is private for now: there is no
- * anonymous or public read.
- */
-export function canAccess(
-  auth: Pick<TokenRecord, "principalId" | "principalType" | "scopes" | "repoIds">,
-  repo: Pick<RepoEntry, "id" | "ownerId">,
+type Caller = Pick<TokenRecord, "principalId" | "principalType" | "scopes" | "repoIds">;
+
+/** The decision for `role` on the repository, with the token's own limits (type, scopes, repository list). */
+export function allowedWithRole(
+  auth: Caller,
+  repo: Pick<RepoEntry, "id">,
   permission: RepoPermission,
+  role: RepoRole | null,
 ): boolean {
-  const owner = auth.principalId === repo.ownerId;
   return evaluate({
     permission,
     actorType: auth.principalType,
     // Instance administration gives no repository role.
-    rights: {
-      isInstanceAdmin: false,
-      accountRole: owner ? "owner" : null,
-      repoRole: owner ? "admin" : null,
-    },
+    rights: { isInstanceAdmin: false, accountRole: null, repoRole: role },
     token: { scopes: auth.scopes, repoIds: auth.repoIds },
     repoId: repo.id,
   }).allow;
+}
+
+/**
+ * Whether a token may use `permission` on one of its principal's own
+ * repositories (a user's own listing): no snapshot is needed. Any other
+ * repository goes through `authorize`.
+ */
+export function canAccessOwn(
+  auth: Caller,
+  repo: Pick<RepoEntry, "id" | "ownerId">,
+  permission: RepoPermission,
+): boolean {
+  return (
+    ownsUserAccount(auth.principalId, repo.ownerId) &&
+    allowedWithRole(auth, repo, permission, "admin")
+  );
+}
+
+/**
+ * Whether a token may use `permission` on a repository: the token's own
+ * limits, then the principal's role there. The owner of a user's account
+ * administers it outright; anyone else's role, and everyone's on an
+ * organization's repository, comes from the repository object's ACL
+ * snapshot (a write from one pulled within its window; fail closed). Every
+ * repository is private for now: there is no anonymous or public read.
+ */
+export async function authorize(
+  env: Env,
+  auth: Caller,
+  repo: Pick<RepoEntry, "id" | "ownerId">,
+  permission: RepoPermission,
+  metrics?: Metrics,
+): Promise<boolean> {
+  // The token's limits need no call: no role widens them.
+  if (!allowedWithRole(auth, repo, permission, "admin")) return false;
+  if (ownsUserAccount(auth.principalId, repo.ownerId)) return true;
+  const purpose = PERMISSIONS[permission].writes ? "write" : "read";
+  metrics?.count("do.request", { class: "RepoDO", method: "roleOf" });
+  let role: RepoRole | null;
+  try {
+    role = await env.REPO.getByName(repo.id).roleOf(auth.principalId, purpose);
+  } catch {
+    // The repository object could not answer: deny (fail closed).
+    role = null;
+  }
+  return allowedWithRole(auth, repo, permission, role);
 }
 
 /** Every repository starts with HEAD at this branch; the branch exists after the first push. */

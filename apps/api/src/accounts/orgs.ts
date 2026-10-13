@@ -13,7 +13,7 @@ import { allocateEpoch } from "../events/epochs.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock, newId } from "../services.js";
-import { type Account, findAccount, orgFor } from "./account.js";
+import { type Account, findAccount, invalidateAccountRepos, orgFor } from "./account.js";
 
 // D1 reports a unique-index violation in the error message.
 const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
@@ -92,7 +92,7 @@ export async function setMembershipOperation(
   const user = await userFor(ctx, input.username);
   const stub = env.ORG.getByName(org.id);
   metrics.count("do.request", { class: "OrgDO", method: "setMember" });
-  changed(
+  const change = changed(
     await stub.setMember(
       { principalId: auth.principalId, requestId },
       { id: user.id, handle: user.handle },
@@ -100,6 +100,7 @@ export async function setMembershipOperation(
     ),
   );
   ctx.waitUntil(stub.deliverAudit());
+  if (change.changed) ctx.waitUntil(invalidateAccountRepos(env, org.id, change, metrics));
   return { org: org.handle, user: user.handle, role: input.role, state: "active" };
 }
 
@@ -118,6 +119,7 @@ export async function removeMembershipOperation(
   // Already gone (a retry): nothing to do.
   if (change.ok || change.code !== "not_a_member") changed(change);
   ctx.waitUntil(stub.deliverAudit());
+  if (change.ok) ctx.waitUntil(invalidateAccountRepos(env, org.id, change, metrics));
   return { org: org.handle, user: user.handle, state: "removed" };
 }
 

@@ -12,6 +12,16 @@ CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
 CREATE INDEX refs_oid ON refs (oid);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);
+CREATE TABLE acl_snapshot (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        account_id TEXT NOT NULL DEFAULT '',
+        epoch_gen INTEGER NOT NULL DEFAULT 0,
+        version INTEGER NOT NULL DEFAULT 0,
+        pulled_at INTEGER NOT NULL DEFAULT 0,
+        roles TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(roles)),
+        floor_epoch INTEGER NOT NULL DEFAULT 0,
+        floor_version INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
 CREATE TABLE audit_log (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
         epoch_gen INTEGER NOT NULL,

@@ -1,7 +1,7 @@
 import type { completeUpload, createUpload, getUpload, Input, Output } from "@fyrden/api-contract";
 import { PERMISSIONS, type RepoPermission } from "@fyrden/domain";
 import { type OpContext, OperationError } from "../../ops/execute.js";
-import { canAccess, type RepoEntry, resolveRepo } from "../../repos/directory.js";
+import { authorize, type RepoEntry, resolveRepo } from "../../repos/directory.js";
 import { reauthorizeWriter } from "../push/reauthorize.js";
 import { pushTuning } from "../push/tuning.js";
 import { type PushReportSummary, readPushReport, refUpdateProblem } from "./head.js";
@@ -27,7 +27,7 @@ export async function repoFor(
     consistency: PERMISSIONS[permission].writes ? "primary" : "cached",
     metrics: ctx.metrics,
   });
-  if (!entry || !canAccess(ctx.auth, entry, permission))
+  if (!entry || !(await authorize(ctx.env, ctx.auth, entry, permission, ctx.metrics)))
     throw new OperationError(404, "repo_not_found", `No repository ${owner}/${repo} was found.`);
   return entry;
 }

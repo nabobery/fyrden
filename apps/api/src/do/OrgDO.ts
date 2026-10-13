@@ -1,5 +1,5 @@
 import { createLogger } from "@fyrden/adapters-cloudflare/obs";
-import type { OrgRole } from "@fyrden/domain";
+import { type OrgRole, orgRepoRole, type RepoRole } from "@fyrden/domain";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { orgSchema } from "./schema/org.js";
 
@@ -20,7 +20,12 @@ export interface ChangeActor {
 }
 
 export type MemberChange =
-  | { readonly ok: true; readonly version: number; readonly changed: boolean }
+  | {
+      readonly ok: true;
+      readonly epochGen: number;
+      readonly version: number;
+      readonly changed: boolean;
+    }
   | {
       readonly ok: false;
       readonly code: "not_an_org" | "forbidden" | "last_owner" | "not_a_member";
@@ -33,7 +38,30 @@ export interface MemberRow {
   readonly role: OrgRole;
 }
 
-type Meta = { account_id: string; kind: "org" | "user"; acl_version: number };
+/**
+ * Who may do what on one repository of the account, at one ACL version: each
+ * principal's strongest role there. A repository object caches it.
+ */
+export interface AclSnapshot {
+  readonly accountId: string;
+  readonly epochGen: number;
+  readonly version: number;
+  /** Principal id → role. */
+  readonly roles: Readonly<Record<string, RepoRole>>;
+}
+
+/** The role members of an organization get on its repositories (GitHub's default; not configurable yet). */
+export const BASE_ROLE: RepoRole = "read";
+
+/** Most entries one snapshot carries (an organization's members, for now). Proposed. */
+export const MAX_SNAPSHOT_ENTRIES = 10_000;
+
+type Meta = {
+  account_id: string;
+  kind: "org" | "user";
+  acl_version: number;
+  epoch_gen: number;
+};
 
 /** Audit rows one delivery sends at most. */
 const AUDIT_BATCH = 50;
@@ -56,7 +84,7 @@ export class OrgDO extends MigratingDO {
 
   #meta(): Meta | undefined {
     return this.ctx.storage.sql
-      .exec<Meta>("SELECT account_id, kind, acl_version FROM org_meta WHERE id = 1")
+      .exec<Meta>("SELECT account_id, kind, acl_version, epoch_gen FROM org_meta WHERE id = 1")
       .toArray()[0];
   }
 
@@ -86,6 +114,8 @@ export class OrgDO extends MigratingDO {
           input.owner.handle,
           now,
         );
+      // The generation was just allocated from the directory.
+      this.#epochChecked = true;
       return { ok: true as const };
     });
   }
@@ -107,6 +137,39 @@ export class OrgDO extends MigratingDO {
     return this.#meta()?.acl_version ?? 0;
   }
 
+  /**
+   * The snapshot of who may do what on repository `repoId` of the account.
+   * An account not recorded yet (a user's, before anything needed its
+   * object) has version 0 and no entries: its owner's access needs none.
+   * Throws when the account has more entries than a snapshot may carry.
+   */
+  async snapshotFor(repoId: string): Promise<AclSnapshot> {
+    await this.#checkEpoch();
+    const meta = this.#meta();
+    if (!meta) return { accountId: "", epochGen: 0, version: 0, roles: {} };
+    const roles: Record<string, RepoRole> = {};
+    if (meta.kind === "org") {
+      const members = this.ctx.storage.sql
+        .exec<{ principal_id: string; role: OrgRole }>(
+          "SELECT principal_id, role FROM members LIMIT ?",
+          MAX_SNAPSHOT_ENTRIES + 1,
+        )
+        .toArray();
+      if (members.length > MAX_SNAPSHOT_ENTRIES)
+        throw new Error(`the account has more than ${MAX_SNAPSHOT_ENTRIES} entries for ${repoId}`);
+      for (const m of members) {
+        const role = orgRepoRole(m.role, BASE_ROLE);
+        if (role) roles[m.principal_id] = role;
+      }
+    }
+    return {
+      accountId: meta.account_id,
+      epochGen: meta.epoch_gen,
+      version: meta.acl_version,
+      roles,
+    };
+  }
+
   /** An organization's members after handle `after` (ignoring case), at most `limit`. */
   members(after: string, limit: number): MemberRow[] {
     return this.ctx.storage.sql
@@ -124,17 +187,19 @@ export class OrgDO extends MigratingDO {
    * Adds a member or changes its role, if `actor` is an owner now. The last
    * owner cannot be demoted. Unchanged, it bumps nothing.
    */
-  setMember(
+  async setMember(
     actor: ChangeActor,
     member: { readonly id: string; readonly handle: string },
     role: OrgRole,
-  ): MemberChange {
+  ): Promise<MemberChange> {
+    await this.#checkEpoch();
     const change = this.ctx.storage.transactionSync((): MemberChange => {
       const refused = this.#refuse(actor);
       if (refused) return refused;
       const meta = this.#meta() as Meta;
       const current = this.accountRole(member.id);
-      if (current === role) return { ok: true, version: meta.acl_version, changed: false };
+      if (current === role)
+        return { ok: true, epochGen: meta.epoch_gen, version: meta.acl_version, changed: false };
       if (current === "owner" && this.#owners() === 1) return LAST_OWNER;
       this.ctx.storage.sql.exec(
         `INSERT INTO members (principal_id, handle, role, added_at) VALUES (?, ?, ?, ?)
@@ -146,14 +211,15 @@ export class OrgDO extends MigratingDO {
       );
       const version = this.#bump();
       this.#audit(actor, "org.member.set", { user: member.id, role, acl_version: version });
-      return { ok: true, version, changed: true };
+      return { ok: true, epochGen: (this.#meta() as Meta).epoch_gen, version, changed: true };
     });
     this.#scheduleDelivery(change);
     return change;
   }
 
   /** Removes a member, if `actor` is an owner now; the last owner cannot leave. */
-  removeMember(actor: ChangeActor, memberId: string): MemberChange {
+  async removeMember(actor: ChangeActor, memberId: string): Promise<MemberChange> {
+    await this.#checkEpoch();
     const change = this.ctx.storage.transactionSync((): MemberChange => {
       const refused = this.#refuse(actor);
       if (refused) return refused;
@@ -164,7 +230,7 @@ export class OrgDO extends MigratingDO {
       this.ctx.storage.sql.exec("DELETE FROM members WHERE principal_id = ?", memberId);
       const version = this.#bump();
       this.#audit(actor, "org.member.remove", { user: memberId, acl_version: version });
-      return { ok: true, version, changed: true };
+      return { ok: true, epochGen: (this.#meta() as Meta).epoch_gen, version, changed: true };
     });
     this.#scheduleDelivery(change);
     return change;
@@ -221,6 +287,40 @@ export class OrgDO extends MigratingDO {
       });
       await this.ctx.storage.setAlarm(this.#now() + AUDIT_RETRY_MS);
     }
+  }
+
+  /**
+   * Whether this instance has taken the directory's restore generation. A
+   * restored object starts as a new instance with the generation it had;
+   * until it takes the directory's newer one, its ACL versions could repeat
+   * ones repositories have seen, and they would refuse its snapshots.
+   */
+  #epochChecked = false;
+  #epochCheck: Promise<void> | undefined;
+
+  #checkEpoch(): Promise<void> {
+    if (this.#epochChecked) return Promise.resolve();
+    this.#epochCheck ??= this.#takeEpoch().finally(() => {
+      this.#epochCheck = undefined;
+    });
+    return this.#epochCheck;
+  }
+
+  async #takeEpoch(): Promise<void> {
+    const meta = this.#meta();
+    // Nothing recorded yet: `init` records the generation just allocated.
+    if (!meta) return;
+    const row = await this.env.DIRECTORY.withSession("first-primary")
+      .prepare("SELECT epoch_gen FROM source_epochs WHERE source_id = ?")
+      .bind(meta.account_id)
+      .first<{ epoch_gen: number }>();
+    if (row && row.epoch_gen > (this.#meta() as Meta).epoch_gen)
+      this.ctx.storage.sql.exec(
+        "UPDATE org_meta SET epoch_gen = ?, epoch_uuid = ? WHERE id = 1",
+        row.epoch_gen,
+        crypto.randomUUID(),
+      );
+    this.#epochChecked = true;
   }
 
   /** Why `actor` may not change the account's access now, if it may not. */

@@ -83,3 +83,30 @@ export async function orgFor(
     throw new OperationError(403, "forbidden", `You may not use ${permission} in ${org.handle}.`);
   return org;
 }
+
+/** Repositories one ACL change tells of its new version at most; the rest catch up within the snapshot window. Proposed. */
+export const INVALIDATE_MAX = 100;
+
+/**
+ * Tells the account's repositories that ACL `version` (of restore
+ * generation `epochGen`) was committed, so
+ * they stop using older snapshots at once. Best effort: correctness rests
+ * on the snapshot window, so failures are ignored.
+ */
+export async function invalidateAccountRepos(
+  env: Env,
+  accountId: string,
+  acl: { readonly epochGen: number; readonly version: number },
+  metrics?: Metrics,
+): Promise<void> {
+  metrics?.count("d1.query", { db: "directory", op: "acl_invalidate" });
+  const { results } = await env.DIRECTORY.prepare(
+    "SELECT id FROM repos WHERE owner_id = ? AND state <> 'deleted' AND state = 'active' LIMIT ?",
+  )
+    .bind(accountId, INVALIDATE_MAX)
+    .all<{ id: string }>();
+  metrics?.count("do.request", { class: "RepoDO", method: "invalidateAcl" }, results.length);
+  await Promise.allSettled(
+    results.map(({ id }) => env.REPO.getByName(id).invalidateAcl(acl.epochGen, acl.version)),
+  );
+}

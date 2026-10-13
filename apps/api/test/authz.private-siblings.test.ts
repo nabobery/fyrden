@@ -273,19 +273,22 @@ describe("two private siblings sharing a pack", () => {
     const log: string[] = [];
     const { open } = spyCaches(log);
     const authorities = loggingAuthorities(log);
-    const bobGrant = RepoAccessGrant.check(
+    const bobGrant = (await RepoAccessGrant.check(
+      env,
       tokenRecord(bob.principalId),
       await entryOf(bob.principalId, repoB),
       "read",
-    ) as RepoAccessGrant;
-    const aliceGrant = RepoAccessGrant.check(
+    )) as RepoAccessGrant;
+    const aliceGrant = (await RepoAccessGrant.check(
+      env,
       tokenRecord(alice.principalId),
       await entryOf(alice.principalId, repoA),
       "read",
-    ) as RepoAccessGrant;
+    )) as RepoAccessGrant;
     // Alice has no access to B, Bob none to A.
     expect(
-      RepoAccessGrant.check(
+      await RepoAccessGrant.check(
+        env,
         tokenRecord(alice.principalId),
         await entryOf(bob.principalId, repoB),
         "read",

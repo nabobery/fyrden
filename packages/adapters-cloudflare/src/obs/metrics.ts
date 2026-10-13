@@ -32,6 +32,11 @@ export const METRICS = {
   // Queue messages sent (Queues bill per 64 KB of a message).
   "queue.send": ["queue"],
   "auth.token": ["type", "outcome"],
+  // ACL snapshots in a repository object: purpose = read | write; outcome
+  // = cached | pulled | denied.
+  "acl.snapshot": ["purpose", "outcome"],
+  // Age of the snapshot an access decision used, in milliseconds.
+  "acl.snapshot_age_ms": ["purpose"],
   // Orphan reaper: what = upload | pack | scratch | object | abort_failed.
   "git.reaped": ["what"],
   // Fetch responses: request = clone | fetch | negotiate | refused; plan =
@@ -92,6 +97,7 @@ export const METRIC_AGGREGATION: Partial<Record<MetricName, MetricAggregation>> 
   "git.repo.bytes": "last",
   subrequests: "each",
   "do.active_ms": "each",
+  "acl.snapshot_age_ms": "each",
   "worker.cpu_ms": "each",
   "worker.wall_ms": "each",
   "metrics.dropped": "each",

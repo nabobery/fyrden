@@ -1,7 +1,7 @@
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { AuthState } from "../../middleware/auth.js";
-import { canAccess, type RepoEntry, resolveRepo } from "../../repos/directory.js";
+import { authorize, type RepoEntry, resolveRepo } from "../../repos/directory.js";
 import type { GitContext } from "../http.js";
 import type { PushDecision } from "./commit.js";
 
@@ -46,7 +46,11 @@ export async function reauthorizeWriter(
     consistency: "primary",
     metrics: request.metrics,
   });
-  if (!repo || repo.id !== accepted.repo.id || !canAccess(record, repo, "contents:write")) {
+  if (
+    !repo ||
+    repo.id !== accepted.repo.id ||
+    !(await authorize(request.env, record, repo, "contents:write", request.metrics))
+  ) {
     return decide(ACCESS_LOST);
   }
   return decide();

@@ -1,6 +1,6 @@
 import { parseTokenRestrictions } from "@fyrden/adapters-cloudflare/auth";
-import type { PrincipalType } from "@fyrden/domain";
-import { canAccess } from "../../repos/directory.js";
+import { ownsUserAccount, type PrincipalType, type RepoRole } from "@fyrden/domain";
+import { allowedWithRole } from "../../repos/directory.js";
 import type { PushDecision } from "../push/commit.js";
 import { ACCESS_LOST, TOKEN_REVOKED } from "../push/reauthorize.js";
 
@@ -26,6 +26,8 @@ type Row = {
 export async function reauthorizeImport(
   db: D1Database,
   accepted: { readonly tokenId: string; readonly principal: string; readonly repoId: string },
+  /** The principal's role for a write, from the repository's own ACL snapshot. */
+  roleOf: (principalId: string) => Promise<RepoRole | null>,
 ): Promise<PushDecision> {
   const decide = (refusal?: string): PushDecision => ({
     ...(refusal === undefined ? {} : { refusal }),
@@ -60,6 +62,11 @@ export async function reauthorizeImport(
     principalType: row.principal_type,
     ...restrictions,
   };
-  const repo = { id: accepted.repoId, ownerId: row.owner_id };
-  return canAccess(token, repo, "contents:write") ? decide() : decide(ACCESS_LOST);
+  // As on the request path: a user owns its own repositories outright.
+  const role = ownsUserAccount(row.principal_id, row.owner_id)
+    ? "admin"
+    : await roleOf(row.principal_id);
+  return allowedWithRole(token, { id: accepted.repoId }, "contents:write", role)
+    ? decide()
+    : decide(ACCESS_LOST);
 }
