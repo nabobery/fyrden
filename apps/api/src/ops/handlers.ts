@@ -1,6 +1,6 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
 import { allocateEpoch } from "../events/epochs.js";
-import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import {
   abortUploadSession,
   completeUploadSession,
@@ -13,11 +13,13 @@ import {
   canAccess,
   defaultBranchOf,
   INITIAL_BRANCH,
+  isValidRepoName,
+  listOwnedRepos,
   type RepoEntry,
   resolveRepo,
 } from "../repos/directory.js";
 import { clock, newId, tokenStore } from "../services.js";
-import { type Handlers, OperationError } from "./execute.js";
+import { type Handlers, type OpContext, OperationError } from "./execute.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -31,6 +33,38 @@ function repoOutput(repo: RepoEntry, defaultBranch: string) {
     default_branch: defaultBranch,
     created_at: repo.createdAt,
   };
+}
+
+/** A page cursor: the last name of the page, opaque to clients. */
+function encodeCursor(name: string): string {
+  return btoa(name).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+function decodeCursor(cursor: string): string | undefined {
+  try {
+    const name = atob(cursor.replaceAll("-", "+").replaceAll("_", "/"));
+    return isValidRepoName(name) ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The default branches the read model has for `ids` (a repository not projected yet is absent). */
+async function readModelHeads(
+  env: Env,
+  ids: readonly string[],
+  metrics: OpContext["metrics"],
+): Promise<Map<string, string | null>> {
+  if (ids.length === 0) return new Map();
+  metrics.count("d1.query", { db: "org", op: "repo_heads" });
+  const { results } = await readModelFor(env, DEFAULT_ORG_SHARD)
+    .prepare(
+      `SELECT repo_id, default_branch FROM repos
+       WHERE repo_id IN (SELECT value FROM json_each(?)) AND deleted = 0`,
+    )
+    .bind(JSON.stringify(ids))
+    .all<{ repo_id: string; default_branch: string | null }>();
+  return new Map(results.map((row) => [row.repo_id, row.default_branch]));
 }
 
 // D1 reports a unique-index violation in the error message.
@@ -159,6 +193,34 @@ export const handlers: Handlers = {
       },
       INITIAL_BRANCH,
     );
+  },
+
+  "repos.list": async ({ env, auth, metrics }, { per_page, cursor }) => {
+    const after = cursor === undefined ? "" : decodeCursor(cursor);
+    if (after === undefined)
+      throw new OperationError(422, "invalid_cursor", "The cursor is not one this API returned.");
+    // Only repositories the token may see are read (its repository list in the
+    // query), so a page and its cursor never reveal another one's name. One
+    // more than a page tells whether another page follows.
+    const scanned = await listOwnedRepos(
+      env,
+      auth.principalId,
+      { after, limit: per_page + 1, onlyIds: auth.repoIds },
+      metrics,
+    );
+    const page = scanned
+      .slice(0, per_page)
+      .filter((entry) => canAccess(auth, entry, "metadata:read"));
+    const heads = await readModelHeads(
+      env,
+      page.map((entry) => entry.id),
+      metrics,
+    );
+    const last = page.at(-1);
+    return {
+      repos: page.map((entry) => repoOutput(entry, defaultBranchOf(heads.get(entry.id) ?? null))),
+      next_cursor: scanned.length > per_page && last ? encodeCursor(last.name) : null,
+    };
   },
 
   "repos.get": async ({ env, auth, metrics }, { owner, repo }) => {

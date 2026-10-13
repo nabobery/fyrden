@@ -46,8 +46,8 @@ pnpm audit                      # known advisories (CI fails on high and critica
    `packages/domain/src/authz/permissions.ts` and allowed principal types,
    and a handler in `apps/api/src/ops/handlers.ts`. REST, MCP and OpenAPI come
    from it; never add a hand-written route for an API capability. A handler
-   checks a repository permission itself (`canAccess`), and a repository
-   operation needs an input in `apps/api/test/authz.repo-operations.test.ts`.
+   checks a repository permission itself (`canAccess`), and an operation on
+   one repository needs an input in `apps/api/test/authz.repo-operations.test.ts`.
 3. **Schema changes are forward-only.** Durable Object schemas are lists of
    numbered migrations (`apps/api/src/do/schema/`); never edit a released
    migration. Destructive steps must be marked as contract steps. D1 changes

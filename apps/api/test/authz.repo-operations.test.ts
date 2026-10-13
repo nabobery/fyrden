@@ -38,8 +38,12 @@ const CASES: Record<string, { input: Record<string, unknown>; expected: Outcome 
 
 type Outcome = { status: number; code?: string };
 
+// Operations on one repository (a list checks each repository it returns).
 const repoOps = registry.filter(
-  (op) => op.permission !== AUTHENTICATED && permissionDef(op.permission).resource === "repo",
+  (op) =>
+    op.permission !== AUTHENTICATED &&
+    permissionDef(op.permission).resource === "repo" &&
+    op.path.includes("{repo}"),
 );
 
 let owner: { principalId: string; token: string };

@@ -73,7 +73,13 @@ export async function resolveRepo(
   let row = primary ? null : await lookup(env.DIRECTORY.withSession());
   row ??= await lookup(env.DIRECTORY.withSession("first-primary"));
   if (!row) return undefined;
-  const entry: RepoEntry = {
+  const entry = entryOf(row);
+  found.set(key, entry, checkedAt);
+  return entry;
+}
+
+function entryOf(row: Row): RepoEntry {
+  return {
     id: row.id,
     ownerId: row.owner_id,
     ownerHandle: row.handle,
@@ -82,8 +88,34 @@ export async function resolveRepo(
     visibility: row.visibility,
     createdAt: row.created_at,
   };
-  found.set(key, entry, checkedAt);
-  return entry;
+}
+
+/**
+ * A principal's active repositories in name order (ignoring case), the
+ * first `limit` after `after` and, when given, among `onlyIds` (a token's
+ * repository list), from the D1 primary so a repository created a moment
+ * ago is listed.
+ */
+export async function listOwnedRepos(
+  env: Env,
+  ownerId: string,
+  options: { after: string; limit: number; onlyIds: readonly string[] | null },
+  metrics?: Metrics,
+): Promise<RepoEntry[]> {
+  metrics?.count("d1.query", { db: "directory", op: "repo_list" });
+  const { results } = await env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      // `state <> 'deleted'` lets the partial (owner_id, name) index serve the query.
+      `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at
+       FROM repos r JOIN principals p ON p.id = r.owner_id
+       WHERE r.owner_id = ?1 AND r.state <> 'deleted' AND r.state = 'active'
+         AND r.name > ?2 COLLATE NOCASE
+         AND (?3 IS NULL OR r.id IN (SELECT value FROM json_each(?3)))
+       ORDER BY r.name COLLATE NOCASE LIMIT ?4`,
+    )
+    .bind(ownerId, options.after, options.onlyIds && JSON.stringify(options.onlyIds), options.limit)
+    .all<Row>();
+  return results.map(entryOf);
 }
 
 /** Access git asks for: fetch and clone read the contents, push writes them. */

@@ -48,6 +48,38 @@ export const createRepo = defineOperation({
   },
 });
 
+export const RepoList = z.object({
+  repos: z.array(Repo),
+  next_cursor: z
+    .string()
+    .nullable()
+    .describe("Pass as `cursor` for the next page; null on the last page."),
+});
+
+export const listRepos = defineOperation({
+  id: "repos.list",
+  method: "GET",
+  path: "/user/repos",
+  summary: "List your repositories",
+  description:
+    "Lists the repositories the authenticated principal owns and its token can see, by name (ignoring case). A repository created a moment ago is listed; its `default_branch` can lag behind a change by a few seconds (use `GET /repos/{owner}/{repo}` for the current one).",
+  input: z.object({
+    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+    cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
+  }),
+  output: RepoList,
+  permission: "metadata:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "list_repos",
+    title: "List your repositories",
+    description: "List the repositories you own, a page at a time.",
+    readOnly: true,
+  },
+});
+
 export const getRepo = defineOperation({
   id: "repos.get",
   method: "GET",

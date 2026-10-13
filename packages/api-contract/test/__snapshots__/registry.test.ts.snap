@@ -1622,6 +1622,131 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
       },
     },
     "/user/repos": {
+      "get": {
+        "description": "Lists the repositories the authenticated principal owns and its token can see, by name (ignoring case). A repository created a moment ago is listed; its \`default_branch\` can lag behind a change by a few seconds (use \`GET /repos/{owner}/{repo}\` for the current one).",
+        "operationId": "repos.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "repos": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "default_branch": {
+                            "type": "string",
+                          },
+                          "full_name": {
+                            "description": "owner/name",
+                            "type": "string",
+                          },
+                          "id": {
+                            "description": "Immutable repository id (rep_ prefix).",
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "owner": {
+                            "description": "The owner's handle.",
+                            "type": "string",
+                          },
+                          "visibility": {
+                            "enum": [
+                              "public",
+                              "internal",
+                              "private",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "owner",
+                          "name",
+                          "full_name",
+                          "visibility",
+                          "default_branch",
+                          "created_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "repos",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List your repositories",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
       "post": {
         "description": "Creates an empty private repository owned by the authenticated user. Clone and push it at \`/<owner>/<name>.git\`.",
         "operationId": "repos.create",
