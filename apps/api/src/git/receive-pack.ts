@@ -1,5 +1,6 @@
 import { currentInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { bytesBody, encodeFatalError, requestedSideband } from "@fyrden/git-core";
+import { isRepoDeleted } from "../do/repo/events.js";
 import { authorizeGit } from "./auth.js";
 import { checkRequestType, type GitContext, gitPayload, gitText, repoParams } from "./http.js";
 import { contentType, NO_CACHE_HEADERS } from "./protocol.js";
@@ -161,10 +162,23 @@ export async function receivePack(c: GitContext): Promise<Response> {
   const first = await stub
     .runPush(uploadId, stored.bytes, tuning.indexBudgetMs)
     .catch((error: unknown) => {
+      if (isRepoDeleted(error)) return "deleted" as const;
       // The object was reset mid-call: indexing continues from its cursor.
       log.warn("push run call failed; waiting for the index job", { uploadId, error });
       return { state: "indexing", sideband: false } as const;
     });
+  if (first === "deleted" || (first.state === "done" && first.discardBody)) {
+    // No upload holds the body any more (the repository was deleted, or the
+    // upload expired, while the body was stored): nothing else will delete it.
+    await c.env.GIT.delete(begun.bodyKey).catch((error: unknown) =>
+      log.warn("deleting the body of a push nobody holds failed", { uploadId, error }),
+    );
+    return first === "deleted"
+      ? gitPayload(encodeFatalError("repository not found", false), contentType.result(SERVICE))
+      : new Response(first.response as BodyInit, {
+          headers: { "Content-Type": contentType.result(SERVICE), ...NO_CACHE_HEADERS },
+        });
+  }
   const body = await pushResponseBody(
     first,
     {

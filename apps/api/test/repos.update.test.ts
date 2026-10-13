@@ -232,7 +232,7 @@ describe("repos.update", () => {
     expect(await res.json()).toMatchObject({ default_branch: "dev" });
     expect(await get(repo.name)).toMatchObject({ default_branch: "dev" });
     const exported = await snapshot(repo.id);
-    expect(exported?.row.defaultBranch).toBe("refs/heads/dev");
+    expect(exported?.row?.defaultBranch).toBe("refs/heads/dev");
     expect((await auditRows(repo.id)).map((row) => row.details)).toEqual([
       { default_branch: { from: "refs/heads/main", to: "refs/heads/dev" } },
     ]);

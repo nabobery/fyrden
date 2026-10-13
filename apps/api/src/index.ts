@@ -5,6 +5,7 @@ import { sweepEffects } from "./effects/dispatcher.js";
 import { EFFECT_SINKS } from "./effects/sinks.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "./events/read-model.js";
 import { consumeEvents, EVENTS_QUEUE } from "./queues/events-consumer.js";
+import { advanceDeletions } from "./repos/deletion.js";
 
 export { NetworkDO } from "./do/NetworkDO.js";
 export { OrgDO } from "./do/OrgDO.js";
@@ -39,6 +40,7 @@ export default {
           now: () => Date.now(),
           metrics,
         }),
+        advanceDeletions(env, { metrics }),
         sweepEffects({
           db: readModelFor(env, DEFAULT_ORG_SHARD),
           env,

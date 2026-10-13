@@ -9,6 +9,7 @@ import {
 } from "../git/chunked/operations.js";
 import { getRepoImport, startImport } from "../git/import/operations.js";
 import { forkRepoOperation } from "../network/operations.js";
+import { deleteRepoOperation, deleteReposOperation } from "../repos/delete.js";
 import {
   canAccess,
   claimNameStatement,
@@ -241,6 +242,8 @@ export const handlers: Handlers = {
   },
 
   "repos.update": updateRepoOperation,
+  "repos.delete": deleteRepoOperation,
+  "repos.delete_many": deleteReposOperation,
 
   // Forks share the parent's packs in its fork network (network/).
   "repos.fork": forkRepoOperation,

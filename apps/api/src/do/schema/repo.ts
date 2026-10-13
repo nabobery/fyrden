@@ -117,4 +117,26 @@ export const repoSchema: readonly DoMigration[] = [
       ALTER TABLE repo_meta ADD COLUMN name_gen INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    version: 6,
+    // When the repository's deletion froze it (its tombstone was emitted),
+    // and every fork network it was ever in (a detach moves it to a new
+    // one), for its deletion to leave them all.
+    name: "repo_deletion",
+    sql: `
+      ALTER TABLE repo_meta ADD COLUMN deleting_at INTEGER;
+
+      CREATE TABLE networks (
+        network_id TEXT PRIMARY KEY,
+        recorded_at INTEGER NOT NULL
+      ) STRICT;
+
+      INSERT OR IGNORE INTO networks (network_id, recorded_at)
+        SELECT network_id, updated_at FROM git_meta
+        UNION ALL SELECT DISTINCT network_id, 0 FROM packs
+        UNION ALL SELECT json_extract(CAST(cursor AS TEXT), '$.oldNetworkId'), 0 FROM jobs
+          WHERE kind = 'detach' AND cursor IS NOT NULL AND json_valid(CAST(cursor AS TEXT))
+            AND json_extract(CAST(cursor AS TEXT), '$.oldNetworkId') IS NOT NULL;
+    `,
+  },
 ];

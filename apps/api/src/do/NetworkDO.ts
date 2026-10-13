@@ -195,6 +195,23 @@ export class NetworkDO extends MigratingDO {
     if (unclaimed.length > 0) scheduleDeletions(this.runtime);
   }
 
+  /**
+   * `repoId` is deleted: it leaves the network with all its claims. Shared
+   * packs nobody claims any more are condemned, then deleted as usual; its
+   * forks keep the packs they claim.
+   */
+  removeMember(input: { networkId: string; repoId: string }): void {
+    // A network never forked has nothing to record.
+    if (this.registry.networkId() === undefined) return;
+    if (this.#ensure(input.networkId)) return;
+    const unclaimed = this.context.storage.transactionSync(() => {
+      const left = this.registry.removeMember(input.repoId);
+      this.registry.condemn(left, this.policy.retentionMs);
+      return left;
+    });
+    if (unclaimed.length > 0) scheduleDeletions(this.runtime);
+  }
+
   /** Of `packIds`, the ones the network knows: their bytes are the network's to delete. */
   sharedPacks(packIds: readonly string[]): string[] {
     return [...this.registry.known(packIds)];

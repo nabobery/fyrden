@@ -56,6 +56,12 @@ export async function updateRepoOperation(
     ...(input.default_branch !== undefined && { defaultBranch: input.default_branch }),
     actor: { principal: auth.principalId, tokenId: auth.id, via: "api" },
   });
+  if (!result.ok && result.code === "repo_deleted")
+    throw new OperationError(
+      404,
+      "repo_not_found",
+      `No repository ${input.owner}/${input.repo} was found.`,
+    );
   if (!result.ok) throw branchNotFound(input.default_branch ?? "");
   return repoOutput(
     { ...entry, name: name.value, nameGen: name.gen },

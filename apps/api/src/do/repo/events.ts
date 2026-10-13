@@ -15,7 +15,8 @@ export interface RepoExport {
     readonly id: string;
     readonly version: number;
     readonly deleted: boolean;
-    readonly row: RepoRow;
+    /** Null once the repository is deleted. */
+    readonly row: RepoRow | null;
   }[];
 }
 
@@ -36,6 +37,14 @@ export interface RepoIdentity {
  */
 export const REFS_PER_EVENT = 500;
 
+/** What a repository being deleted answers every write (and, once erased, every call). */
+export const REPO_DELETED = "the repository is being deleted";
+
+/** Whether `error` is a repository object refusing because its deletion started. */
+export function isRepoDeleted(error: unknown): boolean {
+  return error instanceof Error && error.message === REPO_DELETED;
+}
+
 /** One update of a repository's settings; fields left out are kept. */
 export interface RepoUpdate {
   /**
@@ -50,7 +59,7 @@ export interface RepoUpdate {
 }
 
 const META_COLUMNS =
-  "repo_id, owner_gen, epoch_gen, version, owner_id, name, name_gen, visibility, description, pushed_at, created_at";
+  "repo_id, owner_gen, epoch_gen, version, owner_id, name, name_gen, visibility, description, pushed_at, created_at, write_frozen, deleting_at";
 
 type MetaRow = {
   repo_id: string;
@@ -64,6 +73,8 @@ type MetaRow = {
   description: string | null;
   pushed_at: number | null;
   created_at: number;
+  write_frozen: number;
+  deleting_at: number | null;
 };
 
 /**
@@ -221,17 +232,64 @@ export class RepoEvents {
           type: REPO_ENTITY,
           id: meta.repo_id,
           version: meta.version,
-          deleted: false,
-          row: this.#row(meta),
+          deleted: meta.deleting_at !== null,
+          row: meta.deleting_at === null ? this.#row(meta) : null,
         },
       ],
     };
   }
 
+  /**
+   * Freezes the repository for its deletion: from now on no ref, HEAD or
+   * setting changes; emits its tombstone and the audit row, once.
+   */
+  markDeleted(actor: string | null): void {
+    this.#storage.transactionSync(() => {
+      const meta = this.#meta();
+      if (!meta || meta.deleting_at !== null) return;
+      if (!this.#epochChecked)
+        throw new Error("the repository's epoch must be checked before it changes");
+      const now = this.git.context.now();
+      this.#exec(
+        "events.delete",
+        "UPDATE repo_meta SET write_frozen = 1, deleting_at = ? WHERE id = 1",
+        now,
+      );
+      const after = this.#emit("repo.deleted", { actor, actChain: [], data: null }, true);
+      this.#audit(
+        after,
+        "repo.delete",
+        actor === null ? null : { principal: actor, via: "api" },
+        now,
+        {
+          name: meta.name,
+        },
+      );
+    });
+  }
+
+  /** Whether the repository's identity is recorded (objects created before identities existed have none). */
+  hasIdentity(): boolean {
+    return this.#meta() !== undefined;
+  }
+
+  /** Whether the deletion froze the repository (its tombstone was emitted). */
+  isDeleted(): boolean {
+    return (this.#meta()?.deleting_at ?? null) !== null;
+  }
+
+  /** Throws when the repository is frozen (being deleted): nothing may change it. */
+  #assertWritable(meta: MetaRow | undefined): void {
+    if (meta?.write_frozen) throw new Error(REPO_DELETED);
+  }
+
   /** In a commit's transaction: the new snapshot, the ref updates and the audit row. */
   onCommit(context: CommitContext): void {
     const { refUpdates, actor } = context.request;
-    if (refUpdates.length === 0 || !this.#meta()) return;
+    if (refUpdates.length === 0) return;
+    const current = this.#meta();
+    this.#assertWritable(current);
+    if (!current) return;
     if (!this.#epochChecked)
       throw new Error("the repository's epoch must be checked before it commits");
     this.#exec("events.pushed_at", "UPDATE repo_meta SET pushed_at = ? WHERE id = 1", context.now);
@@ -271,6 +329,7 @@ export class RepoEvents {
   update(update: RepoUpdate): void {
     this.#storage.transactionSync(() => {
       const meta = this.#meta();
+      this.#assertWritable(meta);
       if (meta && !this.#epochChecked)
         throw new Error("the repository's epoch must be checked before it changes");
       const changes: Record<string, unknown> = {};
@@ -340,7 +399,10 @@ export class RepoEvents {
    * transaction.
    */
   onHeadChanged(): void {
-    if (this.#updating || !this.#meta()) return;
+    if (this.#updating) return;
+    const meta = this.#meta();
+    this.#assertWritable(meta);
+    if (!meta) return;
     if (!this.#epochChecked)
       throw new Error("the repository's epoch must be checked before it changes");
     this.#emit("repo.updated", { actor: null, actChain: [], data: null }, true);
@@ -379,8 +441,8 @@ export class RepoEvents {
               type: REPO_ENTITY,
               id: meta.repo_id,
               version: meta.version,
-              deleted: false,
-              row: this.#row(meta),
+              deleted: meta.deleting_at !== null,
+              row: meta.deleting_at === null ? this.#row(meta) : null,
             }
           : null,
       },

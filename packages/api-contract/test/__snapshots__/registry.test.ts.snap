@@ -273,6 +273,88 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
       },
     },
     "/repos/{owner}/{repo}": {
+      "delete": {
+        "description": "Deletes a repository: from now on it cannot be pushed or changed, and within about 30 seconds it can no longer be found or read under any name; its data, events and storage are then removed, and its audit records kept. Forks keep their own data. The name is free again once \`state\` is \`deleted\`.",
+        "operationId": "repos.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "1-100 letters, digits, '.', '_' and '-'; not '.' or '..'; must not end in '.git'. Unique per owner, ignoring case.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "full_name": {
+                      "type": "string",
+                    },
+                    "id": {
+                      "type": "string",
+                    },
+                    "state": {
+                      "description": "\`deleted\` once everything is gone and the name is free again; \`deleting\` while the rest finishes in the background (the repository is already gone for every request).",
+                      "enum": [
+                        "deleting",
+                        "deleted",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "full_name",
+                    "state",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete a repository",
+        "x-fyrden-permission": "administration:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
       "get": {
         "description": "Returns a repository the caller can see. A repository that does not exist and one the caller cannot see both answer 404.",
         "operationId": "repos.get",
@@ -2020,6 +2102,109 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-fyrden-permission": "repos:create",
         "x-fyrden-principals": [
           "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/user/repos/delete": {
+      "post": {
+        "description": "Deletes up to 100 repositories you own, by name, as \`DELETE /repos/{owner}/{repo}\` does for one. Each name answers \`deleting\`, \`deleted\` or \`not_found\` (no such repository, or the token cannot administer it). Deletions this request does not finish continue in the background.",
+        "operationId": "repos.delete_many",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "names": {
+                    "description": "Names of repositories you own; a name given twice (ignoring case) counts once.",
+                    "items": {
+                      "description": "1-100 letters, digits, '.', '_' and '-'; not '.' or '..'; must not end in '.git'. Unique per owner, ignoring case.",
+                      "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+                      "type": "string",
+                    },
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                },
+                "required": [
+                  "names",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "results": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "state": {
+                            "enum": [
+                              "deleting",
+                              "deleted",
+                              "not_found",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "name",
+                          "id",
+                          "state",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "results",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete several of your repositories",
+        "x-fyrden-permission": "administration:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
         ],
         "x-idempotency": "Idempotency-Key header",
       },

@@ -46,6 +46,7 @@ export {
   type NetworkRetire,
   PACK_RETIRE_DEFAULTS,
   type PackRetireOptions,
+  packR2Keys,
   packRetireHandler,
   RETIRE_JOB_ID,
   schedulePackRetire,

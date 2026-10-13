@@ -1,4 +1,5 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import type { RepoExport } from "../do/repo/events.js";
 import { epochStatement, repoStatement, type Snapshot } from "../queues/events-consumer.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "./read-model.js";
 
@@ -27,30 +28,44 @@ export async function rebuildRepo(
   if (listed?.state !== "active") return "skipped";
   const exported = await env.REPO.getByName(repoId).exportSnapshot();
   if (!exported) return "skipped";
+  await applyExport(env, listed.org_shard, exported, options);
+  return "rebuilt";
+}
+
+/**
+ * Applies a repository's exported snapshot (a tombstone, once it is
+ * deleted) to its shard's read model, through the consumer's guarded upsert.
+ */
+export async function applyExport(
+  env: Env,
+  shard: string,
+  exported: RepoExport,
+  options: { now?: () => number; metrics?: Metrics } = {},
+): Promise<void> {
   const now = options.now?.() ?? Date.now();
-  const db = readModelFor(env, listed.org_shard);
+  const db = readModelFor(env, shard);
+  const { sourceId } = exported;
   const snapshots: Snapshot[] = exported.entities.map((entity) => ({
     id: {
-      sourceId: repoId,
+      sourceId,
       epochGen: exported.epochGen,
       sourceSeq: Math.max(1, exported.watermark),
     },
-    type: `${entity.type}.updated`,
+    type: `${entity.type}.${entity.deleted ? "deleted" : "updated"}`,
     at: now,
     actor: null,
     actChain: [],
     ownerGen: exported.ownerGen,
-    entity: { ...entity, row: { ...entity.row } },
+    entity: { ...entity, row: entity.row && { ...entity.row } },
     data: null,
     stored: false,
   }));
   const statements = [
-    epochStatement(db, repoId, exported.epochGen, now),
-    ...snapshots.map((snapshot) => repoStatement(db, repoId, snapshot, now)),
+    epochStatement(db, sourceId, exported.epochGen, now),
+    ...snapshots.map((snapshot) => repoStatement(db, sourceId, snapshot, now)),
   ];
   options.metrics?.count("d1.query", { db: "org", op: "rebuild_apply" }, statements.length);
   await db.batch(statements);
-  return "rebuilt";
 }
 
 /**

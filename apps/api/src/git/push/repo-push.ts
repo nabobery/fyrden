@@ -69,8 +69,12 @@ export type PushProgress =
   | { readonly state: "indexing"; readonly sideband: boolean }
   /** Indexing has finished (or was not needed): the Worker may re-authorize and finalize. */
   | { readonly state: "ready"; readonly sideband: boolean }
-  /** The push is over; `response` is the whole response body. */
-  | { readonly state: "done"; readonly response: Uint8Array };
+  /**
+   * The push is over; `response` is the whole response body. `discardBody`:
+   * no upload holds the stored body any more (it expired, or the repository
+   * was erased), so the Worker that stored it deletes it.
+   */
+  | { readonly state: "done"; readonly response: Uint8Array; readonly discardBody?: true };
 
 export interface BeginPushInput {
   readonly principal: string;
@@ -179,7 +183,12 @@ export class RepoPush {
    */
   async run(uploadId: string, bodyBytes: number, budgetMs: number): Promise<PushProgress> {
     const upload = this.git.uploads.get(uploadId);
-    if (!upload) return fatal("this push has expired; push again", false);
+    if (!upload)
+      return {
+        state: "done",
+        response: encodeFatalError("this push has expired; push again", false),
+        discardBody: true,
+      };
     if (upload.state === "open") {
       if (!Number.isSafeInteger(bodyBytes) || bodyBytes < 0) throw new RangeError("bad body size");
       this.git.uploads.recordCommands(uploadId, { v: 1, bodyBytes });

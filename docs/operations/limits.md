@@ -279,6 +279,28 @@ alarm. These periods are defaults and are not configurable in this version:
 A repack that replaces packs a clone is reading waits up to 1 hour for that
 clone before it switches; the old packs stay readable either way.
 
+## Repository deletion
+
+`DELETE /repos/{owner}/{repo}` and the bulk `POST /user/repos/delete` start a
+deletion that finishes in the background:
+
+| What | Value |
+|---|---|
+| Names in one bulk delete | 1 to 100 |
+| Deletions one request finishes itself | The one it deletes; 3 for a bulk delete |
+| The rest | Advanced by the cron every 5 minutes, 10 per run, oldest first; one that is waiting goes to the back |
+| Pushes, ref and setting changes | Refused as soon as the deletion starts |
+| Found or read under any name | Not after about 30 seconds (an isolate that resolved it before may serve it until then) |
+| The name | Taken until the deletion is `deleted`; free afterwards. The id is never reused |
+| Audit records | Archived to R2 before anything is erased; an R2 outage makes the deletion wait |
+| A clone or fork in progress | The erase waits for its read lease: 10 minutes, renewed while it reads |
+| A push admitted before the deletion | The erase waits up to 15 minutes for it to store its body; a body stored later is deleted by the push itself |
+| Forks | Keep the packs they borrowed; the network deletes a pack once no member claims it |
+| Incomplete multipart uploads of interrupted maintenance | Left to R2, which aborts them after 7 days |
+
+A deletion that keeps failing shows `attempts` and `last_error` in the
+directory's `repo_deletions` row.
+
 ## Configuration variables
 
 Set these as Worker variables of `fyrden-api`: add a `"vars"` object to

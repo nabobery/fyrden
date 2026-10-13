@@ -260,7 +260,7 @@ class PackRetire {
     const packId = pack.pack_id as PackId;
     if (pack.state === "condemned" && pack.kind !== "fetch" && (await this.#sharedPack(pack)))
       return this.#release(pack);
-    const keys = filesOf(pack);
+    const keys = packR2Keys(pack);
     if (!keys) return 0;
     if (pack.state === "condemned" && pack.kind !== "fetch") {
       if (!(await this.config.fence.acknowledged(packId))) return 0;
@@ -395,7 +395,9 @@ class PackRetire {
  * pack under the pack prefix. Undefined for a row whose ids or key are not
  * valid, which is left alone.
  */
-function filesOf(pack: RawPack): string[] | undefined {
+export function packR2Keys(
+  pack: Pick<RawPack, "pack_id" | "network_id" | "r2_key" | "kind">,
+): string[] | undefined {
   try {
     const packKey = packObjectKey(pack.network_id, pack.pack_id, "pack");
     if (pack.r2_key === packKey)

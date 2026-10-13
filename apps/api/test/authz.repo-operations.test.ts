@@ -20,9 +20,14 @@ const SHA = "a".repeat(40);
  * URL refused without a DNS lookup fail after the check, with their own
  * code). A new operation needs an entry.
  */
-const CASES: Record<string, { input: Record<string, unknown>; expected: Outcome }> = {
+const CASES: Record<
+  string,
+  { input: Record<string, unknown>; expected: Outcome; ownRepo?: boolean }
+> = {
   "repos.get": { input: {}, expected: { status: 200 } },
   "repos.update": { input: { description: "checked" }, expected: { status: 200 } },
+  // Deletes a repository of its own, not the one the other cases use.
+  "repos.delete": { input: {}, expected: { status: 200 }, ownRepo: true },
   "uploads.create": {
     input: { size: 32, ref_updates: [{ ref: "refs/heads/main", old: null, new: SHA }] },
     expected: { status: 201 },
@@ -57,10 +62,10 @@ beforeAll(async () => {
   repo = await createRepo(owner.principalId);
 });
 
-function call(op: OperationDef, token: string) {
+function call(op: OperationDef, token: string, name = repo.name) {
   const path = op.path
     .replace("{owner}", handle)
-    .replace("{repo}", repo.name)
+    .replace("{repo}", name)
     .replace("{upload_id}", UPLOAD_ID);
   const input = CASES[op.id]?.input ?? {};
   const get = op.method === "GET";
@@ -99,7 +104,8 @@ describe("repository operations", () => {
     "%s needs no more than the permission it declares",
     async (_, op) => {
       const token = await scopedToken(owner.principalId, [op.permission]);
-      expect(await outcome(await call(op, token))).toEqual(CASES[op.id]?.expected);
+      const name = CASES[op.id]?.ownRepo ? (await createRepo(owner.principalId)).name : repo.name;
+      expect(await outcome(await call(op, token, name))).toEqual(CASES[op.id]?.expected);
     },
   );
 });

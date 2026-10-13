@@ -151,6 +151,80 @@ export const updateRepo = defineOperation({
   },
 });
 
+const DeletionState = z
+  .enum(["deleting", "deleted"])
+  .describe(
+    "`deleted` once everything is gone and the name is free again; `deleting` while the rest finishes in the background (the repository is already gone for every request).",
+  );
+
+export const RepoDeletion = z.object({
+  id: z.string(),
+  full_name: z.string(),
+  state: DeletionState,
+});
+
+export const deleteRepo = defineOperation({
+  id: "repos.delete",
+  method: "DELETE",
+  path: "/repos/{owner}/{repo}",
+  summary: "Delete a repository",
+  description:
+    "Deletes a repository: from now on it cannot be pushed or changed, and within about 30 seconds it can no longer be found or read under any name; its data, events and storage are then removed, and its audit records kept. Forks keep their own data. The name is free again once `state` is `deleted`.",
+  input: z.object({
+    owner: z.string().regex(HANDLE_PATTERN).describe("The owner's handle."),
+    repo: RepoName,
+  }),
+  output: RepoDeletion,
+  permission: "administration:write",
+  principals: ["user", "agent"],
+  rateLimit: "write",
+  idempotency: "key",
+  mcp: {
+    tool: "delete_repo",
+    title: "Delete a repository",
+    description: "Delete a repository you administer; forks keep their own data.",
+    readOnly: false,
+  },
+});
+
+/** Repositories one bulk delete takes at most. */
+export const MAX_BULK_DELETE = 100;
+
+export const deleteRepos = defineOperation({
+  id: "repos.delete_many",
+  method: "POST",
+  path: "/user/repos/delete",
+  summary: "Delete several of your repositories",
+  description:
+    "Deletes up to 100 repositories you own, by name, as `DELETE /repos/{owner}/{repo}` does for one. Each name answers `deleting`, `deleted` or `not_found` (no such repository, or the token cannot administer it). Deletions this request does not finish continue in the background.",
+  input: z.object({
+    names: z
+      .array(RepoName)
+      .min(1)
+      .max(MAX_BULK_DELETE)
+      .describe("Names of repositories you own; a name given twice (ignoring case) counts once."),
+  }),
+  output: z.object({
+    results: z.array(
+      z.object({
+        name: z.string(),
+        id: z.string().nullable(),
+        state: z.enum(["deleting", "deleted", "not_found"]),
+      }),
+    ),
+  }),
+  permission: "administration:write",
+  principals: ["user", "agent"],
+  rateLimit: "expensive",
+  idempotency: "key",
+  mcp: {
+    tool: "delete_repos",
+    title: "Delete several repositories",
+    description: "Delete up to 100 of your repositories by name in one call.",
+    readOnly: false,
+  },
+});
+
 export const forkRepo = defineOperation({
   id: "repos.fork",
   method: "POST",

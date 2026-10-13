@@ -51,7 +51,8 @@ export async function startImport(
       partBytes: tuning.partBytes,
     },
   });
-  if (!begun.ok) throw new OperationError(409, begun.code, begun.error);
+  if (!begun.ok)
+    throw new OperationError(begun.code === "repo_not_found" ? 404 : 409, begun.code, begun.error);
   return output(begun.record);
 }
 

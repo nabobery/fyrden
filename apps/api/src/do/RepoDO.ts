@@ -1,6 +1,8 @@
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
 import {
   isNetworkId,
+  type JobHandler,
+  type JobKind,
   orphanReaperHandler,
   type PackRetireOptions,
   REFLOG_PRUNE_BATCH,
@@ -62,10 +64,18 @@ import {
   AUDIT_ARCHIVE_POLICY,
   auditArchiveHandler,
   hasUnarchivedAuditRows,
+  unarchivedAuditRows,
 } from "./base/audit-archiver.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
-import { RepoEvents, type RepoExport, type RepoIdentity, type RepoUpdate } from "./repo/events.js";
+import { type EraseOutcome, eraseRepository, recordNetwork } from "./repo/erase.js";
+import {
+  REPO_DELETED,
+  RepoEvents,
+  type RepoExport,
+  type RepoIdentity,
+  type RepoUpdate,
+} from "./repo/events.js";
 import { repoSchema } from "./schema/repo.js";
 
 /** What a repository object knows of the repository's details. */
@@ -81,6 +91,15 @@ export interface RepoDetails {
  * of CPU an alarm gets (measured on Workers Free, 2026-10-10).
  */
 const ALARM_BUDGET_MS = 5_000;
+
+/** The job the deletion runs the audit archiver's slices as (they read no job state). */
+const DELETION_SLICE = {
+  jobId: AUDIT_ARCHIVE_JOB,
+  kind: "audit_archive",
+  cursor: null,
+  attempts: 0,
+  claim: 0,
+} as const;
 
 /** One repository: refs, packs, its events and audit log. Keyed by the immutable repo id. */
 export class RepoDO extends MigratingDO {
@@ -100,6 +119,9 @@ export class RepoDO extends MigratingDO {
   /** Sends one outbox batch to the events queue. Tests may replace it. */
   sendEvents: (envelope: Envelope) => Promise<void>;
 
+  /** Where audit records are archived. Tests may replace it. */
+  auditBucket: Pick<R2Bucket, "put">;
+
   /** Events waiting to be sent; drained by the alarm. */
   readonly outbox: Outbox;
 
@@ -117,6 +139,7 @@ export class RepoDO extends MigratingDO {
       }),
       setAlarm: (at) => this.#arm(at),
     });
+    this.auditBucket = env.ASSETS;
     this.sendEvents = async (envelope) => {
       await env.EVENTS.send(envelope, { contentType: "json" });
     };
@@ -189,12 +212,28 @@ export class RepoDO extends MigratingDO {
    * subrequests and wall time are written when it settles.
    */
   #measured<R>(method: string, fn: () => R | Promise<R>): Promise<R> {
+    // While its erase runs, and once it is erased, the object takes no other work.
+    if (this.#closed && method !== "eraseForDeletion")
+      return Promise.reject(new Error(REPO_DELETED));
+    this.#inFlight++;
     return measureInvocation(
       this.git.context.metrics,
       { where: "do", op: method, doClass: "RepoDO" },
       fn,
-    );
+    ).finally(() => {
+      this.#inFlight--;
+    });
   }
+
+  /**
+   * Measured calls (and the alarm) running in this instance now. Work runs
+   * only in the object's one live instance, so a deletion that sees only
+   * itself here knows nothing else is writing, whatever stored leases say.
+   */
+  #inFlight = 0;
+
+  /** Set while the deletion's erase runs, and for good once it erased the storage. */
+  #closed = false;
 
   /**
    * Records the repository's fork network (new packs are stored under it)
@@ -207,6 +246,7 @@ export class RepoDO extends MigratingDO {
   ): Promise<{ ok: true } | { ok: false; error: string }> {
     if (!isNetworkId(networkId)) return { ok: false, error: "not a network id" };
     try {
+      recordNetwork(this.ctx.storage, networkId, this.git.context.now());
       if (identity) this.events.assertIdentity(identity);
       this.git.initialize(networkId, defaultBranch);
       if (identity) {
@@ -252,9 +292,13 @@ export class RepoDO extends MigratingDO {
     description?: string | null;
     defaultBranch?: string;
     actor: RefActor | null;
-  }): Promise<{ ok: true; details: RepoDetails } | { ok: false; code: "branch_not_found" }> {
+  }): Promise<
+    { ok: true; details: RepoDetails } | { ok: false; code: "branch_not_found" | "repo_deleted" }
+  > {
     return this.#measured("updateSettings", async () => {
       await this.checkEpoch();
+      // Its deletion started after the caller found it.
+      if (this.events.isDeleted()) return { ok: false as const, code: "repo_deleted" as const };
       const head =
         input.defaultBranch === undefined ? undefined : `refs/heads/${input.defaultBranch}`;
       if (head !== undefined && !this.git.refStore.hasRef(head)) {
@@ -362,6 +406,7 @@ export class RepoDO extends MigratingDO {
 
   /** Opens a push: the upload and its pack rows, before any byte is stored. Returns the body's R2 key. */
   beginPush(input: BeginPushInput): BeginPushResult {
+    if (this.#refusesAdmission()) return { ok: false, error: REPO_DELETED };
     return this.#push().begin(input);
   }
 
@@ -407,7 +452,19 @@ export class RepoDO extends MigratingDO {
 
   /** Starts a chunked upload session: the upload, its command section and its multipart upload. */
   beginChunked(input: BeginChunked): Promise<{ ok: true; view: ChunkedView } | ChunkedFailure> {
-    return this.#chunked().begin(input);
+    // Measured: a deletion waits for an admission that is setting up R2.
+    if (this.#closed)
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        code: "repo_not_found",
+        error: REPO_DELETED,
+      });
+    return this.#measured("beginChunked", () =>
+      this.#refusesAdmission()
+        ? ({ ok: false, status: 404, code: "repo_not_found", error: REPO_DELETED } as const)
+        : this.#chunked().begin(input),
+    );
   }
 
   /** Where part `part` of `bytes` bytes goes (key, multipart id, R2 part number), if the session takes it now, and the token reserving it. */
@@ -486,7 +543,13 @@ export class RepoDO extends MigratingDO {
   beginImport(
     input: BeginImport,
   ): Promise<{ ok: true; record: ImportRecord } | { ok: false; code: string; error: string }> {
-    return this.#imports().begin(input);
+    if (this.#closed)
+      return Promise.resolve({ ok: false, code: "repo_not_found", error: REPO_DELETED });
+    return this.#measured("beginImport", () =>
+      this.#refusesAdmission()
+        ? { ok: false as const, code: "repo_not_found", error: REPO_DELETED }
+        : this.#imports().begin(input),
+    );
   }
 
   /**
@@ -516,6 +579,7 @@ export class RepoDO extends MigratingDO {
           this.#log().warn("checking the repository's epoch failed", { error }),
         );
         await this.#drainOutbox();
+        this.#parkJobs();
         await this.#runJobs();
       } finally {
         this.#ensureAuditArchive();
@@ -536,43 +600,69 @@ export class RepoDO extends MigratingDO {
     }
   }
 
+  #auditArchiver() {
+    return auditArchiveHandler({
+      storage: this.ctx.storage,
+      bucket: this.auditBucket,
+      now: this.git.context.now,
+      org: () => this.events.orgId() ?? "unknown",
+      source: () => this.#repoId(),
+      metrics: this.git.context.metrics,
+    });
+  }
+
+  /**
+   * Once its deletion froze it, stops every job but the audit archive (their
+   * cursors stay, for the erase to find what they stored), so neither runs
+   * nor the alarm waits for them. A slice still running requeues itself
+   * when it ends and is stopped again on the next alarm.
+   */
+  #parkJobs(): void {
+    if (!this.events.isDeleted() || !this.#hasGitStorage()) return;
+    this.ctx.storage.sql.exec(
+      `UPDATE jobs SET state = 'failed', last_error = 'the repository is being deleted'
+       WHERE kind <> 'audit_archive'
+         AND (state = 'queued' OR (state = 'running' AND lease_expires_at <= ?))`,
+      this.git.context.now(),
+    );
+  }
+
   #runJobs(): Promise<unknown> {
+    const handlers = this.#jobHandlers();
+    // Once its deletion froze it, nothing but the audit archive may run.
     return this.git.jobs.runDue(
-      {
-        reflog_prune: reflogPruneHandler(
-          this.git.context,
-          REFLOG_PRUNE_BATCH,
-          this.maintenance.reflogRetentionMs,
-        ),
-        detach: this.#network().detachHandler(),
-        index: this.#push().indexHandler(),
-        compact: packCapCompactionHandler(this.git, () => this.packCap, this.#log()),
-        import: this.#imports().handler(),
-        audit_archive: auditArchiveHandler({
-          storage: this.ctx.storage,
-          bucket: this.env.ASSETS,
-          now: this.git.context.now,
-          org: () => this.events.orgId() ?? "unknown",
-          source: () => this.#repoId(),
-          metrics: this.git.context.metrics,
-        }),
-        reap_orphans: orphanReaperHandler(this.git, {
-          sweepNetwork: () => soleNetworkMember(this.env, this.git.networkId(), this.#repoId()),
-        }),
-        ...maintenanceHandlers(this.git, {
-          policy: () => this.maintenance,
-          log: this.#log(),
-          blocks: () => {
-            this.#blocks ??= createClockBlockCache();
-            return this.#blocks;
-          },
-          retire: this.retireOptions,
-          gc: this.gcHooks,
-        }),
-      },
+      this.events.isDeleted() ? { audit_archive: handlers.audit_archive } : handlers,
       this.git.memory,
       this.git.context.now() + ALARM_BUDGET_MS,
     );
+  }
+
+  #jobHandlers() {
+    return {
+      reflog_prune: reflogPruneHandler(
+        this.git.context,
+        REFLOG_PRUNE_BATCH,
+        this.maintenance.reflogRetentionMs,
+      ),
+      detach: this.#network().detachHandler(),
+      index: this.#push().indexHandler(),
+      compact: packCapCompactionHandler(this.git, () => this.packCap, this.#log()),
+      import: this.#imports().handler(),
+      audit_archive: this.#auditArchiver(),
+      reap_orphans: orphanReaperHandler(this.git, {
+        sweepNetwork: () => soleNetworkMember(this.env, this.git.networkId(), this.#repoId()),
+      }),
+      ...maintenanceHandlers(this.git, {
+        policy: () => this.maintenance,
+        log: this.#log(),
+        blocks: () => {
+          this.#blocks ??= createClockBlockCache();
+          return this.#blocks;
+        },
+        retire: this.retireOptions,
+        gc: this.gcHooks,
+      }),
+    } satisfies Partial<Record<JobKind, JobHandler>>;
   }
 
   // Fork networks: see src/network/.
@@ -600,6 +690,8 @@ export class RepoDO extends MigratingDO {
 
   /** A parent's half of fork creation: branches, tags, tips and live packs, read-leased by `holder`. */
   exportForFork(holder: string, ttlMs: number): Promise<ForkExport> {
+    // Its packs are about to be erased: a fork must not borrow them.
+    if (this.events.isDeleted()) throw new Error(REPO_DELETED);
     return this.#network().exportForFork(holder, ttlMs);
   }
 
@@ -614,6 +706,8 @@ export class RepoDO extends MigratingDO {
     identity?: RepoIdentity & { readonly actor: string | null },
   ): void {
     if (identity) this.events.assertIdentity(identity);
+    if (isNetworkId(input.networkId))
+      recordNetwork(this.ctx.storage, input.networkId, this.git.context.now());
     this.#network().initFork(input);
     if (identity) {
       this.events.init(identity, identity.actor);
@@ -655,6 +749,102 @@ export class RepoDO extends MigratingDO {
     return this.events.exportSnapshot();
   }
 
+  /**
+   * The deletion's first steps, each safe to redo: freeze the repository
+   * and emit its tombstone (once; from then on no background job but the
+   * audit archive runs), send its events and archive its audit rows within
+   * `budgetMs`. Ready for the erase when nothing is left to send or archive
+   * and no other call or alarm runs in this object.
+   */
+  prepareDeletion(
+    actor: string | null,
+    budgetMs: number,
+  ): Promise<{ ready: boolean; events: number; auditRows: number }> {
+    return this.#measured("prepareDeletion", async () => {
+      await this.checkEpoch();
+      this.events.markDeleted(actor);
+      this.#parkJobs();
+      const deadline = this.git.context.now() + budgetMs;
+      if (this.outbox.pending() > 0) {
+        const sent = await this.outbox.drain(this.#repoId());
+        if (!sent.ok) this.#log().warn("sending events failed", { error: sent.error });
+      }
+      const archiver = this.#auditArchiver();
+      try {
+        while (unarchivedAuditRows(this.ctx.storage) > 0 && this.git.context.now() < deadline)
+          await archiver.runSlice(DELETION_SLICE);
+      } catch (error) {
+        this.#log().warn("archiving audit records failed", { error });
+      }
+      const events = this.outbox.pending();
+      const auditRows = unarchivedAuditRows(this.ctx.storage);
+      // Whatever is left, the alarm retries meanwhile.
+      this.#armOutbox();
+      this.#ensureAuditArchive();
+      const alone = this.#inFlight === 1;
+      return { ready: events === 0 && auditRows === 0 && alone, events, auditRows };
+    });
+  }
+
+  /**
+   * The deletion's last step: erases what the repository stored outside
+   * this object (see `eraseRepository`), then this object's storage and
+   * alarm. Refused unless the deletion froze the repository first.
+   */
+  eraseForDeletion(): Promise<EraseOutcome | "not_frozen"> {
+    // Concurrent callers (a request and the cron) share one erase.
+    this.#erasing ??= this.#erase().finally(() => {
+      this.#erasing = undefined;
+    });
+    return this.#erasing;
+  }
+
+  #erasing: Promise<EraseOutcome | "not_frozen"> | undefined;
+
+  #erase(): Promise<EraseOutcome | "not_frozen"> {
+    return this.#measured("eraseForDeletion", async () => {
+      if (this.#hasGitStorage()) {
+        // An object without an identity (created before identities existed)
+        // cannot record the freeze; the directory's mark stands for it.
+        if (this.events.hasIdentity() && !this.events.isDeleted()) return "not_frozen";
+        if (this.#inFlight > 1) return "busy";
+        this.#closed = true;
+        let outcome: EraseOutcome;
+        try {
+          outcome = await eraseRepository(this.git, this.env, this.#repoId());
+        } catch (error) {
+          this.#closed = false;
+          throw error;
+        }
+        if (outcome !== "erased") {
+          this.#closed = false;
+          return outcome;
+        }
+      }
+      this.#closed = true;
+      await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.deleteAll();
+      return "erased";
+    });
+  }
+
+  /** No new upload or import: the repository is being deleted, or its storage is gone (erased). */
+  #refusesAdmission(): boolean {
+    // Storage first: once erased, its tables are gone.
+    return this.#closed || !this.#hasGitStorage() || this.events.isDeleted();
+  }
+
+  #hasGitStorage(): boolean {
+    return (
+      this.ctx.storage.sql
+        .exec<{ n: number }>(
+          "SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'git_meta'",
+        )
+        .one().n > 0 &&
+      this.ctx.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM git_meta").one().n > 0
+    );
+  }
+
   /** One slice of compacting borrowed packs to keep the view under the cap. */
   compactViewSlice(input: CompactSliceInput) {
     return this.#network().compactSlice(input);
@@ -667,6 +857,9 @@ export class RepoDO extends MigratingDO {
 
   /** The registry rows of packs under `networkId` (the network collection's snapshot). */
   networkSnapshot(networkId: string): MemberPack[] {
+    // An erased object restarted with empty storage holds nothing: it says
+    // so by failing, and the network checks the directory.
+    if (!this.#hasGitStorage()) throw new Error("git storage is not initialized");
     return this.#network().networkSnapshot(networkId);
   }
 
@@ -682,6 +875,10 @@ export class RepoDO extends MigratingDO {
 
   /** Starts a detach into `newNetworkId` (the network object calls this); it runs in the alarm. */
   beginDetach(newNetworkId: string): { ok: true } | { ok: false; error: string } {
+    const now = this.git.context.now();
+    // The one it leaves too (an object older than the history has no record of it).
+    if (this.#hasGitStorage()) recordNetwork(this.ctx.storage, this.git.networkId(), now);
+    if (isNetworkId(newNetworkId)) recordNetwork(this.ctx.storage, newNetworkId, now);
     return this.#network().beginDetach(newNetworkId);
   }
 

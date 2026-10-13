@@ -39,6 +39,10 @@ type Row = {
 // transfer (not built yet) must take effect within that bound.
 const found = new TokenCache<RepoEntry>(clock);
 
+// Repositories this isolate marked for deletion, for as long as a cached
+// entry for them can live: any name it was cached under misses at once.
+const deleted = new TokenCache<true>(clock);
+
 const cacheKey = (owner: string, name: string) => `${owner.toLowerCase()}/${name.toLowerCase()}`;
 
 /**
@@ -60,7 +64,7 @@ export async function resolveRepo(
   const primary = options.consistency === "primary";
   if (!primary) {
     const cached = found.get(key);
-    if (cached) return cached;
+    if (cached && !deleted.get(cached.id)) return cached;
   }
   const lookup = async (session: D1DatabaseSession) => {
     options.metrics?.count("d1.query", { db: "directory", op: "repo_resolve" });
@@ -88,7 +92,8 @@ export async function resolveRepo(
   const checkedAt = clock();
   let row = primary ? null : await lookup(env.DIRECTORY.withSession());
   row ??= await lookup(env.DIRECTORY.withSession("first-primary"));
-  if (!row) return undefined;
+  // A replica may not know yet of a deletion this isolate started.
+  if (!row || deleted.get(row.id)) return undefined;
   const entry = entryOf(row);
   found.set(key, entry, checkedAt);
   return entry;
@@ -136,6 +141,27 @@ export async function listOwnedRepos(
   return results.map(entryOf);
 }
 
+/** An owner's active repositories with `names` (current names, ignoring case), from the D1 primary. */
+export async function findOwnedRepos(
+  env: Env,
+  ownerId: string,
+  names: readonly string[],
+  metrics?: Metrics,
+): Promise<RepoEntry[]> {
+  metrics?.count("d1.query", { db: "directory", op: "repo_find" });
+  const { results } = await env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
+         r.name_gen
+       FROM repos r JOIN principals p ON p.id = r.owner_id
+       WHERE r.owner_id = ?1 AND r.state <> 'deleted' AND r.state = 'active'
+         AND r.name COLLATE NOCASE IN (SELECT value FROM json_each(?2))`,
+    )
+    .bind(ownerId, JSON.stringify(names))
+    .all<Row>();
+  return results.map(entryOf);
+}
+
 /**
  * A statement that frees `name` in an owner's namespace of redirects, for the
  * batch that gives a repository that name (a create, a fork). The batch must
@@ -145,6 +171,11 @@ export function claimNameStatement(db: D1Database, ownerId: string, name: string
   return db
     .prepare("DELETE FROM repo_redirects WHERE owner_id = ? AND name = ?")
     .bind(ownerId, name);
+}
+
+/** This isolate stops resolving `repoId` from its cache, under any name (its deletion started). */
+export function forgetRepo(repoId: string): void {
+  deleted.set(repoId, true);
 }
 
 /** Forgets what this isolate resolved `owner/name` to: the name now belongs to another repository, or none. */
