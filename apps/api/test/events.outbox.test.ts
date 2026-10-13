@@ -480,7 +480,7 @@ describe("repository events", () => {
         sent.push(envelope);
       };
       // Due now.
-      state.storage.sql.exec("UPDATE outbox_state SET next_drain_at = 0");
+      state.storage.sql.exec("UPDATE outbox_state SET next_drain_at = 1");
     });
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect(sent.flatMap((e) => e.events.map((x) => x.type))).toEqual(["repo.created"]);

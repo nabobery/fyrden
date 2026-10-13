@@ -222,7 +222,7 @@ describe("repository audit archive", () => {
       expect(job?.state).toBe("queued");
       // Due now.
       repo.git.context.storage.sql.exec(
-        "UPDATE jobs SET next_run_at = 0 WHERE job_id = ?",
+        "UPDATE jobs SET next_run_at = 1 WHERE job_id = ?",
         AUDIT_ARCHIVE_JOB,
       );
     });
