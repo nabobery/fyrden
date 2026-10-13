@@ -37,6 +37,7 @@ export {
   DO_MEMORY,
   type DoMemoryBudget,
   type MemoryBudgetStats,
+  MemoryWaitTimeoutError,
   withReservation,
 } from "./memory-budget.js";
 export { type PackKind, PackRegistry, type PackRow, type PackState } from "./pack-registry.js";

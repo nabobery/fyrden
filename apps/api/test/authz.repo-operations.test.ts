@@ -39,6 +39,10 @@ const CASES: Record<
   "repos.commits.list": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.commits.get": { input: {}, expected: { status: 404, code: "ref_not_found" } },
   "repos.compare": { input: {}, expected: { status: 404, code: "ref_not_found" } },
+  "repos.contents.get": { input: {}, expected: { status: 409, code: "repo_empty" } },
+  "repos.contents.root": { input: {}, expected: { status: 409, code: "repo_empty" } },
+  "repos.readme.get": { input: {}, expected: { status: 409, code: "repo_empty" } },
+  "repos.trees.get": { input: {}, expected: { status: 404, code: "ref_not_found" } },
   "uploads.create": {
     input: { size: 32, ref_updates: [{ ref: "refs/heads/main", old: null, new: SHA }] },
     expected: { status: 201 },
@@ -81,7 +85,9 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{username}", handle)
     .replace("{branch+}", "main")
     .replace("{ref+}", "main")
-    .replace("{basehead+}", "main...main");
+    .replace("{basehead+}", "main...main")
+    .replace("{path+}", "README.md")
+    .replace("{tree_sha+}", "main");
   const input = CASES[op.id]?.input ?? {};
   const get = op.method === "GET";
   return exports.default.fetch(`${ORIGIN}/api${path}`, {

@@ -18,6 +18,7 @@ import {
   listCommits,
   listTags,
 } from "../ops/browse.js";
+import { getContents, getReadme, getRootContents, getTree } from "../ops/contents.js";
 import { createImport, getImport } from "../ops/imports.js";
 import { whoami } from "../ops/meta.js";
 import { createOrg, listMembers, removeMembership, setMembership } from "../ops/orgs.js";
@@ -54,6 +55,10 @@ export const registry = defineRegistry([
   listCommits,
   getCommit,
   compareCommits,
+  getRootContents,
+  getContents,
+  getReadme,
+  getTree,
   setMembership,
   removeMembership,
   listMembers,

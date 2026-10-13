@@ -45,6 +45,7 @@ function ctx(mode: "read" | "write", fresh: boolean): OpContext {
     metrics: createMetrics(createFakeDataset().dataset),
     requestId: "req-exec",
     requestHost: "api.fyrden.test",
+    requestOrigin: "https://api.fyrden.test",
     waitUntil: () => {},
   };
 }

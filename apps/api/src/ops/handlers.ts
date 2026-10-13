@@ -29,6 +29,10 @@ import {
   compareCommitsOperation,
   getBranchOperation,
   getCommitOperation,
+  getContentsOperation,
+  getReadmeOperation,
+  getRootContentsOperation,
+  getTreeOperation,
   listBranchesOperation,
   listCommitsOperation,
   listTagsOperation,
@@ -172,6 +176,10 @@ export const handlers: Handlers = {
   "repos.commits.list": listCommitsOperation,
   "repos.commits.get": getCommitOperation,
   "repos.compare": compareCommitsOperation,
+  "repos.contents.get": getContentsOperation,
+  "repos.contents.root": getRootContentsOperation,
+  "repos.readme.get": getReadmeOperation,
+  "repos.trees.get": getTreeOperation,
 
   // Chunked pack uploads and server-side import (git/chunked, git/import).
   "uploads.create": createUploadSession,

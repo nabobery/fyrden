@@ -9,6 +9,7 @@ import { mountMcp } from "./mcp/mount.js";
 import type { AuthVariables } from "./middleware/auth.js";
 import { obs } from "./middleware/obs.js";
 import { mountRest } from "./rest/mount.js";
+import { mountRaw } from "./rest/raw.js";
 import { bootstrap } from "./routes/admin/bootstrap.js";
 
 export type AppEnv = { Bindings: Env; Variables: AuthVariables };
@@ -38,6 +39,7 @@ export function createApp() {
 
   app.route("/v0/admin/bootstrap", bootstrap);
   mountRest(app);
+  mountRaw(app);
   mountMcp(app);
   app.route("/", gitRouter);
 

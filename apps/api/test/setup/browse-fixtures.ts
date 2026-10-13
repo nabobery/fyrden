@@ -100,7 +100,31 @@ export default function setup(project: TestProject): () => void {
   write("run.sh", "#!/bin/sh\necho run\n");
   spawnSync("chmod", ["+x", join(dir, "run.sh")]);
   symlinkSync("README.md", join(dir, "link"));
-  const last = commit("Add a script and a link");
+  commit("Add a script and a link");
+  // A directory of many files, a file larger than the contents API carries, a submodule.
+  for (let i = 0; i < 30; i++) write(`many/f${String(i).padStart(2, "0")}.txt`, `file ${i}\n`);
+  writeFileSync(
+    join(dir, "big.bin"),
+    Uint8Array.from({ length: 1_536 * 1024 }, (_, i) => (i * 31) % 251),
+  );
+  // A name starting with a byte order mark, which must survive decoding.
+  write("\uFEFFbom.txt", "bom\n");
+  git(["add", "-A"]);
+  const cacheinfo = (mode: string, sha: string, path: string) =>
+    git(["update-index", "--add", "--cacheinfo", `${mode},${sha},${path}`]);
+  cacheinfo("160000", text(["rev-list", "--max-parents=0", "HEAD"]), "sub");
+  // README.MD beside README.md, without a working tree file (the two collide on case-insensitive disks).
+  const upper = git(["hash-object", "-w", "--stdin"], {}, "upper\n").toString("utf8").trim();
+  cacheinfo("100644", upper, "README.MD");
+  // A symlink whose target is not UTF-8.
+  const badTarget = git(["hash-object", "-w", "--stdin"], {}, Buffer.from([0xfe, 0xff]))
+    .toString("utf8")
+    .trim();
+  cacheinfo("120000", badTarget, "badlink");
+  // Not `commit`: `git add -A` would drop the entries without a working tree file.
+  clock += 60;
+  git(["commit", "-q", "-m", "Add assets"]);
+  const last = text(["rev-parse", "HEAD"]);
 
   // A commit in ISO-8859-1 (its `encoding` header says so), on its own branch.
   clock += 60;
@@ -191,8 +215,40 @@ export default function setup(project: TestProject): () => void {
     git(["pack-objects", "--revs", "--stdout", "-q"], {}, "sibling\n^main\n"),
   );
 
+  const lsTree = (args: string[]) =>
+    git(["ls-tree", "-z", ...args])
+      .toString("utf8")
+      .split("\0")
+      .filter(Boolean)
+      .map((line) => {
+        const [meta, path] = line.split("\t");
+        const [mode, type, sha] = (meta as string).split(" ");
+        return {
+          path: path as string,
+          mode: mode as string,
+          type: type as string,
+          sha: sha as string,
+        };
+      });
+  const files: Record<string, { sha: string; mode: string; base64: string }> = {};
+  for (const path of ["README.md", "run.sh", "big.bin", "docs/ünï.md", "many/f07.txt"]) {
+    const [entry] = lsTree(["main", "--", path]);
+    files[path] = {
+      sha: entry?.sha as string,
+      mode: entry?.mode as string,
+      base64: git(["cat-file", "blob", entry?.sha as string]).toString("base64"),
+    };
+  }
+  const trees = {
+    root: lsTree(["main"]),
+    many: lsTree(["main", "many/"]),
+    recursive: lsTree(["-r", "-t", "main"]),
+  };
+
   const fixtures: BrowseFixtures = {
     packHex,
+    files,
+    trees,
     mainSteps,
     siblingCommit,
     siblingPackHex,

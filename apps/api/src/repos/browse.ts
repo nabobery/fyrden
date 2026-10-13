@@ -2,6 +2,10 @@ import type {
   compareCommits,
   getBranch,
   getCommit,
+  getContents,
+  getReadme,
+  getRootContents,
+  getTree,
   Input,
   listBranches,
   listCommits,
@@ -9,6 +13,7 @@ import type {
   Output,
 } from "@fyrden/api-contract";
 import type { Browsed } from "../do/repo/browse.js";
+import type { ContentsView, DirCursor } from "../do/repo/contents.js";
 import { repoFor } from "../git/chunked/operations.js";
 import {
   decodeBytesCursor,
@@ -157,4 +162,118 @@ export async function compareCommitsOperation(
     merge_base_commit: compared.mergeBaseCommit,
     commits: compared.commits,
   };
+}
+
+/** A directory page cursor: the directory's tree id (20 bytes), then the entry's position (4). */
+function decodeDirCursor(cursor: string | undefined): DirCursor | undefined {
+  if (cursor === undefined) return undefined;
+  const bytes = decodeBytesCursor(cursor);
+  if (!bytes || bytes.length !== OID_BYTES + 4) throw invalidCursor();
+  const tree = Array.from(bytes.subarray(0, OID_BYTES), (b) => b.toString(16).padStart(2, "0"));
+  const index = new DataView(bytes.buffer, bytes.byteOffset + OID_BYTES, 4).getUint32(0);
+  return { tree: tree.join(""), index };
+}
+
+function encodeDirCursor(cursor: DirCursor | null): string | null {
+  if (cursor === null) return null;
+  const bytes = new Uint8Array(OID_BYTES + 4);
+  bytes.set(Uint8Array.from(cursor.tree.match(/../g) ?? [], (b) => Number.parseInt(b, 16)));
+  new DataView(bytes.buffer).setUint32(OID_BYTES, cursor.index);
+  return encodeBytesCursor(bytes);
+}
+
+/** The URL of a file's raw bytes at one commit (the raw route, outside the registry). */
+function rawUrl(ctx: OpContext, owner: string, repo: string, path: string, commit: string): string {
+  const encoded = path.split("/").map(encodeURIComponent).join("/");
+  const url = new URL(`/api/repos/${owner}/${repo}/raw/${encoded}`, ctx.requestOrigin);
+  url.searchParams.set("ref", commit);
+  return url.href;
+}
+
+/** The API shape of what a path names. */
+function contentsOutput(
+  ctx: OpContext,
+  input: { readonly owner: string; readonly repo: string },
+  { commit, view }: { commit: string; view: ContentsView },
+): Output<typeof getContents> {
+  switch (view.type) {
+    case "dir":
+      return {
+        type: "dir",
+        path: view.path,
+        sha: view.sha,
+        entries: view.entries,
+        next_cursor: encodeDirCursor(view.next),
+      };
+    case "file":
+      return {
+        type: "file",
+        path: view.path,
+        name: view.name,
+        sha: view.sha,
+        mode: view.mode,
+        size: view.size,
+        encoding: view.content === null ? "none" : "base64",
+        content: view.content ?? "",
+        download_url: rawUrl(ctx, input.owner, input.repo, view.path, commit),
+      };
+    default:
+      return view;
+  }
+}
+
+async function contentsOf(
+  ctx: OpContext,
+  input: Input<typeof getRootContents> & { readonly path?: string },
+): Promise<Output<typeof getContents>> {
+  const stub = await repoStub(ctx, input.owner, input.repo);
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "browseContents" });
+  const after = decodeDirCursor(input.cursor);
+  const found = value(
+    await stub.browseContents({
+      ...(input.ref !== undefined && { ref: input.ref }),
+      path: input.path ?? "",
+      ...(after !== undefined && { after }),
+      limit: input.per_page,
+    }),
+  );
+  return contentsOutput(ctx, input, found);
+}
+
+/** The `repos.contents.get` operation. */
+export function getContentsOperation(
+  ctx: OpContext,
+  input: Input<typeof getContents>,
+): Promise<Output<typeof getContents>> {
+  return contentsOf(ctx, input);
+}
+
+/** The `repos.contents.root` operation. */
+export function getRootContentsOperation(
+  ctx: OpContext,
+  input: Input<typeof getRootContents>,
+): Promise<Output<typeof getRootContents>> {
+  return contentsOf(ctx, input);
+}
+
+/** The `repos.readme.get` operation. */
+export async function getReadmeOperation(
+  ctx: OpContext,
+  input: Input<typeof getReadme>,
+): Promise<Output<typeof getReadme>> {
+  const stub = await repoStub(ctx, input.owner, input.repo);
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "browseReadme" });
+  return contentsOutput(ctx, input, value(await stub.browseReadme(input.ref)));
+}
+
+/** The `repos.trees.get` operation. */
+export async function getTreeOperation(
+  ctx: OpContext,
+  input: Input<typeof getTree>,
+): Promise<Output<typeof getTree>> {
+  const stub = await repoStub(ctx, input.owner, input.repo);
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "browseTree" });
+  const recursive = input.recursive === "1" || input.recursive === "true";
+  const listing = value(await stub.browseTree(input.tree_sha, recursive));
+  return { sha: listing.sha, tree: listing.entries, truncated: listing.truncated };
 }

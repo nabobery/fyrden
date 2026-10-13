@@ -81,6 +81,15 @@ import {
   RepoBrowse,
   type TagPage,
 } from "./repo/browse.js";
+import {
+  type ContentsView,
+  contents,
+  type DirCursor,
+  rawFile,
+  readme,
+  type TreeListing,
+  treeListing,
+} from "./repo/contents.js";
 import { type EraseOutcome, eraseRepository, recordNetwork } from "./repo/erase.js";
 import {
   REPO_DELETED,
@@ -452,6 +461,31 @@ export class RepoDO extends MigratingDO {
 
   browseCompare(base: string, head: string): Promise<Browsed<CompareView>> {
     return this.#browse("browseCompare", (b) => b.compare(base, head));
+  }
+
+  /** What a path names at a commit: a directory page, a file, a symlink or a submodule. */
+  browseContents(input: {
+    readonly ref?: string;
+    readonly path: string;
+    readonly after?: DirCursor;
+    readonly limit: number;
+  }): Promise<Browsed<{ commit: string; view: ContentsView }>> {
+    return this.#browse("browseContents", (b) => contents(b, input));
+  }
+
+  browseReadme(ref: string | undefined): Promise<Browsed<{ commit: string; view: ContentsView }>> {
+    return this.#browse("browseReadme", (b) => readme(b, ref));
+  }
+
+  browseTree(ref: string | undefined, recursive: boolean): Promise<Browsed<TreeListing>> {
+    return this.#browse("browseTree", (b) => treeListing(b, ref, recursive));
+  }
+
+  browseRaw(
+    ref: string | undefined,
+    path: string,
+  ): Promise<Browsed<{ sha: string; bytes: Uint8Array }>> {
+    return this.#browse("browseRaw", (b) => rawFile(b, ref, path));
   }
 
   /** Extends a fetch's read lease while its response streams; null once it has expired. */

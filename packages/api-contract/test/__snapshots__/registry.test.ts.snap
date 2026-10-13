@@ -3327,6 +3327,595 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
     },
+    "/repos/{owner}/{repo}/contents": {
+      "get": {
+        "description": "The root directory's entries at a branch, tag or commit, a page at a time.",
+        "operationId": "repos.contents.root",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "description": "A branch, a tag or a full commit SHA; the default branch when absent.",
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "description": "Directory entries per page, 1-1000.",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 64,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entries": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "mode": {
+                                "description": "Git's mode in octal: \`100644\`, \`100755\`, \`120000\`, \`040000\`, \`160000\`.",
+                                "type": "string",
+                              },
+                              "name": {
+                                "type": "string",
+                              },
+                              "path": {
+                                "type": "string",
+                              },
+                              "sha": {
+                                "description": "A full object SHA (40 hex digits).",
+                                "type": "string",
+                              },
+                              "type": {
+                                "enum": [
+                                  "file",
+                                  "dir",
+                                  "symlink",
+                                  "submodule",
+                                ],
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "type",
+                              "name",
+                              "path",
+                              "sha",
+                              "mode",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
+                        "next_cursor": {
+                          "description": "Pass as \`cursor\` for the next page of entries; null on the last page.",
+                          "type": [
+                            "string",
+                            "null",
+                          ],
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "A full object SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                        "type": {
+                          "const": "dir",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "path",
+                        "sha",
+                        "entries",
+                        "next_cursor",
+                      ],
+                      "type": "object",
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "content": {
+                          "description": "The file's bytes, base64; empty when \`encoding\` is \`none\`.",
+                          "type": "string",
+                        },
+                        "download_url": {
+                          "description": "The raw bytes at the same commit (the same token works).",
+                          "type": "string",
+                        },
+                        "encoding": {
+                          "description": "\`none\` when the file is too large to include.",
+                          "enum": [
+                            "base64",
+                            "none",
+                          ],
+                          "type": "string",
+                        },
+                        "mode": {
+                          "description": "Git's mode in octal: \`100644\`, \`100755\`, \`120000\`, \`040000\`, \`160000\`.",
+                          "type": "string",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "A full object SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                        "size": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "type": {
+                          "const": "file",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "path",
+                        "name",
+                        "sha",
+                        "mode",
+                        "size",
+                        "encoding",
+                        "content",
+                        "download_url",
+                      ],
+                      "type": "object",
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "content": {
+                          "description": "The target's exact bytes, base64.",
+                          "type": "string",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "A full object SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                        "size": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "target": {
+                          "description": "The target as UTF-8 (other bytes are replaced; see \`content\`).",
+                          "type": "string",
+                        },
+                        "type": {
+                          "const": "symlink",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "path",
+                        "name",
+                        "sha",
+                        "size",
+                        "target",
+                        "content",
+                      ],
+                      "type": "object",
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "A full object SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                        "type": {
+                          "const": "submodule",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "path",
+                        "name",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                  ],
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List the repository's root directory",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/contents/{path}": {
+      "get": {
+        "description": "What a path names at a branch, tag or commit: a directory's entries (in git's order, a page at a time), a file and its content (base64, up to 1 MiB; larger files have \`encoding: none\` and are read through \`download_url\`), a symlink and its target, or a submodule and its commit.",
+        "operationId": "repos.contents.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "description": "A branch, a tag or a full commit SHA; the default branch when absent.",
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "description": "Directory entries per page, 1-1000.",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 64,
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "description": "A path from the repository's root, \`a/b/c.txt\`.",
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entries": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "mode": {
+                                "description": "Git's mode in octal: \`100644\`, \`100755\`, \`120000\`, \`040000\`, \`160000\`.",
+                                "type": "string",
+                              },
+                              "name": {
+                                "type": "string",
+                              },
+                              "path": {
+                                "type": "string",
+                              },
+                              "sha": {
+                                "description": "A full object SHA (40 hex digits).",
+                                "type": "string",
+                              },
+                              "type": {
+                                "enum": [
+                                  "file",
+                                  "dir",
+                                  "symlink",
+                                  "submodule",
+                                ],
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "type",
+                              "name",
+                              "path",
+                              "sha",
+                              "mode",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
+                        "next_cursor": {
+                          "description": "Pass as \`cursor\` for the next page of entries; null on the last page.",
+                          "type": [
+                            "string",
+                            "null",
+                          ],
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "A full object SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                        "type": {
+                          "const": "dir",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "path",
+                        "sha",
+                        "entries",
+                        "next_cursor",
+                      ],
+                      "type": "object",
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "content": {
+                          "description": "The file's bytes, base64; empty when \`encoding\` is \`none\`.",
+                          "type": "string",
+                        },
+                        "download_url": {
+                          "description": "The raw bytes at the same commit (the same token works).",
+                          "type": "string",
+                        },
+                        "encoding": {
+                          "description": "\`none\` when the file is too large to include.",
+                          "enum": [
+                            "base64",
+                            "none",
+                          ],
+                          "type": "string",
+                        },
+                        "mode": {
+                          "description": "Git's mode in octal: \`100644\`, \`100755\`, \`120000\`, \`040000\`, \`160000\`.",
+                          "type": "string",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "A full object SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                        "size": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "type": {
+                          "const": "file",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "path",
+                        "name",
+                        "sha",
+                        "mode",
+                        "size",
+                        "encoding",
+                        "content",
+                        "download_url",
+                      ],
+                      "type": "object",
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "content": {
+                          "description": "The target's exact bytes, base64.",
+                          "type": "string",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "A full object SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                        "size": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "target": {
+                          "description": "The target as UTF-8 (other bytes are replaced; see \`content\`).",
+                          "type": "string",
+                        },
+                        "type": {
+                          "const": "symlink",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "path",
+                        "name",
+                        "sha",
+                        "size",
+                        "target",
+                        "content",
+                      ],
+                      "type": "object",
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "A full object SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                        "type": {
+                          "const": "submodule",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "path",
+                        "name",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                  ],
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get repository content",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/repos/{owner}/{repo}/forks": {
       "post": {
         "description": "Creates a fork of a repository the caller can read, owned by the caller, in the same fork network: it starts with the parent's branches, tags and default branch, and shares the parent's stored objects, so no data is copied. The fork can be cloned as soon as this returns. Answers 409 \`network_busy\` while the network's storage is being collected; retry after a few seconds.",
@@ -3455,6 +4044,142 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "user",
         ],
         "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/git/trees/{tree_sha}": {
+      "get": {
+        "description": "The root tree of a branch, tag or commit (\`tree_sha\` names one of them: a bare tree SHA is not accepted), with \`recursive\` every file and directory below it, as \`git ls-tree -r -t\` lists them. A listing of more than 10,000 entries, or of more trees than one request may read, is \`truncated\`.",
+        "operationId": "repos.trees.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "tree_sha",
+            "required": true,
+            "schema": {
+              "description": "A branch, a tag or a commit SHA.",
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "recursive",
+            "required": false,
+            "schema": {
+              "description": "\`1\` or \`true\` lists every entry below the root.",
+              "enum": [
+                "0",
+                "1",
+                "true",
+                "false",
+              ],
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "sha": {
+                      "description": "The root tree's SHA.",
+                      "type": "string",
+                    },
+                    "tree": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "mode": {
+                            "description": "Git's mode in octal: \`100644\`, \`100755\`, \`120000\`, \`040000\`, \`160000\`.",
+                            "type": "string",
+                          },
+                          "path": {
+                            "type": "string",
+                          },
+                          "sha": {
+                            "description": "A full object SHA (40 hex digits).",
+                            "type": "string",
+                          },
+                          "type": {
+                            "enum": [
+                              "blob",
+                              "tree",
+                              "commit",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "path",
+                          "mode",
+                          "type",
+                          "sha",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "sha",
+                    "tree",
+                    "truncated",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a tree",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
       },
     },
     "/repos/{owner}/{repo}/import": {
@@ -3757,6 +4482,273 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "agent",
         ],
         "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/readme": {
+      "get": {
+        "description": "The README file in the root directory at a branch, tag or commit (\`README.md\` first, then other README files).",
+        "operationId": "repos.readme.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "description": "A branch, a tag or a full commit SHA; the default branch when absent.",
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entries": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "mode": {
+                                "description": "Git's mode in octal: \`100644\`, \`100755\`, \`120000\`, \`040000\`, \`160000\`.",
+                                "type": "string",
+                              },
+                              "name": {
+                                "type": "string",
+                              },
+                              "path": {
+                                "type": "string",
+                              },
+                              "sha": {
+                                "description": "A full object SHA (40 hex digits).",
+                                "type": "string",
+                              },
+                              "type": {
+                                "enum": [
+                                  "file",
+                                  "dir",
+                                  "symlink",
+                                  "submodule",
+                                ],
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "type",
+                              "name",
+                              "path",
+                              "sha",
+                              "mode",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
+                        "next_cursor": {
+                          "description": "Pass as \`cursor\` for the next page of entries; null on the last page.",
+                          "type": [
+                            "string",
+                            "null",
+                          ],
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "A full object SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                        "type": {
+                          "const": "dir",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "path",
+                        "sha",
+                        "entries",
+                        "next_cursor",
+                      ],
+                      "type": "object",
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "content": {
+                          "description": "The file's bytes, base64; empty when \`encoding\` is \`none\`.",
+                          "type": "string",
+                        },
+                        "download_url": {
+                          "description": "The raw bytes at the same commit (the same token works).",
+                          "type": "string",
+                        },
+                        "encoding": {
+                          "description": "\`none\` when the file is too large to include.",
+                          "enum": [
+                            "base64",
+                            "none",
+                          ],
+                          "type": "string",
+                        },
+                        "mode": {
+                          "description": "Git's mode in octal: \`100644\`, \`100755\`, \`120000\`, \`040000\`, \`160000\`.",
+                          "type": "string",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "A full object SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                        "size": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "type": {
+                          "const": "file",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "path",
+                        "name",
+                        "sha",
+                        "mode",
+                        "size",
+                        "encoding",
+                        "content",
+                        "download_url",
+                      ],
+                      "type": "object",
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "content": {
+                          "description": "The target's exact bytes, base64.",
+                          "type": "string",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "A full object SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                        "size": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "target": {
+                          "description": "The target as UTF-8 (other bytes are replaced; see \`content\`).",
+                          "type": "string",
+                        },
+                        "type": {
+                          "const": "symlink",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "path",
+                        "name",
+                        "sha",
+                        "size",
+                        "target",
+                        "content",
+                      ],
+                      "type": "object",
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "A full object SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                        "type": {
+                          "const": "submodule",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "path",
+                        "name",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                  ],
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get the README",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
       },
     },
     "/repos/{owner}/{repo}/tags": {

@@ -85,6 +85,7 @@ export {
   isTreeMode,
   parseTree,
   type TreeEntry,
+  treeEntries,
 } from "./object/tree.js";
 export { applyDelta, type DeltaHeader, readDeltaHeader } from "./pack/delta-apply.js";
 export {

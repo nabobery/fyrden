@@ -21,6 +21,8 @@ export interface OpContext {
   requestId: string;
   /** The hostname the request arrived on (this deployment's own host). */
   requestHost: string;
+  /** The origin (scheme, host and port) the request arrived on, for links back to this API. */
+  requestOrigin: string;
   waitUntil(promise: Promise<unknown>): void;
 }
 

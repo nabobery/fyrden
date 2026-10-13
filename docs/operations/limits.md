@@ -303,10 +303,11 @@ directory's `repo_deletions` row.
 
 ## Browsing history
 
-Branches, tags, commits and comparisons (`/repos/{owner}/{repo}/branches`,
-`/tags`, `/commits`, `/compare/{base}...{head}`) start from a branch, a tag
-or a full commit SHA of the repository itself; a commit that only another
-repository of the same fork network has is not found.
+Branches, tags, commits, comparisons and files (`/repos/{owner}/{repo}/branches`,
+`/tags`, `/commits`, `/compare/{base}...{head}`, `/contents`, `/readme`,
+`/git/trees`, `/raw`) start from a branch, a tag or a full commit SHA of the
+repository itself; a commit that only another repository of the same fork
+network has is not found.
 
 | What | Value |
 |---|---|
@@ -320,6 +321,13 @@ repository of the same fork network has is not found.
 | Commits a comparison counts on each side | 10,000; more answers `comparison_too_large` |
 | Commits a comparison lists | The newest 100, oldest first |
 | Commit text | Decoded as the commit's `encoding` header says (UTF-8 without one, or for an encoding the runtime does not know) |
+| Directory entries per page (`/contents`) | 1 to 1,000, default 1,000 |
+| File content in a JSON answer | 1 MiB; a larger file has `encoding: none` and is read through its `download_url` |
+| Raw file (`/raw/{path}`) | 24 MiB; larger answers `too_large` (clone the repository instead) |
+| Recursive tree listing (`/git/trees/{ref}?recursive=1`) | 10,000 entries; more, more trees than one request may read, or directories nested so that their trees together pass 32 MiB, is `truncated` |
+| `/git/trees/{tree_sha}` | Takes a branch, a tag or a commit SHA; a bare tree SHA is not found |
+| Names that are not valid UTF-8 | Shown with replacement characters; such a file cannot be asked for by path (clone the repository) |
+| A directory page's cursor | Valid for that version of the directory; after the branch moves it answers `cursor_stale` |
 
 ## Configuration variables
 

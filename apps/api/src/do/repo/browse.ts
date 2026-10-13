@@ -1,4 +1,4 @@
-import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import { MemoryWaitTimeoutError, type RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import {
   type BlockCache,
   type Commit,
@@ -6,6 +6,7 @@ import {
   type Ident,
   isTreeMode,
   logPage,
+  type MemoryReservation,
   MissingCommitError,
   mergeBases,
   type ObjectReader,
@@ -150,7 +151,7 @@ export interface BrowseDeps {
 
 const utf8 = new TextDecoder("utf-8");
 
-function fail(status: 404 | 409 | 422, code: string, error: string): BrowseFailure {
+export function fail(status: 404 | 409 | 422, code: string, error: string): BrowseFailure {
   return { ok: false, status, code, error };
 }
 
@@ -173,7 +174,11 @@ export class RepoBrowse {
   }
 
   close(): void {
-    void this.#reader?.then((reader) => reader?.release());
+    // A reader that failed to open (its memory wait timed out) has nothing to release.
+    void this.#reader?.then(
+      (reader) => reader?.release(),
+      () => {},
+    );
     this.#reader = undefined;
   }
 
@@ -353,6 +358,51 @@ export class RepoBrowse {
     });
   }
 
+  /** The commit `ref` names (see `#resolve`) and its tree. */
+  async resolveTree(ref: string | undefined): Promise<Browsed<{ commit: Oid; tree: Oid }>> {
+    const resolved = await this.#resolve(ref);
+    if (!resolved.ok) return resolved;
+    const [row] = this.deps.git.commitGraph.readSync([resolved.value], "verified");
+    if (!row) return refNotFound(ref ?? "");
+    return { ok: true, value: { commit: resolved.value, tree: row.tree } };
+  }
+
+  /** Runs `use` with this request's reader (see `#withReader`). */
+  reading<T>(use: (reader: ObjectReader) => Promise<Browsed<T>>): Promise<Browsed<T>> {
+    return this.#withReader(use);
+  }
+
+  /** R2 reads this request has made. */
+  get reads(): number {
+    return this.#counts.reads;
+  }
+
+  get policy(): BrowsePolicy {
+    return this.#policy;
+  }
+
+  /**
+   * Reserves `bytes` (at least one) from the object's memory budget, or
+   * undefined when they are not free now; the caller releases them.
+   */
+  hold(bytes: number): MemoryReservation | undefined {
+    return this.deps.git.memory.tryReserve(Math.max(1, bytes));
+  }
+
+  /** This request's reader (opened on first use). */
+  async reader(): Promise<ObjectReader> {
+    const reader = await this.#open();
+    // Verified commits but no pack: the repository's objects are gone.
+    if (!reader) throw new Error("the repository has commits but no packs");
+    return reader;
+  }
+
+  /** Counts `bytes` against the response budget; throws when the answer would pass it. */
+  take(bytes: number): void {
+    if (this.#bytes + bytes > this.#policy.maxResponseBytes) throw new ResponseTooLargeError();
+    this.#bytes += bytes;
+  }
+
   /**
    * The commit `ref` names: the default branch when absent; a full commit
    * id this repository has; else a branch, then a tag (peeled), then a full
@@ -424,9 +474,7 @@ export class RepoBrowse {
       await reader.prefetch(oids);
       for (const oid of oids) {
         const view = await commitView(reader, oid);
-        const bytes = viewBytes(view);
-        if (this.#bytes + bytes > this.#policy.maxResponseBytes) throw new ResponseTooLargeError();
-        this.#bytes += bytes;
+        this.take(viewBytes(view));
         views.push(view);
       }
     } catch (error) {
@@ -453,12 +501,14 @@ class ResponseTooLargeError extends Error {
 }
 
 /** An operation whose running out of a budget is answered, not thrown. */
-async function guarded<T>(run: () => Promise<Browsed<T>>): Promise<Browsed<T>> {
+export async function guarded<T>(run: () => Promise<Browsed<T>>): Promise<Browsed<T>> {
   try {
     return await run();
   } catch (error) {
     if (error instanceof ReadBudgetError) return TOO_EXPENSIVE;
     if (error instanceof ResponseTooLargeError) return TOO_LARGE;
+    // The object's working memory stayed taken by other work.
+    if (error instanceof MemoryWaitTimeoutError) return BUSY;
     throw error;
   }
 }
@@ -470,6 +520,7 @@ function viewBytes(view: CommitView): number {
   const text = people.reduce((n, p) => n + p.name.length + p.email.length, commit.message.length);
   return 2 * text + 256 + 48 * view.parents.length;
 }
+export const BUSY = fail(409, "busy", "The repository is busy; try again shortly.");
 const TOO_LARGE = fail(422, "too_large", "The answer would be larger than one response may be.");
 const TOO_EXPENSIVE = fail(
   422,

@@ -18,6 +18,14 @@ export interface OracleCommit {
   readonly message: string;
 }
 
+/** One line of `git ls-tree`. */
+export interface TreeLine {
+  readonly path: string;
+  readonly mode: string;
+  readonly type: string;
+  readonly sha: string;
+}
+
 export interface BrowseFixtures {
   /** Every object (`git pack-objects --all`), hex. */
   readonly packHex: string;
@@ -26,6 +34,10 @@ export interface BrowseFixtures {
   readonly siblingPackHex: string;
   /** `main`'s first-parent commits, oldest first, each with a pack of what it adds. */
   readonly mainSteps: readonly { readonly commit: string; readonly packHex: string }[];
+  /** Files of `main` by path: blob id, mode and content (base64). */
+  readonly files: Readonly<Record<string, { sha: string; mode: string; base64: string }>>;
+  /** `git ls-tree` of `main`: its root, `many/`, and everything (`-r -t`). */
+  readonly trees: Readonly<Record<"root" | "many" | "recursive", readonly TreeLine[]>>;
   /** Every ref but HEAD. */
   readonly refs: readonly { readonly name: string; readonly oid: string }[];
   /** Every commit by sha. */
