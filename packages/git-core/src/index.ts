@@ -208,6 +208,7 @@ export type {
   RefStore,
   RefUpdate,
 } from "./ports/ref-store.js";
+export type { Signer } from "./ports/signer.js";
 export { type InflateResult, type Zlib, ZlibError, type ZlibErrorKind } from "./ports/zlib.js";
 export {
   type AdvertisedRef,
@@ -385,3 +386,13 @@ export {
 } from "./upload-pack/response.js";
 export { INFINITE_DEPTH } from "./upload-pack/shallow.js";
 export type { VerbatimCandidate } from "./upload-pack/verbatim-plan.js";
+export {
+  type BuildCommitInput,
+  type BuiltCommit,
+  type BuiltObject,
+  buildCommit,
+  CommitBuildError,
+  type CommitBuildErrorCode,
+  type FileChange,
+  type TreeLookup,
+} from "./write/commit-builder.js";

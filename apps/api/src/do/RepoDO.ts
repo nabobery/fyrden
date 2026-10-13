@@ -75,6 +75,7 @@ import {
   type Browsed,
   type CommitView,
   type CompareView,
+  fail,
   type LogInput,
   type LogView,
   type RefView,
@@ -98,6 +99,7 @@ import {
   type RepoIdentity,
   type RepoUpdate,
 } from "./repo/events.js";
+import { type FileWriteInput, type FileWriteResult, writeFiles } from "./repo/file-writes.js";
 import { repoSchema } from "./schema/repo.js";
 
 /** What a repository object knows of the repository's details. */
@@ -461,6 +463,31 @@ export class RepoDO extends MigratingDO {
 
   browseCompare(base: string, head: string): Promise<Browsed<CompareView>> {
     return this.#browse("browseCompare", (b) => b.compare(base, head));
+  }
+
+  /**
+   * Writes files as one commit on a branch, through the push path (see
+   * `writeFiles`): the Worker has checked `contents:write`; the token is
+   * checked again at the commit point.
+   */
+  writeFiles(input: FileWriteInput): Promise<Browsed<FileWriteResult>> {
+    if (this.#closed || this.#refusesAdmission())
+      return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
+    this.#blocks ??= createClockBlockCache();
+    const memoryBlocks = this.#blocks;
+    return this.#measured("writeFiles", () =>
+      writeFiles(
+        {
+          git: this.git,
+          push: this.#push(),
+          db: this.env.DIRECTORY,
+          memoryBlocks,
+          metrics: this.git.context.metrics,
+          writerRole: (principalId) => this.acl.roleOf(principalId, "write"),
+        },
+        input,
+      ),
+    );
   }
 
   /** What a path names at a commit: a directory page, a file, a symlink or a submodule. */

@@ -7,11 +7,11 @@ import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { RepoRole } from "@fyrden/domain";
 import { FetchClientError, ProtocolError, SmartHttpClient } from "@fyrden/git-core";
 import { buildCommandHead, readPushReport } from "../chunked/head.js";
+import { reauthorizeByToken } from "../push/reauthorize-token.js";
 import type { RepoPush } from "../push/repo-push.js";
 import { BUCKET_NAME, headKey, packKey } from "../push/scratch.js";
 import { type ImportNetwork, importPolicy } from "./network.js";
 import { MultipartPackSink } from "./pack-parts.js";
-import { reauthorizeImport } from "./reauthorize.js";
 import { IMPORT_REF_PREFIXES, MAX_IMPORT_REFS, selectImportRefs } from "./refs.js";
 
 /*
@@ -282,7 +282,7 @@ export class RepoImports {
   }
 
   async #commit(record: ImportRecord): Promise<ImportRecord> {
-    const decision = await reauthorizeImport(this.env.DIRECTORY, record, this.writerRole);
+    const decision = await reauthorizeByToken(this.env.DIRECTORY, record, this.writerRole);
     const report = readPushReport(
       await this.push.finalize(record.uploadId, decision, { repoId: record.repoId }),
     );

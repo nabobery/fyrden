@@ -43,6 +43,22 @@ const CASES: Record<
   "repos.contents.root": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.readme.get": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.trees.get": { input: {}, expected: { status: 404, code: "ref_not_found" } },
+  // Writes change their own repository: the first commit of an empty one.
+  "repos.contents.put": {
+    input: { message: "add", content: "aGk=" },
+    expected: { status: 200 },
+    ownRepo: true,
+  },
+  "repos.contents.delete": {
+    input: { message: "remove", sha: SHA },
+    expected: { status: 409, code: "sha_mismatch" },
+    ownRepo: true,
+  },
+  "repos.file_commits.create": {
+    input: { message: "add", changes: [{ path: "a.txt", content: "a" }] },
+    expected: { status: 201 },
+    ownRepo: true,
+  },
   "uploads.create": {
     input: { size: 32, ref_updates: [{ ref: "refs/heads/main", old: null, new: SHA }] },
     expected: { status: 201 },

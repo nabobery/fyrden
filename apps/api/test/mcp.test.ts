@@ -3,6 +3,7 @@ import { env, exports } from "cloudflare:workers";
 import { mcpTools, registry } from "@fyrden/api-contract";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { createRepo } from "./helpers/git-http.js";
 import { principalWithToken } from "./helpers/principals.js";
 import { logs } from "./setup/log-capture.js";
 
@@ -124,5 +125,36 @@ describe("MCP endpoint", () => {
     }>(res);
     expect(call.isError ?? false).toBe(false);
     expect(call.structuredContent).toMatchObject({ id: principalId, type: "agent" });
+  });
+});
+
+describe("large tool calls", () => {
+  it("takes a file write whose JSON is over the SDK's default 4 MiB", async () => {
+    const user = await principalWithToken("user", "pat");
+    const repo = await createRepo(user.principalId);
+    // 3,200,000 bytes of content: about 4.3 MB of JSON once base64.
+    const content = btoa("x".repeat(3_200_000));
+    const res = await rpc(
+      "tools/call",
+      {
+        name: "create_or_update_file",
+        arguments: {
+          owner: user.principalId.toLowerCase().replace("_", "-"),
+          repo: repo.name,
+          path: "big.txt",
+          message: "big",
+          content,
+        },
+      },
+      `Bearer ${user.token}`,
+    );
+    expect(res.status).toBe(200);
+    const call = await result<{
+      isError?: boolean;
+      content: { text: string }[];
+      structuredContent: { content: { size: number } };
+    }>(res);
+    expect(call.isError ?? false, call.content[0]?.text).toBe(false);
+    expect(call.structuredContent.content.size).toBe(3_200_000);
   });
 });

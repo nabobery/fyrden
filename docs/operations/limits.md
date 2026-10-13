@@ -329,6 +329,31 @@ network has is not found.
 | Names that are not valid UTF-8 | Shown with replacement characters; such a file cannot be asked for by path (clone the repository) |
 | A directory page's cursor | Valid for that version of the directory; after the branch moves it answers `cursor_stale` |
 
+## File writes
+
+`PUT`/`DELETE /repos/{owner}/{repo}/contents/{path}` and
+`POST /repos/{owner}/{repo}/file-commits` make one commit on a branch. The
+repository's object builds it and commits it through the push path: the pack
+is checked like a pushed one, the token is checked again just before the
+branch moves, and the branch moves only from the head the commit was built on.
+
+| What | Value |
+|---|---|
+| Files one write changes | 1 to 100 |
+| Content one write carries | 4 MiB (all files together), checked before it is decoded |
+| Commit message | 64 KiB |
+| Branch | Must exist; an empty repository takes a first commit on its default branch |
+| Committer | The caller, as `<handle> <id@users.noreply.host>`; `author` may name someone else |
+| Branch moved meanwhile | 409 `head_moved`; read again and retry |
+| File changed meanwhile (`sha` given) | 409 `sha_mismatch` |
+| Token revoked during the write | 403 `token_revoked`; nothing is committed |
+| Indexing wait | 4 steps of up to 5 seconds; a busier repository answers 409 `busy` |
+| Directories a write reads | About 300 R2 reads' worth; deeper writes answer `too_expensive` |
+| A directory a write changes | 1 MiB as a tree object (about 25,000 entries), 4 MiB of trees in all; larger answers `too_expensive` (push instead); memory for them is reserved, or the write answers `busy` |
+| Request body (REST and MCP) | 8 MiB; larger answers 413 `body_too_large` before it is read |
+| Retrying a write | `Idempotency-Key` is not replayed yet: a retried single-file write answers `sha_mismatch`; give `expected_head` to make a multi-file retry safe |
+| Signature | Unsigned for now |
+
 ## Configuration variables
 
 Set these as Worker variables of `fyrden-api`: add a `"vars"` object to

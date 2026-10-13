@@ -1,6 +1,8 @@
 import { makeProblem, mcpAnnotations, type OperationDef, registry } from "@fyrden/api-contract";
 import { type CallToolResult, createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import type { Hono } from "hono";
+import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
+import { problem } from "../http/problem.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
 import { executeOperation, type OpContext } from "../ops/execute.js";
 import { API_VERSION, opContext, operationHandler } from "../rest/mount.js";
@@ -65,11 +67,25 @@ function buildServer(ctx: OpContext): McpServer {
 export function mountMcp(app: Hono<{ Bindings: Env; Variables: AuthVariables }>): void {
   // Read-mode verification: tools/list and read tools use the isolate cache;
   // the executor re-verifies on the D1 primary before any write tool runs.
-  app.all(MCP_PATH, requireAuth("read"), (c) => {
+  app.all(MCP_PATH, requireAuth("read"), async (c) => {
     const ctx = opContext(c);
     const auth = c.get("auth");
-    const handler = createMcpHandler(() => buildServer(ctx));
-    return handler.fetch(c.req.raw, {
+    // The SDK buffers and parses the whole body: bound it first, as REST does.
+    const body = await readBoundedBody(c.req.raw, MAX_JSON_BODY_BYTES);
+    if (!body)
+      return problem(
+        c,
+        413,
+        "body_too_large",
+        `The request body is larger than ${MAX_JSON_BODY_BYTES} bytes.`,
+      );
+    const request = new Request(c.req.raw, {
+      ...(c.req.method !== "GET" && c.req.method !== "HEAD" && { body }),
+    });
+    const handler = createMcpHandler(() => buildServer(ctx), {
+      maxRequestBodySize: MAX_JSON_BODY_BYTES,
+    });
+    return handler.fetch(request, {
       // The token id, not the token: the SDK never needs the secret.
       authInfo: {
         token: auth.id,

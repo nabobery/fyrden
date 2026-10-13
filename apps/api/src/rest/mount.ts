@@ -1,5 +1,6 @@
 import { type OperationDef, openApiDocument, registry } from "@fyrden/api-contract";
 import type { Context, Hono } from "hono";
+import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
 import { problem, problemResponse } from "../http/problem.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
 import { executeOperation, type OpContext, type OpHandler } from "../ops/execute.js";
@@ -30,7 +31,9 @@ export function operationHandler(op: OperationDef): OpHandler<OperationDef> {
 
 type ReadResult =
   | { ok: true; input: unknown }
-  | { ok: false; status: 400 | 422; code: string; detail: string };
+  | { ok: false; status: 400 | 413 | 422; code: string; detail: string };
+
+const utf8 = new TextDecoder();
 
 /**
  * An operation's input: path parameters over the query (GET) or the JSON
@@ -40,7 +43,15 @@ type ReadResult =
 async function readInput(c: AppContext, op: OperationDef): Promise<ReadResult> {
   const params = c.req.param() as Record<string, string>;
   if (op.method === "GET") return { ok: true, input: { ...c.req.query(), ...params } };
-  const text = await c.req.text();
+  const raw = await readBoundedBody(c.req.raw, MAX_JSON_BODY_BYTES);
+  if (!raw)
+    return {
+      ok: false,
+      status: 413,
+      code: "body_too_large",
+      detail: `The request body is larger than ${MAX_JSON_BODY_BYTES} bytes.`,
+    };
+  const text = utf8.decode(raw);
   if (text.trim() === "") return { ok: true, input: { ...params } };
   let body: unknown;
   try {

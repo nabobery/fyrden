@@ -3617,6 +3617,240 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
       },
     },
     "/repos/{owner}/{repo}/contents/{path}": {
+      "delete": {
+        "description": "Deletes one file as a new commit on a branch. \`sha\` is the file's current blob SHA; fails with 409 when the file or the branch changed meanwhile.",
+        "operationId": "repos.contents.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "description": "A path from the repository's root, \`a/b/c.txt\`.",
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "author": {
+                    "description": "The commit's author; the authenticated principal when absent (always the committer).",
+                    "properties": {
+                      "email": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                      "name": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "name",
+                      "email",
+                    ],
+                    "type": "object",
+                  },
+                  "branch": {
+                    "description": "The branch to commit to; the default branch when absent.",
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "message": {
+                    "description": "The commit message.",
+                    "maxLength": 65536,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "sha": {
+                    "description": "The file's current blob SHA.",
+                    "pattern": "^[0-9a-f]{40}$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "message",
+                  "sha",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "commit": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "commit": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "author": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "date": {
+                                  "description": "ISO 8601, UTC.",
+                                  "type": "string",
+                                },
+                                "email": {
+                                  "type": "string",
+                                },
+                                "name": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "name",
+                                "email",
+                                "date",
+                              ],
+                              "type": "object",
+                            },
+                            "committer": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "date": {
+                                  "description": "ISO 8601, UTC.",
+                                  "type": "string",
+                                },
+                                "email": {
+                                  "type": "string",
+                                },
+                                "name": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "name",
+                                "email",
+                                "date",
+                              ],
+                              "type": "object",
+                            },
+                            "message": {
+                              "type": "string",
+                            },
+                            "tree": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "sha": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "sha",
+                              ],
+                              "type": "object",
+                            },
+                          },
+                          "required": [
+                            "message",
+                            "author",
+                            "committer",
+                            "tree",
+                          ],
+                          "type": "object",
+                        },
+                        "parents": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "sha": {
+                                "description": "A full commit SHA (40 hex digits).",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "sha",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
+                        "sha": {
+                          "description": "A full commit SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "sha",
+                        "commit",
+                        "parents",
+                      ],
+                      "type": "object",
+                    },
+                    "content": {
+                      "type": "null",
+                    },
+                  },
+                  "required": [
+                    "content",
+                    "commit",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete a file",
+        "x-fyrden-permission": "contents:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
       "get": {
         "description": "What a path names at a branch, tag or commit: a directory's entries (in git's order, a page at a time), a file and its content (base64, up to 1 MiB; larger files have \`encoding: none\` and are read through \`download_url\`), a symlink and its target, or a submodule and its commit.",
         "operationId": "repos.contents.get",
@@ -3914,6 +4148,568 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "user",
           "agent",
         ],
+      },
+      "put": {
+        "description": "Writes one file as a new commit on a branch (GitHub's contents API). To update a file, give its current blob \`sha\`; without \`sha\` the file must not exist yet. Fails with 409 when the file or the branch changed meanwhile.",
+        "operationId": "repos.contents.put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "description": "A path from the repository's root, \`a/b/c.txt\`.",
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "author": {
+                    "description": "The commit's author; the authenticated principal when absent (always the committer).",
+                    "properties": {
+                      "email": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                      "name": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "name",
+                      "email",
+                    ],
+                    "type": "object",
+                  },
+                  "branch": {
+                    "description": "The branch to commit to; the default branch when absent.",
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "content": {
+                    "description": "The new content, base64 (4 MiB at most).",
+                    "maxLength": 5800000,
+                    "type": "string",
+                  },
+                  "message": {
+                    "description": "The commit message.",
+                    "maxLength": 65536,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "sha": {
+                    "description": "The file's current blob SHA (required to update a file).",
+                    "pattern": "^[0-9a-f]{40}$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "message",
+                  "content",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "commit": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "commit": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "author": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "date": {
+                                  "description": "ISO 8601, UTC.",
+                                  "type": "string",
+                                },
+                                "email": {
+                                  "type": "string",
+                                },
+                                "name": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "name",
+                                "email",
+                                "date",
+                              ],
+                              "type": "object",
+                            },
+                            "committer": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "date": {
+                                  "description": "ISO 8601, UTC.",
+                                  "type": "string",
+                                },
+                                "email": {
+                                  "type": "string",
+                                },
+                                "name": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "name",
+                                "email",
+                                "date",
+                              ],
+                              "type": "object",
+                            },
+                            "message": {
+                              "type": "string",
+                            },
+                            "tree": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "sha": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "sha",
+                              ],
+                              "type": "object",
+                            },
+                          },
+                          "required": [
+                            "message",
+                            "author",
+                            "committer",
+                            "tree",
+                          ],
+                          "type": "object",
+                        },
+                        "parents": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "sha": {
+                                "description": "A full commit SHA (40 hex digits).",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "sha",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
+                        "sha": {
+                          "description": "A full commit SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "sha",
+                        "commit",
+                        "parents",
+                      ],
+                      "type": "object",
+                    },
+                    "content": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                        },
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "The blob SHA of the new content.",
+                          "type": "string",
+                        },
+                        "size": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "type": {
+                          "const": "file",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "name",
+                        "path",
+                        "sha",
+                        "size",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "content",
+                    "commit",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create or update a file",
+        "x-fyrden-permission": "contents:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/file-commits": {
+      "post": {
+        "description": "Writes and deletes up to 100 files (4 MiB of content together) as one commit on a branch. With \`expected_head\`, fails with 409 unless the branch is still at that commit; the commit is always made on the head it was built on, so a branch that moves meanwhile also fails with 409.",
+        "operationId": "repos.file_commits.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "author": {
+                    "description": "The commit's author; the authenticated principal when absent (always the committer).",
+                    "properties": {
+                      "email": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                      "name": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "name",
+                      "email",
+                    ],
+                    "type": "object",
+                  },
+                  "branch": {
+                    "description": "The branch to commit to; the default branch when absent.",
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "changes": {
+                    "items": {
+                      "description": "One file to write or delete.",
+                      "properties": {
+                        "content": {
+                          "description": "The new content; absent with \`delete\`.",
+                          "maxLength": 5800000,
+                          "type": "string",
+                        },
+                        "delete": {
+                          "description": "Delete the file instead.",
+                          "type": "boolean",
+                        },
+                        "encoding": {
+                          "default": "utf-8",
+                          "description": "How \`content\` is written: plain text (\`utf-8\`) or \`base64\`.",
+                          "enum": [
+                            "utf-8",
+                            "base64",
+                          ],
+                          "type": "string",
+                        },
+                        "mode": {
+                          "description": "Default: keep an existing file's mode, else \`file\`.",
+                          "enum": [
+                            "file",
+                            "executable",
+                          ],
+                          "type": "string",
+                        },
+                        "path": {
+                          "description": "A path from the repository's root, \`a/b/c.txt\`.",
+                          "maxLength": 4096,
+                          "minLength": 1,
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "path",
+                      ],
+                      "type": "object",
+                    },
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                  "expected_head": {
+                    "description": "The commit the branch must be at.",
+                    "pattern": "^[0-9a-f]{40}$",
+                    "type": "string",
+                  },
+                  "message": {
+                    "description": "The commit message.",
+                    "maxLength": 65536,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "message",
+                  "changes",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "branch": {
+                      "type": "string",
+                    },
+                    "commit": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "commit": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "author": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "date": {
+                                  "description": "ISO 8601, UTC.",
+                                  "type": "string",
+                                },
+                                "email": {
+                                  "type": "string",
+                                },
+                                "name": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "name",
+                                "email",
+                                "date",
+                              ],
+                              "type": "object",
+                            },
+                            "committer": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "date": {
+                                  "description": "ISO 8601, UTC.",
+                                  "type": "string",
+                                },
+                                "email": {
+                                  "type": "string",
+                                },
+                                "name": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "name",
+                                "email",
+                                "date",
+                              ],
+                              "type": "object",
+                            },
+                            "message": {
+                              "type": "string",
+                            },
+                            "tree": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "sha": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "sha",
+                              ],
+                              "type": "object",
+                            },
+                          },
+                          "required": [
+                            "message",
+                            "author",
+                            "committer",
+                            "tree",
+                          ],
+                          "type": "object",
+                        },
+                        "parents": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "sha": {
+                                "description": "A full commit SHA (40 hex digits).",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "sha",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
+                        "sha": {
+                          "description": "A full commit SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "sha",
+                        "commit",
+                        "parents",
+                      ],
+                      "type": "object",
+                    },
+                    "files": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                          },
+                          "sha": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                        },
+                        "required": [
+                          "path",
+                          "sha",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "branch",
+                    "commit",
+                    "files",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Commit changes to several files",
+        "x-fyrden-permission": "contents:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
       },
     },
     "/repos/{owner}/{repo}/forks": {

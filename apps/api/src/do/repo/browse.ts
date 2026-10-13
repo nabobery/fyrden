@@ -82,7 +82,7 @@ export const BROWSE_POLICY: BrowsePolicy = {
 
 export type BrowseFailure = {
   readonly ok: false;
-  readonly status: 404 | 409 | 422;
+  readonly status: 403 | 404 | 409 | 422;
   readonly code: string;
   readonly error: string;
 };
@@ -151,7 +151,7 @@ export interface BrowseDeps {
 
 const utf8 = new TextDecoder("utf-8");
 
-export function fail(status: 404 | 409 | 422, code: string, error: string): BrowseFailure {
+export function fail(status: 403 | 404 | 409 | 422, code: string, error: string): BrowseFailure {
   return { ok: false, status, code, error };
 }
 

@@ -40,6 +40,11 @@ import {
 import { createRepository } from "../repos/create.js";
 import { deleteRepoOperation, deleteReposOperation } from "../repos/delete.js";
 import { authorize, defaultBranchOf, resolveRepo } from "../repos/directory.js";
+import {
+  createFileCommitOperation,
+  deleteContentsOperation,
+  putContentsOperation,
+} from "../repos/file-writes.js";
 import { listAccountRepos } from "../repos/listing.js";
 import { repoOutput } from "../repos/output.js";
 import { updateRepoOperation } from "../repos/update.js";
@@ -180,6 +185,11 @@ export const handlers: Handlers = {
   "repos.contents.root": getRootContentsOperation,
   "repos.readme.get": getReadmeOperation,
   "repos.trees.get": getTreeOperation,
+
+  // File writes (repos/file-writes).
+  "repos.contents.put": putContentsOperation,
+  "repos.contents.delete": deleteContentsOperation,
+  "repos.file_commits.create": createFileCommitOperation,
 
   // Chunked pack uploads and server-side import (git/chunked, git/import).
   "uploads.create": createUploadSession,

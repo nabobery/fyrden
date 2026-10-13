@@ -1,8 +1,8 @@
 import { parseTokenRestrictions } from "@fyrden/adapters-cloudflare/auth";
 import { ownsUserAccount, type PrincipalType, type RepoRole } from "@fyrden/domain";
 import { allowedWithRole } from "../../repos/directory.js";
-import type { PushDecision } from "../push/commit.js";
-import { ACCESS_LOST, TOKEN_REVOKED } from "../push/reauthorize.js";
+import type { PushDecision } from "./commit.js";
+import { ACCESS_LOST, TOKEN_REVOKED } from "./reauthorize.js";
 
 type Row = {
   principal_id: string;
@@ -16,14 +16,14 @@ type Row = {
 };
 
 /**
- * The commit-point check for an import, which commits from the repository
- * object's alarm with no request holding the token: the token (by id) and
- * the repository are read from the D1 primary. As for a push, a token that
- * merely expired since the import was accepted does not stop it; a revoked
- * token, a disabled principal, a deleted repository or lost write access
- * does.
+ * The commit-point check for a write the repository object makes itself
+ * (an import from its alarm, a file write), with no Worker holding the
+ * token: the token (by id) and the repository are read from the D1
+ * primary. As for a push, a token that merely expired since the write was
+ * accepted does not stop it; a revoked token, a disabled principal, a
+ * deleted repository or lost write access does.
  */
-export async function reauthorizeImport(
+export async function reauthorizeByToken(
   db: D1Database,
   accepted: { readonly tokenId: string; readonly principal: string; readonly repoId: string },
   /** The principal's role for a write, from the repository's own ACL snapshot. */
