@@ -45,9 +45,41 @@ export function envDeployOptions(
   };
 }
 
+const HELP_FLAGS = new Set(["--help", "-h"]);
+
+/**
+ * The deploy plan if `args` are exactly what `deploy` accepts; undefined
+ * otherwise. Anything unknown (a typo, `--help`) must never start a deploy.
+ */
+export function parseDeployArgs(args: readonly string[]): Plan | undefined {
+  if (args.length === 0) return "paid";
+  if (args.length === 2 && args[0] === "--plan" && (args[1] === "free" || args[1] === "paid"))
+    return args[1];
+  return undefined;
+}
+
+/**
+ * Whether the command line asks for help. A bare `help` counts only where no
+ * command takes it as a value (a push can name a remote or branch `help`).
+ */
+export function asksForHelp(argv: readonly string[]): boolean {
+  const [command, ...rest] = argv;
+  return (
+    command === "help" ||
+    HELP_FLAGS.has(command ?? "") ||
+    rest.some((arg) => HELP_FLAGS.has(arg)) ||
+    (command !== "push" && rest.length === 1 && rest[0] === "help")
+  );
+}
+
 export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   const log = (line: string) => console.log(line);
+  // Help is answered before anything else runs, for every command.
+  if (command === undefined || asksForHelp(argv)) {
+    console.log(USAGE);
+    return command === undefined ? 2 : 0;
+  }
   if (command === "push") {
     // Runs in any git repository, not only a Fyrden checkout.
     const parsed = parsePushArgs(rest, process.env);
@@ -58,7 +90,11 @@ export async function main(argv: string[]): Promise<number> {
     return push(parsed, nodePushDeps());
   }
   const known = command === "deploy" || command === "doctor" || command === "destroy";
-  if (!known || (command === "destroy" && rest.some((arg) => arg !== "--yes"))) {
+  const badArgs =
+    (command === "destroy" && rest.some((arg) => arg !== "--yes")) ||
+    (command === "doctor" && rest.length > 0) ||
+    (command === "deploy" && parseDeployArgs(rest) === undefined);
+  if (!known || badArgs) {
     console.error(USAGE);
     return 2;
   }
@@ -79,12 +115,7 @@ export async function main(argv: string[]): Promise<number> {
     });
     return result.complete ? 0 : 1;
   }
-  const planIndex = rest.indexOf("--plan");
-  const plan = (planIndex >= 0 ? rest[planIndex + 1] : "paid") as Plan;
-  if (plan !== "free" && plan !== "paid") {
-    console.error(USAGE);
-    return 2;
-  }
+  const plan = parseDeployArgs(rest) as Plan;
   const result = await deploy({
     repoRoot,
     plan,

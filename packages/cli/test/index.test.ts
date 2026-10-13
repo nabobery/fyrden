@@ -1,5 +1,58 @@
-import { describe, expect, it } from "vitest";
-import { envDeployOptions } from "../src/index.ts";
+import { describe, expect, it, vi } from "vitest";
+import { asksForHelp, envDeployOptions, main, parseDeployArgs } from "../src/index.ts";
+
+describe("command line", () => {
+  it.each([
+    [["deploy", "--help"]],
+    [["deploy", "-h"]],
+    [["destroy", "--help"]],
+    [["destroy", "--yes", "--help"]],
+    [["doctor", "--help"]],
+    [["--help"]],
+    [["help"]],
+    [["deploy", "help"]],
+  ])("answers %j with the usage and changes nothing", async (argv) => {
+    const out = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      // Returns before looking for a checkout or running wrangler.
+      expect(await main(argv)).toBe(0);
+      expect(out.mock.calls[0]?.[0]).toMatch(/^usage:/);
+    } finally {
+      out.mockRestore();
+    }
+  });
+
+  it.each([
+    [["deploy", "--plan"]],
+    [["deploy", "--plan", "pro"]],
+    [["deploy", "--plna", "free"]],
+    [["deploy", "free"]],
+    [["doctor", "--fix"]],
+    [["destroy", "--force"]],
+    [["launch"]],
+  ])("refuses %j without running anything", async (argv) => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await main(argv)).toBe(2);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("leaves a remote or branch named help to push", () => {
+    expect(asksForHelp(["push", "origin", "help"])).toBe(false);
+    expect(asksForHelp(["push", "help", "main"])).toBe(false);
+    expect(asksForHelp(["push", "--help"])).toBe(true);
+    expect(asksForHelp(["deploy", "help"])).toBe(true);
+  });
+
+  it("accepts exactly the deploy plans", () => {
+    expect(parseDeployArgs([])).toBe("paid");
+    expect(parseDeployArgs(["--plan", "free"])).toBe("free");
+    expect(parseDeployArgs(["--plan", "paid"])).toBe("paid");
+    expect(parseDeployArgs(["--plan", "free", "--plan", "paid"])).toBeUndefined();
+  });
+});
 
 describe("envDeployOptions", () => {
   it.each([
