@@ -8,12 +8,11 @@ import type {
   setMembership,
 } from "@fyrden/api-contract";
 import { isValidHandle, type OrgRole } from "@fyrden/domain";
-import type { MemberChange } from "../do/OrgDO.js";
 import { allocateEpoch } from "../events/epochs.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock, newId } from "../services.js";
-import { type Account, findAccount, invalidateAccountRepos, orgFor } from "./account.js";
+import { applied, findAccount, invalidateChange, orgFor, userFor } from "./account.js";
 
 // D1 reports a unique-index violation in the error message.
 const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
@@ -21,21 +20,6 @@ const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
 /** GitHub's membership role names: an `admin` is an owner. */
 const toOrgRole = (role: "admin" | "member"): OrgRole => (role === "admin" ? "owner" : "member");
 const toApiRole = (role: OrgRole): "admin" | "member" => (role === "owner" ? "admin" : "member");
-
-/** The enabled user `handle` (or, with `includeDisabled`, a disabled one), or 404. */
-async function userFor(ctx: OpContext, handle: string, includeDisabled = false): Promise<Account> {
-  const user = await findAccount(ctx.env, handle, { metrics: ctx.metrics, includeDisabled });
-  if (user?.type !== "user")
-    throw new OperationError(404, "user_not_found", `No user ${handle} was found.`);
-  return user;
-}
-
-/** The organization object's answer to a change, as the API answers it. */
-function changed(change: MemberChange): Extract<MemberChange, { ok: true }> {
-  if (change.ok) return change;
-  if (change.code === "forbidden") throw new OperationError(403, change.code, change.error);
-  throw new OperationError(409, change.code, change.error);
-}
 
 /** The `admin.orgs.create` operation: the organization's object first, then its directory rows. */
 export async function createOrgOperation(
@@ -92,7 +76,7 @@ export async function setMembershipOperation(
   const user = await userFor(ctx, input.username);
   const stub = env.ORG.getByName(org.id);
   metrics.count("do.request", { class: "OrgDO", method: "setMember" });
-  const change = changed(
+  const change = applied(
     await stub.setMember(
       { principalId: auth.principalId, requestId },
       { id: user.id, handle: user.handle },
@@ -100,11 +84,11 @@ export async function setMembershipOperation(
     ),
   );
   ctx.waitUntil(stub.deliverAudit());
-  if (change.changed) ctx.waitUntil(invalidateAccountRepos(env, org.id, change, metrics));
+  await invalidateChange(env, org.id, change, metrics);
   return { org: org.handle, user: user.handle, role: input.role, state: "active" };
 }
 
-/** The `orgs.memberships.remove` operation: in force when the organization's object answers. */
+/** The `orgs.memberships.remove` operation; removing a user who is not a member answers the same. */
 export async function removeMembershipOperation(
   ctx: OpContext,
   input: Input<typeof removeMembership>,
@@ -115,11 +99,11 @@ export async function removeMembershipOperation(
   const user = await userFor(ctx, input.username, true);
   const stub = env.ORG.getByName(org.id);
   metrics.count("do.request", { class: "OrgDO", method: "removeMember" });
-  const change = await stub.removeMember({ principalId: auth.principalId, requestId }, user.id);
-  // Already gone (a retry): nothing to do.
-  if (change.ok || change.code !== "not_a_member") changed(change);
+  const change = applied(
+    await stub.removeMember({ principalId: auth.principalId, requestId }, user.id),
+  );
   ctx.waitUntil(stub.deliverAudit());
-  if (change.ok) ctx.waitUntil(invalidateAccountRepos(env, org.id, change, metrics));
+  await invalidateChange(env, org.id, change, metrics);
   return { org: org.handle, user: user.handle, state: "removed" };
 }
 

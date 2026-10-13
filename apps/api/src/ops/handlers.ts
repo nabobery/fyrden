@@ -1,4 +1,15 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
+import {
+  createTeamOperation,
+  listCollaboratorsOperation,
+  listTeamsOperation,
+  removeCollaboratorOperation,
+  removeTeamMembershipOperation,
+  removeTeamRepoOperation,
+  setCollaboratorOperation,
+  setTeamMembershipOperation,
+  setTeamRepoOperation,
+} from "../accounts/grants.js";
 import { createOrgRepoOperation, listOrgReposOperation } from "../accounts/org-repos.js";
 import {
   createOrgOperation,
@@ -133,6 +144,15 @@ export const handlers: Handlers = {
   "orgs.members.list": listMembersOperation,
   "orgs.repos.create": createOrgRepoOperation,
   "orgs.repos.list": listOrgReposOperation,
+  "repos.collaborators.set": setCollaboratorOperation,
+  "repos.collaborators.remove": removeCollaboratorOperation,
+  "repos.collaborators.list": listCollaboratorsOperation,
+  "orgs.teams.create": createTeamOperation,
+  "orgs.teams.list": listTeamsOperation,
+  "orgs.teams.memberships.set": setTeamMembershipOperation,
+  "orgs.teams.memberships.remove": removeTeamMembershipOperation,
+  "orgs.teams.repos.set": setTeamRepoOperation,
+  "orgs.teams.repos.remove": removeTeamRepoOperation,
 
   // Forks share the parent's packs in its fork network (network/).
   "repos.fork": forkRepoOperation,

@@ -10,6 +10,12 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   of access in the change's transaction.
  * - `members`: an organization's members, their roles and handles (for
  *   listing in handle order).
+ * - `collaborators` (v2): principals with a role on one repository.
+ * - `teams`, `team_members`, `team_repos` (v2): an organization's teams,
+ *   their members (members of the organization) and their roles on its
+ *   repositories.
+ * - `forgotten_repos` (v2): deleted repositories, so a grant that arrives
+ *   after their records were removed is refused.
  * - `pending_audit`: audit rows of access changes, written in the change's
  *   transaction and delivered to the directory's `audit_log` (then
  *   deleted); the alarm retries what could not be delivered.
@@ -46,6 +52,53 @@ export const orgSchema: readonly DoMigration[] = [
         target_id TEXT NOT NULL,
         details TEXT NOT NULL CHECK (json_valid(details)),
         request_id TEXT
+      ) STRICT;
+    `,
+  },
+  {
+    version: 2,
+    // Collaborators (any account's repository) and teams (organizations):
+    // flat teams, their members, and the role each team has on repositories.
+    name: "org_grants",
+    sql: `
+      CREATE TABLE collaborators (
+        repo_id TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        handle TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('read', 'triage', 'write', 'maintain', 'admin')),
+        added_at INTEGER NOT NULL,
+        PRIMARY KEY (repo_id, principal_id)
+      ) STRICT;
+      CREATE INDEX collaborators_handle ON collaborators (repo_id, handle COLLATE NOCASE);
+
+      CREATE TABLE teams (
+        team_id TEXT PRIMARY KEY,
+        slug TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE team_members (
+        team_id TEXT NOT NULL REFERENCES teams (team_id),
+        principal_id TEXT NOT NULL,
+        added_at INTEGER NOT NULL,
+        PRIMARY KEY (team_id, principal_id)
+      ) STRICT;
+      CREATE INDEX team_members_principal ON team_members (principal_id);
+
+      CREATE TABLE team_repos (
+        team_id TEXT NOT NULL REFERENCES teams (team_id),
+        repo_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('read', 'triage', 'write', 'maintain', 'admin')),
+        added_at INTEGER NOT NULL,
+        PRIMARY KEY (team_id, repo_id)
+      ) STRICT;
+      CREATE INDEX team_repos_repo ON team_repos (repo_id);
+
+      -- Deleted repositories: no grant names them again.
+      CREATE TABLE forgotten_repos (
+        repo_id TEXT PRIMARY KEY,
+        forgotten_at INTEGER NOT NULL
       ) STRICT;
     `,
   },

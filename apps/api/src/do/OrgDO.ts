@@ -1,5 +1,12 @@
 import { createLogger } from "@fyrden/adapters-cloudflare/obs";
-import { type OrgRole, orgRepoRole, type RepoRole } from "@fyrden/domain";
+import {
+  atLeast,
+  type OrgRole,
+  orgRepoRole,
+  REPO_ROLES,
+  type RepoRole,
+  strongestRole,
+} from "@fyrden/domain";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { orgSchema } from "./schema/org.js";
 
@@ -19,18 +26,42 @@ export interface ChangeActor {
   readonly requestId?: string;
 }
 
-export type MemberChange =
+/** The outcome of an access change. */
+export type AclChange =
   | {
       readonly ok: true;
       readonly epochGen: number;
       readonly version: number;
       readonly changed: boolean;
+      /** The repositories whose access changed; absent: possibly all of the account's. */
+      readonly repos?: readonly string[];
     }
   | {
       readonly ok: false;
-      readonly code: "not_an_org" | "forbidden" | "last_owner" | "not_a_member";
+      readonly code:
+        | "not_an_org"
+        | "not_recorded"
+        | "forbidden"
+        | "last_owner"
+        | "not_a_member"
+        | "team_not_found"
+        | "team_taken"
+        | "too_many"
+        | "repo_gone";
       readonly error: string;
     };
+
+/** A principal with a role on one repository, as listed. */
+export interface CollaboratorRow {
+  readonly id: string;
+  readonly handle: string;
+  readonly role: RepoRole;
+}
+
+export interface TeamRow {
+  readonly slug: string;
+  readonly name: string;
+}
 
 export interface MemberRow {
   readonly id: string;
@@ -72,8 +103,9 @@ const AUDIT_RETRY_MS = 60_000;
  * One account (an organization, or a user's own namespace): the source of
  * truth for access to its repositories. Every change of access is checked
  * against the actor's role, bumps the ACL version and records its audit row
- * in one transaction, and returns only after it, so a revocation is in force
- * when its call returns. Audit rows are then delivered to the directory.
+ * in one transaction, and returns only after it; the caller then tells the
+ * repositories, whose cached snapshots expire anyway (writes within 60
+ * seconds). Audit rows are then delivered to the directory.
  */
 export class OrgDO extends MigratingDO {
   static readonly schema = orgSchema;
@@ -147,27 +179,119 @@ export class OrgDO extends MigratingDO {
     await this.#checkEpoch();
     const meta = this.#meta();
     if (!meta) return { accountId: "", epochGen: 0, version: 0, roles: {} };
-    const roles: Record<string, RepoRole> = {};
-    if (meta.kind === "org") {
-      const members = this.ctx.storage.sql
-        .exec<{ principal_id: string; role: OrgRole }>(
-          "SELECT principal_id, role FROM members LIMIT ?",
-          MAX_SNAPSHOT_ENTRIES + 1,
-        )
-        .toArray();
-      if (members.length > MAX_SNAPSHOT_ENTRIES)
-        throw new Error(`the account has more than ${MAX_SNAPSHOT_ENTRIES} entries for ${repoId}`);
-      for (const m of members) {
-        const role = orgRepoRole(m.role, BASE_ROLE);
-        if (role) roles[m.principal_id] = role;
-      }
-    }
     return {
       accountId: meta.account_id,
       epochGen: meta.epoch_gen,
       version: meta.acl_version,
-      roles,
+      roles: Object.fromEntries(this.#rolesFor(repoId, meta)),
     };
+  }
+
+  /** Whether the account is recorded (a user's is created when something first needs it). */
+  isRecorded(): boolean {
+    return this.#meta() !== undefined;
+  }
+
+  /**
+   * Each principal's strongest role on `repoId`: the account's owner (a
+   * user's) or its organization roles, its teams' grants, its collaborators.
+   * Throws past the snapshot's limit.
+   */
+  #rolesFor(repoId: string, meta: Meta): Map<string, RepoRole> {
+    const roles = new Map<string, RepoRole>();
+    const grant = (principal: string, role: RepoRole | null) => {
+      const strongest = strongestRole([roles.get(principal) ?? null, role]);
+      if (strongest) roles.set(principal, strongest);
+    };
+    const sql = this.ctx.storage.sql;
+    const cap = MAX_SNAPSHOT_ENTRIES + 1;
+    if (meta.kind === "user") grant(meta.account_id, "admin");
+    else
+      for (const m of sql
+        .exec<{ principal_id: string; role: OrgRole }>(
+          "SELECT principal_id, role FROM members LIMIT ?",
+          cap,
+        )
+        .toArray())
+        grant(m.principal_id, orgRepoRole(m.role, BASE_ROLE));
+    // Each principal's strongest team grant, so the limit counts principals, not grants.
+    for (const g of sql
+      .exec<{ principal_id: string; rank: number }>(
+        `SELECT tm.principal_id, MAX(${RANK}) AS rank FROM team_repos tr
+         JOIN team_members tm ON tm.team_id = tr.team_id WHERE tr.repo_id = ?
+         GROUP BY tm.principal_id LIMIT ?`,
+        repoId,
+        cap,
+      )
+      .toArray())
+      grant(g.principal_id, REPO_ROLES[g.rank] as RepoRole);
+    for (const c of sql
+      .exec<{ principal_id: string; role: RepoRole }>(
+        "SELECT principal_id, role FROM collaborators WHERE repo_id = ? LIMIT ?",
+        repoId,
+        cap,
+      )
+      .toArray())
+      grant(c.principal_id, c.role);
+    if (roles.size > MAX_SNAPSHOT_ENTRIES)
+      throw new Error(`more than ${MAX_SNAPSHOT_ENTRIES} principals have access to ${repoId}`);
+    return roles;
+  }
+
+  /** `principalId`'s strongest role on `repoId`, as `#rolesFor` gives it, without listing the others. */
+  #roleOn(repoId: string, principalId: string, meta: Meta): RepoRole | null {
+    const team = this.ctx.storage.sql
+      .exec<{ rank: number | null }>(
+        `SELECT MAX(${RANK}) AS rank FROM team_repos tr
+         JOIN team_members tm ON tm.team_id = tr.team_id
+         WHERE tr.repo_id = ? AND tm.principal_id = ?`,
+        repoId,
+        principalId,
+      )
+      .one().rank;
+    return strongestRole([
+      meta.kind === "user"
+        ? principalId === meta.account_id
+          ? "admin"
+          : null
+        : orgRepoRole(this.accountRole(principalId), BASE_ROLE),
+      team === null ? null : (REPO_ROLES[team] as RepoRole),
+      this.#collaboratorRole(repoId, principalId),
+    ]);
+  }
+
+  /**
+   * The most principals with access to one repository of the account (to
+   * `repoId` alone if given): its owner or members, and collaborators (team
+   * members are members).
+   */
+  #widestAccess(meta: Meta, repoId?: string): number {
+    const base =
+      meta.kind === "user"
+        ? 1
+        : this.ctx.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM members").one().n;
+    // Collaborators who are neither the owner nor members; one repository's by its index.
+    const outside = `c.principal_id <> ?
+      AND NOT EXISTS (SELECT 1 FROM members m WHERE m.principal_id = c.principal_id)`;
+    const others = (
+      repoId === undefined
+        ? this.ctx.storage.sql.exec<{ n: number | null }>(
+            `SELECT MAX(n) AS n FROM (
+               SELECT count(*) AS n FROM collaborators c WHERE ${outside} GROUP BY c.repo_id)`,
+            meta.account_id,
+          )
+        : this.ctx.storage.sql.exec<{ n: number | null }>(
+            `SELECT count(*) AS n FROM collaborators c WHERE c.repo_id = ? AND ${outside}`,
+            repoId,
+            meta.account_id,
+          )
+    ).one().n;
+    return base + (others ?? 0);
+  }
+
+  /** In a change's transaction: undoes it (by throwing) if a snapshot would grow past its limit. */
+  #keepWithinLimit(meta: Meta, repoId?: string): void {
+    if (this.#widestAccess(meta, repoId) > MAX_SNAPSHOT_ENTRIES) throw new TooMany();
   }
 
   /** An organization's members after handle `after` (ignoring case), at most `limit`. */
@@ -191,15 +315,10 @@ export class OrgDO extends MigratingDO {
     actor: ChangeActor,
     member: { readonly id: string; readonly handle: string },
     role: OrgRole,
-  ): Promise<MemberChange> {
-    await this.#checkEpoch();
-    const change = this.ctx.storage.transactionSync((): MemberChange => {
-      const refused = this.#refuse(actor);
-      if (refused) return refused;
-      const meta = this.#meta() as Meta;
+  ): Promise<AclChange> {
+    return this.#change(actor, { owner: true }, (meta) => {
       const current = this.accountRole(member.id);
-      if (current === role)
-        return { ok: true, epochGen: meta.epoch_gen, version: meta.acl_version, changed: false };
+      if (current === role) return this.#unchanged(meta);
       if (current === "owner" && this.#owners() === 1) return LAST_OWNER;
       this.ctx.storage.sql.exec(
         `INSERT INTO members (principal_id, handle, role, added_at) VALUES (?, ?, ?, ?)
@@ -209,31 +328,322 @@ export class OrgDO extends MigratingDO {
         role,
         this.#now(),
       );
-      const version = this.#bump();
-      this.#audit(actor, "org.member.set", { user: member.id, role, acl_version: version });
-      return { ok: true, epochGen: (this.#meta() as Meta).epoch_gen, version, changed: true };
+      if (current === null) this.#keepWithinLimit(meta);
+      return this.#changed(actor, "org.member.set", { user: member.id, role });
     });
+  }
+
+  /** Removes a member, if `actor` is an owner now; the last owner cannot leave. Gone already, it bumps nothing. */
+  async removeMember(actor: ChangeActor, memberId: string): Promise<AclChange> {
+    return this.#change(actor, { owner: true }, (meta) => {
+      const current = this.accountRole(memberId);
+      if (current === null) return this.#unchanged(meta);
+      if (current === "owner" && this.#owners() === 1) return LAST_OWNER;
+      this.ctx.storage.sql.exec("DELETE FROM members WHERE principal_id = ?", memberId);
+      // Teams are the organization's: leaving it leaves them.
+      this.ctx.storage.sql.exec("DELETE FROM team_members WHERE principal_id = ?", memberId);
+      return this.#changed(actor, "org.member.remove", { user: memberId });
+    });
+  }
+
+  /**
+   * Gives `user` a role on repository `repoId` of the account, if `actor`
+   * administers that repository now (the caller checked the repository is
+   * the account's).
+   */
+  async setCollaborator(
+    actor: ChangeActor,
+    repoId: string,
+    user: { readonly id: string; readonly handle: string },
+    role: RepoRole,
+  ): Promise<AclChange> {
+    return this.#change(actor, { repoAdmin: repoId }, (meta) => {
+      if (this.#forgotten(repoId)) return REPO_GONE;
+      const current = this.#collaboratorRole(repoId, user.id);
+      if (current === role) return this.#unchanged(meta, [repoId]);
+      this.ctx.storage.sql.exec(
+        `INSERT INTO collaborators (repo_id, principal_id, handle, role, added_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (repo_id, principal_id) DO UPDATE SET role = excluded.role,
+           handle = excluded.handle`,
+        repoId,
+        user.id,
+        user.handle,
+        role,
+        this.#now(),
+      );
+      if (current === null) this.#keepWithinLimit(meta, repoId);
+      return this.#changed(actor, "repo.collaborator.set", { repo: repoId, user: user.id, role }, [
+        repoId,
+      ]);
+    });
+  }
+
+  /**
+   * Takes `userId`'s collaborator role on `repoId` away, if `actor`
+   * administers it now. Gone already, it bumps nothing.
+   */
+  async removeCollaborator(actor: ChangeActor, repoId: string, userId: string): Promise<AclChange> {
+    return this.#change(actor, { repoAdmin: repoId }, (meta) => {
+      const removed = this.ctx.storage.sql.exec(
+        "DELETE FROM collaborators WHERE repo_id = ? AND principal_id = ?",
+        repoId,
+        userId,
+      ).rowsWritten;
+      if (removed === 0) return this.#unchanged(meta, [repoId]);
+      return this.#changed(actor, "repo.collaborator.remove", { repo: repoId, user: userId }, [
+        repoId,
+      ]);
+    });
+  }
+
+  /**
+   * Repository `repoId` was deleted: its collaborators and team grants go
+   * with it, and a grant that reaches this object later is refused.
+   */
+  forgetRepo(repoId: string): void {
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(
+        "INSERT INTO forgotten_repos (repo_id, forgotten_at) VALUES (?, ?) ON CONFLICT DO NOTHING",
+        repoId,
+        this.#now(),
+      );
+      this.ctx.storage.sql.exec("DELETE FROM collaborators WHERE repo_id = ?", repoId);
+      this.ctx.storage.sql.exec("DELETE FROM team_repos WHERE repo_id = ?", repoId);
+    });
+  }
+
+  #forgotten(repoId: string): boolean {
+    return (
+      this.ctx.storage.sql.exec("SELECT 1 FROM forgotten_repos WHERE repo_id = ?", repoId).toArray()
+        .length > 0
+    );
+  }
+
+  /** The collaborators of `repoId` after handle `after` (ignoring case), at most `limit`. */
+  collaborators(repoId: string, after: string, limit: number): CollaboratorRow[] {
+    return this.ctx.storage.sql
+      .exec<{ principal_id: string; handle: string; role: RepoRole }>(
+        `SELECT principal_id, handle, role FROM collaborators
+         WHERE repo_id = ? AND handle > ? COLLATE NOCASE
+         ORDER BY handle COLLATE NOCASE LIMIT ?`,
+        repoId,
+        after,
+        limit,
+      )
+      .toArray()
+      .map((r) => ({ id: r.principal_id, handle: r.handle, role: r.role }));
+  }
+
+  /** Creates a team (no members, no repositories), if `actor` owns the organization now. */
+  async createTeam(actor: ChangeActor, slug: string, name: string): Promise<AclChange> {
+    return this.#change(actor, { owner: true }, (meta) => {
+      if (this.#teamId(slug))
+        return { ok: false, code: "team_taken", error: `A team ${slug} already exists.` };
+      this.ctx.storage.sql.exec(
+        "INSERT INTO teams (team_id, slug, name, created_at) VALUES (?, ?, ?, ?)",
+        crypto.randomUUID(),
+        slug,
+        name,
+        this.#now(),
+      );
+      // No access changed: no new version, but the creation is audited.
+      this.#audit(actor, "org.team.create", { slug, name });
+      return {
+        ok: true,
+        epochGen: meta.epoch_gen,
+        version: meta.acl_version,
+        changed: true,
+        repos: [],
+      };
+    });
+  }
+
+  /** The organization's teams after slug `after`, at most `limit`. */
+  teams(after: string, limit: number): TeamRow[] {
+    return this.ctx.storage.sql
+      .exec<{ slug: string; name: string }>(
+        "SELECT slug, name FROM teams WHERE slug > ? ORDER BY slug LIMIT ?",
+        after,
+        limit,
+      )
+      .toArray()
+      .map((r) => ({ slug: r.slug, name: r.name }));
+  }
+
+  /** Adds a member of the organization to a team, if `actor` owns the organization now. */
+  async setTeamMember(actor: ChangeActor, slug: string, userId: string): Promise<AclChange> {
+    return this.#change(actor, { owner: true }, (meta) => {
+      const teamId = this.#teamId(slug);
+      if (!teamId) return teamNotFound(slug);
+      if (this.accountRole(userId) === null)
+        return {
+          ok: false,
+          code: "not_a_member",
+          error: "Only members of the organization join its teams.",
+        };
+      const added = this.ctx.storage.sql.exec(
+        "INSERT INTO team_members (team_id, principal_id, added_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+        teamId,
+        userId,
+        this.#now(),
+      ).rowsWritten;
+      const repos = this.#teamRepos(teamId);
+      if (added === 0) return this.#unchanged(meta, repos);
+      return this.#changed(actor, "org.team.member.add", { team: slug, user: userId }, repos);
+    });
+  }
+
+  /** Removes a member from a team, if `actor` owns the organization now. */
+  async removeTeamMember(actor: ChangeActor, slug: string, userId: string): Promise<AclChange> {
+    return this.#change(actor, { owner: true }, (meta) => {
+      const teamId = this.#teamId(slug);
+      if (!teamId) return teamNotFound(slug);
+      const removed = this.ctx.storage.sql.exec(
+        "DELETE FROM team_members WHERE team_id = ? AND principal_id = ?",
+        teamId,
+        userId,
+      ).rowsWritten;
+      const repos = this.#teamRepos(teamId);
+      if (removed === 0) return this.#unchanged(meta, repos);
+      return this.#changed(actor, "org.team.member.remove", { team: slug, user: userId }, repos);
+    });
+  }
+
+  /** Gives a team a role on repository `repoId` of the organization, if `actor` owns it now. */
+  async setTeamRepo(
+    actor: ChangeActor,
+    slug: string,
+    repoId: string,
+    role: RepoRole,
+  ): Promise<AclChange> {
+    return this.#change(actor, { owner: true }, (meta) => {
+      const teamId = this.#teamId(slug);
+      if (!teamId) return teamNotFound(slug);
+      if (this.#forgotten(repoId)) return REPO_GONE;
+      const current = this.ctx.storage.sql
+        .exec<{ role: RepoRole }>(
+          "SELECT role FROM team_repos WHERE team_id = ? AND repo_id = ?",
+          teamId,
+          repoId,
+        )
+        .toArray()[0]?.role;
+      if (current === role) return this.#unchanged(meta, [repoId]);
+      this.ctx.storage.sql.exec(
+        `INSERT INTO team_repos (team_id, repo_id, role, added_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT (team_id, repo_id) DO UPDATE SET role = excluded.role`,
+        teamId,
+        repoId,
+        role,
+        this.#now(),
+      );
+      return this.#changed(actor, "org.team.repo.set", { team: slug, repo: repoId, role }, [
+        repoId,
+      ]);
+    });
+  }
+
+  /** Takes a team's role on `repoId` away, if `actor` owns the organization now. */
+  async removeTeamRepo(actor: ChangeActor, slug: string, repoId: string): Promise<AclChange> {
+    return this.#change(actor, { owner: true }, (meta) => {
+      const teamId = this.#teamId(slug);
+      if (!teamId) return teamNotFound(slug);
+      const removed = this.ctx.storage.sql.exec(
+        "DELETE FROM team_repos WHERE team_id = ? AND repo_id = ?",
+        teamId,
+        repoId,
+      ).rowsWritten;
+      if (removed === 0) return this.#unchanged(meta, [repoId]);
+      return this.#changed(actor, "org.team.repo.remove", { team: slug, repo: repoId }, [repoId]);
+    });
+  }
+
+  /**
+   * One access change: in one transaction, `actor`'s authority is checked
+   * (an owner of the organization, or an administrator of the repository),
+   * then `apply` runs; its audit row is delivered afterwards. A change that
+   * would take a snapshot past its limit is undone.
+   */
+  async #change(
+    actor: ChangeActor,
+    needs: { readonly owner: true } | { readonly repoAdmin: string },
+    apply: (meta: Meta) => AclChange,
+  ): Promise<AclChange> {
+    await this.#checkEpoch();
+    let change: AclChange;
+    try {
+      change = this.ctx.storage.transactionSync((): AclChange => {
+        const meta = this.#meta();
+        if ("owner" in needs) {
+          const refused = this.#refuse(actor);
+          if (refused) return refused;
+        } else {
+          if (!meta) return NOT_RECORDED;
+          if (!atLeast(this.#roleOn(needs.repoAdmin, actor.principalId, meta), "admin"))
+            return FORBIDDEN;
+        }
+        return apply(this.#meta() as Meta);
+      });
+    } catch (error) {
+      if (error instanceof TooMany) return TOO_MANY;
+      throw error;
+    }
     this.#scheduleDelivery(change);
     return change;
   }
 
-  /** Removes a member, if `actor` is an owner now; the last owner cannot leave. */
-  async removeMember(actor: ChangeActor, memberId: string): Promise<MemberChange> {
-    await this.#checkEpoch();
-    const change = this.ctx.storage.transactionSync((): MemberChange => {
-      const refused = this.#refuse(actor);
-      if (refused) return refused;
-      const current = this.accountRole(memberId);
-      if (current === null)
-        return { ok: false, code: "not_a_member", error: "Not a member of the organization." };
-      if (current === "owner" && this.#owners() === 1) return LAST_OWNER;
-      this.ctx.storage.sql.exec("DELETE FROM members WHERE principal_id = ?", memberId);
-      const version = this.#bump();
-      this.#audit(actor, "org.member.remove", { user: memberId, acl_version: version });
-      return { ok: true, epochGen: (this.#meta() as Meta).epoch_gen, version, changed: true };
-    });
-    this.#scheduleDelivery(change);
-    return change;
+  /** Nothing changed; `repos` (absent: all of the account's) are still told the current version, so a retry repeats a lost notice. */
+  #unchanged(meta: Meta, repos?: readonly string[]): AclChange {
+    return {
+      ok: true,
+      epochGen: meta.epoch_gen,
+      version: meta.acl_version,
+      changed: false,
+      ...(repos && { repos }),
+    };
+  }
+
+  /** In a change's transaction: a new version and the audit row. */
+  #changed(
+    actor: ChangeActor,
+    action: string,
+    details: Record<string, unknown>,
+    repos?: readonly string[],
+  ): AclChange {
+    const version = this.#bump();
+    this.#audit(actor, action, { ...details, acl_version: version });
+    return {
+      ok: true,
+      epochGen: (this.#meta() as Meta).epoch_gen,
+      version,
+      changed: true,
+      ...(repos && { repos }),
+    };
+  }
+
+  #collaboratorRole(repoId: string, principalId: string): RepoRole | null {
+    return (
+      this.ctx.storage.sql
+        .exec<{ role: RepoRole }>(
+          "SELECT role FROM collaborators WHERE repo_id = ? AND principal_id = ?",
+          repoId,
+          principalId,
+        )
+        .toArray()[0]?.role ?? null
+    );
+  }
+
+  #teamId(slug: string): string | undefined {
+    return this.ctx.storage.sql
+      .exec<{ team_id: string }>("SELECT team_id FROM teams WHERE slug = ?", slug)
+      .toArray()[0]?.team_id;
+  }
+
+  #teamRepos(teamId: string): string[] {
+    return this.ctx.storage.sql
+      .exec<{ repo_id: string }>("SELECT repo_id FROM team_repos WHERE team_id = ?", teamId)
+      .toArray()
+      .map((r) => r.repo_id);
   }
 
   /**
@@ -324,7 +734,7 @@ export class OrgDO extends MigratingDO {
   }
 
   /** Why `actor` may not change the account's access now, if it may not. */
-  #refuse(actor: ChangeActor): MemberChange | undefined {
+  #refuse(actor: ChangeActor): AclChange | undefined {
     const meta = this.#meta();
     if (meta?.kind !== "org") return NOT_AN_ORG;
     if (this.accountRole(actor.principalId) !== "owner") return FORBIDDEN;
@@ -363,7 +773,7 @@ export class OrgDO extends MigratingDO {
    * does not. An earlier alarm (a retry already due) is kept, so frequent
    * changes cannot postpone delivery.
    */
-  #scheduleDelivery(change: MemberChange): void {
+  #scheduleDelivery(change: AclChange): void {
     if (!(change.ok && change.changed)) return;
     const at = this.#now() + AUDIT_RETRY_MS;
     void this.ctx.storage.getAlarm().then((current) => {
@@ -371,6 +781,12 @@ export class OrgDO extends MigratingDO {
     });
   }
 }
+
+/** SQL ranking a team grant's role (`tr.role`) as its index in `REPO_ROLES`. */
+const RANK = `CASE tr.role ${REPO_ROLES.map((r, i) => `WHEN '${r}' THEN ${i}`).join(" ")} END`;
+
+/** Thrown in a change's transaction to undo it: a snapshot would grow past its limit. */
+class TooMany extends Error {}
 
 type AuditRow = {
   seq: number;
@@ -393,6 +809,26 @@ const FORBIDDEN = {
   code: "forbidden",
   error: "Only an owner of the organization may change its members.",
 } as const;
+
+const NOT_RECORDED = {
+  ok: false,
+  code: "not_recorded",
+  error: "The account has no access records yet.",
+} as const;
+
+const TOO_MANY = {
+  ok: false,
+  code: "too_many",
+  error: `A repository of the account would have more than ${MAX_SNAPSHOT_ENTRIES} principals with access.`,
+} as const;
+
+const REPO_GONE = { ok: false, code: "repo_gone", error: "The repository was deleted." } as const;
+
+const teamNotFound = (slug: string): AclChange => ({
+  ok: false,
+  code: "team_not_found",
+  error: `No team ${slug} was found.`,
+});
 
 const LAST_OWNER = {
   ok: false,

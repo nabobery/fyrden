@@ -71,12 +71,15 @@ type PackRow = {
  *    lease can be granted on them; a row is marked deleted after its bytes.
  * 3. Its membership of every such network, which releases its claims (its
  *    forks keep theirs). Pack rows stay until the storage goes, so a retry
- *    still knows every network.
+ *    still knows every network. Then its account's collaborators and team
+ *    grants of it.
  */
 export async function eraseRepository(
   git: RepoGitStorage,
   env: Env,
   repoId: string,
+  /** The account whose access records name the repository; none for an object without identity. */
+  accountId: string | undefined,
 ): Promise<EraseOutcome> {
   const { storage, now, metrics } = git.context;
   const sql = storage.sql;
@@ -196,10 +199,14 @@ export async function eraseRepository(
   if (spent()) return "partial";
   await flush();
 
-  // 3. Membership.
+  // 3. Membership, and the account's access records of it.
   for (const network of networks) {
     metrics.count("do.request", { class: "NetworkDO", method: "removeMember" });
     await env.NETWORK.getByName(network).removeMember({ networkId: network, repoId });
+  }
+  if (accountId) {
+    metrics.count("do.request", { class: "OrgDO", method: "forgetRepo" });
+    await env.ORG.getByName(accountId).forgetRepo(repoId);
   }
   return "erased";
 

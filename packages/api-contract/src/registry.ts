@@ -1,3 +1,14 @@
+import {
+  createTeam,
+  listCollaborators,
+  listTeams,
+  removeCollaborator,
+  removeTeamMembership,
+  removeTeamRepo,
+  setCollaborator,
+  setTeamMembership,
+  setTeamRepo,
+} from "../ops/access.js";
 import { createToken, createUser } from "../ops/admin.js";
 import { createImport, getImport } from "../ops/imports.js";
 import { whoami } from "../ops/meta.js";
@@ -34,6 +45,15 @@ export const registry = defineRegistry([
   listMembers,
   createOrgRepo,
   listOrgRepos,
+  setCollaborator,
+  removeCollaborator,
+  listCollaborators,
+  createTeam,
+  listTeams,
+  setTeamMembership,
+  removeTeamMembership,
+  setTeamRepo,
+  removeTeamRepo,
   createUpload,
   getUpload,
   completeUpload,

@@ -477,7 +477,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/orgs/{org}/memberships/{username}": {
       "delete": {
-        "description": "Removes a user from an organization. In force when this returns: the user's next write to the organization's repositories is refused. The last owner cannot be removed. Owners only.",
+        "description": "Removes a user from an organization and its teams; collaborator roles on its repositories stay. Repositories told of the change stop counting the membership at once; every repository stops within 60 seconds for writes and 5 minutes for reads. The last owner cannot be removed. Owners only.",
         "operationId": "orgs.memberships.remove",
         "parameters": [
           {
@@ -926,6 +926,603 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/orgs/{org}/teams": {
+      "get": {
+        "description": "Lists an organization's teams by slug. Members only.",
+        "operationId": "orgs.teams.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "teams": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                          },
+                          "slug": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "slug",
+                          "name",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "teams",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List an organization's teams",
+        "x-fyrden-permission": "members:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Creates a team in an organization, with no members or repositories; its slug comes from its name. Owners only.",
+        "operationId": "orgs.teams.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "description": "The team's name.",
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "name",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                    },
+                    "slug": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "slug",
+                    "name",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create a team",
+        "x-fyrden-permission": "members:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/orgs/{org}/teams/{team_slug}/memberships/{username}": {
+      "delete": {
+        "description": "Removes a user from a team; roles the user has otherwise stay. Repositories told of the change stop counting the team's role at once; every repository stops within 60 seconds for writes and 5 minutes for reads. Owners only.",
+        "operationId": "orgs.teams.memberships.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "team_slug",
+            "required": true,
+            "schema": {
+              "description": "The team's slug (lowercase letters, digits and inner hyphens).",
+              "maxLength": 100,
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "username",
+            "required": true,
+            "schema": {
+              "description": "The user's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "removed",
+                      "type": "string",
+                    },
+                    "team": {
+                      "type": "string",
+                    },
+                    "user": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "team",
+                    "user",
+                    "state",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Remove a team member",
+        "x-fyrden-permission": "members:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "put": {
+        "description": "Adds a member of the organization to a team, at once. Owners only.",
+        "operationId": "orgs.teams.memberships.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "team_slug",
+            "required": true,
+            "schema": {
+              "description": "The team's slug (lowercase letters, digits and inner hyphens).",
+              "maxLength": 100,
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "username",
+            "required": true,
+            "schema": {
+              "description": "The user's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "const": "active",
+                      "type": "string",
+                    },
+                    "team": {
+                      "type": "string",
+                    },
+                    "user": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "team",
+                    "user",
+                    "state",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Add a team member",
+        "x-fyrden-permission": "members:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}": {
+      "delete": {
+        "description": "Takes a team's role on a repository away; its members keep the roles they have otherwise (members of the organization read). Repositories told of the change stop counting it at once; every repository stops within 60 seconds for writes and 5 minutes for reads. Owners only.",
+        "operationId": "orgs.teams.repos.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "team_slug",
+            "required": true,
+            "schema": {
+              "description": "The team's slug (lowercase letters, digits and inner hyphens).",
+              "maxLength": 100,
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "repo": {
+                      "type": "string",
+                    },
+                    "state": {
+                      "const": "removed",
+                      "type": "string",
+                    },
+                    "team": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "team",
+                    "repo",
+                    "state",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Take a team's role on a repository away",
+        "x-fyrden-permission": "members:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "put": {
+        "description": "Gives a team a role on one of the organization's repositories; every member of the team gets it. Owners only.",
+        "operationId": "orgs.teams.repos.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "team_slug",
+            "required": true,
+            "schema": {
+              "description": "The team's slug (lowercase letters, digits and inner hyphens).",
+              "maxLength": 100,
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "permission": {
+                    "default": "push",
+                    "description": "\`pull\` reads, \`push\` writes, \`admin\` administers (GitHub's role names).",
+                    "enum": [
+                      "pull",
+                      "triage",
+                      "push",
+                      "maintain",
+                      "admin",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "permission": {
+                      "description": "\`pull\` reads, \`push\` writes, \`admin\` administers (GitHub's role names).",
+                      "enum": [
+                        "pull",
+                        "triage",
+                        "push",
+                        "maintain",
+                        "admin",
+                      ],
+                      "type": "string",
+                    },
+                    "repo": {
+                      "type": "string",
+                    },
+                    "team": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "team",
+                    "repo",
+                    "permission",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Give a team a role on a repository",
+        "x-fyrden-permission": "members:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}": {
       "delete": {
         "description": "Deletes a repository: from now on it cannot be pushed or changed, and within about 30 seconds it can no longer be found or read under any name; its data, events and storage are then removed, and its audit records kept. Forks keep their own data. The name is free again once \`state\` is \`deleted\`.",
@@ -1259,6 +1856,345 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Update a repository",
+        "x-fyrden-permission": "administration:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/collaborators": {
+      "get": {
+        "description": "Lists the users given a role on this repository directly, by handle (owners, organization members and teams are not listed).",
+        "operationId": "repos.collaborators.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "collaborators": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                          },
+                          "login": {
+                            "type": "string",
+                          },
+                          "permission": {
+                            "description": "\`pull\` reads, \`push\` writes, \`admin\` administers (GitHub's role names).",
+                            "enum": [
+                              "pull",
+                              "triage",
+                              "push",
+                              "maintain",
+                              "admin",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "login",
+                          "permission",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                  },
+                  "required": [
+                    "collaborators",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List a repository's collaborators",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/collaborators/{username}": {
+      "delete": {
+        "description": "Takes a user's collaborator role on a repository away; roles the user has otherwise (organization, teams) stay. Repositories told of the change stop counting it at once; every repository stops within 60 seconds for writes and 5 minutes for reads. Administrators of the repository only.",
+        "operationId": "repos.collaborators.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "username",
+            "required": true,
+            "schema": {
+              "description": "The user's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "repo": {
+                      "type": "string",
+                    },
+                    "state": {
+                      "const": "removed",
+                      "type": "string",
+                    },
+                    "user": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "repo",
+                    "user",
+                    "state",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Remove a collaborator",
+        "x-fyrden-permission": "administration:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "put": {
+        "description": "Gives a user a role on one repository, at once (no invitation). Administrators of the repository only.",
+        "operationId": "repos.collaborators.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "username",
+            "required": true,
+            "schema": {
+              "description": "The user's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "permission": {
+                    "default": "push",
+                    "description": "\`pull\` reads, \`push\` writes, \`admin\` administers (GitHub's role names).",
+                    "enum": [
+                      "pull",
+                      "triage",
+                      "push",
+                      "maintain",
+                      "admin",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "permission": {
+                      "description": "\`pull\` reads, \`push\` writes, \`admin\` administers (GitHub's role names).",
+                      "enum": [
+                        "pull",
+                        "triage",
+                        "push",
+                        "maintain",
+                        "admin",
+                      ],
+                      "type": "string",
+                    },
+                    "repo": {
+                      "description": "owner/name",
+                      "type": "string",
+                    },
+                    "user": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "repo",
+                    "user",
+                    "permission",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Add a collaborator or change a collaborator's role",
         "x-fyrden-permission": "administration:write",
         "x-fyrden-principals": [
           "user",

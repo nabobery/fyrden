@@ -870,7 +870,12 @@ export class RepoDO extends MigratingDO {
         this.#closed = true;
         let outcome: EraseOutcome;
         try {
-          outcome = await eraseRepository(this.git, this.env, this.#repoId());
+          outcome = await eraseRepository(
+            this.git,
+            this.env,
+            this.#repoId(),
+            this.events.account()?.accountId,
+          );
         } catch (error) {
           this.#closed = false;
           throw error;

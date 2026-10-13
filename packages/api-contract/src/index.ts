@@ -1,3 +1,4 @@
+export * from "../ops/access.js";
 export * from "../ops/admin.js";
 export * from "../ops/imports.js";
 export * from "../ops/meta.js";

@@ -84,7 +84,7 @@ export const removeMembership = defineOperation({
   path: "/orgs/{org}/memberships/{username}",
   summary: "Remove a member",
   description:
-    "Removes a user from an organization. In force when this returns: the user's next write to the organization's repositories is refused. The last owner cannot be removed. Owners only.",
+    "Removes a user from an organization and its teams; collaborator roles on its repositories stay. Repositories told of the change stop counting the membership at once; every repository stops within 60 seconds for writes and 5 minutes for reads. The last owner cannot be removed. Owners only.",
   input: z.object({ org: OrgParam, username: UserParam }),
   output: z.object({ org: z.string(), user: z.string(), state: z.literal("removed") }),
   permission: "members:write",

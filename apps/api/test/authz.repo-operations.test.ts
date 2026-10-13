@@ -26,6 +26,10 @@ const CASES: Record<
 > = {
   "repos.get": { input: {}, expected: { status: 200 } },
   "repos.update": { input: { description: "checked" }, expected: { status: 200 } },
+  // {username} is the owner itself: a collaborator role it already exceeds.
+  "repos.collaborators.set": { input: { permission: "pull" }, expected: { status: 200 } },
+  "repos.collaborators.remove": { input: {}, expected: { status: 200 } },
+  "repos.collaborators.list": { input: {}, expected: { status: 200 } },
   // Deletes a repository of its own, not the one the other cases use.
   "repos.delete": { input: {}, expected: { status: 200 }, ownRepo: true },
   "uploads.create": {
@@ -66,7 +70,8 @@ function call(op: OperationDef, token: string, name = repo.name) {
   const path = op.path
     .replace("{owner}", handle)
     .replace("{repo}", name)
-    .replace("{upload_id}", UPLOAD_ID);
+    .replace("{upload_id}", UPLOAD_ID)
+    .replace("{username}", handle);
   const input = CASES[op.id]?.input ?? {};
   const get = op.method === "GET";
   return exports.default.fetch(`${ORIGIN}/api${path}`, {
