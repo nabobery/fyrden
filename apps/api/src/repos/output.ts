@@ -10,7 +10,13 @@ import { authorize, findReposById, type RepoEntry } from "./directory.js";
  */
 export function repoOutput(
   repo: RepoEntry,
-  details: { defaultBranch: string; description: string | null; parentVisible?: boolean },
+  details: {
+    defaultBranch: string;
+    description: string | null;
+    parentVisible?: boolean;
+    /** How many users starred it (0 for a new repository). */
+    stars: number;
+  },
 ): Output<typeof getRepo> {
   return {
     id: repo.id,
@@ -21,6 +27,8 @@ export function repoOutput(
     description: details.description,
     default_branch: details.defaultBranch,
     fork: repo.parentId !== null,
+    is_template: repo.isTemplate,
+    stargazers_count: details.stars,
     parent_id: details.parentVisible ? repo.parentId : null,
     created_at: repo.createdAt,
   };
@@ -42,4 +50,22 @@ export async function visibleParents(
     parents.map((parent) => authorize(env, auth, parent, "metadata:read", metrics)),
   );
   return new Set(parents.filter((_, i) => allowed[i]).map((p) => p.id));
+}
+
+/** How many enabled users starred each of `ids`, in one query (a repository no one starred is absent). */
+export async function starCounts(
+  env: Env,
+  ids: readonly string[],
+  metrics?: Metrics,
+): Promise<Map<string, number>> {
+  if (ids.length === 0) return new Map();
+  metrics?.count("d1.query", { db: "directory", op: "star_counts" });
+  const { results } = await env.DIRECTORY.prepare(
+    `SELECT s.repo_id, count(*) AS n FROM stars s JOIN principals p ON p.id = s.user_id
+     WHERE s.repo_id IN (SELECT value FROM json_each(?)) AND p.disabled_at IS NULL
+     GROUP BY s.repo_id`,
+  )
+    .bind(JSON.stringify(ids))
+    .all<{ repo_id: string; n: number }>();
+  return new Map(results.map((r) => [r.repo_id, r.n]));
 }

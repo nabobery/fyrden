@@ -64,6 +64,22 @@ export const PERMISSIONS = {
     implies: ["members:read"],
     writes: true,
   },
+  "starring:read": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "See the repositories the user starred.",
+    principals: ["user"],
+    implies: [],
+    writes: false,
+  },
+  "starring:write": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "Star and unstar repositories as the user.",
+    principals: ["user"],
+    implies: ["starring:read"],
+    writes: true,
+  },
   "metadata:read": {
     resource: "repo",
     minRole: "read",

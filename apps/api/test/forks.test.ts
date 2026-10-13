@@ -2,47 +2,19 @@
 // the forks the caller can read, and two forks of one repository never see
 // each other's commits, though their network shares packs.
 
-import { env, exports } from "cloudflare:workers";
+import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, inject, it } from "vitest";
-import { ORIGIN } from "./helpers/git-http.js";
-import { principalWithToken, scopedToken } from "./helpers/principals.js";
+import { api, json, user, type Who } from "./helpers/api.js";
+import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
 
 const fx = inject("browseFixtures");
 
-type Who = { principalId: string; token: string; handle: string };
-
 let owner: Who;
 let target: PushTarget;
 let base: string;
-
-const handleOf = (id: string) => id.toLowerCase().replace("_", "-");
-
-function api(method: string, path: string, token: string, body?: unknown) {
-  return exports.default.fetch(`${ORIGIN}/api${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(method !== "GET" && {
-        "Content-Type": "application/json",
-        "Idempotency-Key": crypto.randomUUID(),
-      }),
-    },
-    ...(body !== undefined && { body: JSON.stringify(body) }),
-  });
-}
-
-async function json<T = Record<string, unknown>>(res: Response | Promise<Response>) {
-  const r = await res;
-  return { status: r.status, body: await r.json<T>() };
-}
-
-async function user(): Promise<Who> {
-  const p = await principalWithToken("user", "pat");
-  return { ...p, handle: handleOf(p.principalId) };
-}
 
 beforeAll(async () => {
   // Made through the API, so its account records collaborators.

@@ -85,6 +85,24 @@ const repoOps = registry.filter(
     op.path.includes("{repo}"),
 );
 
+/**
+ * Operations whose declared permission is not a repository's (creating
+ * repositories, starring) but that also read a repository, with the
+ * permission they need on it. A new one needs an entry.
+ */
+const SECONDARY: Record<string, { permission: string; input: Record<string, unknown> }> = {
+  "repos.fork": { permission: "contents:read", input: { name: "forked" } },
+  "repos.generate": { permission: "contents:read", input: { name: "generated" } },
+  "stars.put": { permission: "metadata:read", input: {} },
+  "stars.delete": { permission: "metadata:read", input: {} },
+};
+// Organization operations on a repository (a team's) check the organization
+// first; their tests are with the organization's.
+const secondaryOps = registry.filter(
+  (op) =>
+    !repoOps.includes(op) && !op.path.startsWith("/orgs/") && /\{(template_)?repo\}/.test(op.path),
+);
+
 let owner: { principalId: string; token: string };
 let handle: string;
 let repo: TestRepo;
@@ -99,6 +117,8 @@ function call(op: OperationDef, token: string, name = repo.name) {
   const path = op.path
     .replace("{owner}", handle)
     .replace("{repo}", name)
+    .replace("{template_owner}", handle)
+    .replace("{template_repo}", name)
     .replace("{upload_id}", UPLOAD_ID)
     .replace("{username}", handle)
     .replace("{branch+}", "main")
@@ -107,7 +127,7 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{path+}", "README.md")
     .replace("{tree_sha+}", "main")
     .replace("{format}", "zip");
-  const input = CASES[op.id]?.input ?? {};
+  const input = CASES[op.id]?.input ?? SECONDARY[op.id]?.input ?? {};
   const get = op.method === "GET";
   return exports.default.fetch(`${ORIGIN}/api${path}`, {
     method: op.method,
@@ -146,6 +166,34 @@ describe("repository operations", () => {
       const token = await scopedToken(owner.principalId, [op.permission]);
       const name = CASES[op.id]?.ownRepo ? (await createRepo(owner.principalId)).name : repo.name;
       expect(await outcome(await call(op, token, name))).toEqual(CASES[op.id]?.expected);
+    },
+  );
+});
+
+describe("operations that read a repository beyond their declared permission", () => {
+  it("have an entry here for each of them", () => {
+    expect(secondaryOps.map((op) => op.id).sort()).toEqual(Object.keys(SECONDARY).sort());
+  });
+
+  it.each(secondaryOps.map((op) => [op.id, op] as const))(
+    "%s answers a principal without access as if the repository did not exist",
+    async (_, op) => {
+      const stranger = await principalWithToken("user", "pat");
+      expect(await outcome(await call(op, stranger.token))).toEqual({
+        status: 404,
+        code: "repo_not_found",
+      });
+    },
+  );
+
+  it.each(secondaryOps.map((op) => [op.id, op] as const))(
+    "%s needs its permission on the repository besides the one it declares",
+    async (_, op) => {
+      const token = await scopedToken(owner.principalId, [op.permission]);
+      expect(await outcome(await call(op, token))).toEqual({
+        status: 404,
+        code: "repo_not_found",
+      });
     },
   );
 });

@@ -30,12 +30,14 @@ import {
   deleteRepo,
   deleteRepos,
   forkRepo,
+  generateRepo,
   getRepo,
   listForks,
   listOrgRepos,
   listRepos,
   updateRepo,
 } from "../ops/repos.js";
+import { listStarred, starRepo, unstarRepo } from "../ops/stars.js";
 import { abortUpload, completeUpload, createUpload, getUpload } from "../ops/uploads.js";
 import { defineRegistry } from "./op.js";
 
@@ -53,6 +55,10 @@ export const registry = defineRegistry([
   deleteRepos,
   forkRepo,
   listForks,
+  generateRepo,
+  starRepo,
+  unstarRepo,
+  listStarred,
   listBranches,
   getBranch,
   listTags,

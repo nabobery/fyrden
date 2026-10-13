@@ -205,4 +205,18 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 9,
+    // A repository generated from a template: it takes no write but the
+    // generation's own first commit until that commit is made, so a failed
+    // generation can be deleted without losing anyone's push.
+    name: "generation",
+    sql: `
+      CREATE TABLE generation (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        template_id TEXT NOT NULL,
+        started_at INTEGER NOT NULL
+      ) STRICT;
+    `,
+  },
 ];

@@ -45,6 +45,8 @@ describe("repos.create", () => {
       description: null,
       default_branch: "main",
       fork: false,
+      is_template: false,
+      stargazers_count: 0,
       parent_id: null,
       created_at: expect.any(Number),
     });

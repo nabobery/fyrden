@@ -59,7 +59,7 @@ export async function markDeletions(
   const now = clock();
   const ids = JSON.stringify(repos.map((r) => r.id));
   const inIds = "id IN (SELECT value FROM json_each(?1))";
-  options.metrics?.count("d1.query", { db: "directory", op: "repo_delete" }, 4);
+  options.metrics?.count("d1.query", { db: "directory", op: "repo_delete" }, 5);
   const results = await db.batch<{ id: string }>([
     db
       .prepare(
@@ -83,6 +83,12 @@ export async function markDeletions(
       .bind(ids, now, options.actorId),
     db
       .prepare("DELETE FROM repo_redirects WHERE repo_id IN (SELECT value FROM json_each(?1))")
+      .bind(ids),
+    db
+      .prepare(
+        `DELETE FROM stars WHERE repo_id IN (SELECT value FROM json_each(?1))
+         AND EXISTS (SELECT 1 FROM repos WHERE id = stars.repo_id AND state = 'deleting')`,
+      )
       .bind(ids),
   ]);
   for (const repo of repos) {

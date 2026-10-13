@@ -30,9 +30,11 @@ export interface RepoEntry {
   readonly nameGen: number;
   /** The repository it was forked from; null when it is not a fork. */
   readonly parentId: string | null;
+  /** Whether new repositories can be generated from it. */
+  readonly isTemplate: boolean;
 }
 
-type Row = {
+export type RepoRow = {
   id: string;
   owner_id: string;
   handle: string;
@@ -42,6 +44,7 @@ type Row = {
   created_at: number;
   name_gen: number;
   parent_id: string | null;
+  is_template: number;
 };
 
 // Found repositories, per isolate, for 30 s (the token cache's bound): a
@@ -83,13 +86,13 @@ export async function resolveRepo(
     return session
       .prepare(
         `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-           r.name_gen, r.parent_id, 0 AS redirected
+           r.name_gen, r.parent_id, r.is_template, 0 AS redirected
          FROM principals p JOIN repos r ON r.owner_id = p.id
          WHERE p.handle = ?1 COLLATE NOCASE AND p.disabled_at IS NULL
            AND r.name = ?2 COLLATE NOCASE AND r.state <> 'deleted' AND r.state = 'active'
          UNION ALL
          SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-           r.name_gen, r.parent_id, 1
+           r.name_gen, r.parent_id, r.is_template, 1
          FROM principals p JOIN repo_redirects d ON d.owner_id = p.id
            JOIN repos r ON r.id = d.repo_id AND r.owner_id = d.owner_id
          WHERE p.handle = ?1 COLLATE NOCASE AND p.disabled_at IS NULL
@@ -97,7 +100,7 @@ export async function resolveRepo(
          ORDER BY redirected LIMIT 1`,
       )
       .bind(owner, name)
-      .first<Row>();
+      .first<RepoRow>();
   };
   const checkedAt = clock();
   let row = primary ? null : await lookup(env.DIRECTORY.withSession());
@@ -109,7 +112,7 @@ export async function resolveRepo(
   return entry;
 }
 
-function entryOf(row: Row): RepoEntry {
+export function entryOf(row: RepoRow): RepoEntry {
   return {
     id: row.id,
     ownerId: row.owner_id,
@@ -120,6 +123,7 @@ function entryOf(row: Row): RepoEntry {
     createdAt: row.created_at,
     nameGen: row.name_gen,
     parentId: row.parent_id ?? null,
+    isTemplate: row.is_template === 1,
   };
 }
 
@@ -134,18 +138,18 @@ export async function listOwnedForks(
   parentId: string,
   ownerId: string,
   page: {
-    readonly after: { readonly createdAt: number; readonly id: string } | null;
+    readonly after: { readonly at: number; readonly id: string } | null;
     readonly limit: number;
     readonly onlyIds: readonly string[] | null;
   },
   metrics?: Metrics,
 ): Promise<RepoEntry[]> {
   metrics?.count("d1.query", { db: "directory", op: "repo_forks" });
-  const after = page.after ?? { createdAt: -1, id: "" };
+  const after = page.after ?? { at: -1, id: "" };
   const { results } = await env.DIRECTORY.withSession("first-primary")
     .prepare(
       `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-         r.name_gen, r.parent_id
+         r.name_gen, r.parent_id, r.is_template
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.parent_id = ? AND r.owner_id = ? AND r.state = 'active'
          AND p.disabled_at IS NULL
@@ -156,13 +160,13 @@ export async function listOwnedForks(
     .bind(
       parentId,
       ownerId,
-      after.createdAt,
+      after.at,
       after.id,
       page.onlyIds === null ? null : 1,
       JSON.stringify(page.onlyIds ?? []),
       page.limit,
     )
-    .all<Row>();
+    .all<RepoRow>();
   return results.map(entryOf);
 }
 
@@ -177,13 +181,13 @@ export async function findReposById(
   const { results } = await env.DIRECTORY.withSession("first-primary")
     .prepare(
       `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-         r.name_gen, r.parent_id
+         r.name_gen, r.parent_id, r.is_template
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.id IN (SELECT value FROM json_each(?)) AND r.state = 'active'
          AND p.disabled_at IS NULL`,
     )
     .bind(JSON.stringify(ids))
-    .all<Row>();
+    .all<RepoRow>();
   return results.map(entryOf);
 }
 
@@ -204,7 +208,7 @@ export async function listOwnedRepos(
     .prepare(
       // `state <> 'deleted'` lets the partial (owner_id, name) index serve the query.
       `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-         r.name_gen, r.parent_id
+         r.name_gen, r.parent_id, r.is_template
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.owner_id = ?1 AND r.state <> 'deleted' AND r.state = 'active'
          AND r.name > ?2 COLLATE NOCASE
@@ -212,7 +216,7 @@ export async function listOwnedRepos(
        ORDER BY r.name COLLATE NOCASE LIMIT ?4`,
     )
     .bind(ownerId, options.after, options.onlyIds && JSON.stringify(options.onlyIds), options.limit)
-    .all<Row>();
+    .all<RepoRow>();
   return results.map(entryOf);
 }
 
@@ -227,13 +231,13 @@ export async function findOwnedRepos(
   const { results } = await env.DIRECTORY.withSession("first-primary")
     .prepare(
       `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-         r.name_gen, r.parent_id
+         r.name_gen, r.parent_id, r.is_template
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.owner_id = ?1 AND r.state <> 'deleted' AND r.state = 'active'
          AND r.name COLLATE NOCASE IN (SELECT value FROM json_each(?2))`,
     )
     .bind(ownerId, JSON.stringify(names))
-    .all<Row>();
+    .all<RepoRow>();
   return results.map(entryOf);
 }
 
@@ -321,6 +325,43 @@ export async function renameRepo(
     forgetResolved(repo.ownerHandle, forgotten);
   const row = results[3]?.results[0];
   return row && { value: row.name, gen: row.name_gen };
+}
+
+/**
+ * Marks an active repository as a template, or not, and audits a change.
+ * Returns the flag the directory now holds, or undefined when the
+ * repository is not active. This isolate forgets the repository's name at
+ * once; others see the change within the cache's bound.
+ */
+export async function setTemplate(
+  env: Env,
+  repo: Pick<RepoEntry, "id" | "ownerHandle" | "name">,
+  isTemplate: boolean,
+  options: { actorId: string; requestId?: string; metrics?: Metrics },
+): Promise<boolean | undefined> {
+  const db = env.DIRECTORY;
+  const now = clock();
+  const flag = isTemplate ? 1 : 0;
+  options.metrics?.count("d1.query", { db: "directory", op: "repo_set_template" }, 2);
+  const [, updated] = await db.batch<{ is_template: number }>([
+    db
+      .prepare(
+        `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
+         SELECT ?3, ?4, 'repo.template', id, json_object('is_template', json(?2)), ?5 FROM repos
+         WHERE id = ?1 AND state = 'active' AND is_template <> ?2`,
+      )
+      .bind(repo.id, flag, now, options.actorId, options.requestId ?? null),
+    db
+      .prepare(
+        `UPDATE repos SET is_template = ?2, updated_at = CASE WHEN is_template = ?2
+           THEN updated_at ELSE ?3 END
+         WHERE id = ?1 AND state = 'active' RETURNING is_template`,
+      )
+      .bind(repo.id, flag, now),
+  ]);
+  forgetResolved(repo.ownerHandle, repo.name);
+  const row = updated?.results[0];
+  return row && row.is_template === 1;
 }
 
 /** Access git asks for: fetch and clone read the contents, push writes them. */

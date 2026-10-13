@@ -373,6 +373,30 @@ branch moves, and the branch moves only from the head the commit was built on.
 | Retrying a write | `Idempotency-Key` is not replayed yet: a retried single-file write answers `sha_mismatch`; give `expected_head` to make a multi-file retry safe |
 | Signature | Unsigned for now |
 
+## Templates
+
+`POST /repos/{template_owner}/{template_repo}/generate` makes a repository
+whose first commit holds the template's default-branch tree. The template's
+object reads the tree; the new repository's object commits it through the
+push path, as a file write.
+
+| What | Value |
+|---|---|
+| Trees and files copied | 2,000 at most |
+| Their bytes | 8 MiB at most (they cross between two objects and are packed); larger answers 422 `template_too_large` |
+| Storage reads | The browse budget (800 R2 reads); more answers 422 `too_expensive` |
+| History | None: one commit on `main`, `Initial commit`, by the caller |
+| Token | Needs `contents:write` too, without a repository list |
+| A failure | The new repository is deleted again; its name is free once the deletion finishes |
+
+## Stars
+
+A star is one directory row per user and repository. Starring needs
+`starring:write` and `metadata:read` on the repository; `GET /user/starred`
+needs `starring:read`. A repository's `stargazers_count` counts stars of
+enabled users. Deleting a repository deletes its stars. A listing leaves out
+repositories the caller can no longer read, so a page can be short.
+
 ## Configuration variables
 
 Set these as Worker variables of `fyrden-api`: add a `"vars"` object to

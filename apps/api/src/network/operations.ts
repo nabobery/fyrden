@@ -1,11 +1,10 @@
 import type { forkRepo, Input, listForks, Output } from "@fyrden/api-contract";
-import { isId } from "@fyrden/domain";
 import { repoFor } from "../git/chunked/operations.js";
-import { decodeCursor, encodeCursor } from "../ops/cursor.js";
+import { decodeSeekCursor, encodeSeekCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { defaultBranchOf, listOwnedForks } from "../repos/directory.js";
 import { readModelDetails } from "../repos/listing.js";
-import { repoOutput } from "../repos/output.js";
+import { repoOutput, starCounts } from "../repos/output.js";
 import { forkRepository, nameTaken } from "./fork.js";
 
 /** The `repos.fork` operation: the caller forks a repository it can read into one it owns. */
@@ -37,23 +36,8 @@ export async function forkRepoOperation(
     description: null,
     // The caller can read the repository it forked.
     parentVisible: true,
+    stars: 0,
   });
-}
-
-/** A forks page cursor: the last fork of the page, `<created_at>:<id>` (one the caller owns). */
-function decodeForkCursor(cursor: string | undefined) {
-  if (cursor === undefined) return null;
-  const text = decodeCursor(cursor, (value) => {
-    const at = value.indexOf(":");
-    const time = value.slice(0, at);
-    return (
-      /^(0|[1-9][0-9]{0,15})$/.test(time) &&
-      Number.isSafeInteger(Number(time)) &&
-      isId(value.slice(at + 1), "rep")
-    );
-  });
-  const at = text.indexOf(":");
-  return { createdAt: Number(text.slice(0, at)), id: text.slice(at + 1) };
 }
 
 /**
@@ -72,7 +56,7 @@ export async function listForksOperation(
     parent.id,
     ctx.auth.principalId,
     {
-      after: decodeForkCursor(input.cursor),
+      after: decodeSeekCursor(input.cursor),
       limit: input.per_page + 1,
       onlyIds: ctx.auth.repoIds,
     },
@@ -80,6 +64,11 @@ export async function listForksOperation(
   );
   const page = rows.slice(0, input.per_page);
   const details = await readModelDetails(
+    ctx.env,
+    page.map((entry) => entry.id),
+    ctx.metrics,
+  );
+  const stars = await starCounts(
     ctx.env,
     page.map((entry) => entry.id),
     ctx.metrics,
@@ -92,9 +81,12 @@ export async function listForksOperation(
         description: details.get(entry.id)?.description ?? null,
         // The caller just read it.
         parentVisible: true,
+        stars: stars.get(entry.id) ?? 0,
       }),
     ),
     next_cursor:
-      rows.length > input.per_page && last ? encodeCursor(`${last.createdAt}:${last.id}`) : null,
+      rows.length > input.per_page && last
+        ? encodeSeekCursor({ at: last.createdAt, id: last.id })
+        : null,
   };
 }

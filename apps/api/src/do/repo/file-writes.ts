@@ -298,7 +298,7 @@ class WriteRefused extends Error {
   }
 }
 
-const BUSY = fail(409, "busy", "The repository is busy; try the write again shortly.");
+export const BUSY = fail(409, "busy", "The repository is busy; try the write again shortly.");
 const TOO_WIDE = fail(
   422,
   "too_expensive",
@@ -382,8 +382,11 @@ async function blobAt(
   return null;
 }
 
+/** Who makes a write, and where: what the push path checks at its commit point. */
+export type WriterOf<T extends FileWriteInput> = Pick<T, "principal" | "tokenId" | "repoId">;
+
 /** A write stored as a push's body: its upload and scratch objects. */
-interface StoredUpload {
+export interface StoredUpload {
   readonly uploadId: string;
   readonly keys: readonly string[];
 }
@@ -393,9 +396,9 @@ interface StoredUpload {
  * failure nothing is left behind (the upload is aborted and its scratch
  * objects deleted).
  */
-async function storeUpload(
+export async function storeUpload(
   deps: FileWriteDeps,
-  input: FileWriteInput,
+  input: WriterOf<FileWriteInput>,
   write: {
     readonly ref: string;
     readonly head: Oid | undefined;
@@ -439,9 +442,9 @@ async function storeUpload(
  * Indexes a stored write, checks the writer's token again and commits it
  * (the branch moves only from the head the commit was built on).
  */
-async function finishUpload(
+export async function finishUpload(
   deps: FileWriteDeps,
-  input: FileWriteInput,
+  input: WriterOf<FileWriteInput>,
   upload: StoredUpload,
 ): Promise<Browsed<true>> {
   const { push } = deps;
@@ -479,7 +482,7 @@ async function discard(deps: FileWriteDeps, upload: StoredUpload): Promise<void>
 }
 
 /** A version 2 pack of `objects`, whole objects only. */
-async function packOf(
+export async function packOf(
   git: RepoGitStorage,
   objects: readonly { type: "blob" | "tree" | "commit" | "tag"; oid: Oid; data: Uint8Array }[],
 ): Promise<Uint8Array> {
@@ -544,7 +547,7 @@ function toFileChange(change: FileWriteChange): FileChange {
     : { path, content: change.content as Uint8Array, ...(change.mode && { mode: change.mode }) };
 }
 
-function ident(who: { readonly name: string; readonly email: string }, now: number): Ident {
+export function ident(who: { readonly name: string; readonly email: string }, now: number): Ident {
   return {
     name: encoder.encode(who.name),
     email: encoder.encode(who.email),
@@ -553,7 +556,7 @@ function ident(who: { readonly name: string; readonly email: string }, now: numb
   };
 }
 
-function person(who: { readonly name: string; readonly email: string }, now: number) {
+export function person(who: { readonly name: string; readonly email: string }, now: number) {
   return {
     name: who.name,
     email: who.email,

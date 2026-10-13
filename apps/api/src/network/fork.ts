@@ -228,6 +228,7 @@ export async function forkRepository(
       createdAt: now,
       nameGen: 0,
       parentId: parent.id,
+      isTemplate: false,
     },
     defaultBranch: defaultBranchOf(exported.head),
     publishMs,

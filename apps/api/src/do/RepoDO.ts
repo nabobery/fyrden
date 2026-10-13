@@ -100,7 +100,18 @@ import {
   type RepoIdentity,
   type RepoUpdate,
 } from "./repo/events.js";
-import { type FileWriteInput, type FileWriteResult, writeFiles } from "./repo/file-writes.js";
+import {
+  type FileWriteDeps,
+  type FileWriteInput,
+  type FileWriteResult,
+  writeFiles,
+} from "./repo/file-writes.js";
+import {
+  type TemplateTree,
+  type TemplateWriteInput,
+  templateTree,
+  writeTemplate,
+} from "./repo/template.js";
 import { repoSchema } from "./schema/repo.js";
 
 /** What a repository object knows of the repository's details. */
@@ -294,9 +305,19 @@ export class RepoDO extends MigratingDO {
     networkId: string,
     defaultBranch = "refs/heads/main",
     identity?: RepoIdentity & { readonly actor: string | null },
+    /** The template this repository is generated from: it takes no other write until then. */
+    templateId?: string,
   ): Promise<{ ok: true } | { ok: false; error: string }> {
     if (!isNetworkId(networkId)) return { ok: false, error: "not a network id" };
     try {
+      // Before the storage exists, so no write is ever admitted ahead of the generation.
+      if (templateId !== undefined)
+        this.ctx.storage.sql.exec(
+          `INSERT INTO generation (id, template_id, started_at) VALUES (1, ?, ?)
+           ON CONFLICT (id) DO NOTHING`,
+          templateId,
+          this.git.context.now(),
+        );
       recordNetwork(this.ctx.storage, networkId, this.git.context.now());
       if (identity) this.events.assertIdentity(identity);
       this.git.initialize(networkId, defaultBranch);
@@ -468,6 +489,19 @@ export class RepoDO extends MigratingDO {
     return this.#browse("browseCompare", (b) => b.compare(base, head));
   }
 
+  /** What a write this object makes itself needs (file writes, generation from a template). */
+  #writeDeps(): FileWriteDeps {
+    this.#blocks ??= createClockBlockCache();
+    return {
+      git: this.git,
+      push: this.#push(),
+      db: this.env.DIRECTORY,
+      memoryBlocks: this.#blocks,
+      metrics: this.git.context.metrics,
+      writerRole: (principalId) => this.acl.roleOf(principalId, "write"),
+    };
+  }
+
   /**
    * Writes files as one commit on a branch, through the push path (see
    * `writeFiles`): the Worker has checked `contents:write`; the token is
@@ -476,21 +510,45 @@ export class RepoDO extends MigratingDO {
   writeFiles(input: FileWriteInput): Promise<Browsed<FileWriteResult>> {
     if (this.#closed || this.#refusesAdmission())
       return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
-    this.#blocks ??= createClockBlockCache();
-    const memoryBlocks = this.#blocks;
-    return this.#measured("writeFiles", () =>
-      writeFiles(
-        {
-          git: this.git,
-          push: this.#push(),
-          db: this.env.DIRECTORY,
-          memoryBlocks,
-          metrics: this.git.context.metrics,
-          writerRole: (principalId) => this.acl.roleOf(principalId, "write"),
-        },
-        input,
-      ),
-    );
+    return this.#measured("writeFiles", () => writeFiles(this.#writeDeps(), input));
+  }
+
+  /** The trees and files of the default branch, for a repository generated from this one. */
+  templateTree(): Promise<Browsed<TemplateTree>> {
+    if (this.#closed || this.#refusesAdmission())
+      return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
+    return this.#browse("templateTree", (b) => templateTree(b));
+  }
+
+  /**
+   * Makes this new repository's first commit from the template it is
+   * generated from (see `writeTemplate`): the Worker has checked that the
+   * caller may read the template and write here; the token is checked
+   * again at the commit point. Until it succeeds, the repository takes no
+   * other write.
+   */
+  async generateFrom(
+    input: TemplateWriteInput,
+  ): Promise<Browsed<{ branch: string; commit: string }>> {
+    if (this.#closed || !this.#hasGitStorage() || this.events.isDeleted())
+      return fail(404, "repo_not_found", REPO_DELETED);
+    const templateId = this.#generatingFrom();
+    if (templateId === undefined)
+      return fail(409, "not_generating", "The repository is not being generated from a template.");
+    const template = await this.env.REPO.getByName(templateId).templateTree();
+    if (!template.ok) return template;
+    return this.#measured("generateFrom", async () => {
+      const made = await writeTemplate(this.#writeDeps(), input, template.value);
+      if (made.ok) this.ctx.storage.sql.exec("DELETE FROM generation");
+      return made;
+    });
+  }
+
+  /** The template this repository is still being generated from, if it is. */
+  #generatingFrom(): string | undefined {
+    return this.ctx.storage.sql
+      .exec<{ template_id: string }>("SELECT template_id FROM generation")
+      .toArray()[0]?.template_id;
   }
 
   #archiver: RepoArchives | undefined;
@@ -1041,10 +1099,18 @@ export class RepoDO extends MigratingDO {
     });
   }
 
-  /** No new upload or import: the repository is being deleted, or its storage is gone (erased). */
+  /**
+   * No new upload, import or write: the repository is being deleted, its
+   * storage is gone (erased), or it is still being generated from a template.
+   */
   #refusesAdmission(): boolean {
     // Storage first: once erased, its tables are gone.
-    return this.#closed || !this.#hasGitStorage() || this.events.isDeleted();
+    return (
+      this.#closed ||
+      !this.#hasGitStorage() ||
+      this.events.isDeleted() ||
+      this.#generatingFrom() !== undefined
+    );
   }
 
   #hasGitStorage(): boolean {

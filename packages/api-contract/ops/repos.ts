@@ -25,6 +25,10 @@ export const Repo = z.object({
   description: z.string().nullable(),
   default_branch: z.string(),
   fork: z.boolean().describe("Whether the repository was forked from another."),
+  is_template: z
+    .boolean()
+    .describe("Whether new repositories can be generated from it (`/generate`)."),
+  stargazers_count: z.number().int().describe("How many users starred it."),
   parent_id: z.string().nullable().describe("The id of the repository it was forked from."),
   created_at: z.number().int().describe("Unix time in milliseconds."),
 });
@@ -113,7 +117,7 @@ export const updateRepo = defineOperation({
   path: "/repos/{owner}/{repo}",
   summary: "Update a repository",
   description:
-    "Renames a repository or changes its description or default branch; fields left out are kept. After a rename the old name keeps working for clone, fetch, push and this API, until a repository takes that name again.",
+    "Renames a repository, changes its description or default branch, or marks it as a template; fields left out are kept. After a rename the old name keeps working for clone, fetch, push and this API, until a repository takes that name again.",
   input: z
     .object({
       owner: z.string().regex(HANDLE_PATTERN).describe("The owner's handle."),
@@ -131,13 +135,18 @@ export const updateRepo = defineOperation({
         .max(1024 - "refs/heads/".length)
         .optional()
         .describe("An existing branch, without the refs/heads/ prefix."),
+      is_template: z
+        .boolean()
+        .optional()
+        .describe("Whether new repositories can be generated from it."),
     })
     .refine(
       (input) =>
         input.name !== undefined ||
         input.description !== undefined ||
-        input.default_branch !== undefined,
-      "Give at least one of name, description and default_branch.",
+        input.default_branch !== undefined ||
+        input.is_template !== undefined,
+      "Give at least one of name, description, default_branch and is_template.",
     ),
   output: Repo,
   permission: "administration:write",
@@ -148,7 +157,7 @@ export const updateRepo = defineOperation({
     tool: "update_repo",
     title: "Update a repository",
     description:
-      "Rename a repository or change its description or default branch; the old name keeps working after a rename.",
+      "Rename a repository, change its description or default branch, or mark it as a template; the old name keeps working after a rename.",
     readOnly: false,
   },
 });
@@ -276,6 +285,38 @@ export const forkRepo = defineOperation({
     title: "Fork a repository",
     description:
       "Fork a repository you can read into a new repository you own; nothing is copied and the fork is cloneable at once.",
+    readOnly: false,
+  },
+});
+
+export const generateRepo = defineOperation({
+  id: "repos.generate",
+  method: "POST",
+  path: "/repos/{template_owner}/{template_repo}/generate",
+  summary: "Create a repository from a template",
+  description:
+    "Creates a private repository whose first commit (on `main`) holds the files of the template's default branch, with their modes, symlinks and submodule links (at most 2,000 files and directories, 8 MiB in all). Unlike a fork it starts its own history and shares nothing with the template. The template must be marked `is_template` and readable by the caller; `owner` may be the caller or an organization it may create repositories in, where it can write. The token needs `contents:write` as well, without a repository list. Answers 422 `not_a_template`, or 422 `template_too_large` past the bounds; on a failure no repository is left.",
+  input: z.object({
+    template_owner: z.string().regex(HANDLE_PATTERN).describe("The template's owner handle."),
+    template_repo: RepoName.describe("The template's name."),
+    owner: z
+      .string()
+      .regex(HANDLE_PATTERN)
+      .optional()
+      .describe("Who owns the new repository: the caller (default) or an organization."),
+    name: RepoName.describe("The new repository's name."),
+  }),
+  output: Repo,
+  permission: "repos:create",
+  principals: ["user"],
+  rateLimit: "expensive",
+  idempotency: "key",
+  successStatus: 201,
+  mcp: {
+    tool: "generate_repo",
+    title: "Create a repository from a template",
+    description:
+      "Create a new repository holding a template repository's files, with its own history.",
     readOnly: false,
   },
 });

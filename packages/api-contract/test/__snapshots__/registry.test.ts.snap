@@ -258,6 +258,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "repos:create",
                         "members:read",
                         "members:write",
+                        "starring:read",
+                        "starring:write",
                         "metadata:read",
                         "contents:read",
                         "contents:write",
@@ -745,6 +747,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "description": "Immutable repository id (rep_ prefix).",
                             "type": "string",
                           },
+                          "is_template": {
+                            "description": "Whether new repositories can be generated from it (\`/generate\`).",
+                            "type": "boolean",
+                          },
                           "name": {
                             "type": "string",
                           },
@@ -758,6 +764,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "string",
                               "null",
                             ],
+                          },
+                          "stargazers_count": {
+                            "description": "How many users starred it.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
                           },
                           "visibility": {
                             "enum": [
@@ -777,6 +789,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "description",
                           "default_branch",
                           "fork",
+                          "is_template",
+                          "stargazers_count",
                           "parent_id",
                           "created_at",
                         ],
@@ -887,6 +901,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "description": "Immutable repository id (rep_ prefix).",
                       "type": "string",
                     },
+                    "is_template": {
+                      "description": "Whether new repositories can be generated from it (\`/generate\`).",
+                      "type": "boolean",
+                    },
                     "name": {
                       "type": "string",
                     },
@@ -900,6 +918,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "stargazers_count": {
+                      "description": "How many users starred it.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
                     },
                     "visibility": {
                       "enum": [
@@ -919,6 +943,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "description",
                     "default_branch",
                     "fork",
+                    "is_template",
+                    "stargazers_count",
                     "parent_id",
                     "created_at",
                   ],
@@ -1691,6 +1717,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "description": "Immutable repository id (rep_ prefix).",
                       "type": "string",
                     },
+                    "is_template": {
+                      "description": "Whether new repositories can be generated from it (\`/generate\`).",
+                      "type": "boolean",
+                    },
                     "name": {
                       "type": "string",
                     },
@@ -1704,6 +1734,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "stargazers_count": {
+                      "description": "How many users starred it.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
                     },
                     "visibility": {
                       "enum": [
@@ -1723,6 +1759,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "description",
                     "default_branch",
                     "fork",
+                    "is_template",
+                    "stargazers_count",
                     "parent_id",
                     "created_at",
                   ],
@@ -1756,7 +1794,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "patch": {
-        "description": "Renames a repository or changes its description or default branch; fields left out are kept. After a rename the old name keeps working for clone, fetch, push and this API, until a repository takes that name again.",
+        "description": "Renames a repository, changes its description or default branch, or marks it as a template; fields left out are kept. After a rename the old name keeps working for clone, fetch, push and this API, until a repository takes that name again.",
         "operationId": "repos.update",
         "parameters": [
           {
@@ -1802,6 +1840,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       },
                     ],
                     "description": "A short description; null or an empty string clears it.",
+                  },
+                  "is_template": {
+                    "description": "Whether new repositories can be generated from it.",
+                    "type": "boolean",
                   },
                   "name": {
                     "description": "A new name.",
@@ -1850,6 +1892,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "description": "Immutable repository id (rep_ prefix).",
                       "type": "string",
                     },
+                    "is_template": {
+                      "description": "Whether new repositories can be generated from it (\`/generate\`).",
+                      "type": "boolean",
+                    },
                     "name": {
                       "type": "string",
                     },
@@ -1863,6 +1909,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "stargazers_count": {
+                      "description": "How many users starred it.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
                     },
                     "visibility": {
                       "enum": [
@@ -1882,6 +1934,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "description",
                     "default_branch",
                     "fork",
+                    "is_template",
+                    "stargazers_count",
                     "parent_id",
                     "created_at",
                   ],
@@ -4977,6 +5031,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "description": "Immutable repository id (rep_ prefix).",
                             "type": "string",
                           },
+                          "is_template": {
+                            "description": "Whether new repositories can be generated from it (\`/generate\`).",
+                            "type": "boolean",
+                          },
                           "name": {
                             "type": "string",
                           },
@@ -4990,6 +5048,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "string",
                               "null",
                             ],
+                          },
+                          "stargazers_count": {
+                            "description": "How many users starred it.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
                           },
                           "visibility": {
                             "enum": [
@@ -5009,6 +5073,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "description",
                           "default_branch",
                           "fork",
+                          "is_template",
+                          "stargazers_count",
                           "parent_id",
                           "created_at",
                         ],
@@ -5127,6 +5193,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "description": "Immutable repository id (rep_ prefix).",
                       "type": "string",
                     },
+                    "is_template": {
+                      "description": "Whether new repositories can be generated from it (\`/generate\`).",
+                      "type": "boolean",
+                    },
                     "name": {
                       "type": "string",
                     },
@@ -5140,6 +5210,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "stargazers_count": {
+                      "description": "How many users starred it.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
                     },
                     "visibility": {
                       "enum": [
@@ -5159,6 +5235,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "description",
                     "default_branch",
                     "fork",
+                    "is_template",
+                    "stargazers_count",
                     "parent_id",
                     "created_at",
                   ],
@@ -6739,6 +6817,168 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{template_owner}/{template_repo}/generate": {
+      "post": {
+        "description": "Creates a private repository whose first commit (on \`main\`) holds the files of the template's default branch, with their modes, symlinks and submodule links (at most 2,000 files and directories, 8 MiB in all). Unlike a fork it starts its own history and shares nothing with the template. The template must be marked \`is_template\` and readable by the caller; \`owner\` may be the caller or an organization it may create repositories in, where it can write. The token needs \`contents:write\` as well, without a repository list. Answers 422 \`not_a_template\`, or 422 \`template_too_large\` past the bounds; on a failure no repository is left.",
+        "operationId": "repos.generate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_owner",
+            "required": true,
+            "schema": {
+              "description": "The template's owner handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "template_repo",
+            "required": true,
+            "schema": {
+              "description": "The template's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "description": "The new repository's name.",
+                    "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+                    "type": "string",
+                  },
+                  "owner": {
+                    "description": "Who owns the new repository: the caller (default) or an organization.",
+                    "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "name",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "default_branch": {
+                      "type": "string",
+                    },
+                    "description": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "fork": {
+                      "description": "Whether the repository was forked from another.",
+                      "type": "boolean",
+                    },
+                    "full_name": {
+                      "description": "owner/name",
+                      "type": "string",
+                    },
+                    "id": {
+                      "description": "Immutable repository id (rep_ prefix).",
+                      "type": "string",
+                    },
+                    "is_template": {
+                      "description": "Whether new repositories can be generated from it (\`/generate\`).",
+                      "type": "boolean",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "owner": {
+                      "description": "The owner's handle.",
+                      "type": "string",
+                    },
+                    "parent_id": {
+                      "description": "The id of the repository it was forked from.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "stargazers_count": {
+                      "description": "How many users starred it.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "visibility": {
+                      "enum": [
+                        "public",
+                        "internal",
+                        "private",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "owner",
+                    "name",
+                    "full_name",
+                    "visibility",
+                    "description",
+                    "default_branch",
+                    "fork",
+                    "is_template",
+                    "stargazers_count",
+                    "parent_id",
+                    "created_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create a repository from a template",
+        "x-fyrden-permission": "repos:create",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/user": {
       "get": {
         "description": "Returns the principal and token that authenticated this request.",
@@ -6915,6 +7155,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "description": "Immutable repository id (rep_ prefix).",
                             "type": "string",
                           },
+                          "is_template": {
+                            "description": "Whether new repositories can be generated from it (\`/generate\`).",
+                            "type": "boolean",
+                          },
                           "name": {
                             "type": "string",
                           },
@@ -6928,6 +7172,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "string",
                               "null",
                             ],
+                          },
+                          "stargazers_count": {
+                            "description": "How many users starred it.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
                           },
                           "visibility": {
                             "enum": [
@@ -6947,6 +7197,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "description",
                           "default_branch",
                           "fork",
+                          "is_template",
+                          "stargazers_count",
                           "parent_id",
                           "created_at",
                         ],
@@ -7045,6 +7297,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "description": "Immutable repository id (rep_ prefix).",
                       "type": "string",
                     },
+                    "is_template": {
+                      "description": "Whether new repositories can be generated from it (\`/generate\`).",
+                      "type": "boolean",
+                    },
                     "name": {
                       "type": "string",
                     },
@@ -7058,6 +7314,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "stargazers_count": {
+                      "description": "How many users starred it.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
                     },
                     "visibility": {
                       "enum": [
@@ -7077,6 +7339,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "description",
                     "default_branch",
                     "fork",
+                    "is_template",
+                    "stargazers_count",
                     "parent_id",
                     "created_at",
                   ],
@@ -7209,6 +7473,321 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-fyrden-principals": [
           "user",
           "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/user/starred": {
+      "get": {
+        "description": "Lists the repositories the caller starred, most recently starred first. Repositories the caller or its token can no longer read are left out, so a page can hold fewer than \`per_page\`; keep following \`next_cursor\` until it is null.",
+        "operationId": "stars.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "repos": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "default_branch": {
+                            "type": "string",
+                          },
+                          "description": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "fork": {
+                            "description": "Whether the repository was forked from another.",
+                            "type": "boolean",
+                          },
+                          "full_name": {
+                            "description": "owner/name",
+                            "type": "string",
+                          },
+                          "id": {
+                            "description": "Immutable repository id (rep_ prefix).",
+                            "type": "string",
+                          },
+                          "is_template": {
+                            "description": "Whether new repositories can be generated from it (\`/generate\`).",
+                            "type": "boolean",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "owner": {
+                            "description": "The owner's handle.",
+                            "type": "string",
+                          },
+                          "parent_id": {
+                            "description": "The id of the repository it was forked from.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "stargazers_count": {
+                            "description": "How many users starred it.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "starred_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "visibility": {
+                            "enum": [
+                              "public",
+                              "internal",
+                              "private",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "owner",
+                          "name",
+                          "full_name",
+                          "visibility",
+                          "description",
+                          "default_branch",
+                          "fork",
+                          "is_template",
+                          "stargazers_count",
+                          "parent_id",
+                          "created_at",
+                          "starred_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "repos",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List starred repositories",
+        "x-fyrden-permission": "starring:read",
+        "x-fyrden-principals": [
+          "user",
+        ],
+      },
+    },
+    "/user/starred/{owner}/{repo}": {
+      "delete": {
+        "description": "Takes the caller's star off a repository it can read. Unstarring one not starred changes nothing.",
+        "operationId": "stars.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The repository's owner handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "repo": {
+                      "description": "owner/name",
+                      "type": "string",
+                    },
+                    "starred": {
+                      "const": false,
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "repo",
+                    "starred",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Unstar a repository",
+        "x-fyrden-permission": "starring:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "put": {
+        "description": "Stars a repository the caller can read. Starring one already starred changes nothing. The token also needs \`metadata:read\` for the repository.",
+        "operationId": "stars.put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The repository's owner handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "repo": {
+                      "description": "owner/name",
+                      "type": "string",
+                    },
+                    "starred": {
+                      "const": true,
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "repo",
+                    "starred",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Star a repository",
+        "x-fyrden-permission": "starring:write",
+        "x-fyrden-principals": [
+          "user",
         ],
         "x-idempotency": "Idempotency-Key header",
       },

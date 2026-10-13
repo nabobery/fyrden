@@ -46,8 +46,10 @@ import {
   deleteContentsOperation,
   putContentsOperation,
 } from "../repos/file-writes.js";
+import { generateRepoOperation } from "../repos/generate.js";
 import { listAccountRepos } from "../repos/listing.js";
-import { repoOutput, visibleParents } from "../repos/output.js";
+import { repoOutput, starCounts, visibleParents } from "../repos/output.js";
+import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "../repos/stars.js";
 import { updateRepoOperation } from "../repos/update.js";
 import { clock, newId, tokenStore } from "../services.js";
 import { type Handlers, OperationError } from "./execute.js";
@@ -147,10 +149,12 @@ export const handlers: Handlers = {
     metrics.count("do.request", { class: "RepoDO", method: "details" });
     const details = await env.REPO.getByName(entry.id).details();
     const parents = await visibleParents(env, auth, [entry], metrics);
+    const stars = await starCounts(env, [entry.id], metrics);
     return repoOutput(entry, {
       defaultBranch: defaultBranchOf(details.headTarget),
       description: details.description,
       parentVisible: parents.has(entry.parentId ?? ""),
+      stars: stars.get(entry.id) ?? 0,
     });
   },
 
@@ -177,6 +181,12 @@ export const handlers: Handlers = {
   // Forks share the parent's packs in its fork network (network/).
   "repos.fork": forkRepoOperation,
   "repos.forks.list": listForksOperation,
+  "repos.generate": generateRepoOperation,
+
+  // Stars are the caller's own, of repositories it can read (repos/stars).
+  "stars.put": starRepoOperation,
+  "stars.delete": unstarRepoOperation,
+  "stars.list": listStarredOperation,
 
   // Branches, tags, commits and comparisons (repos/browse).
   "repos.branches.list": listBranchesOperation,

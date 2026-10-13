@@ -5,7 +5,7 @@ import type { RepoRole } from "@fyrden/domain";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { allowedWithRole, defaultBranchOf, isValidRepoName, listOwnedRepos } from "./directory.js";
-import { repoOutput, visibleParents } from "./output.js";
+import { repoOutput, starCounts, visibleParents } from "./output.js";
 
 type ProjectedDetails = { default_branch: string | null; description: string | null };
 
@@ -58,6 +58,11 @@ export async function listAccountRepos(
     metrics,
   );
   const parents = await visibleParents(env, auth, visible, metrics);
+  const stars = await starCounts(
+    env,
+    visible.map((entry) => entry.id),
+    metrics,
+  );
   const last = visible.at(-1);
   return {
     repos: visible.map((entry) => {
@@ -66,6 +71,7 @@ export async function listAccountRepos(
         defaultBranch: defaultBranchOf(details?.default_branch ?? null),
         description: details?.description ?? null,
         parentVisible: parents.has(entry.parentId ?? ""),
+        stars: stars.get(entry.id) ?? 0,
       });
     }),
     next_cursor: scanned.length > page.perPage && last ? encodeCursor(last.name) : null,

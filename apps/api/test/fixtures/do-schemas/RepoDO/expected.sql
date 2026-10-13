@@ -92,6 +92,11 @@ CREATE TABLE event_payloads (
         payload TEXT NOT NULL CHECK (json_valid(payload)),
         created_at INTEGER NOT NULL
       ) STRICT;
+CREATE TABLE generation (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        template_id TEXT NOT NULL,
+        started_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE git_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     network_id TEXT NOT NULL,

@@ -78,7 +78,7 @@ class ContentBudget {
 }
 
 /** The committer: the caller, with a no-reply address on this host (as GitHub's). */
-function committerOf(ctx: OpContext) {
+export function committerOf(ctx: OpContext) {
   return {
     name: ctx.auth.principalHandle ?? ctx.auth.principalId,
     email: `${ctx.auth.principalId}@users.noreply.${ctx.requestHost}`,

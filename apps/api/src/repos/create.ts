@@ -21,7 +21,13 @@ export async function createRepository(
   env: Env,
   owner: { readonly id: string; readonly handle: string },
   name: string,
-  request: { readonly actorId: string; readonly requestId?: string; readonly metrics: Metrics },
+  request: {
+    readonly actorId: string;
+    readonly requestId?: string;
+    readonly metrics: Metrics;
+    /** The template it will be generated from: it takes no other write until then. */
+    readonly templateId?: string;
+  },
 ): Promise<Output<typeof getRepo>> {
   const { metrics } = request;
   const taken = () =>
@@ -47,6 +53,7 @@ export async function createRepository(
     networkId,
     `refs/heads/${INITIAL_BRANCH}`,
     { ownerId: owner.id, name, visibility: "private", epochGen, actor: request.actorId },
+    request.templateId,
   );
   if (!init.ok) throw new Error(`initializing repository storage failed: ${init.error}`);
 
@@ -92,7 +99,8 @@ export async function createRepository(
       createdAt: now,
       nameGen: 0,
       parentId: null,
+      isTemplate: false,
     },
-    { defaultBranch: INITIAL_BRANCH, description: null },
+    { defaultBranch: INITIAL_BRANCH, description: null, stars: 0 },
   );
 }

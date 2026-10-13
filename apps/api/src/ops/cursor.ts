@@ -1,3 +1,4 @@
+import { isId } from "@fyrden/domain";
 import { OperationError } from "./execute.js";
 
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -45,4 +46,27 @@ export function decodeCursor(cursor: string | undefined, valid: (name: string) =
 
 export function invalidCursor(): OperationError {
   return new OperationError(422, "invalid_cursor", "The cursor is not one this API returned.");
+}
+
+/** A seek cursor: a row's time and repository id, `<time>:<id>`. */
+export function encodeSeekCursor(row: { readonly at: number; readonly id: string }): string {
+  return encodeCursor(`${row.at}:${row.id}`);
+}
+
+/** The row an `encodeSeekCursor` cursor names (null without one); any other cursor is refused. */
+export function decodeSeekCursor(
+  cursor: string | undefined,
+): { readonly at: number; readonly id: string } | null {
+  if (cursor === undefined) return null;
+  const text = decodeCursor(cursor, (value) => {
+    const at = value.indexOf(":");
+    const time = value.slice(0, at);
+    return (
+      /^(0|[1-9][0-9]{0,15})$/.test(time) &&
+      Number.isSafeInteger(Number(time)) &&
+      isId(value.slice(at + 1), "rep")
+    );
+  });
+  const at = text.indexOf(":");
+  return { at: Number(text.slice(0, at)), id: text.slice(at + 1) };
 }
