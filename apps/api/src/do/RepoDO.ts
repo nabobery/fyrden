@@ -64,7 +64,7 @@ import {
 } from "./base/audit-archiver.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
-import { RepoEvents, type RepoIdentity } from "./repo/events.js";
+import { RepoEvents, type RepoExport, type RepoIdentity } from "./repo/events.js";
 import { repoSchema } from "./schema/repo.js";
 
 /**
@@ -335,7 +335,10 @@ export class RepoDO extends MigratingDO {
     decision: PushDecision,
     meta: PushLogMeta = {},
   ): Promise<Uint8Array> {
-    return this.#measured("finalizePush", () => this.#push().finalize(uploadId, decision, meta));
+    return this.#measured("finalizePush", async () => {
+      await this.checkEpoch();
+      return this.#push().finalize(uploadId, decision, meta);
+    });
   }
 
   /** Ends a push whose body could not be stored. */
@@ -462,6 +465,10 @@ export class RepoDO extends MigratingDO {
       // Maintenance changes the packs without a commit.
       this.#recordStorage();
       try {
+        // Background jobs may commit (an import).
+        await this.checkEpoch().catch((error: unknown) =>
+          this.#log().warn("checking the repository's epoch failed", { error }),
+        );
         await this.#drainOutbox();
         await this.#runJobs();
       } finally {
@@ -574,8 +581,32 @@ export class RepoDO extends MigratingDO {
   }
 
   /** Sets a new fork's refs, once its commit graph is complete. */
-  finishFork(refs: readonly ExportedRef[]): void {
+  async finishFork(refs: readonly ExportedRef[]): Promise<void> {
+    await this.checkEpoch();
     this.#network().finishFork(refs);
+  }
+
+  /**
+   * Takes the directory's epoch for this repository if it is newer than the
+   * recorded one (after a restore). Runs before this instance's first
+   * commit; a restore runbook calls it to take the new epoch at once.
+   */
+  async checkEpoch(): Promise<void> {
+    await this.events.checkEpoch(async () => {
+      this.git.context.metrics.count("d1.query", { db: "directory", op: "epoch_read" });
+      const row = await this.env.DIRECTORY.withSession("first-primary")
+        .prepare("SELECT epoch_gen FROM source_epochs WHERE source_id = ?")
+        .bind(this.#repoId())
+        .first<{ epoch_gen: number }>();
+      return row?.epoch_gen ?? null;
+    });
+    // A new epoch's snapshot goes out even if nothing else is written.
+    this.#armOutbox();
+  }
+
+  /** The repository's current snapshot for a read-model rebuild (null without an identity). */
+  exportSnapshot(): RepoExport | null {
+    return this.events.exportSnapshot();
   }
 
   /** One slice of compacting borrowed packs to keep the view under the cap. */

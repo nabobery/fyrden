@@ -144,14 +144,7 @@ export async function applyEnvelope(
   // epochs are refused.
   const epochGen = Math.max(...events.map((e) => e.id.epochGen));
   const statements = [
-    db
-      .prepare(
-        `INSERT INTO consumer_epochs (source_id, epoch_gen, updated_at) VALUES (?1, ?2, ?3)
-         ON CONFLICT (source_id) DO UPDATE SET epoch_gen = excluded.epoch_gen,
-           updated_at = excluded.updated_at
-         WHERE excluded.epoch_gen > consumer_epochs.epoch_gen`,
-      )
-      .bind(sourceId, epochGen, now),
+    epochStatement(db, sourceId, epochGen, now),
     ...snapshots.map((event) => repoStatement(db, sourceId, event, now)),
   ];
   options.metrics?.count("d1.query", { db: "org", op: "events_apply" }, statements.length);
@@ -159,7 +152,24 @@ export async function applyEnvelope(
   return "applied";
 }
 
-type Snapshot = DomainEvent & { entity: EntitySnapshot };
+export type Snapshot = DomainEvent & { entity: EntitySnapshot };
+
+/** Records a source's newest epoch seen; from then on, older epochs are refused. */
+export function epochStatement(
+  db: D1Database,
+  sourceId: string,
+  epochGen: number,
+  now: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO consumer_epochs (source_id, epoch_gen, updated_at) VALUES (?1, ?2, ?3)
+       ON CONFLICT (source_id) DO UPDATE SET epoch_gen = excluded.epoch_gen,
+         updated_at = excluded.updated_at
+       WHERE excluded.epoch_gen > consumer_epochs.epoch_gen`,
+    )
+    .bind(sourceId, epochGen, now);
+}
 
 /** The newest snapshot of each entity in the envelope (activity events have no projection yet). */
 function newestSnapshots(events: readonly DomainEvent[]): Snapshot[] {
@@ -206,7 +216,7 @@ async function resolveStored(
  * is not older than the source's newest, its ownership generation is
  * current, and it is newer than the row it replaces.
  */
-function repoStatement(
+export function repoStatement(
   db: D1Database,
   sourceId: string,
   event: Snapshot,

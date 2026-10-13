@@ -3,6 +3,22 @@ import { REPO_ENTITY, type RepoRow } from "@fyrden/domain";
 import { oidToHex } from "@fyrden/git-core";
 import type { NewEvent, Outbox } from "../base/outbox.js";
 
+/** A repository's snapshot as a read-model rebuild takes it. */
+export interface RepoExport {
+  readonly sourceId: string;
+  readonly epochGen: number;
+  readonly ownerGen: number;
+  /** The last event sequence the export includes. */
+  readonly watermark: number;
+  readonly entities: readonly {
+    readonly type: string;
+    readonly id: string;
+    readonly version: number;
+    readonly deleted: boolean;
+    readonly row: RepoRow;
+  }[];
+}
+
 /** Who the repository is, as the Worker that creates it knows it. */
 export interface RepoIdentity {
   readonly ownerId: string;
@@ -42,6 +58,17 @@ type MetaRow = {
  * created before it existed (only test fixtures) has none and emits nothing.
  */
 export class RepoEvents {
+  /**
+   * Whether this instance has checked its epoch against the directory. A
+   * restored object starts as a new instance with the epoch it had before;
+   * until it has taken the directory's newer one, a commit would reuse
+   * event ids, so commits are refused before the check.
+   */
+  #epochChecked = false;
+
+  /** The check in flight, shared by concurrent first writers. */
+  #epochCheck: Promise<void> | undefined;
+
   constructor(
     private readonly git: RepoGitStorage,
     private readonly outbox: Outbox,
@@ -114,13 +141,76 @@ export class RepoEvents {
         identity.visibility,
       );
       this.#emit("repo.created", { actor, actChain: [], data: null }, true);
+      // The epoch was just allocated from the directory.
+      this.#epochChecked = true;
     });
+  }
+
+  /**
+   * Takes the directory's epoch for this repository (`read`) if it is newer
+   * than the one recorded: a restore happened, so later events must not
+   * reuse the ids the old history used. Emits a snapshot under the new
+   * epoch. Once per instance; a repository without an identity has nothing
+   * to check.
+   */
+  checkEpoch(read: () => Promise<number | null>): Promise<void> {
+    if (this.#epochChecked || !this.#meta()) return Promise.resolve();
+    this.#epochCheck ??= this.#checkEpoch(read).finally(() => {
+      this.#epochCheck = undefined;
+    });
+    return this.#epochCheck;
+  }
+
+  async #checkEpoch(read: () => Promise<number | null>): Promise<void> {
+    const current = await read();
+    this.#storage.transactionSync(() => {
+      const meta = this.#meta();
+      if (meta && current !== null && current > meta.epoch_gen) {
+        this.#exec(
+          "events.epoch",
+          "UPDATE repo_meta SET epoch_gen = ?, epoch_uuid = ? WHERE id = 1",
+          current,
+          crypto.randomUUID(),
+        );
+        this.#emit("repo.updated", { actor: null, actChain: [], data: null }, true);
+      }
+    });
+    this.#epochChecked = true;
+  }
+
+  /**
+   * The repository's current snapshot for a read-model rebuild, with the
+   * sequence the export starts at; null without an identity.
+   */
+  exportSnapshot(): RepoExport | null {
+    const meta = this.#meta();
+    if (!meta) return null;
+    const { source_seq: watermark } = this.#storage.sql
+      .exec<{ source_seq: number }>("SELECT source_seq FROM repo_meta WHERE id = 1")
+      .one();
+    return {
+      sourceId: meta.repo_id,
+      epochGen: meta.epoch_gen,
+      ownerGen: meta.owner_gen,
+      watermark,
+      entities: [
+        {
+          type: REPO_ENTITY,
+          id: meta.repo_id,
+          version: meta.version,
+          deleted: false,
+          row: this.#row(meta),
+        },
+      ],
+    };
   }
 
   /** In a commit's transaction: the new snapshot, the ref updates and the audit row. */
   onCommit(context: CommitContext): void {
     const { refUpdates, actor } = context.request;
     if (refUpdates.length === 0 || !this.#meta()) return;
+    if (!this.#epochChecked)
+      throw new Error("the repository's epoch must be checked before it commits");
     this.#exec("events.pushed_at", "UPDATE repo_meta SET pushed_at = ? WHERE id = 1", context.now);
     const who = { actor: actor?.principal ?? null, actChain: [] };
     this.#emit("repo.updated", { ...who, data: null }, true);
@@ -167,7 +257,10 @@ export class RepoEvents {
    * transaction.
    */
   onHeadChanged(): void {
-    if (this.#meta()) this.#emit("repo.updated", { actor: null, actChain: [], data: null }, true);
+    if (!this.#meta()) return;
+    if (!this.#epochChecked)
+      throw new Error("the repository's epoch must be checked before it changes");
+    this.#emit("repo.updated", { actor: null, actChain: [], data: null }, true);
   }
 
   /**

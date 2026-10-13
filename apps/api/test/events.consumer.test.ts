@@ -146,7 +146,12 @@ function capturingQueue() {
 }
 
 /** The test environment with some bindings replaced. */
-const envWith = (overrides: Partial<Env>): Env => Object.assign(Object.create(env), overrides);
+const envWith = (overrides: Partial<Env>): Env =>
+  // A proxy, so the shared `env` is never changed.
+  new Proxy(env, {
+    get: (target, prop) =>
+      prop in overrides ? overrides[prop as keyof Env] : Reflect.get(target, prop),
+  });
 
 describe("events consumer", () => {
   it("projects a repository snapshot and acknowledges the message", async () => {
