@@ -136,6 +136,11 @@ function failingOnce(repoId: string, method: keyof RepoDO): Env {
 describe("repos.delete", () => {
   it("deletes a repository: gone at once, then its data, bytes and storage; the name is free", async () => {
     const repo = await repoWithData();
+    // An archive of it too, whose segments must go with it.
+    const archive = await api("GET", `/repos/${handle}/${repo.name}/tarball`);
+    expect(archive.status).toBe(200);
+    await archive.arrayBuffer();
+    expect((await keysUnder(env.GIT, `net/${repo.networkId}/scratch/`)).length).toBeGreaterThan(0);
     expect(await keysUnder(env.GIT, `net/${repo.networkId}/`)).not.toEqual([]);
 
     const res = await remove(repo.name);
@@ -205,6 +210,12 @@ describe("repos.delete", () => {
     const forker = await principalWithToken("user", "git");
     const { repo: child } = await fork(user, parent, forker);
     const before = await keysUnder(env.GIT, `net/${parent.networkId}/`);
+    // An archive of the fork: its segments sit in the network the parent keeps.
+    const archive = await child.stub.archive({ format: "tar.gz", prefix: "child" });
+    expect(archive).toMatchObject({ ok: true, value: { state: "ready" } });
+    expect((await keysUnder(env.GIT, `net/${parent.networkId}/`)).length).toBeGreaterThan(
+      before.length,
+    );
     await markDeletions(env, [{ id: child.id, ownerHandle: "x", name: child.name }], {
       actorId: forker.principalId,
     });

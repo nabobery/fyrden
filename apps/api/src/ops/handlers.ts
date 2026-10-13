@@ -27,6 +27,7 @@ import { getRepoImport, startImport } from "../git/import/operations.js";
 import { forkRepoOperation } from "../network/operations.js";
 import {
   compareCommitsOperation,
+  getArchiveOperation,
   getBranchOperation,
   getCommitOperation,
   getContentsOperation,
@@ -185,6 +186,7 @@ export const handlers: Handlers = {
   "repos.contents.root": getRootContentsOperation,
   "repos.readme.get": getReadmeOperation,
   "repos.trees.get": getTreeOperation,
+  "repos.archives.get": getArchiveOperation,
 
   // File writes (repos/file-writes).
   "repos.contents.put": putContentsOperation,

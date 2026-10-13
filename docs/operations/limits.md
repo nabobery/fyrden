@@ -329,6 +329,25 @@ network has is not found.
 | Names that are not valid UTF-8 | Shown with replacement characters; such a file cannot be asked for by path (clone the repository) |
 | A directory page's cursor | Valid for that version of the directory; after the branch moves it answers `cursor_stale` |
 
+## Archives
+
+`GET /repos/{owner}/{repo}/tarball[/{ref}]` and `/zipball[/{ref}]` serve a
+commit's files under `<owner>-<repo>-<short id>/`; `GET
+/repos/{owner}/{repo}/archives/{format}` (REST and MCP) prepares one and
+links it. The repository's object builds an archive in slices into R2 and
+keeps it a week.
+
+| What | Value |
+|---|---|
+| File content in one archive | 1 GiB; more fails with `archive_failed` (clone instead) |
+| One file | 24 MiB |
+| Zip entries | 65,535 (no ZIP64); use tar.gz past that |
+| Building | 8 MiB encoded or 5,000 entries per slice, at most 300 slices (a commit with very many small files fails: clone it); a request builds for up to 5 seconds, then answers 202 with `Retry-After: 5` until it is ready |
+| Kept | 7 days, then deleted when the repository next builds one (not while a download that started in the last hour may still read it); deleted with the repository |
+| Dates | tar holds dates up to 2242, zip 1980 to 2107; later or earlier commit dates are written as the nearest one |
+| Zip names | Flagged UTF-8 when they are; other bytes are written as they are, without the flag (as git does) |
+| tar.gz | Several gzip members (any gzip reader reads them as one stream); pax headers for long names; the commit id in a pax global header, as `git archive` writes |
+
 ## File writes
 
 `PUT`/`DELETE /repos/{owner}/{repo}/contents/{path}` and

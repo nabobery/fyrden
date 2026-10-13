@@ -43,6 +43,7 @@ const CASES: Record<
   "repos.contents.root": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.readme.get": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.trees.get": { input: {}, expected: { status: 404, code: "ref_not_found" } },
+  "repos.archives.get": { input: {}, expected: { status: 409, code: "repo_empty" } },
   // Writes change their own repository: the first commit of an empty one.
   "repos.contents.put": {
     input: { message: "add", content: "aGk=" },
@@ -103,7 +104,8 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{ref+}", "main")
     .replace("{basehead+}", "main...main")
     .replace("{path+}", "README.md")
-    .replace("{tree_sha+}", "main");
+    .replace("{tree_sha+}", "main")
+    .replace("{format}", "zip");
   const input = CASES[op.id]?.input ?? {};
   const get = op.method === "GET";
   return exports.default.fetch(`${ORIGIN}/api${path}`, {

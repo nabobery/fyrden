@@ -88,11 +88,15 @@ export function parseTree(body: Uint8Array): Parsed<TreeEntry[]> {
 /**
  * A tree's entries one at a time, in stored order, without fsck checks or
  * copies (names and ids are views into `body`): for listing large trees in
- * bounded memory. Throws `GitObjectError("badTree")` at the first entry
- * that cannot be read, as `parseTree` does.
+ * bounded memory. Each entry carries `end`, the offset just after it, so a
+ * walk can resume from there (`start`). Throws `GitObjectError("badTree")`
+ * at the first entry that cannot be read, as `parseTree` does.
  */
-export function* treeEntries(body: Uint8Array): Generator<TreeEntry> {
-  let offset = 0;
+export function* treeEntries(
+  body: Uint8Array,
+  start = 0,
+): Generator<TreeEntry & { readonly end: number }> {
+  let offset = start;
   while (offset < body.length) {
     const space = body.indexOf(SPACE, offset);
     if (space <= offset) throw badTree("malformed mode in tree entry");
@@ -110,6 +114,7 @@ export function* treeEntries(body: Uint8Array): Generator<TreeEntry> {
       mode,
       name: body.subarray(space + 1, nul),
       oid: body.subarray(nul + 1, offset) as Oid,
+      end: offset,
     };
   }
 }

@@ -19,6 +19,7 @@ export {
   isNetworkId,
   isUlid,
   newPackId,
+  newUlid,
   packObjectKey,
   packPrefix,
   scratchPrefix,

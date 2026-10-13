@@ -1,5 +1,6 @@
 import type {
   compareCommits,
+  getArchive,
   getBranch,
   getCommit,
   getContents,
@@ -276,4 +277,31 @@ export async function getTreeOperation(
   const recursive = input.recursive === "1" || input.recursive === "true";
   const listing = value(await stub.browseTree(input.tree_sha, recursive));
   return { sha: listing.sha, tree: listing.entries, truncated: listing.truncated };
+}
+
+/** The `repos.archives.get` operation: starts or finds the archive, and links the download route. */
+export async function getArchiveOperation(
+  ctx: OpContext,
+  input: Input<typeof getArchive>,
+): Promise<Output<typeof getArchive>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "contents:read");
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "archive" });
+  const status = value(
+    await ctx.env.REPO.getByName(entry.id).archive({
+      ...(input.ref !== undefined && { ref: input.ref }),
+      format: input.format,
+      prefix: `${entry.ownerHandle}-${entry.name}`,
+    }),
+  );
+  const route = input.format === "zip" ? "zipball" : "tarball";
+  const url = new URL(
+    `/api/repos/${entry.ownerHandle}/${entry.name}/${route}/${status.commit}`,
+    ctx.requestOrigin,
+  );
+  return {
+    state: status.state,
+    commit: status.commit,
+    size: status.state === "ready" ? status.bytes : null,
+    download_url: url.href,
+  };
 }

@@ -19,7 +19,7 @@ import {
   type RequestMeta,
 } from "@fyrden/adapters-cloudflare/obs";
 import type { Envelope, RepoRole } from "@fyrden/domain";
-import type { BlockCache, LsRefsArgs } from "@fyrden/git-core";
+import { type BlockCache, type LsRefsArgs, oidToHex } from "@fyrden/git-core";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
 import { checkObjectAccess } from "../git/cache/object-check.js";
@@ -71,6 +71,7 @@ import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
 import type { AclSnapshot } from "./OrgDO.js";
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
+import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
 import {
   type Browsed,
   type CommitView,
@@ -115,6 +116,8 @@ export interface RepoDetails {
  * of CPU an alarm gets (measured on Workers Free, 2026-10-10).
  */
 const ALARM_BUDGET_MS = 5_000;
+/** How long an archive request builds before it answers "building". Proposed. */
+const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
 
 /** The job the deletion runs the audit archiver's slices as (they read no job state). */
 const DELETION_SLICE = {
@@ -490,6 +493,41 @@ export class RepoDO extends MigratingDO {
     );
   }
 
+  #archiver: RepoArchives | undefined;
+
+  #archives(): RepoArchives {
+    this.#blocks ??= createClockBlockCache();
+    this.#archiver ??= new RepoArchives({ git: this.git, memoryBlocks: this.#blocks });
+    return this.#archiver;
+  }
+
+  /**
+   * The archive of the commit `ref` names (the default branch without one)
+   * in `format`, everything under `prefix` (`prefix-<short id>`): ready, or
+   * being built (it is started, and built here for a few seconds).
+   */
+  archive(input: {
+    readonly ref?: string;
+    readonly format: ArchiveFormat;
+    readonly prefix: string;
+  }): Promise<Browsed<ArchiveStatus>> {
+    if (this.#closed || this.#refusesAdmission())
+      return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
+    return this.#browse("archive", async (b) => {
+      const at = await b.resolveTree(input.ref);
+      if (!at.ok) return at;
+      const commit = oidToHex(at.value.commit);
+      const [row] = this.git.commitGraph.readSync([at.value.commit], "verified");
+      return this.#archives().request({
+        commit,
+        mtime: row?.commitTime ?? 0,
+        format: input.format,
+        prefix: `${input.prefix}-${commit.slice(0, 7)}`,
+        budgetMs: ARCHIVE_REQUEST_BUDGET_MS,
+      });
+    });
+  }
+
   /** What a path names at a commit: a directory page, a file, a symlink or a submodule. */
   browseContents(input: {
     readonly ref?: string;
@@ -817,6 +855,7 @@ export class RepoDO extends MigratingDO {
       index: this.#push().indexHandler(),
       compact: packCapCompactionHandler(this.git, () => this.packCap, this.#log()),
       import: this.#imports().handler(),
+      archive: this.#archives().handler(),
       audit_archive: this.#auditArchiver(),
       reap_orphans: orphanReaperHandler(this.git, {
         sweepNetwork: () => soleNetworkMember(this.env, this.git.networkId(), this.#repoId()),

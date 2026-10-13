@@ -1,3 +1,6 @@
+CREATE INDEX archives_created ON archives (created_at);
+CREATE UNIQUE INDEX archives_live ON archives (commit_id, format, prefix)
+        WHERE state <> 'deleting';
 CREATE INDEX audit_log_archived ON audit_log (archived_at) WHERE archived_at IS NOT NULL;
 CREATE INDEX audit_log_unarchived ON audit_log (seq) WHERE archived_at IS NULL;
 CREATE INDEX audit_segments_archived ON audit_segments (archived_at) WHERE state = 'archived';
@@ -21,6 +24,33 @@ CREATE TABLE acl_snapshot (
         roles TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(roles)),
         floor_epoch INTEGER NOT NULL DEFAULT 0,
         floor_version INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+CREATE TABLE archive_segments (
+        run_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        key TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        PRIMARY KEY (run_id, seq)
+      ) STRICT;
+CREATE TABLE archive_zip_records (
+        run_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        record TEXT NOT NULL CHECK (json_valid(record)),
+        PRIMARY KEY (run_id, seq)
+      ) STRICT;
+CREATE TABLE archives (
+        run_id TEXT PRIMARY KEY,
+        commit_id TEXT NOT NULL,
+        format TEXT NOT NULL CHECK (format IN ('tar.gz', 'zip')),
+        prefix TEXT NOT NULL,
+        network_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('building', 'ready', 'failed', 'deleting')),
+        segments INTEGER NOT NULL DEFAULT 0,
+        bytes INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        leased_until INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
       ) STRICT;
 CREATE TABLE audit_log (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,

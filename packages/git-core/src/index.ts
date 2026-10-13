@@ -387,6 +387,19 @@ export {
 export { INFINITE_DEPTH } from "./upload-pack/shallow.js";
 export type { VerbatimCandidate } from "./upload-pack/verbatim-plan.js";
 export {
+  type ArchiveEntry,
+  type ArchiveEntryKind,
+  deflateRaw,
+  gzipMember,
+  tarCommitHeader,
+  tarEnd,
+  tarEntry,
+  ZIP_LIMITS,
+  type ZipRecord,
+  zipEnd,
+  zipEntry,
+} from "./write/archive.js";
+export {
   type BuildCommitInput,
   type BuiltCommit,
   type BuiltObject,

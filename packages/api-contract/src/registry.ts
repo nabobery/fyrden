@@ -10,6 +10,7 @@ import {
   setTeamRepo,
 } from "../ops/access.js";
 import { createToken, createUser } from "../ops/admin.js";
+import { getArchive } from "../ops/archives.js";
 import {
   compareCommits,
   getBranch,
@@ -60,6 +61,7 @@ export const registry = defineRegistry([
   getContents,
   getReadme,
   getTree,
+  getArchive,
   putContents,
   deleteContents,
   createFileCommit,

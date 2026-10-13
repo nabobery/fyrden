@@ -140,6 +140,17 @@ export async function eraseRepository(
     if (isUlid(upload.upload_id)) await deletePrefixes(networks, upload.upload_id);
     sql.exec("DELETE FROM uploads WHERE upload_id = ?", upload.upload_id);
   }
+  // Archives, built under their run's scratch prefix in the network they were built in.
+  const archives = sql
+    .exec<{ run_id: string; network_id: string }>("SELECT run_id, network_id FROM archives")
+    .toArray();
+  for (const archive of archives) {
+    if (spent()) return "partial";
+    if (isUlid(archive.run_id)) await deletePrefixes([archive.network_id], archive.run_id);
+    sql.exec("DELETE FROM archive_zip_records WHERE run_id = ?", archive.run_id);
+    sql.exec("DELETE FROM archive_segments WHERE run_id = ?", archive.run_id);
+    sql.exec("DELETE FROM archives WHERE run_id = ?", archive.run_id);
+  }
   const jobs = sql.exec<{ job_id: string; cursor: ArrayBuffer | null }>(
     "SELECT job_id, cursor FROM jobs WHERE cursor IS NOT NULL",
   );

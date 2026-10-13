@@ -305,3 +305,114 @@ describe("JobQueue and the reflog prune job", () => {
     expect(result.calls).toBe(8);
   });
 });
+
+describe("memory admission and delays", () => {
+  it("lets a run whose lease expired keep its claim while the pool is short", async () => {
+    const { stub } = await newProbe();
+    const result = await inProbe(stub, async ({ git }) => {
+      const clock = { now: 1_000_000 };
+      const context = withClock(git.context, clock);
+      const jobs = new JobQueue(context, () => {}, policy);
+      const jobId = jobs.enqueue("compact");
+      const memory = createDoMemoryBudget(100);
+      // A slice that holds the pool and outlives its lease.
+      let release: () => void = () => {};
+      let started: () => void = () => {};
+      const running = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const slow = {
+        compact: {
+          memoryBytes: 80,
+          // The first slice waits to be released; later ones finish the job.
+          runSlice: (job: { cursor: Uint8Array | null }) =>
+            job.cursor
+              ? Promise.resolve({ done: true as const })
+              : new Promise<{ done: false; cursor: Uint8Array }>((resolve) => {
+                  release = () => resolve({ done: false, cursor: Uint8Array.of(7) });
+                  started();
+                }),
+        },
+      };
+      const first = jobs.runDue(slow, memory, clock.now + 10_000);
+      await running;
+      clock.now += policy.leaseMs + 1;
+      // Another run finds the lease expired but no memory: it must not take the job.
+      const second = await jobs.runDue(slow, memory, clock.now + 10_000);
+      release();
+      await first;
+      return { second, job: jobs.get(jobId) };
+    });
+    expect(result.second).toBe(0);
+    // The first run recorded its slice (its claim was still the job's) and went on to finish it.
+    expect(result.job).toMatchObject({ state: "done", cursor: Uint8Array.of(7), attempts: 0 });
+  });
+
+  it("does not run a slice that asked to go on later again in the same run", async () => {
+    const { stub } = await newProbe();
+    const slices = await inProbe(stub, async ({ git }) => {
+      const jobs = new JobQueue(git.context, () => {}, policy);
+      const jobId = jobs.enqueue("compact");
+      let runs = 0;
+      const outcome = await jobs.runJob(
+        jobId,
+        {
+          async runSlice() {
+            runs++;
+            return { done: false as const, cursor: null, runAfterMs: 60_000 };
+          },
+        },
+        createDoMemoryBudget(100),
+        Date.now() + 10_000,
+      );
+      return { runs, outcome };
+    });
+    expect(slices.runs).toBe(1);
+    expect(slices.outcome).toMatchObject({ slices: 1, state: "queued" });
+  });
+});
+
+describe("a claim that fails", () => {
+  it("gives the slice's memory back, in runDue and in runJob", async () => {
+    const { stub } = await newProbe();
+    const reserved = await inProbe(stub, async ({ git }) => {
+      // Storage whose next transaction (the claim) throws once.
+      let failNext = false;
+      const storage = new Proxy(git.context.storage, {
+        get(target, property) {
+          if (property !== "transactionSync") {
+            const value = Reflect.get(target, property);
+            return typeof value === "function" ? value.bind(target) : value;
+          }
+          return <T>(fn: () => T): T => {
+            if (failNext) {
+              failNext = false;
+              throw new Error("the claim failed");
+            }
+            return target.transactionSync(fn);
+          };
+        },
+      });
+      const jobs = new JobQueue({ ...git.context, storage }, () => {}, policy);
+      const memory = createDoMemoryBudget(100);
+      const handlers = {
+        compact: { memoryBytes: 60, runSlice: async () => ({ done: true as const }) },
+      };
+      const jobId = jobs.enqueue("compact");
+      failNext = true;
+      await expect(jobs.runDue(handlers, memory, Date.now() + 10_000)).rejects.toThrow(
+        "the claim failed",
+      );
+      const afterDue = memory.stats().reservedBytes;
+      failNext = true;
+      await expect(
+        jobs.runJob(jobId, handlers.compact, memory, Date.now() + 10_000),
+      ).rejects.toThrow("the claim failed");
+      const afterJob = memory.stats().reservedBytes;
+      // And the job still runs once claims work again.
+      const ran = await jobs.runJob(jobId, handlers.compact, memory, Date.now() + 10_000);
+      return { afterDue, afterJob, ran };
+    });
+    expect(reserved).toEqual({ afterDue: 0, afterJob: 0, ran: { slices: 1, state: "done" } });
+  });
+});

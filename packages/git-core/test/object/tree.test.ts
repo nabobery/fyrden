@@ -296,10 +296,14 @@ describe("treeEntries", () => {
     );
   });
 
-  it("reads entries one at a time, so a caller can stop early", () => {
-    const body = rawTree(rawEntry("100644", "a"), rawEntry("100644", "b"));
+  it("reads entries one at a time, and resumes after any of them", () => {
+    const body = rawTree(rawEntry("100644", "a"), rawEntry("100644", "b"), rawEntry("40000", "c"));
     const first = treeEntries(body).next();
     expect(first.done).toBe(false);
     expect(new TextDecoder().decode(first.value?.name)).toBe("a");
+    const rest = [...treeEntries(body, first.value?.end)].map((e) =>
+      new TextDecoder().decode(e.name),
+    );
+    expect(rest).toEqual(["b", "c"]);
   });
 });
