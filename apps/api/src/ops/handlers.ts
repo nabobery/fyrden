@@ -1,4 +1,5 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
+import { allocateEpoch } from "../events/epochs.js";
 import {
   abortUploadSession,
   completeUploadSession,
@@ -121,9 +122,11 @@ export const handlers: Handlers = {
     // unreachable and empty, never a listed repository without storage.
     const id = newId("rep");
     const networkId = newId("net");
+    const epochGen = await allocateEpoch(env.DIRECTORY, id, metrics);
     const init = await env.REPO.getByName(id).initGitStorage(
       networkId,
       `refs/heads/${INITIAL_BRANCH}`,
+      { ownerId: auth.principalId, name, visibility: "private", epochGen, actor: auth.principalId },
     );
     if (!init.ok) throw new Error(`initializing repository storage failed: ${init.error}`);
 

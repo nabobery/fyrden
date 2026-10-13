@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { repoSchema } from "../src/do/schema/repo.js";
 import repoV0 from "./fixtures/do-schemas/RepoDO/v0.sql?raw";
 import repoV1 from "./fixtures/do-schemas/RepoDO/v1.sql?raw";
+import repoV2 from "./fixtures/do-schemas/RepoDO/v2.sql?raw";
 
 // One fixture per released schema version: an object last migrated by any
 // released build must reach the same schema as a fresh one.
@@ -17,7 +18,7 @@ const fixtures: Record<
   string,
   { schema: readonly DoMigration[]; versions: Record<number, string> }
 > = {
-  RepoDO: { schema: repoSchema, versions: { 0: repoV0, 1: repoV1 } },
+  RepoDO: { schema: repoSchema, versions: { 0: repoV0, 1: repoV1, 2: repoV2 } },
 };
 
 describe("RepoDO schema", () => {

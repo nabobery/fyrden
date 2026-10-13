@@ -13,6 +13,9 @@
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests"
   },
+  "dependencies": {
+    "zod": "catalog:"
+  },
   "devDependencies": {
     "typescript": "catalog:",
     "vitest": "catalog:",

@@ -29,6 +29,8 @@ export const METRICS = {
   "do.rows_written": ["class", "op"],
   "do.request": ["class", "method"],
   "d1.query": ["db", "op"],
+  // Queue messages sent (Queues bill per 64 KB of a message).
+  "queue.send": ["queue"],
   "auth.token": ["type", "outcome"],
   // Orphan reaper: what = upload | pack | scratch | object | abort_failed.
   "git.reaped": ["what"],

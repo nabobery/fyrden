@@ -1,6 +1,7 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { RepoDO } from "../do/RepoDO.js";
+import { allocateEpoch } from "../events/epochs.js";
 import type { RewriteState } from "../git/maintenance/rewrite.js";
 import { packCapPolicy } from "../git/maintenance/tail-merge-plan.js";
 import { defaultBranchOf, type RepoEntry } from "../repos/directory.js";
@@ -115,7 +116,17 @@ export async function forkRepository(
   let commitsCopied = 0;
   let packsCompacted = 0;
   try {
-    await fork.initFork({ networkId, head: exported.head, packs: exported.packs });
+    const epochGen = await allocateEpoch(env.DIRECTORY, forkId, request.metrics);
+    await fork.initFork(
+      { networkId, head: exported.head, packs: exported.packs },
+      {
+        ownerId: request.ownerId,
+        name: request.name,
+        visibility: parent.visibility,
+        epochGen,
+        actor: request.ownerId,
+      },
+    );
 
     let frontier = exported.tips.map(hex);
     for (let step = 1; frontier.length > 0; step++) {

@@ -15,6 +15,7 @@ import {
   measureInvocation,
   type RequestMeta,
 } from "@fyrden/adapters-cloudflare/obs";
+import type { Envelope } from "@fyrden/domain";
 import type { BlockCache, LsRefsArgs } from "@fyrden/git-core";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
@@ -56,6 +57,8 @@ import type {
 } from "../network/types.js";
 import type { CompactSliceInput } from "../network/view-cap.js";
 import { MigratingDO } from "./base/MigratingDO.js";
+import { Outbox } from "./base/outbox.js";
+import { RepoEvents, type RepoIdentity } from "./repo/events.js";
 import { repoSchema } from "./schema/repo.js";
 
 /**
@@ -66,7 +69,7 @@ import { repoSchema } from "./schema/repo.js";
  */
 const ALARM_BUDGET_MS = 5_000;
 
-/** One repository: refs, packs, issues, pull requests and the outbox. Keyed by the immutable repo id. */
+/** One repository: refs, packs, its events and audit log. Keyed by the immutable repo id. */
 export class RepoDO extends MigratingDO {
   static readonly schema = repoSchema;
 
@@ -81,6 +84,15 @@ export class RepoDO extends MigratingDO {
   /** Where this object's metrics are written. Tests may replace it. */
   metricsDataset: AnalyticsEngineDataset;
 
+  /** Sends one outbox batch to the events queue. Tests may replace it. */
+  sendEvents: (envelope: Envelope) => Promise<void>;
+
+  /** Events waiting to be sent; drained by the alarm. */
+  readonly outbox: Outbox;
+
+  /** The repository's events and audit rows, written with each change. */
+  readonly events: RepoEvents;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.metricsDataset = env.METRICS;
@@ -90,16 +102,44 @@ export class RepoDO extends MigratingDO {
       metrics: createMetrics({
         writeDataPoint: (point) => this.metricsDataset.writeDataPoint(point),
       }),
-      setAlarm: (at) => {
-        void ctx.storage.setAlarm(at);
-      },
+      setAlarm: (at) => this.#arm(at),
     });
+    this.sendEvents = async (envelope) => {
+      await env.EVENTS.send(envelope, { contentType: "json" });
+    };
+    this.outbox = new Outbox(ctx.storage, {
+      now: this.git.context.now,
+      send: (envelope) => this.sendEvents(envelope),
+      metrics: this.git.context.metrics,
+      doClass: this.git.context.doClass,
+    });
+    this.events = new RepoEvents(this.git, this.outbox, () => this.#repoId());
+    this.git.refStore.inCommit = (context) => this.events.onCommit(context);
+    this.git.refStore.onHeadChanged = () => this.events.onHeadChanged();
     // Every commit (push, import, merge) schedules the maintenance it calls
     // for and records the repository's pack count and storage.
     this.git.refStore.afterCommit = ({ nonFastForward }) => {
       scheduleAfterCommit(this.git, this.maintenance, nonFastForward);
       this.#recordStorage();
+      this.#armOutbox();
     };
+  }
+
+  /**
+   * Sets the object's one alarm for the job queue (`at`), unless the outbox
+   * is due sooner: neither may push back the other's time.
+   */
+  #arm(at: number): void {
+    const due = this.outbox.dueAt();
+    void this.ctx.storage.setAlarm(due === null ? at : Math.min(at, due));
+  }
+
+  /** Arms the alarm for the outbox's next drain, unless a job is due sooner. */
+  #armOutbox(): void {
+    const due = this.outbox.dueAt();
+    if (due === null) return;
+    const job = this.git.jobs.nextAt();
+    void this.ctx.storage.setAlarm(job === null ? due : Math.min(due, job));
   }
 
   /** The repository id (this object's name). */
@@ -141,10 +181,16 @@ export class RepoDO extends MigratingDO {
   async initGitStorage(
     networkId: string,
     defaultBranch = "refs/heads/main",
+    identity?: RepoIdentity & { readonly actor: string | null },
   ): Promise<{ ok: true } | { ok: false; error: string }> {
     if (!isNetworkId(networkId)) return { ok: false, error: "not a network id" };
     try {
+      if (identity) this.events.assertIdentity(identity);
       this.git.initialize(networkId, defaultBranch);
+      if (identity) {
+        this.events.init(identity, identity.actor);
+        this.#armOutbox();
+      }
       return { ok: true };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -389,8 +435,25 @@ export class RepoDO extends MigratingDO {
     await this.#measured("alarm", async () => {
       // Maintenance changes the packs without a commit.
       this.#recordStorage();
-      await this.#runJobs();
+      try {
+        await this.#drainOutbox();
+        await this.#runJobs();
+      } finally {
+        this.#armOutbox();
+      }
     });
+  }
+
+  /** Sends due events; a failure backs off and never fails the alarm or stops the jobs. */
+  async #drainOutbox(): Promise<void> {
+    try {
+      const due = this.outbox.dueAt();
+      if (due === null || due > this.git.context.now()) return;
+      const result = await this.outbox.drain(this.#repoId());
+      if (!result.ok) this.#log().warn("sending events failed", { error: result.error });
+    } catch (error) {
+      this.#log().warn("draining the outbox failed", { error });
+    }
   }
 
   #runJobs(): Promise<unknown> {
@@ -458,8 +521,16 @@ export class RepoDO extends MigratingDO {
   }
 
   /** A new fork's storage: its network, HEAD and borrowed packs. */
-  initFork(input: { networkId: string; head: string | null; packs: readonly ViewPack[] }): void {
+  initFork(
+    input: { networkId: string; head: string | null; packs: readonly ViewPack[] },
+    identity?: RepoIdentity & { readonly actor: string | null },
+  ): void {
+    if (identity) this.events.assertIdentity(identity);
     this.#network().initFork(input);
+    if (identity) {
+      this.events.init(identity, identity.actor);
+      this.#armOutbox();
+    }
   }
 
   /** One bounded step of a new fork's graph copy from its parent (see `RepoNetwork.copyGraphStep`). */

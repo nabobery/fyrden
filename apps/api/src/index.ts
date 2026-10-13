@@ -11,8 +11,8 @@ const app = createApp();
 
 export default {
   fetch: app.fetch,
-  // Nothing produces queue messages yet; retrying keeps any message that
-  // arrives early instead of dropping it.
+  // Repository outboxes produce to the events queue; nothing consumes it
+  // yet. Retrying keeps a message that arrives early instead of dropping it.
   async queue(batch) {
     batch.retryAll();
   },

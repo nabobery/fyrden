@@ -284,7 +284,9 @@ export class RepoImports {
       await this.push.finalize(record.uploadId, decision, { repoId: record.repoId }),
     );
     if (!report.ok) return this.#save({ ...record, state: "failed", error: report.error });
-    if (record.head) this.git.refStore.setHead(record.head);
+    // The new default branch and its snapshot event commit together.
+    const { head } = record;
+    if (head) this.git.context.storage.transactionSync(() => this.git.refStore.setHead(head));
     return this.#save({ ...record, state: "committed" });
   }
 

@@ -479,7 +479,7 @@ export class RepoPush {
     );
   }
 
-  /** The push event: one structured log line and counters (no outbox table exists yet). */
+  /** The push's log line and counters (its events go through the outbox with each commit). */
   #report(
     meta: PushLogMeta,
     uploadId: string,

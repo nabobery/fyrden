@@ -106,6 +106,7 @@ The latest point of a group is its current value.
 | `do.request` | `class`, `method` | Calls to a Durable Object |
 | `do.rows_written` | `class`, `op` | Durable Object SQLite rows written (the billed unit) |
 | `d1.query` | `db`, `op` | D1 statements |
+| `queue.send` | `queue` | Queue messages sent (an outbox drain sends one per batch of events) |
 | `http.request` | `route`, `method`, `status` | One per HTTP request |
 | `auth.token` | `type`, `outcome` | One per token check |
 

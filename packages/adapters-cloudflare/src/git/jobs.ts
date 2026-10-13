@@ -369,14 +369,20 @@ export class JobQueue {
     return state === "running" ? "busy" : (state as RunJobState);
   }
 
-  /** Sets the alarm to the earliest pending job, if any. */
-  rearm(): void {
+  /** When the earliest pending job is due (or its runner's lease expires), or null when none is pending. */
+  nextAt(): number | null {
     const next = first<{ at: number | null }>(
       this.context.storage,
       `SELECT min(CASE WHEN state = 'running' THEN lease_expires_at ELSE next_run_at END) AS at
        FROM jobs WHERE state IN ('queued', 'running')`,
     );
-    if (next?.at != null) this.setAlarm(next.at);
+    return next?.at ?? null;
+  }
+
+  /** Sets the alarm to the earliest pending job, if any. */
+  rearm(): void {
+    const at = this.nextAt();
+    if (at !== null) this.setAlarm(at);
   }
 
   /** Claims the job `jobId` if it is queued (at any time) or its runner's lease has expired. */

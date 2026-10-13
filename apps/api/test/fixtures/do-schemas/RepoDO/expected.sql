@@ -6,6 +6,22 @@ CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
 CREATE INDEX refs_oid ON refs (oid);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);
+CREATE TABLE audit_log (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        epoch_gen INTEGER NOT NULL,
+        at INTEGER NOT NULL,
+        actor_id TEXT,
+        on_behalf_of TEXT,
+        act_chain TEXT CHECK (act_chain IS NULL OR json_valid(act_chain)),
+        token_id TEXT,
+        grant_id TEXT,
+        action TEXT NOT NULL,
+        target_id TEXT,
+        result TEXT NOT NULL,
+        details TEXT CHECK (details IS NULL OR json_valid(details)),
+        request_id TEXT,
+        archived_at INTEGER
+      ) STRICT;
 CREATE TABLE commits (
     oid BLOB PRIMARY KEY CHECK (length(oid) = 20),
     tree BLOB NOT NULL CHECK (length(tree) = 20),
@@ -15,6 +31,11 @@ CREATE TABLE commits (
     level INTEGER NOT NULL,
     signature TEXT
   ) STRICT, WITHOUT ROWID;
+CREATE TABLE event_payloads (
+        event_key TEXT PRIMARY KEY,
+        payload TEXT NOT NULL CHECK (json_valid(payload)),
+        created_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE git_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     network_id TEXT NOT NULL,
@@ -49,6 +70,18 @@ CREATE TABLE locks (
     acquired_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
   ) STRICT;
+CREATE TABLE outbox (
+        source_seq INTEGER PRIMARY KEY,
+        event TEXT NOT NULL CHECK (json_valid(event)),
+        bytes INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE outbox_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        next_drain_at INTEGER,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
+      ) STRICT;
 CREATE TABLE packs (
     pack_id TEXT PRIMARY KEY,
     network_id TEXT NOT NULL,
@@ -120,7 +153,8 @@ CREATE TABLE repo_meta (
         epoch_gen INTEGER NOT NULL,
         write_frozen INTEGER NOT NULL DEFAULT 0 CHECK (write_frozen IN (0, 1)),
         created_at INTEGER NOT NULL
-      ) STRICT;
+      , epoch_uuid TEXT, source_seq INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, owner_id TEXT, name TEXT, visibility TEXT
+        CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER) STRICT;
 CREATE TABLE shallow (
     oid BLOB PRIMARY KEY CHECK (length(oid) = 20)
   ) STRICT, WITHOUT ROWID;

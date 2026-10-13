@@ -135,6 +135,21 @@ export class SqliteRefStore implements RefStore {
    */
   afterCommit: ((commit: { version: number; nonFastForward: boolean }) => void) | undefined;
 
+  /**
+   * Runs inside every commit's transaction, after the request's own
+   * `onCommitted`: the owner's rows that must commit with any ref change,
+   * whichever path made it (events, audit rows). A throw rolls the commit
+   * back.
+   */
+  inCommit: ((context: CommitContext) => void) | undefined;
+
+  /**
+   * Runs after `setHead` moved HEAD to another target, in the caller's
+   * transaction when there is one (the owner's snapshot of the default
+   * branch). A throw undoes the move inside a transaction.
+   */
+  onHeadChanged: ((target: string) => void) | undefined;
+
   constructor(
     private readonly context: GitStorageContext,
     private readonly registry: PackRegistry,
@@ -196,6 +211,7 @@ export class SqliteRefStore implements RefStore {
     checkRefName(target);
     const now = this.context.now();
     const { storage } = this.context;
+    const before = this.head();
     const written = run(
       storage,
       `INSERT INTO refs (name, kind, oid, target, version, updated_at)
@@ -205,6 +221,7 @@ export class SqliteRefStore implements RefStore {
       now,
     );
     countRowsWritten(this.context, "refs.set_head", written);
+    if (before !== target) this.onHeadChanged?.(target);
   }
 
   async commit(request: RefCommitRequest): Promise<RefCommitResult> {
@@ -395,6 +412,7 @@ export class SqliteRefStore implements RefStore {
         now,
       );
       request.onCommitted?.(context);
+      this.inCommit?.(context);
       return { result: { ok: true, version: next } as const, written, nonFastForward };
     });
     countRowsWritten(this.context, "refs.commit", outcome.written);

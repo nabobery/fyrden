@@ -65,8 +65,8 @@ const LOCK_RENEW_MS = 30_000;
  * the fast-forward proof, and the in-transaction hooks. `authorize` checks,
  * inside the transaction, that the Worker's decision is for this upload's
  * token and fresh, and that this push still holds the commit lock.
- * `onCommitted` records the transaction for the push event (no outbox
- * table exists yet; the event is logged after the commit).
+ * `onCommitted` records the transaction for the push's log line; the
+ * repository's own commit hook writes its events and audit row.
  *
  * With a `cap` gate, the transaction that makes the upload live first gets
  * the merge the pack-count cap needs. That transaction then also swaps in
