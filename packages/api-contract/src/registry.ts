@@ -10,6 +10,14 @@ import {
   setTeamRepo,
 } from "../ops/access.js";
 import { createToken, createUser } from "../ops/admin.js";
+import {
+  compareCommits,
+  getBranch,
+  getCommit,
+  listBranches,
+  listCommits,
+  listTags,
+} from "../ops/browse.js";
 import { createImport, getImport } from "../ops/imports.js";
 import { whoami } from "../ops/meta.js";
 import { createOrg, listMembers, removeMembership, setMembership } from "../ops/orgs.js";
@@ -40,6 +48,12 @@ export const registry = defineRegistry([
   deleteRepo,
   deleteRepos,
   forkRepo,
+  listBranches,
+  getBranch,
+  listTags,
+  listCommits,
+  getCommit,
+  compareCommits,
   setMembership,
   removeMembership,
   listMembers,

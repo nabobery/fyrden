@@ -301,6 +301,26 @@ deletion that finishes in the background:
 A deletion that keeps failing shows `attempts` and `last_error` in the
 directory's `repo_deletions` row.
 
+## Browsing history
+
+Branches, tags, commits and comparisons (`/repos/{owner}/{repo}/branches`,
+`/tags`, `/commits`, `/compare/{base}...{head}`) start from a branch, a tag
+or a full commit SHA of the repository itself; a commit that only another
+repository of the same fork network has is not found.
+
+| What | Value |
+|---|---|
+| Page size | 1 to 100, default 30 |
+| Commits one history page examines | 2,000, and about 400 R2 reads for the walk; with `path`, a page can hold fewer commits than asked (even none) and still have a next one |
+| R2 reads one browse request makes | 800 at most (Free allows 1,000 calls per invocation); a history page then ends early, anything else answers `too_expensive` |
+| Commit text in one answer | 8 MiB; a history page then ends early, anything else answers `too_large` |
+| History order | Newest first by corrected commit date, then commit id: what `git log` shows, unless commit dates go backwards or are equal |
+| Tags | A tag of a tree or blob is not listed; a page can be short (even empty) and still have a next one |
+| Branches waiting in a history cursor | 256; a wider history answers `history_too_wide` |
+| Commits a comparison counts on each side | 10,000; more answers `comparison_too_large` |
+| Commits a comparison lists | The newest 100, oldest first |
+| Commit text | Decoded as the commit's `encoding` header says (UTF-8 without one, or for an encoding the runtime does not know) |
+
 ## Configuration variables
 
 Set these as Worker variables of `fyrden-api`: add a `"vars"` object to

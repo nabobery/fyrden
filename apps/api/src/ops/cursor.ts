@@ -1,8 +1,29 @@
 import { OperationError } from "./execute.js";
 
-/** A page cursor: the last name of a page, opaque to clients. */
+const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/** Base64url of `bytes`, unpadded. */
+export function encodeBytesCursor(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
+}
+
+/** The bytes of a cursor `encodeBytesCursor` made, or undefined. */
+export function decodeBytesCursor(cursor: string): Uint8Array | undefined {
+  try {
+    return Uint8Array.from(atob(cursor.replaceAll("-", "+").replaceAll("_", "/")), (c) =>
+      c.charCodeAt(0),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/** A page cursor: the last name of a page (UTF-8), opaque to clients. */
 export function encodeCursor(name: string): string {
-  return btoa(name).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  return encodeBytesCursor(new TextEncoder().encode(name));
 }
 
 /**
@@ -11,13 +32,17 @@ export function encodeCursor(name: string): string {
  */
 export function decodeCursor(cursor: string | undefined, valid: (name: string) => boolean): string {
   if (cursor === undefined) return "";
+  const bytes = decodeBytesCursor(cursor);
   let name: string | undefined;
   try {
-    name = atob(cursor.replaceAll("-", "+").replaceAll("_", "/"));
+    name = bytes && utf8.decode(bytes);
   } catch {
     name = undefined;
   }
-  if (name === undefined || !valid(name))
-    throw new OperationError(422, "invalid_cursor", "The cursor is not one this API returned.");
+  if (name === undefined || !valid(name)) throw invalidCursor();
   return name;
+}
+
+export function invalidCursor(): OperationError {
+  return new OperationError(422, "invalid_cursor", "The cursor is not one this API returned.");
 }

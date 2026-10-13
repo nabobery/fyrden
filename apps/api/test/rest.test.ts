@@ -1,5 +1,5 @@
 import { exports } from "cloudflare:workers";
-import { registry } from "@fyrden/api-contract";
+import { openApiPath, registry } from "@fyrden/api-contract";
 import { describe, expect, it } from "vitest";
 
 describe("REST surface", () => {
@@ -13,7 +13,8 @@ describe("REST surface", () => {
     }>();
     expect(doc.openapi).toBe("3.1.1");
     expect(doc.servers[0]?.url).toBe("https://fyrden.test/api");
-    for (const op of registry) expect(doc.paths[op.path]).toHaveProperty(op.method.toLowerCase());
+    for (const op of registry)
+      expect(doc.paths[openApiPath(op.path)]).toHaveProperty(op.method.toLowerCase());
   });
 
   it("mounts every operation and requires authentication", async () => {

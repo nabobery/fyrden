@@ -36,6 +36,7 @@ export default defineConfig(async () => {
         "./test/setup/push-fixtures.ts",
         "./test/setup/chunked-import-fixtures.ts",
         "./test/setup/gc-fixtures.ts",
+        "./test/setup/browse-fixtures.ts",
       ],
       // Most tests here drive a sequence of Durable Object round trips (often
       // with git fixtures and repacks); about twenty files have tests that take

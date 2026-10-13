@@ -25,6 +25,14 @@ import {
 } from "../git/chunked/operations.js";
 import { getRepoImport, startImport } from "../git/import/operations.js";
 import { forkRepoOperation } from "../network/operations.js";
+import {
+  compareCommitsOperation,
+  getBranchOperation,
+  getCommitOperation,
+  listBranchesOperation,
+  listCommitsOperation,
+  listTagsOperation,
+} from "../repos/browse.js";
 import { createRepository } from "../repos/create.js";
 import { deleteRepoOperation, deleteReposOperation } from "../repos/delete.js";
 import { authorize, defaultBranchOf, resolveRepo } from "../repos/directory.js";
@@ -156,6 +164,14 @@ export const handlers: Handlers = {
 
   // Forks share the parent's packs in its fork network (network/).
   "repos.fork": forkRepoOperation,
+
+  // Branches, tags, commits and comparisons (repos/browse).
+  "repos.branches.list": listBranchesOperation,
+  "repos.branches.get": getBranchOperation,
+  "repos.tags.list": listTagsOperation,
+  "repos.commits.list": listCommitsOperation,
+  "repos.commits.get": getCommitOperation,
+  "repos.compare": compareCommitsOperation,
 
   // Chunked pack uploads and server-side import (git/chunked, git/import).
   "uploads.create": createUploadSession,

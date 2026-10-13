@@ -71,6 +71,16 @@ import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
 import type { AclSnapshot } from "./OrgDO.js";
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
+import {
+  type Browsed,
+  type CommitView,
+  type CompareView,
+  type LogInput,
+  type LogView,
+  type RefView,
+  RepoBrowse,
+  type TagPage,
+} from "./repo/browse.js";
 import { type EraseOutcome, eraseRepository, recordNetwork } from "./repo/erase.js";
 import {
   REPO_DELETED,
@@ -403,6 +413,45 @@ export class RepoDO extends MigratingDO {
     return this.#measured("objectAccess", () =>
       checkObjectAccess({ git: this.git, memoryBlocks }, request),
     );
+  }
+
+  /** One browse request, its reader released when it ends. */
+  #browse<R>(method: string, use: (browse: RepoBrowse) => R | Promise<R>): Promise<R> {
+    this.#blocks ??= createClockBlockCache();
+    const browse = new RepoBrowse({ git: this.git, memoryBlocks: this.#blocks });
+    return this.#measured(method, async () => {
+      try {
+        return await use(browse);
+      } finally {
+        browse.close();
+      }
+    });
+  }
+
+  /** The repository's branches after `after`, by name. */
+  browseBranches(after: string, limit: number): Promise<RefView[]> {
+    return this.#browse("browseBranches", (b) => b.branches(after, limit));
+  }
+
+  browseBranch(name: string): Promise<Browsed<RefView>> {
+    return this.#browse("browseBranch", (b) => b.branch(name));
+  }
+
+  /** The repository's tags after `after`, by name, peeled to commits. */
+  browseTags(after: string, limit: number): Promise<Browsed<TagPage>> {
+    return this.#browse("browseTags", (b) => b.tags(after, limit));
+  }
+
+  browseCommit(ref: string | undefined): Promise<Browsed<CommitView>> {
+    return this.#browse("browseCommit", (b) => b.commit(ref));
+  }
+
+  browseLog(input: LogInput): Promise<Browsed<LogView>> {
+    return this.#browse("browseLog", (b) => b.log(input));
+  }
+
+  browseCompare(base: string, head: string): Promise<Browsed<CompareView>> {
+    return this.#browse("browseCompare", (b) => b.compare(base, head));
   }
 
   /** Extends a fetch's read lease while its response streams; null once it has expired. */

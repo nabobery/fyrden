@@ -75,7 +75,8 @@ export function mountRest(app: Hono<{ Bindings: Env; Variables: AuthVariables }>
   );
 
   for (const op of registry as readonly OperationDef[]) {
-    const path = API_PREFIX + op.path.replace(/\{([a-z_]+)\}/g, ":$1");
+    const path =
+      API_PREFIX + op.path.replace(/\{([a-z_]+)\+\}/g, ":$1{.+}").replace(/\{([a-z_]+)\}/g, ":$1");
     app.on(op.method, path, requireAuth("by-method"), async (c) => {
       const read = await readInput(c, op);
       if (!read.ok) return problem(c, read.status, read.code, read.detail);

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type OperationDef, pathParams, type Registry } from "./op.js";
+import { type OperationDef, openApiPath, pathParams, type Registry } from "./op.js";
 import { Problem } from "./problem.js";
 
 type JsonSchema = Record<string, unknown>;
@@ -75,9 +75,10 @@ export function openApiDocument(
 ): JsonSchema {
   const paths: Record<string, Record<string, JsonSchema>> = {};
   for (const op of registry) {
-    const item = paths[op.path] ?? {};
+    const path = openApiPath(op.path);
+    const item = paths[path] ?? {};
     item[op.method.toLowerCase()] = operationObject(op);
-    paths[op.path] = item;
+    paths[path] = item;
   }
   return {
     openapi: "3.1.1",

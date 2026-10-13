@@ -16,7 +16,7 @@ import { type EntryHead, readEntry, readEntryHead, readEntryHeader } from "./ent
 import { MissingObjectError } from "./errors.js";
 import { SequentialPackReader } from "./range-planner.js";
 import { createReadStats, type ReadStats } from "./stats.js";
-import { checkView, type RepoView } from "./view.js";
+import { checkView, type RepoView, type ViewPack } from "./view.js";
 
 /**
  * Most bytes of entry reads kept while a delta chain is followed (so each
@@ -106,6 +106,8 @@ export class ObjectReader {
   readonly #blocks: BlockReader;
   readonly #cache: DeltaBaseCache;
   readonly #reservation: MemoryReservation;
+  /** Where `prefetch` found objects, by hex oid (undefined: in no pack of the view). */
+  readonly #located = new Map<string, Location | undefined>();
   #released = false;
 
   private constructor(
@@ -153,6 +155,41 @@ export class ObjectReader {
   async has(oid: Uint8Array): Promise<boolean> {
     this.#checkOpen();
     return (await this.#locate(oid)) !== undefined;
+  }
+
+  /**
+   * Finds where `oids` are with each pack's batched `.idx` lookup (a few
+   * coalesced reads per pack instead of a few per object), so the reads
+   * that follow for them skip their own lookups. Packs without a batched
+   * lookup are left to the per-object path.
+   */
+  async prefetch(oids: Iterable<Uint8Array>): Promise<void> {
+    this.#checkOpen();
+    let pending = [...oids].filter((oid) => !this.#located.has(oidHex(oid)));
+    // Any pack holding an object gives the same object; only "in no pack"
+    // needs every pack asked.
+    let everyPack = true;
+    for (let index = 0; index < this.#view.packs.length && pending.length > 0; index++) {
+      const pack = this.#view.packs[index] as ViewPack;
+      if (!pack.idx.lookupMany) {
+        everyPack = false;
+        continue;
+      }
+      const candidates = pack.summary
+        ? pending.filter((o) => pack.summary?.mayContain(o))
+        : pending;
+      if (candidates.length === 0) continue;
+      const found = await pack.idx.lookupMany(candidates);
+      const hits = new Set<string>();
+      found.forEach((entry, i) => {
+        if (!entry) return;
+        const hex = oidHex(candidates[i] as Uint8Array);
+        hits.add(hex);
+        this.#located.set(hex, { pack: index, offset: entry.offset });
+      });
+      pending = pending.filter((oid) => !hits.has(oidHex(oid)));
+    }
+    if (everyPack) for (const oid of pending) this.#located.set(oidHex(oid), undefined);
   }
 
   /** The object, or undefined when no pack of the view holds it. Throws PackError for a bad pack. */
@@ -361,10 +398,14 @@ export class ObjectReader {
   async #locate(oid: Uint8Array, prefer?: number): Promise<Location | undefined> {
     if (oid.length !== OID_BYTES) throw new RangeError(`an oid has ${OID_BYTES} bytes`);
     const { packs } = this.#view;
+    // A delta's base is looked for in the delta's own pack first, whatever
+    // `prefetch` found: another pack's copy may be a longer delta chain.
     if (prefer !== undefined) {
       const found = await this.#lookupIn(prefer, oid);
       if (found) return found;
     }
+    const hex = this.#located.size > 0 ? oidHex(oid) : "";
+    if (this.#located.has(hex)) return this.#located.get(hex);
     for (let index = 0; index < packs.length; index++) {
       if (index === prefer) continue;
       const found = await this.#lookupIn(index, oid);
@@ -394,6 +435,12 @@ export class ObjectReader {
   #checkOpen(): void {
     if (this.#released) throw new Error("the object reader was released");
   }
+}
+
+function oidHex(oid: Uint8Array): string {
+  let hex = "";
+  for (const byte of oid) hex += byte.toString(16).padStart(2, "0");
+  return hex;
 }
 
 function tooDeep(limits: ReaderLimits, offset: number): PackError {

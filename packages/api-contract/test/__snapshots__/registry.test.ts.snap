@@ -1864,6 +1864,321 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/branches": {
+      "get": {
+        "description": "Lists a repository's branches by name, each with the commit it points to.",
+        "operationId": "repos.branches.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 8000,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "branches": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "commit": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "sha": {
+                                "description": "A full commit SHA (40 hex digits).",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "sha",
+                            ],
+                            "type": "object",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "protected": {
+                            "type": "boolean",
+                          },
+                        },
+                        "required": [
+                          "name",
+                          "commit",
+                          "protected",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                  },
+                  "required": [
+                    "branches",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List branches",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/branches/{branch}": {
+      "get": {
+        "description": "A branch and its latest commit. Branch names may contain slashes.",
+        "operationId": "repos.branches.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "branch",
+            "required": true,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "commit": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "commit": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "author": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "date": {
+                                  "description": "ISO 8601, UTC.",
+                                  "type": "string",
+                                },
+                                "email": {
+                                  "type": "string",
+                                },
+                                "name": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "name",
+                                "email",
+                                "date",
+                              ],
+                              "type": "object",
+                            },
+                            "committer": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "date": {
+                                  "description": "ISO 8601, UTC.",
+                                  "type": "string",
+                                },
+                                "email": {
+                                  "type": "string",
+                                },
+                                "name": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "name",
+                                "email",
+                                "date",
+                              ],
+                              "type": "object",
+                            },
+                            "message": {
+                              "type": "string",
+                            },
+                            "tree": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "sha": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "sha",
+                              ],
+                              "type": "object",
+                            },
+                          },
+                          "required": [
+                            "message",
+                            "author",
+                            "committer",
+                            "tree",
+                          ],
+                          "type": "object",
+                        },
+                        "parents": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "sha": {
+                                "description": "A full commit SHA (40 hex digits).",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "sha",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
+                        "sha": {
+                          "description": "A full commit SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "sha",
+                        "commit",
+                        "parents",
+                      ],
+                      "type": "object",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "protected": {
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "name",
+                    "commit",
+                    "protected",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a branch",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/repos/{owner}/{repo}/collaborators": {
       "get": {
         "description": "Lists the users given a role on this repository directly, by handle (owners, organization members and teams are not listed).",
@@ -2201,6 +2516,815 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "agent",
         ],
         "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/commits": {
+      "get": {
+        "description": "The history from a branch, tag or commit (the default branch without \`sha\`), newest first, as \`git log\` lists it (unless commit dates go backwards: the order is by corrected commit date); with \`path\`, only commits that change that file or directory. A page can hold fewer commits than \`per_page\` and still have a next one.",
+        "operationId": "repos.commits.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "sha",
+            "required": false,
+            "schema": {
+              "description": "Where the history starts: a branch, tag or commit SHA.",
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "description": "Only commits changing this path.",
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 8000,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "commits": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "commit": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "author": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "date": {
+                                    "description": "ISO 8601, UTC.",
+                                    "type": "string",
+                                  },
+                                  "email": {
+                                    "type": "string",
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "name",
+                                  "email",
+                                  "date",
+                                ],
+                                "type": "object",
+                              },
+                              "committer": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "date": {
+                                    "description": "ISO 8601, UTC.",
+                                    "type": "string",
+                                  },
+                                  "email": {
+                                    "type": "string",
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "name",
+                                  "email",
+                                  "date",
+                                ],
+                                "type": "object",
+                              },
+                              "message": {
+                                "type": "string",
+                              },
+                              "tree": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "sha": {
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "sha",
+                                ],
+                                "type": "object",
+                              },
+                            },
+                            "required": [
+                              "message",
+                              "author",
+                              "committer",
+                              "tree",
+                            ],
+                            "type": "object",
+                          },
+                          "parents": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "sha": {
+                                  "description": "A full commit SHA (40 hex digits).",
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "sha",
+                              ],
+                              "type": "object",
+                            },
+                            "type": "array",
+                          },
+                          "sha": {
+                            "description": "A full commit SHA (40 hex digits).",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "sha",
+                          "commit",
+                          "parents",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                  },
+                  "required": [
+                    "commits",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List commits",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/commits/{ref}": {
+      "get": {
+        "description": "One commit, named by its SHA or by a branch or tag.",
+        "operationId": "repos.commits.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "A branch, a tag, a full ref name (\`refs/...\`) or a full commit SHA.",
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "commit": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "author": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "date": {
+                              "description": "ISO 8601, UTC.",
+                              "type": "string",
+                            },
+                            "email": {
+                              "type": "string",
+                            },
+                            "name": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "name",
+                            "email",
+                            "date",
+                          ],
+                          "type": "object",
+                        },
+                        "committer": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "date": {
+                              "description": "ISO 8601, UTC.",
+                              "type": "string",
+                            },
+                            "email": {
+                              "type": "string",
+                            },
+                            "name": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "name",
+                            "email",
+                            "date",
+                          ],
+                          "type": "object",
+                        },
+                        "message": {
+                          "type": "string",
+                        },
+                        "tree": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "sha": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "sha",
+                          ],
+                          "type": "object",
+                        },
+                      },
+                      "required": [
+                        "message",
+                        "author",
+                        "committer",
+                        "tree",
+                      ],
+                      "type": "object",
+                    },
+                    "parents": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "sha": {
+                            "description": "A full commit SHA (40 hex digits).",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "sha",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "sha": {
+                      "description": "A full commit SHA (40 hex digits).",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "sha",
+                    "commit",
+                    "parents",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a commit",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/compare/{basehead}": {
+      "get": {
+        "description": "Compares \`base...head\` (branches, tags or SHAs): how far head is ahead of and behind base, their merge base, and the commits in head and not in base, oldest first (the newest 100). File differences are not included.",
+        "operationId": "repos.compare",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "basehead",
+            "required": true,
+            "schema": {
+              "description": "\`base...head\`.",
+              "maxLength": 2051,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ahead_by": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "base_commit": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "commit": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "author": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "date": {
+                                  "description": "ISO 8601, UTC.",
+                                  "type": "string",
+                                },
+                                "email": {
+                                  "type": "string",
+                                },
+                                "name": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "name",
+                                "email",
+                                "date",
+                              ],
+                              "type": "object",
+                            },
+                            "committer": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "date": {
+                                  "description": "ISO 8601, UTC.",
+                                  "type": "string",
+                                },
+                                "email": {
+                                  "type": "string",
+                                },
+                                "name": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "name",
+                                "email",
+                                "date",
+                              ],
+                              "type": "object",
+                            },
+                            "message": {
+                              "type": "string",
+                            },
+                            "tree": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "sha": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "sha",
+                              ],
+                              "type": "object",
+                            },
+                          },
+                          "required": [
+                            "message",
+                            "author",
+                            "committer",
+                            "tree",
+                          ],
+                          "type": "object",
+                        },
+                        "parents": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "sha": {
+                                "description": "A full commit SHA (40 hex digits).",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "sha",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
+                        "sha": {
+                          "description": "A full commit SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "sha",
+                        "commit",
+                        "parents",
+                      ],
+                      "type": "object",
+                    },
+                    "behind_by": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "commits": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "commit": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "author": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "date": {
+                                    "description": "ISO 8601, UTC.",
+                                    "type": "string",
+                                  },
+                                  "email": {
+                                    "type": "string",
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "name",
+                                  "email",
+                                  "date",
+                                ],
+                                "type": "object",
+                              },
+                              "committer": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "date": {
+                                    "description": "ISO 8601, UTC.",
+                                    "type": "string",
+                                  },
+                                  "email": {
+                                    "type": "string",
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "name",
+                                  "email",
+                                  "date",
+                                ],
+                                "type": "object",
+                              },
+                              "message": {
+                                "type": "string",
+                              },
+                              "tree": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "sha": {
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "sha",
+                                ],
+                                "type": "object",
+                              },
+                            },
+                            "required": [
+                              "message",
+                              "author",
+                              "committer",
+                              "tree",
+                            ],
+                            "type": "object",
+                          },
+                          "parents": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "sha": {
+                                  "description": "A full commit SHA (40 hex digits).",
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "sha",
+                              ],
+                              "type": "object",
+                            },
+                            "type": "array",
+                          },
+                          "sha": {
+                            "description": "A full commit SHA (40 hex digits).",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "sha",
+                          "commit",
+                          "parents",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "merge_base_commit": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "commit": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "author": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "date": {
+                                      "description": "ISO 8601, UTC.",
+                                      "type": "string",
+                                    },
+                                    "email": {
+                                      "type": "string",
+                                    },
+                                    "name": {
+                                      "type": "string",
+                                    },
+                                  },
+                                  "required": [
+                                    "name",
+                                    "email",
+                                    "date",
+                                  ],
+                                  "type": "object",
+                                },
+                                "committer": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "date": {
+                                      "description": "ISO 8601, UTC.",
+                                      "type": "string",
+                                    },
+                                    "email": {
+                                      "type": "string",
+                                    },
+                                    "name": {
+                                      "type": "string",
+                                    },
+                                  },
+                                  "required": [
+                                    "name",
+                                    "email",
+                                    "date",
+                                  ],
+                                  "type": "object",
+                                },
+                                "message": {
+                                  "type": "string",
+                                },
+                                "tree": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "sha": {
+                                      "type": "string",
+                                    },
+                                  },
+                                  "required": [
+                                    "sha",
+                                  ],
+                                  "type": "object",
+                                },
+                              },
+                              "required": [
+                                "message",
+                                "author",
+                                "committer",
+                                "tree",
+                              ],
+                              "type": "object",
+                            },
+                            "parents": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "sha": {
+                                    "description": "A full commit SHA (40 hex digits).",
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "sha",
+                                ],
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "sha": {
+                              "description": "A full commit SHA (40 hex digits).",
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "sha",
+                            "commit",
+                            "parents",
+                          ],
+                          "type": "object",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "status": {
+                      "enum": [
+                        "identical",
+                        "ahead",
+                        "behind",
+                        "diverged",
+                      ],
+                      "type": "string",
+                    },
+                    "total_commits": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "status",
+                    "ahead_by",
+                    "behind_by",
+                    "total_commits",
+                    "base_commit",
+                    "merge_base_commit",
+                    "commits",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Compare two commits",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
       },
     },
     "/repos/{owner}/{repo}/forks": {
@@ -2633,6 +3757,132 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "agent",
         ],
         "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/tags": {
+      "get": {
+        "description": "Lists a repository's tags by name, each with the commit it points to (annotated tags are peeled; tags of other objects are not listed).",
+        "operationId": "repos.tags.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 8000,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "tags": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "commit": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "sha": {
+                                "description": "A full commit SHA (40 hex digits).",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "sha",
+                            ],
+                            "type": "object",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "name",
+                          "commit",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "tags",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List tags",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
       },
     },
     "/repos/{owner}/{repo}/uploads": {

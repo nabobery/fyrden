@@ -270,6 +270,7 @@ export {
   type V2Advertised,
   type V2CommandRequest,
 } from "./protocol/v2-command.js";
+export { type LogPage, type LogPageOptions, logPage, type PathEntryLookup } from "./read/log.js";
 export {
   type CachedObject,
   DELTA_BASE_ENTRY_OVERHEAD,

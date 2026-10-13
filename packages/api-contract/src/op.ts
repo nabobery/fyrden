@@ -27,7 +27,11 @@ export interface OperationDef<
   /** Stable id, `<area>.<verb>`; kept as a literal type so handler maps can require every id. */
   id: Id;
   method: HttpMethod;
-  /** OpenAPI-style path under /api, e.g. `/repos/{owner}/{repo}`. */
+  /**
+   * OpenAPI-style path under /api, e.g. `/repos/{owner}/{repo}`. The last
+   * parameter may be greedy, `{path+}`: it takes the rest of the path,
+   * slashes included (a file path, a branch name).
+   */
   path: string;
   summary: string;
   description?: string;
@@ -60,10 +64,15 @@ export class RegistryError extends Error {
 
 const ID = /^[a-z][a-z0-9]*(\.[a-z][a-z0-9_]*)+$/;
 const TOOL = /^[a-z][a-z0-9_]{0,63}$/;
-const PATH = /^(\/([a-z0-9-]+|\{[a-z_]+\}))+$/;
+const PATH = /^(\/([a-z0-9-]+|\{[a-z_]+\}))*(\/\{[a-z_]+\+\})?$/;
 
 export function pathParams(path: string): string[] {
-  return [...path.matchAll(/\{([a-z_]+)\}/g)].map((m) => m[1] as string);
+  return [...path.matchAll(/\{([a-z_]+)\+?\}/g)].map((m) => m[1] as string);
+}
+
+/** The path as OpenAPI writes it: a greedy `{path+}` is `{path}`. */
+export function openApiPath(path: string): string {
+  return path.replace(/\{([a-z_]+)\+\}/g, "{$1}");
 }
 
 function validate(def: OperationDef): void {
@@ -71,7 +80,7 @@ function validate(def: OperationDef): void {
     throw new RegistryError(`operation ${def.id || "<unnamed>"}: ${reason}`);
   };
   if (!ID.test(def.id)) fail("id must look like area.verb");
-  if (!PATH.test(def.path)) fail(`path ${def.path} is not a valid template`);
+  if (!def.path || !PATH.test(def.path)) fail(`path ${def.path} is not a valid template`);
   if (!def.permission.trim()) fail("a permission is required");
   if (def.principals.length === 0) fail("at least one principal type is required");
   for (const p of def.principals)
@@ -120,7 +129,7 @@ export function defineRegistry<R extends readonly OperationDef[]>(ops: R): R {
     validate(op);
     unique(`id:${op.id}`, `operation id ${op.id}`);
     unique(
-      `route:${op.method} ${op.path.replace(/\{[a-z_]+\}/g, "{}")}`,
+      `route:${op.method} ${op.path.replace(/\{[a-z_]+\}/g, "{}").replace(/\{[a-z_]+\+\}/g, "{+}")}`,
       `route ${op.method} ${op.path}`,
     );
     if (op.mcp) unique(`tool:${op.mcp.tool}`, `MCP tool ${op.mcp.tool}`);

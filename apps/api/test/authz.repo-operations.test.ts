@@ -32,6 +32,13 @@ const CASES: Record<
   "repos.collaborators.list": { input: {}, expected: { status: 200 } },
   // Deletes a repository of its own, not the one the other cases use.
   "repos.delete": { input: {}, expected: { status: 200 }, ownRepo: true },
+  // The repository is empty: listings answer, a named ref is not found.
+  "repos.branches.list": { input: {}, expected: { status: 200 } },
+  "repos.branches.get": { input: {}, expected: { status: 404, code: "branch_not_found" } },
+  "repos.tags.list": { input: {}, expected: { status: 200 } },
+  "repos.commits.list": { input: {}, expected: { status: 409, code: "repo_empty" } },
+  "repos.commits.get": { input: {}, expected: { status: 404, code: "ref_not_found" } },
+  "repos.compare": { input: {}, expected: { status: 404, code: "ref_not_found" } },
   "uploads.create": {
     input: { size: 32, ref_updates: [{ ref: "refs/heads/main", old: null, new: SHA }] },
     expected: { status: 201 },
@@ -71,7 +78,10 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{owner}", handle)
     .replace("{repo}", name)
     .replace("{upload_id}", UPLOAD_ID)
-    .replace("{username}", handle);
+    .replace("{username}", handle)
+    .replace("{branch+}", "main")
+    .replace("{ref+}", "main")
+    .replace("{basehead+}", "main...main");
   const input = CASES[op.id]?.input ?? {};
   const get = op.method === "GET";
   return exports.default.fetch(`${ORIGIN}/api${path}`, {

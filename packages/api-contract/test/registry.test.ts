@@ -8,6 +8,8 @@ import {
   defineOperation,
   defineRegistry,
   type OperationDef,
+  openApiPath,
+  pathParams,
   RegistryError,
 } from "../src/op.js";
 import { openApiDocument } from "../src/openapi.js";
@@ -47,6 +49,12 @@ describe("defineOperation", () => {
     ["unknown principal type", { principals: ["robot"] }, /unknown principal/],
     ["bad id", { id: "GetRepo" }, /id must/],
     ["bad path", { path: "repos/x" }, /not a valid template/],
+    [
+      "a greedy parameter before the end",
+      { path: "/repos/{owner+}/{repo}" },
+      /not a valid template/,
+    ],
+    ["an empty path", { path: "" }, /not a valid template/],
     ["path param missing from input", { path: "/repos/{owner}/{name}" }, /\{name\} missing/],
     ["GET with an idempotency key", { idempotency: "key" }, /naturally idempotent/],
     [
@@ -59,6 +67,14 @@ describe("defineOperation", () => {
     ["GET answering 201", { successStatus: 201 }, /cannot answer 201/],
   ])("rejects %s", (_, change, message) => {
     expect(() => defineOperation({ ...base, ...change } as OperationDef)).toThrow(message);
+  });
+});
+
+describe("greedy path parameters", () => {
+  it("take the rest of the path as their last parameter, written plainly in OpenAPI", () => {
+    const op = defineOperation({ ...base, path: "/repos/{owner}/{repo+}" } as OperationDef);
+    expect(pathParams(op.path)).toEqual(["owner", "repo"]);
+    expect(openApiPath(op.path)).toBe("/repos/{owner}/{repo}");
   });
 });
 
