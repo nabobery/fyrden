@@ -116,6 +116,16 @@ describe("fyrden deploy", () => {
     expect(lines.join("\n")).not.toContain("from-ci");
   });
 
+  it("says so when a preset secret is not uploaded because one is already set", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    const { d, lines } = deps(fake.runner, { presetBootstrapSecret: "from-ci" });
+    await deploy(d);
+    expect(fake.state.secrets.get("BOOTSTRAP_SECRET")).toBe("s3cret-value");
+    expect(lines.join("\n")).toContain("already has a BOOTSTRAP_SECRET");
+    expect(lines.join("\n")).not.toContain("from-ci");
+  });
+
   it("fails without deploying when no secret is preset and generating one is disabled (CI)", async () => {
     const fake = fakeWrangler();
     const { d, generated, lines } = deps(fake.runner, { randomSecret: undefined });

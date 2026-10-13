@@ -160,6 +160,11 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
     const file = join(secretsDir, "secrets.json");
     await writeFile(file, JSON.stringify({ BOOTSTRAP_SECRET: secret }), { mode: 0o600 });
     deployArgs.push("--secrets-file", file);
+  } else if (deps.presetBootstrapSecret) {
+    // An earlier deploy set it: first-run setup needs that value, not this one.
+    log(
+      `${config.name} already has a BOOTSTRAP_SECRET; FYRDEN_BOOTSTRAP_SECRET was not uploaded (set it with wrangler secret put to replace it)`,
+    );
   }
   let apiUrl: string | undefined;
   try {
