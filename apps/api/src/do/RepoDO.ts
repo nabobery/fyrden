@@ -56,6 +56,12 @@ import type {
   ViewPack,
 } from "../network/types.js";
 import type { CompactSliceInput } from "../network/view-cap.js";
+import {
+  AUDIT_ARCHIVE_JOB,
+  AUDIT_ARCHIVE_POLICY,
+  auditArchiveHandler,
+  hasUnarchivedAuditRows,
+} from "./base/audit-archiver.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
 import { RepoEvents, type RepoIdentity } from "./repo/events.js";
@@ -122,7 +128,16 @@ export class RepoDO extends MigratingDO {
       scheduleAfterCommit(this.git, this.maintenance, nonFastForward);
       this.#recordStorage();
       this.#armOutbox();
+      this.#ensureAuditArchive();
     };
+  }
+
+  /** Queues the audit archiver while audit rows wait to be archived. */
+  #ensureAuditArchive(): void {
+    if (!hasUnarchivedAuditRows(this.ctx.storage)) return;
+    this.git.jobs.ensure("audit_archive", AUDIT_ARCHIVE_JOB, {
+      runAt: this.git.context.now() + AUDIT_ARCHIVE_POLICY.delayMs,
+    });
   }
 
   /**
@@ -450,6 +465,7 @@ export class RepoDO extends MigratingDO {
         await this.#drainOutbox();
         await this.#runJobs();
       } finally {
+        this.#ensureAuditArchive();
         this.#armOutbox();
       }
     });
@@ -479,6 +495,14 @@ export class RepoDO extends MigratingDO {
         index: this.#push().indexHandler(),
         compact: packCapCompactionHandler(this.git, () => this.packCap, this.#log()),
         import: this.#imports().handler(),
+        audit_archive: auditArchiveHandler({
+          storage: this.ctx.storage,
+          bucket: this.env.ASSETS,
+          now: this.git.context.now,
+          org: () => this.events.orgId() ?? "unknown",
+          source: () => this.#repoId(),
+          metrics: this.git.context.metrics,
+        }),
         reap_orphans: orphanReaperHandler(this.git, {
           sweepNetwork: () => soleNetworkMember(this.env, this.git.networkId(), this.#repoId()),
         }),

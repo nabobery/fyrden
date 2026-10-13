@@ -69,6 +69,15 @@ export class RepoEvents {
       );
   }
 
+  /** The organization (or account) the repository belongs to, or null before its creation is recorded. */
+  orgId(): string | null {
+    return (
+      this.#storage.sql
+        .exec<{ org_id: string }>("SELECT org_id FROM repo_meta WHERE id = 1")
+        .toArray()[0]?.org_id ?? null
+    );
+  }
+
   /**
    * Throws if the repository was created with another identity; call it
    * before any other write of a creation, so a mistaken call changes

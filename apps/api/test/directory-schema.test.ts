@@ -23,6 +23,7 @@ describe("D1 directory schema", () => {
     ).all<{ name: string }>();
     expect(results.map((r) => r.name)).toEqual([
       "audit_log",
+      "audit_segments",
       "memberships",
       "principals",
       "repo_deletions",

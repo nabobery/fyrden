@@ -1,3 +1,9 @@
+CREATE INDEX audit_log_archived ON audit_log (archived_at) WHERE archived_at IS NOT NULL;
+CREATE INDEX audit_log_unarchived ON audit_log (seq) WHERE archived_at IS NULL;
+CREATE INDEX audit_segments_archived ON audit_segments (archived_at) WHERE state = 'archived';
+CREATE INDEX audit_segments_from ON audit_segments (from_seq);
+CREATE INDEX audit_segments_pending ON audit_segments (from_seq) WHERE state = 'pending';
+CREATE INDEX audit_segments_to ON audit_segments (to_seq);
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
 CREATE INDEX leases_pack ON leases (pack_id, expires_at);
 CREATE INDEX packs_state ON packs (state, created_at);
@@ -20,6 +26,16 @@ CREATE TABLE audit_log (
         result TEXT NOT NULL,
         details TEXT CHECK (details IS NULL OR json_valid(details)),
         request_id TEXT,
+        archived_at INTEGER
+      ) STRICT;
+CREATE TABLE audit_segments (
+        segment_id INTEGER PRIMARY KEY,
+        epoch_gen INTEGER NOT NULL,
+        from_seq INTEGER NOT NULL,
+        to_seq INTEGER NOT NULL CHECK (to_seq >= from_seq),
+        r2_key TEXT NOT NULL UNIQUE,
+        state TEXT NOT NULL CHECK (state IN ('pending', 'archived')),
+        created_at INTEGER NOT NULL,
         archived_at INTEGER
       ) STRICT;
 CREATE TABLE commits (
