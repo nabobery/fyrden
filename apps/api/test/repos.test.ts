@@ -44,6 +44,8 @@ describe("repos.create", () => {
       visibility: "private",
       description: null,
       default_branch: "main",
+      fork: false,
+      parent_id: null,
       created_at: expect.any(Number),
     });
 

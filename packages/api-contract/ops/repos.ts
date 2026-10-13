@@ -24,6 +24,8 @@ export const Repo = z.object({
   visibility: z.enum(["public", "internal", "private"]),
   description: z.string().nullable(),
   default_branch: z.string(),
+  fork: z.boolean().describe("Whether the repository was forked from another."),
+  parent_id: z.string().nullable().describe("The id of the repository it was forked from."),
   created_at: z.number().int().describe("Unix time in milliseconds."),
 });
 
@@ -222,6 +224,32 @@ export const deleteRepos = defineOperation({
     title: "Delete several repositories",
     description: "Delete up to 100 of your repositories by name in one call.",
     readOnly: false,
+  },
+});
+
+export const listForks = defineOperation({
+  id: "repos.forks.list",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/forks",
+  summary: "List forks",
+  description:
+    "Lists the forks of a repository that the caller owns, oldest first. Forks owned by other accounts are not listed.",
+  input: z.object({
+    owner: z.string().regex(HANDLE_PATTERN).describe("The repository's owner handle."),
+    repo: RepoName.describe("The repository's name."),
+    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+    cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
+  }),
+  output: RepoList,
+  permission: "metadata:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "list_forks",
+    title: "List forks",
+    description: "List your forks of a repository.",
+    readOnly: true,
   },
 });
 

@@ -733,6 +733,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "fork": {
+                            "description": "Whether the repository was forked from another.",
+                            "type": "boolean",
+                          },
                           "full_name": {
                             "description": "owner/name",
                             "type": "string",
@@ -747,6 +751,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "owner": {
                             "description": "The owner's handle.",
                             "type": "string",
+                          },
+                          "parent_id": {
+                            "description": "The id of the repository it was forked from.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
                           },
                           "visibility": {
                             "enum": [
@@ -765,6 +776,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "visibility",
                           "description",
                           "default_branch",
+                          "fork",
+                          "parent_id",
                           "created_at",
                         ],
                         "type": "object",
@@ -862,6 +875,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "fork": {
+                      "description": "Whether the repository was forked from another.",
+                      "type": "boolean",
+                    },
                     "full_name": {
                       "description": "owner/name",
                       "type": "string",
@@ -876,6 +893,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "owner": {
                       "description": "The owner's handle.",
                       "type": "string",
+                    },
+                    "parent_id": {
+                      "description": "The id of the repository it was forked from.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
                     },
                     "visibility": {
                       "enum": [
@@ -894,6 +918,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "visibility",
                     "description",
                     "default_branch",
+                    "fork",
+                    "parent_id",
                     "created_at",
                   ],
                   "type": "object",
@@ -1653,6 +1679,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "fork": {
+                      "description": "Whether the repository was forked from another.",
+                      "type": "boolean",
+                    },
                     "full_name": {
                       "description": "owner/name",
                       "type": "string",
@@ -1667,6 +1697,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "owner": {
                       "description": "The owner's handle.",
                       "type": "string",
+                    },
+                    "parent_id": {
+                      "description": "The id of the repository it was forked from.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
                     },
                     "visibility": {
                       "enum": [
@@ -1685,6 +1722,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "visibility",
                     "description",
                     "default_branch",
+                    "fork",
+                    "parent_id",
                     "created_at",
                   ],
                   "type": "object",
@@ -1799,6 +1838,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "fork": {
+                      "description": "Whether the repository was forked from another.",
+                      "type": "boolean",
+                    },
                     "full_name": {
                       "description": "owner/name",
                       "type": "string",
@@ -1813,6 +1856,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "owner": {
                       "description": "The owner's handle.",
                       "type": "string",
+                    },
+                    "parent_id": {
+                      "description": "The id of the repository it was forked from.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
                     },
                     "visibility": {
                       "enum": [
@@ -1831,6 +1881,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "visibility",
                     "description",
                     "default_branch",
+                    "fork",
+                    "parent_id",
                     "created_at",
                   ],
                   "type": "object",
@@ -4833,6 +4885,171 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
       },
     },
     "/repos/{owner}/{repo}/forks": {
+      "get": {
+        "description": "Lists the forks of a repository that the caller owns, oldest first. Forks owned by other accounts are not listed.",
+        "operationId": "repos.forks.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The repository's owner handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "repos": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "default_branch": {
+                            "type": "string",
+                          },
+                          "description": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "fork": {
+                            "description": "Whether the repository was forked from another.",
+                            "type": "boolean",
+                          },
+                          "full_name": {
+                            "description": "owner/name",
+                            "type": "string",
+                          },
+                          "id": {
+                            "description": "Immutable repository id (rep_ prefix).",
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "owner": {
+                            "description": "The owner's handle.",
+                            "type": "string",
+                          },
+                          "parent_id": {
+                            "description": "The id of the repository it was forked from.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "visibility": {
+                            "enum": [
+                              "public",
+                              "internal",
+                              "private",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "owner",
+                          "name",
+                          "full_name",
+                          "visibility",
+                          "description",
+                          "default_branch",
+                          "fork",
+                          "parent_id",
+                          "created_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "repos",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List forks",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
       "post": {
         "description": "Creates a fork of a repository the caller can read, owned by the caller, in the same fork network: it starts with the parent's branches, tags and default branch, and shares the parent's stored objects, so no data is copied. The fork can be cloned as soon as this returns. Answers 409 \`network_busy\` while the network's storage is being collected; retry after a few seconds.",
         "operationId": "repos.fork",
@@ -4898,6 +5115,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "fork": {
+                      "description": "Whether the repository was forked from another.",
+                      "type": "boolean",
+                    },
                     "full_name": {
                       "description": "owner/name",
                       "type": "string",
@@ -4912,6 +5133,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "owner": {
                       "description": "The owner's handle.",
                       "type": "string",
+                    },
+                    "parent_id": {
+                      "description": "The id of the repository it was forked from.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
                     },
                     "visibility": {
                       "enum": [
@@ -4930,6 +5158,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "visibility",
                     "description",
                     "default_branch",
+                    "fork",
+                    "parent_id",
                     "created_at",
                   ],
                   "type": "object",
@@ -6673,6 +6903,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "fork": {
+                            "description": "Whether the repository was forked from another.",
+                            "type": "boolean",
+                          },
                           "full_name": {
                             "description": "owner/name",
                             "type": "string",
@@ -6687,6 +6921,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "owner": {
                             "description": "The owner's handle.",
                             "type": "string",
+                          },
+                          "parent_id": {
+                            "description": "The id of the repository it was forked from.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
                           },
                           "visibility": {
                             "enum": [
@@ -6705,6 +6946,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "visibility",
                           "description",
                           "default_branch",
+                          "fork",
+                          "parent_id",
                           "created_at",
                         ],
                         "type": "object",
@@ -6790,6 +7033,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "fork": {
+                      "description": "Whether the repository was forked from another.",
+                      "type": "boolean",
+                    },
                     "full_name": {
                       "description": "owner/name",
                       "type": "string",
@@ -6804,6 +7051,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "owner": {
                       "description": "The owner's handle.",
                       "type": "string",
+                    },
+                    "parent_id": {
+                      "description": "The id of the repository it was forked from.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
                     },
                     "visibility": {
                       "enum": [
@@ -6822,6 +7076,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "visibility",
                     "description",
                     "default_branch",
+                    "fork",
+                    "parent_id",
                     "created_at",
                   ],
                   "type": "object",

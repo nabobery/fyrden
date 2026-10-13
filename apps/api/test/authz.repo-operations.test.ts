@@ -44,6 +44,7 @@ const CASES: Record<
   "repos.readme.get": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.trees.get": { input: {}, expected: { status: 404, code: "ref_not_found" } },
   "repos.archives.get": { input: {}, expected: { status: 409, code: "repo_empty" } },
+  "repos.forks.list": { input: {}, expected: { status: 200 } },
   // Writes change their own repository: the first commit of an empty one.
   "repos.contents.put": {
     input: { message: "add", content: "aGk=" },

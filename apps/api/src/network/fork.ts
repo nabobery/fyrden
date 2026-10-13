@@ -180,8 +180,9 @@ export async function forkRepository(
     await env.DIRECTORY.batch([
       claimNameStatement(env.DIRECTORY, request.ownerId, request.name),
       env.DIRECTORY.prepare(
-        `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, parent_id,
+           created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         forkId,
         request.ownerId,
@@ -189,6 +190,7 @@ export async function forkRepository(
         networkId,
         DEFAULT_ORG_SHARD,
         parent.visibility,
+        parent.id,
         now,
         now,
       ),
@@ -225,6 +227,7 @@ export async function forkRepository(
       visibility: parent.visibility,
       createdAt: now,
       nameGen: 0,
+      parentId: parent.id,
     },
     defaultBranch: defaultBranchOf(exported.head),
     publishMs,

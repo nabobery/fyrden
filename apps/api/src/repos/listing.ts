@@ -5,12 +5,12 @@ import type { RepoRole } from "@fyrden/domain";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { allowedWithRole, defaultBranchOf, isValidRepoName, listOwnedRepos } from "./directory.js";
-import { repoOutput } from "./output.js";
+import { repoOutput, visibleParents } from "./output.js";
 
 type ProjectedDetails = { default_branch: string | null; description: string | null };
 
 /** The details the read model has for `ids` (a repository not projected yet is absent). */
-async function readModelDetails(
+export async function readModelDetails(
   env: Env,
   ids: readonly string[],
   metrics: Metrics,
@@ -37,7 +37,7 @@ async function readModelDetails(
  */
 export async function listAccountRepos(
   env: Env,
-  auth: Pick<TokenRecord, "principalId" | "principalType" | "scopes" | "repoIds">,
+  auth: TokenRecord,
   account: { readonly id: string; readonly role: RepoRole | null },
   page: { readonly perPage: number; readonly cursor: string | undefined },
   metrics: Metrics,
@@ -57,6 +57,7 @@ export async function listAccountRepos(
     visible.map((entry) => entry.id),
     metrics,
   );
+  const parents = await visibleParents(env, auth, visible, metrics);
   const last = visible.at(-1);
   return {
     repos: visible.map((entry) => {
@@ -64,6 +65,7 @@ export async function listAccountRepos(
       return repoOutput(entry, {
         defaultBranch: defaultBranchOf(details?.default_branch ?? null),
         description: details?.description ?? null,
+        parentVisible: parents.has(entry.parentId ?? ""),
       });
     }),
     next_cursor: scanned.length > page.perPage && last ? encodeCursor(last.name) : null,

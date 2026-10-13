@@ -24,7 +24,7 @@ import {
   getUploadSession,
 } from "../git/chunked/operations.js";
 import { getRepoImport, startImport } from "../git/import/operations.js";
-import { forkRepoOperation } from "../network/operations.js";
+import { forkRepoOperation, listForksOperation } from "../network/operations.js";
 import {
   compareCommitsOperation,
   getArchiveOperation,
@@ -47,7 +47,7 @@ import {
   putContentsOperation,
 } from "../repos/file-writes.js";
 import { listAccountRepos } from "../repos/listing.js";
-import { repoOutput } from "../repos/output.js";
+import { repoOutput, visibleParents } from "../repos/output.js";
 import { updateRepoOperation } from "../repos/update.js";
 import { clock, newId, tokenStore } from "../services.js";
 import { type Handlers, OperationError } from "./execute.js";
@@ -146,9 +146,11 @@ export const handlers: Handlers = {
     // HEAD is the repository object's (an import or a fork sets it from its source).
     metrics.count("do.request", { class: "RepoDO", method: "details" });
     const details = await env.REPO.getByName(entry.id).details();
+    const parents = await visibleParents(env, auth, [entry], metrics);
     return repoOutput(entry, {
       defaultBranch: defaultBranchOf(details.headTarget),
       description: details.description,
+      parentVisible: parents.has(entry.parentId ?? ""),
     });
   },
 
@@ -174,6 +176,7 @@ export const handlers: Handlers = {
 
   // Forks share the parent's packs in its fork network (network/).
   "repos.fork": forkRepoOperation,
+  "repos.forks.list": listForksOperation,
 
   // Branches, tags, commits and comparisons (repos/browse).
   "repos.branches.list": listBranchesOperation,

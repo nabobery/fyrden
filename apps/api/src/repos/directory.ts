@@ -28,6 +28,8 @@ export interface RepoEntry {
   readonly createdAt: number;
   /** How many times the repository was renamed. */
   readonly nameGen: number;
+  /** The repository it was forked from; null when it is not a fork. */
+  readonly parentId: string | null;
 }
 
 type Row = {
@@ -39,6 +41,7 @@ type Row = {
   visibility: RepoEntry["visibility"];
   created_at: number;
   name_gen: number;
+  parent_id: string | null;
 };
 
 // Found repositories, per isolate, for 30 s (the token cache's bound): a
@@ -80,13 +83,13 @@ export async function resolveRepo(
     return session
       .prepare(
         `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-           r.name_gen, 0 AS redirected
+           r.name_gen, r.parent_id, 0 AS redirected
          FROM principals p JOIN repos r ON r.owner_id = p.id
          WHERE p.handle = ?1 COLLATE NOCASE AND p.disabled_at IS NULL
            AND r.name = ?2 COLLATE NOCASE AND r.state <> 'deleted' AND r.state = 'active'
          UNION ALL
          SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-           r.name_gen, 1
+           r.name_gen, r.parent_id, 1
          FROM principals p JOIN repo_redirects d ON d.owner_id = p.id
            JOIN repos r ON r.id = d.repo_id AND r.owner_id = d.owner_id
          WHERE p.handle = ?1 COLLATE NOCASE AND p.disabled_at IS NULL
@@ -116,7 +119,72 @@ function entryOf(row: Row): RepoEntry {
     visibility: row.visibility,
     createdAt: row.created_at,
     nameGen: row.name_gen,
+    parentId: row.parent_id ?? null,
   };
+}
+
+/**
+ * The active forks of repository `parentId` that `ownerId` owns (and, when
+ * given, among `onlyIds`: a token's repository list), oldest first (by
+ * creation time, then id), the first `limit` after `after`, from the D1
+ * primary.
+ */
+export async function listOwnedForks(
+  env: Env,
+  parentId: string,
+  ownerId: string,
+  page: {
+    readonly after: { readonly createdAt: number; readonly id: string } | null;
+    readonly limit: number;
+    readonly onlyIds: readonly string[] | null;
+  },
+  metrics?: Metrics,
+): Promise<RepoEntry[]> {
+  metrics?.count("d1.query", { db: "directory", op: "repo_forks" });
+  const after = page.after ?? { createdAt: -1, id: "" };
+  const { results } = await env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
+         r.name_gen, r.parent_id
+       FROM repos r JOIN principals p ON p.id = r.owner_id
+       WHERE r.parent_id = ? AND r.owner_id = ? AND r.state = 'active'
+         AND p.disabled_at IS NULL
+         AND (r.created_at, r.id) > (?, ?)
+         AND (? IS NULL OR r.id IN (SELECT value FROM json_each(?)))
+       ORDER BY r.created_at, r.id LIMIT ?`,
+    )
+    .bind(
+      parentId,
+      ownerId,
+      after.createdAt,
+      after.id,
+      page.onlyIds === null ? null : 1,
+      JSON.stringify(page.onlyIds ?? []),
+      page.limit,
+    )
+    .all<Row>();
+  return results.map(entryOf);
+}
+
+/** The active repositories among `ids` (of enabled owners), in one query, from the D1 primary. */
+export async function findReposById(
+  env: Env,
+  ids: readonly string[],
+  metrics?: Metrics,
+): Promise<RepoEntry[]> {
+  if (ids.length === 0) return [];
+  metrics?.count("d1.query", { db: "directory", op: "repos_by_id" });
+  const { results } = await env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
+         r.name_gen, r.parent_id
+       FROM repos r JOIN principals p ON p.id = r.owner_id
+       WHERE r.id IN (SELECT value FROM json_each(?)) AND r.state = 'active'
+         AND p.disabled_at IS NULL`,
+    )
+    .bind(JSON.stringify(ids))
+    .all<Row>();
+  return results.map(entryOf);
 }
 
 /**
@@ -136,7 +204,7 @@ export async function listOwnedRepos(
     .prepare(
       // `state <> 'deleted'` lets the partial (owner_id, name) index serve the query.
       `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-         r.name_gen
+         r.name_gen, r.parent_id
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.owner_id = ?1 AND r.state <> 'deleted' AND r.state = 'active'
          AND r.name > ?2 COLLATE NOCASE
@@ -159,7 +227,7 @@ export async function findOwnedRepos(
   const { results } = await env.DIRECTORY.withSession("first-primary")
     .prepare(
       `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
-         r.name_gen
+         r.name_gen, r.parent_id
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.owner_id = ?1 AND r.state <> 'deleted' AND r.state = 'active'
          AND r.name COLLATE NOCASE IN (SELECT value FROM json_each(?2))`,

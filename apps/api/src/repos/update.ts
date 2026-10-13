@@ -2,7 +2,7 @@ import type { Input, Output, updateRepo } from "@fyrden/api-contract";
 import { repoFor } from "../git/chunked/operations.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { defaultBranchOf, renameRepo } from "./directory.js";
-import { repoOutput } from "./output.js";
+import { repoOutput, visibleParents } from "./output.js";
 
 const branchNotFound = (branch: string) =>
   new OperationError(422, "branch_not_found", `The repository has no branch ${branch}.`);
@@ -63,11 +63,13 @@ export async function updateRepoOperation(
       `No repository ${input.owner}/${input.repo} was found.`,
     );
   if (!result.ok) throw branchNotFound(input.default_branch ?? "");
+  const parents = await visibleParents(env, auth, [entry], metrics);
   return repoOutput(
     { ...entry, name: name.value, nameGen: name.gen },
     {
       defaultBranch: defaultBranchOf(result.details.headTarget),
       description: result.details.description,
+      parentVisible: parents.has(entry.parentId ?? ""),
     },
   );
 }

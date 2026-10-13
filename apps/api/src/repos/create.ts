@@ -91,6 +91,7 @@ export async function createRepository(
       visibility: "private",
       createdAt: now,
       nameGen: 0,
+      parentId: null,
     },
     { defaultBranch: INITIAL_BRANCH, description: null },
   );
