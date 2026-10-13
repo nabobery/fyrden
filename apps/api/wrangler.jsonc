@@ -69,9 +69,9 @@
     ]
   },
 
-  // Archives the directory's audit log to R2 (Proposed interval; Free allows
-  // a few cron triggers per account).
-  "triggers": { "crons": ["*/15 * * * *"] },
+  // Archives the directory's audit log to R2 and retries stuck effects
+  // (Proposed interval; Free allows a few cron triggers per account).
+  "triggers": { "crons": ["*/5 * * * *"] },
 
   // Cache only; never an authoritative store.
   "kv_namespaces": [{ "binding": "CACHE" }],

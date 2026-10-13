@@ -1,6 +1,9 @@
 import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { createApp } from "./app.js";
 import { archiveDirectoryAudit } from "./cron/directory-audit-archiver.js";
+import { sweepEffects } from "./effects/dispatcher.js";
+import { EFFECT_SINKS } from "./effects/sinks.js";
+import { DEFAULT_ORG_SHARD, readModelFor } from "./events/read-model.js";
 import { consumeEvents, EVENTS_QUEUE } from "./queues/events-consumer.js";
 
 export { NetworkDO } from "./do/NetworkDO.js";
@@ -27,20 +30,28 @@ export default {
   },
   async scheduled(_controller, env) {
     const metrics = createMetrics(env.METRICS);
-    await measureInvocation(metrics, { where: "worker", op: "cron audit" }, async () => {
-      try {
-        await archiveDirectoryAudit({
+    await measureInvocation(metrics, { where: "worker", op: "cron" }, async () => {
+      // Each task on its own: one failing does not stop the other.
+      const results = await Promise.allSettled([
+        archiveDirectoryAudit({
           db: env.DIRECTORY,
           bucket: env.ASSETS,
           now: () => Date.now(),
           metrics,
-        });
-      } catch (error) {
-        createLogger({ op: "cron.audit" }).error("archiving the directory audit log failed", {
-          error,
-        });
-        throw error;
-      }
+        }),
+        sweepEffects({
+          db: readModelFor(env, DEFAULT_ORG_SHARD),
+          env,
+          sinks: EFFECT_SINKS,
+          now: () => Date.now(),
+          log: createLogger({ op: "cron.effects" }),
+          metrics,
+        }),
+      ]);
+      const failed = results.filter((r) => r.status === "rejected");
+      for (const failure of failed)
+        createLogger({ op: "cron" }).error("a scheduled task failed", { error: failure.reason });
+      if (failed.length > 0) throw new Error(`${failed.length} scheduled task(s) failed`);
     });
   },
 } satisfies ExportedHandler<Env>;

@@ -10,6 +10,9 @@ import {
   REPO_ENTITY,
   type RepoRow,
 } from "@fyrden/domain";
+import { dispatchEffects } from "../effects/dispatcher.js";
+import { type EffectSink, effectStatements } from "../effects/journal.js";
+import { EFFECT_SINKS } from "../effects/sinks.js";
 import { readModelFor } from "../events/read-model.js";
 
 /** The queue repository outboxes send to. */
@@ -59,6 +62,8 @@ export type ApplyOutcome = "applied" | "dropped" | "unlisted";
 export interface ConsumerOptions {
   readonly now?: () => number;
   readonly metrics?: Metrics;
+  /** The effect sinks (default: the deployment's). */
+  readonly sinks?: readonly EffectSink[];
 }
 
 /**
@@ -138,17 +143,43 @@ export async function applyEnvelope(
   // comes with deletion).
   if (listed.state !== "active") return "dropped";
 
-  const snapshots = await resolveStored(env, sourceId, newestSnapshots(events));
+  const payloads = storedPayloads(env, sourceId);
+  const snapshots = await resolveStored(payloads, newestSnapshots(events));
   const db = readModelFor(env, listed.org_shard);
   // The newest epoch any event shows, projected or not: from then on, older
   // epochs are refused.
   const epochGen = Math.max(...events.map((e) => e.id.epochGen));
+  const sinks = options.sinks ?? EFFECT_SINKS;
+  // Sinks see every event whole (stored ones with their row and data).
+  const planned = sinks.length > 0 ? await hydrate(payloads, events) : events;
+  const effects = effectStatements(db, sinks, sourceId, planned, now);
   const statements = [
     epochStatement(db, sourceId, epochGen, now),
     ...snapshots.map((event) => repoStatement(db, sourceId, event, now)),
+    ...effects,
   ];
   options.metrics?.count("d1.query", { db: "org", op: "events_apply" }, statements.length);
-  await db.batch(statements);
+  const results = await db.batch<{ effect_id: string }>(statements);
+  // Only the effects this batch inserted: one already journaled keeps its own schedule.
+  const inserted = results
+    .slice(statements.length - effects.length)
+    .flatMap((result) => result.results.map((row) => row.effect_id));
+  // Journaled with the projection; what cannot be delivered now, the sweeper retries.
+  try {
+    await dispatchEffects(
+      {
+        db,
+        env,
+        sinks,
+        now: options.now ?? Date.now,
+        log: createLogger({ op: "effects.dispatch" }),
+        ...(options.metrics && { metrics: options.metrics }),
+      },
+      inserted,
+    );
+  } catch (error) {
+    createLogger({ op: "effects.dispatch" }).warn("dispatching effects failed", { error });
+  }
   return "applied";
 }
 
@@ -186,6 +217,26 @@ function newestSnapshots(events: readonly DomainEvent[]): Snapshot[] {
   return [...newest.values()];
 }
 
+/** A stored event's `{ row, data }` by event key, fetched once per envelope; null once gone. */
+type Payloads = (event: DomainEvent) => Promise<{ row?: unknown; data?: unknown } | null>;
+
+function storedPayloads(env: Env, sourceId: string): Payloads {
+  const fetched = new Map<string, Promise<{ row?: unknown; data?: unknown } | null>>();
+  return (event) => {
+    const key = eventKey(event.id);
+    let payload = fetched.get(key);
+    if (!payload) {
+      payload = env.REPO.getByName(sourceId)
+        .eventPayload(key)
+        .then((json) =>
+          json === null ? null : (JSON.parse(json) as { row?: unknown; data?: unknown }),
+        );
+      fetched.set(key, payload);
+    }
+    return payload;
+  };
+}
+
 /**
  * Fills in the rows of stored snapshots from the source. A payload already
  * gone (past its retention) leaves the entity to a later snapshot or a
@@ -193,8 +244,7 @@ function newestSnapshots(events: readonly DomainEvent[]): Snapshot[] {
  * fails the message.
  */
 async function resolveStored(
-  env: Env,
-  sourceId: string,
+  payloads: Payloads,
   snapshots: readonly Snapshot[],
 ): Promise<Snapshot[]> {
   const resolved: Snapshot[] = [];
@@ -203,12 +253,39 @@ async function resolveStored(
       resolved.push(event);
       continue;
     }
-    const payload = await env.REPO.getByName(sourceId).eventPayload(eventKey(event.id));
+    const payload = await payloads(event);
     if (payload === null) continue;
-    const { row } = JSON.parse(payload) as { row?: unknown };
-    resolved.push({ ...event, entity: { ...event.entity, row: row as Record<string, unknown> } });
+    resolved.push({
+      ...event,
+      entity: { ...event.entity, row: payload.row as Record<string, unknown> },
+    });
   }
   return resolved;
+}
+
+/**
+ * Stored events with their row and data put back, for the sinks; an event
+ * whose payload is gone stays as it travelled (`stored`, no data).
+ */
+async function hydrate(payloads: Payloads, events: readonly DomainEvent[]): Promise<DomainEvent[]> {
+  const whole: DomainEvent[] = [];
+  for (const event of events) {
+    const payload = event.stored ? await payloads(event) : null;
+    if (!payload) {
+      whole.push(event);
+      continue;
+    }
+    whole.push({
+      ...event,
+      stored: false,
+      entity: event.entity && {
+        ...event.entity,
+        row: (payload.row ?? null) as Record<string, unknown> | null,
+      },
+      data: (payload.data ?? null) as Record<string, unknown> | null,
+    });
+  }
+  return whole;
 }
 
 /**
