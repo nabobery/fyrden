@@ -1,6 +1,7 @@
 import type { completeUpload, createUpload, getUpload, Input, Output } from "@fyrden/api-contract";
+import { PERMISSIONS, type RepoPermission } from "@fyrden/domain";
 import { type OpContext, OperationError } from "../../ops/execute.js";
-import { canAccess, type RepoAccess, type RepoEntry, resolveRepo } from "../../repos/directory.js";
+import { canAccess, type RepoEntry, resolveRepo } from "../../repos/directory.js";
 import { reauthorizeWriter } from "../push/reauthorize.js";
 import { pushTuning } from "../push/tuning.js";
 import { type PushReportSummary, readPushReport, refUpdateProblem } from "./head.js";
@@ -20,13 +21,13 @@ export async function repoFor(
   ctx: OpContext,
   owner: string,
   repo: string,
-  access: RepoAccess,
+  permission: RepoPermission,
 ): Promise<RepoEntry> {
   const entry = await resolveRepo(ctx.env, owner, repo, {
-    consistency: access === "write" ? "primary" : "cached",
+    consistency: PERMISSIONS[permission].writes ? "primary" : "cached",
     metrics: ctx.metrics,
   });
-  if (!entry || !canAccess(ctx.auth, entry, access))
+  if (!entry || !canAccess(ctx.auth, entry, permission))
     throw new OperationError(404, "repo_not_found", `No repository ${owner}/${repo} was found.`);
   return entry;
 }
@@ -60,7 +61,7 @@ export async function createUploadSession(
   ctx: OpContext,
   input: Input<typeof createUpload>,
 ): Promise<Session> {
-  const repo = await repoFor(ctx, input.owner, input.repo, "write");
+  const repo = await repoFor(ctx, input.owner, input.repo, "contents:write");
   const tuning = chunkedTuning(ctx.env);
   if (input.size > tuning.maxUploadBytes)
     throw new OperationError(
@@ -87,13 +88,13 @@ export async function createUploadSession(
 }
 
 export async function getUploadSession(ctx: OpContext, input: SessionInput): Promise<Session> {
-  const repo = await repoFor(ctx, input.owner, input.repo, "read");
+  const repo = await repoFor(ctx, input.owner, input.repo, "contents:read");
   const stub = ctx.env.REPO.getByName(repo.id);
   return output(repo, unwrap(await stub.chunkedView(input.upload_id, ctx.auth.principalId)).view);
 }
 
 export async function abortUploadSession(ctx: OpContext, input: SessionInput): Promise<Session> {
-  const repo = await repoFor(ctx, input.owner, input.repo, "write");
+  const repo = await repoFor(ctx, input.owner, input.repo, "contents:write");
   const stub = ctx.env.REPO.getByName(repo.id);
   return output(repo, unwrap(await stub.abortChunked(input.upload_id, ctx.auth.principalId)).view);
 }
@@ -110,7 +111,7 @@ export async function completeUploadSession(
   ctx: OpContext,
   input: Input<typeof completeUpload>,
 ): Promise<Session> {
-  const repo = await repoFor(ctx, input.owner, input.repo, "write");
+  const repo = await repoFor(ctx, input.owner, input.repo, "contents:write");
   const stub = ctx.env.REPO.getByName(repo.id);
   const push = pushTuning(ctx.env);
   const deadline = Date.now() + chunkedTuning(ctx.env).completeWaitMs;

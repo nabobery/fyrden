@@ -61,7 +61,7 @@ describe("first-run bootstrap", () => {
       expect(await res.json()).toMatchObject({
         type: "user",
         is_instance_admin: true,
-        token: { type: "pat", scopes: ["admin"] },
+        token: { type: "pat", scopes: [] },
       });
     }
   });

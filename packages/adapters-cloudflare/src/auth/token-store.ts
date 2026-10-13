@@ -32,7 +32,41 @@ export type VerifyFailure =
   | "expired"
   | "revoked"
   | "disabled";
-export type VerifyResult = { ok: true; record: TokenRecord } | { ok: false; reason: VerifyFailure };
+export type VerifyResult =
+  | { ok: true; record: TokenRecord }
+  | {
+      ok: false;
+      reason: VerifyFailure;
+      /**
+       * For a token found expired on the D1 primary, what it holds now: a
+       * commit that started before the expiry is judged on it.
+       */
+      expiredRecord?: TokenRecord;
+    };
+
+/**
+ * A token's stored scopes and repository list (JSON columns), or undefined
+ * when either is not a list of strings: such a row grants nothing, rather
+ * than reading as "no scopes" (the principal's full rights).
+ */
+export function parseTokenRestrictions(
+  scopes: string,
+  repoIds: string | null,
+): { scopes: string[]; repoIds: string[] | null } | undefined {
+  const list = (json: string): string[] | undefined => {
+    let value: unknown;
+    try {
+      value = JSON.parse(json);
+    } catch {
+      return undefined;
+    }
+    return Array.isArray(value) && value.every((v) => typeof v === "string") ? value : undefined;
+  };
+  const parsedScopes = list(scopes);
+  const parsedRepoIds = repoIds === null ? null : list(repoIds);
+  if (parsedScopes === undefined || parsedRepoIds === undefined) return undefined;
+  return { scopes: parsedScopes, repoIds: parsedRepoIds };
+}
 
 /**
  * Read paths may use the isolate cache. Write paths (push, merge, admin, every
@@ -85,6 +119,23 @@ interface TokenRow {
   expires_at: number;
   last_used_at: number | null;
   revoked_at: number | null;
+}
+
+function toRecord(
+  row: TokenRow,
+  restrictions: { scopes: string[]; repoIds: string[] | null },
+): TokenRecord {
+  return {
+    id: row.id,
+    type: row.type,
+    principalId: row.principal_id,
+    principalType: row.principal_type,
+    principalHandle: row.handle,
+    isInstanceAdmin: row.is_instance_admin === 1,
+    ...restrictions,
+    expiresAt: row.expires_at,
+    lastUsedAt: row.last_used_at,
+  };
 }
 
 /**
@@ -190,32 +241,26 @@ export class D1TokenStore {
 
     // Judge expiry at the time the answer arrived, not when the lookup began.
     const answeredAt = this.deps.clock();
+    const restrictions = row && parseTokenRestrictions(row.scopes, row.repo_ids);
     const failure: VerifyFailure | undefined = !row
       ? "unknown"
       : row.revoked_at !== null
         ? "revoked"
         : row.disabled_at !== null
           ? "disabled"
-          : row.expires_at <= answeredAt
-            ? "expired"
-            : undefined;
-    if (!row || failure) {
+          : !restrictions
+            ? "unknown"
+            : row.expires_at <= answeredAt
+              ? "expired"
+              : undefined;
+    if (!row || !restrictions || failure) {
       this.cache.delete(hash);
-      return { ok: false, reason: failure ?? "unknown" };
+      return failure === "expired" && mode === "write" && row && restrictions
+        ? { ok: false, reason: failure, expiredRecord: toRecord(row, restrictions) }
+        : { ok: false, reason: failure ?? "unknown" };
     }
 
-    const record: TokenRecord = {
-      id: row.id,
-      type: row.type,
-      principalId: row.principal_id,
-      principalType: row.principal_type,
-      principalHandle: row.handle,
-      isInstanceAdmin: row.is_instance_admin === 1,
-      scopes: JSON.parse(row.scopes) as string[],
-      repoIds: row.repo_ids === null ? null : (JSON.parse(row.repo_ids) as string[]),
-      expiresAt: row.expires_at,
-      lastUsedAt: row.last_used_at,
-    };
+    const record = toRecord(row, restrictions);
     // Freshness counts from `now`, when this lookup started.
     this.cache.set(hash, record, now);
     return this.touch(hash, record, answeredAt);

@@ -1,6 +1,6 @@
 import { HANDLE_PATTERN } from "@fyrden/domain";
 import { z } from "zod";
-import { AUTHENTICATED, defineOperation } from "../src/op.js";
+import { defineOperation } from "../src/op.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 
 const RepoPath = z.object({
@@ -43,7 +43,7 @@ export const createImport = defineOperation({
       .describe("The repository URL as `git clone` takes it, e.g. https://github.com/o/r.git."),
   }),
   output: RepoImport,
-  permission: AUTHENTICATED,
+  permission: "contents:write",
   principals: ["user", "agent"],
   rateLimit: "expensive",
   idempotency: "key",
@@ -65,7 +65,7 @@ export const getImport = defineOperation({
   description: "Returns the progress or outcome of the repository's latest import.",
   input: RepoPath,
   output: RepoImport,
-  permission: AUTHENTICATED,
+  permission: "contents:read",
   principals: ["user", "agent"],
   rateLimit: "read",
   idempotency: "none",

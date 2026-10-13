@@ -55,7 +55,7 @@ export const bootstrap = new Hono<{ Bindings: Env; Variables: ObsVariables }>().
       db
         .prepare(
           `INSERT INTO tokens (id, token_hash, type, principal_id, scopes, expires_at, created_at)
-         SELECT ?, ?, 'pat', ?, '["admin"]', ?, ? WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?)`,
+         SELECT ?, ?, 'pat', ?, '[]', ?, ? WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?)`,
         )
         .bind(tokenId, await hashToken(token), userId, now + BOOTSTRAP_TOKEN_TTL_MS, now, userId),
       db

@@ -1,6 +1,6 @@
 import { HANDLE_PATTERN } from "@fyrden/domain";
 import { z } from "zod";
-import { AUTHENTICATED, defineOperation } from "../src/op.js";
+import { defineOperation } from "../src/op.js";
 
 /**
  * Repository names as GitHub accepts them: 1-100 letters, digits, `.`, `_`
@@ -35,7 +35,7 @@ export const createRepo = defineOperation({
     "Creates an empty private repository owned by the authenticated user. Clone and push it at `/<owner>/<name>.git`.",
   input: z.object({ name: RepoName }),
   output: Repo,
-  permission: AUTHENTICATED,
+  permission: "repos:create",
   principals: ["user"],
   rateLimit: "write",
   idempotency: "key",
@@ -60,7 +60,7 @@ export const getRepo = defineOperation({
     repo: RepoName,
   }),
   output: Repo,
-  permission: AUTHENTICATED,
+  permission: "metadata:read",
   principals: ["user", "agent"],
   rateLimit: "read",
   idempotency: "none",
@@ -85,7 +85,7 @@ export const forkRepo = defineOperation({
     name: RepoName.optional().describe("The fork's name. Default: the parent's name."),
   }),
   output: Repo,
-  permission: AUTHENTICATED,
+  permission: "repos:create",
   principals: ["user"],
   rateLimit: "write",
   idempotency: "key",

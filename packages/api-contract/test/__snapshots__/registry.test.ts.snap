@@ -165,9 +165,16 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                   },
                   "scopes": {
                     "default": [],
+                    "description": "Permissions the token is limited to (and what they imply). Empty: the user's full rights.",
                     "items": {
-                      "maxLength": 64,
-                      "minLength": 1,
+                      "enum": [
+                        "instance:admin",
+                        "repos:create",
+                        "metadata:read",
+                        "contents:read",
+                        "contents:write",
+                        "administration:write",
+                      ],
                       "type": "string",
                     },
                     "maxItems": 32,
@@ -363,7 +370,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Get a repository",
-        "x-fyrden-permission": "authenticated",
+        "x-fyrden-permission": "metadata:read",
         "x-fyrden-principals": [
           "user",
           "agent",
@@ -486,7 +493,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Fork a repository",
-        "x-fyrden-permission": "authenticated",
+        "x-fyrden-permission": "repos:create",
         "x-fyrden-principals": [
           "user",
         ],
@@ -627,7 +634,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Get the repository's import",
-        "x-fyrden-permission": "authenticated",
+        "x-fyrden-permission": "contents:read",
         "x-fyrden-principals": [
           "user",
           "agent",
@@ -787,7 +794,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Import a public git repository",
-        "x-fyrden-permission": "authenticated",
+        "x-fyrden-permission": "contents:write",
         "x-fyrden-principals": [
           "user",
           "agent",
@@ -1011,7 +1018,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Start a chunked pack upload",
-        "x-fyrden-permission": "authenticated",
+        "x-fyrden-permission": "contents:write",
         "x-fyrden-principals": [
           "user",
           "agent",
@@ -1176,7 +1183,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Abort a chunked pack upload",
-        "x-fyrden-permission": "authenticated",
+        "x-fyrden-permission": "contents:write",
         "x-fyrden-principals": [
           "user",
           "agent",
@@ -1339,7 +1346,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Get a chunked pack upload",
-        "x-fyrden-permission": "authenticated",
+        "x-fyrden-permission": "contents:read",
         "x-fyrden-principals": [
           "user",
           "agent",
@@ -1503,7 +1510,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Complete a chunked pack upload",
-        "x-fyrden-permission": "authenticated",
+        "x-fyrden-permission": "contents:write",
         "x-fyrden-principals": [
           "user",
           "agent",
@@ -1710,7 +1717,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Create a repository",
-        "x-fyrden-permission": "authenticated",
+        "x-fyrden-permission": "repos:create",
         "x-fyrden-principals": [
           "user",
         ],

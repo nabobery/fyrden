@@ -8,7 +8,7 @@ export async function forkRepoOperation(
   ctx: OpContext,
   input: Input<typeof forkRepo>,
 ): Promise<Output<typeof forkRepo>> {
-  const parent = await repoFor(ctx, input.owner, input.repo, "read");
+  const parent = await repoFor(ctx, input.owner, input.repo, "contents:read");
   const name = input.name ?? parent.name;
   ctx.metrics.count("d1.query", { db: "directory", op: "repo_name_check" });
   const existing = await ctx.env.DIRECTORY.withSession("first-primary")

@@ -11,7 +11,7 @@ import { resolveRepo } from "../src/repos/directory.js";
 import { loadFixture } from "./helpers/fetch-repo.js";
 import { createRepo, ORIGIN } from "./helpers/git-http.js";
 import { cloneObjects, fork, handleOf, inNetwork, type Owner } from "./helpers/network.js";
-import { principalWithToken } from "./helpers/principals.js";
+import { principalWithToken, scopedToken } from "./helpers/principals.js";
 import { inRepo } from "./helpers/repo-git.js";
 
 const fixtures = inject("fetchFixtures");
@@ -256,6 +256,33 @@ describe("repos.fork operation", () => {
     expect(body).toMatchObject({ owner: handleOf(user), name, visibility: "private" });
     const entry = await resolveRepo(env, handleOf(user), name, { consistency: "primary" });
     expect(entry?.networkId).toBe(await inRepo(parent.stub, ({ git }) => git.networkId()));
+  });
+
+  it("needs repos:create and read access to the source from a scoped token", async () => {
+    const user = await principalWithToken("user", "pat");
+    const parent = await createRepo(user.principalId);
+    const other = await createRepo(user.principalId);
+    await loadFixture(parent.stub, single);
+    const forkWith = async (scopes: string[], repoIds?: string[]) => {
+      const token = await scopedToken(user.principalId, scopes, "pat", repoIds);
+      const res = await exports.default.fetch(
+        `${ORIGIN}/api/repos/${handleOf(user)}/${parent.name}/forks`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "Idempotency-Key": crypto.randomUUID(),
+          },
+          body: JSON.stringify({ name: uniqueId("forked") }),
+        },
+      );
+      return res.ok ? res.status : (await res.json<{ code: string }>()).code;
+    };
+    expect(await forkWith(["contents:read"])).toBe("missing_permission");
+    expect(await forkWith(["repos:create"])).toBe("repo_not_found");
+    expect(await forkWith(["repos:create", "contents:read"], [other.id])).toBe("repo_not_found");
+    expect(await forkWith(["repos:create", "contents:read"])).toBe(201);
   });
 
   it("reports the default branch HEAD names (master here), in the lookup and the fork response", async () => {

@@ -1,3 +1,4 @@
+import { isPermission } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { whoami } from "../ops/meta.js";
@@ -19,7 +20,7 @@ const base = {
   summary: "Get a repo",
   input: z.object({ owner: z.string(), repo: z.string() }),
   output: z.object({ id: z.string() }),
-  permission: "repo:read",
+  permission: "metadata:read",
   principals: ["user"],
   rateLimit: "read",
   idempotency: "none",
@@ -34,6 +35,14 @@ describe("defineOperation", () => {
   it.each([
     ["no permission", { permission: "" }, /permission is required/],
     ["blank permission", { permission: "   " }, /permission is required/],
+    ["permission not in the table", { permission: "repo:read" }, /unknown permission repo:read/],
+    ["a scope-like name that is no permission", { permission: "admin" }, /unknown permission/],
+    [
+      "a principal type that cannot hold the permission",
+      { permission: "instance:admin", principals: ["agent"] },
+      /agent principals cannot hold instance:admin/,
+    ],
+    ["a GET that needs a write permission", { permission: "contents:write" }, /write permission/],
     ["no principal types", { principals: [] }, /principal type/],
     ["unknown principal type", { principals: ["robot"] }, /unknown principal/],
     ["bad id", { id: "GetRepo" }, /id must/],
@@ -89,5 +98,12 @@ describe("generated artifacts", () => {
 
   it("uses the AUTHENTICATED permission for whoami", () => {
     expect(whoami.permission).toBe(AUTHENTICATED);
+  });
+
+  it("names a permission from the table for every other operation", () => {
+    for (const op of registry) {
+      if (op.id === "meta.whoami") continue;
+      expect(isPermission(op.permission), op.id).toBe(true);
+    }
   });
 });

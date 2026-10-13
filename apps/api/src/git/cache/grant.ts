@@ -1,5 +1,10 @@
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
-import { canAccess, type RepoAccess, type RepoEntry } from "../../repos/directory.js";
+import {
+  canAccess,
+  GIT_PERMISSION,
+  type RepoAccess,
+  type RepoEntry,
+} from "../../repos/directory.js";
 
 /**
  * Proof that the repository-level access check allowed one caller to read
@@ -32,7 +37,7 @@ export class RepoAccessGrant {
     repo: RepoEntry,
     access: RepoAccess,
   ): RepoAccessGrant | undefined {
-    if (!canAccess(auth, repo, access)) return undefined;
+    if (!canAccess(auth, repo, GIT_PERMISSION[access])) return undefined;
     return new RepoAccessGrant(repo.id, repo.networkId, repo.visibility, auth.principalId, access);
   }
 

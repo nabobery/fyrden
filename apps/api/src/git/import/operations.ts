@@ -29,7 +29,7 @@ export async function startImport(
   ctx: OpContext,
   input: Input<typeof createImport>,
 ): Promise<RepoImport> {
-  const repo = await repoFor(ctx, input.owner, input.repo, "write");
+  const repo = await repoFor(ctx, input.owner, input.repo, "contents:write");
   const ownHosts = ownHostsOf(ctx.env, ctx.requestHost);
   const check = await checkImportUrl(input.url, importPolicy(ownHosts, dohResolver()));
   if (!check.ok)
@@ -59,7 +59,7 @@ export async function getRepoImport(
   ctx: OpContext,
   input: Input<typeof getImport>,
 ): Promise<RepoImport> {
-  const repo = await repoFor(ctx, input.owner, input.repo, "read");
+  const repo = await repoFor(ctx, input.owner, input.repo, "contents:read");
   const record = await ctx.env.REPO.getByName(repo.id).importRecord();
   if (!record) throw new OperationError(404, "import_not_found", "This repository has no import.");
   return output(record);

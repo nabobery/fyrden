@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import { createLogger, createMetrics } from "@fyrden/adapters-cloudflare/obs";
 import { createFakeDataset } from "@fyrden/adapters-cloudflare/obs/testing";
+import type { OperationDef } from "@fyrden/api-contract";
 import { AUTHENTICATED, defineOperation, INSTANCE_ADMIN } from "@fyrden/api-contract";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -27,7 +28,7 @@ const writeOp = defineOperation({
   mcp: false,
 });
 
-const record = { id: "tok_1", principalType: "user" } as TokenRecord;
+const record = { id: "tok_1", principalType: "user", scopes: [] as string[] } as TokenRecord;
 
 function ctx(mode: "read" | "write", fresh: boolean): OpContext {
   return {
@@ -69,12 +70,20 @@ describe("executeOperation", () => {
   it.each([
     ["an unknown permission, for anyone (fails closed)", "repo:write", true],
     ["instance:admin, for a non-admin", INSTANCE_ADMIN, false],
-  ])("denies %s", async (_, permission, admin) => {
-    const op = { ...writeOp, permission };
+    [
+      "instance:admin, for an admin whose token is scoped to something else",
+      INSTANCE_ADMIN,
+      true,
+      ["contents:read"],
+    ],
+    ["a repository write, for a token scoped to reads", "contents:write", false, ["contents:read"]],
+    ["any permission, for a token whose only scope is unknown", "contents:read", false, ["repo"]],
+  ])("denies %s", async (_, permission, admin, scopes: string[] = []) => {
+    const op = { ...writeOp, permission: permission as OperationDef["permission"] };
     const handler = vi.fn(async () => ({ ok: true }));
     const c: OpContext = {
       ...ctx("write", true),
-      auth: { ...record, isInstanceAdmin: admin } as TokenRecord,
+      auth: { ...record, isInstanceAdmin: admin, scopes } as TokenRecord,
     };
     const result = await executeOperation(op, handler, c, { value: "x" });
     expect(result).toMatchObject({
@@ -82,6 +91,23 @@ describe("executeOperation", () => {
       problem: { status: 403, code: "missing_permission", missing_permission: permission },
     });
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("leaves repository and account permissions to the handler once scopes allow them", async () => {
+    for (const [permission, scopes] of [
+      ["contents:write", []],
+      ["contents:read", ["contents:write"]],
+      ["repos:create", ["repos:create"]],
+    ] as const) {
+      const handler = vi.fn(async () => ({ ok: true }));
+      const c: OpContext = {
+        ...ctx("write", true),
+        auth: { ...record, scopes: [...scopes] } as TokenRecord,
+      };
+      const result = await executeOperation({ ...writeOp, permission }, handler, c, { value: "x" });
+      expect(result.ok, permission).toBe(true);
+      expect(handler).toHaveBeenCalledOnce();
+    }
   });
 
   it("checks instance:admin against the re-verified record, not the cached one", async () => {

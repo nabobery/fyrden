@@ -1,12 +1,19 @@
-import { PRINCIPAL_TYPES, type PrincipalType } from "@fyrden/domain";
+import {
+  AUTHENTICATED,
+  isPermission,
+  type Permission,
+  PRINCIPAL_TYPES,
+  type PrincipalType,
+  permissionDef,
+} from "@fyrden/domain";
 import type { z } from "zod";
+
+export { AUTHENTICATED };
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-/** Any authenticated principal may call the operation; authorization is not otherwise narrowed. */
-export const AUTHENTICATED = "authenticated";
 /** Only an instance administrator may call the operation. */
-export const INSTANCE_ADMIN = "instance:admin";
+export const INSTANCE_ADMIN = "instance:admin" satisfies Permission;
 
 /**
  * One operation, declared once. REST routes, the OpenAPI document, MCP
@@ -27,8 +34,11 @@ export interface OperationDef<
   /** All inputs: path parameters, then the query (GET) or JSON body (others). */
   input: I;
   output: O;
-  /** Permission the caller needs, checked by the authorization layer. */
-  permission: string;
+  /**
+   * Permission the caller needs, from the permission table in
+   * `@fyrden/domain`; `AUTHENTICATED` when any authenticated caller may.
+   */
+  permission: Permission | typeof AUTHENTICATED;
   /** Principal types allowed to call it at all. */
   principals: readonly PrincipalType[];
   rateLimit: "read" | "write" | "expensive";
@@ -66,6 +76,14 @@ function validate(def: OperationDef): void {
   if (def.principals.length === 0) fail("at least one principal type is required");
   for (const p of def.principals)
     if (!PRINCIPAL_TYPES.includes(p)) fail(`unknown principal type ${p}`);
+  if (def.permission !== AUTHENTICATED) {
+    if (!isPermission(def.permission)) fail(`unknown permission ${def.permission}`);
+    const held = permissionDef(def.permission as Permission);
+    for (const p of def.principals)
+      if (!held.principals.includes(p)) fail(`${p} principals cannot hold ${def.permission}`);
+    // The executor re-verifies a token on the primary for non-GET methods only.
+    if (def.method === "GET" && held.writes) fail("a GET operation cannot need a write permission");
+  }
   if (def.method === "GET" && def.idempotency !== "none")
     fail("GET operations are naturally idempotent");
   if (def.method !== "GET" && def.idempotency !== "key")

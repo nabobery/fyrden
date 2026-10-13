@@ -1,10 +1,13 @@
-import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
-import { canAccess, type RepoEntry } from "../../repos/directory.js";
+import { parseTokenRestrictions } from "@fyrden/adapters-cloudflare/auth";
+import type { PrincipalType } from "@fyrden/domain";
+import { canAccess } from "../../repos/directory.js";
 import type { PushDecision } from "../push/commit.js";
 import { ACCESS_LOST, TOKEN_REVOKED } from "../push/reauthorize.js";
 
 type Row = {
   principal_id: string;
+  principal_type: PrincipalType;
+  scopes: string;
   repo_ids: string | null;
   revoked_at: number | null;
   disabled_at: number | null;
@@ -32,7 +35,8 @@ export async function reauthorizeImport(
   const row = await db
     .withSession("first-primary")
     .prepare(
-      `SELECT t.principal_id, t.repo_ids, t.revoked_at, p.disabled_at,
+      `SELECT t.principal_id, p.type AS principal_type, t.scopes,
+              t.repo_ids, t.revoked_at, p.disabled_at,
               r.owner_id, r.state AS repo_state
        FROM tokens t JOIN principals p ON p.id = t.principal_id
        LEFT JOIN repos r ON r.id = ?
@@ -47,12 +51,15 @@ export async function reauthorizeImport(
     row.principal_id !== accepted.principal
   )
     return decide(TOKEN_REVOKED);
+  const restrictions = parseTokenRestrictions(row.scopes, row.repo_ids);
+  if (!restrictions) return decide(TOKEN_REVOKED);
   if (row.owner_id === null || row.repo_state !== "active") return decide(ACCESS_LOST);
   // The same rule the request path applies, from the fields it reads.
   const token = {
     principalId: row.principal_id,
-    repoIds: row.repo_ids === null ? null : (JSON.parse(row.repo_ids) as string[]),
-  } as TokenRecord;
-  const repo = { id: accepted.repoId, ownerId: row.owner_id } as RepoEntry;
-  return canAccess(token, repo, "write") ? decide() : decide(ACCESS_LOST);
+    principalType: row.principal_type,
+    ...restrictions,
+  };
+  const repo = { id: accepted.repoId, ownerId: row.owner_id };
+  return canAccess(token, repo, "contents:write") ? decide() : decide(ACCESS_LOST);
 }

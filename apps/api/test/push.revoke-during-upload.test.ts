@@ -1,8 +1,9 @@
 // Re-authorization at the commit point: the Worker checks the pusher's token
 // on the D1 primary just before the commit, and the commit transaction
 // accepts only a fresh decision for the upload's own token. A revoked token
-// (during upload or indexing) aborts the push with refs unchanged; a token
-// that merely expired after the upload was accepted does not.
+// (during upload or indexing) or one that lost its write scope aborts the push
+// with refs unchanged; a token that merely expired after the upload was
+// accepted does not.
 import { env } from "cloudflare:workers";
 import { hashToken } from "@fyrden/domain";
 import { oidToHex } from "@fyrden/git-core";
@@ -100,6 +101,26 @@ describe("push: re-authorization at the commit point", () => {
     expect(report).toEqual(["unpack ok\n", `ng ${MAIN} ${ACCESS_LOST}\n`, "0000"]);
     expect((await state(target)).refs).toEqual([]);
   });
+
+  it.each([
+    ["while the token stays valid", false],
+    ["and the token then expires", true],
+  ])(
+    "aborts the push when the token loses its write scope during indexing %s",
+    async (_, expire) => {
+      const target = await pushTarget();
+      const { report } = await pushWith(target, async () => {
+        await env.DIRECTORY.prepare(
+          `UPDATE tokens SET scopes = '["contents:read"]' WHERE token_hash = ?`,
+        )
+          .bind(await hashToken(target.owner.token))
+          .run();
+        if (expire) await setToken(target.owner.token, "expires_at", Date.now() - 1);
+      });
+      expect(report).toEqual(["unpack ok\n", `ng ${MAIN} ${ACCESS_LOST}\n`, "0000"]);
+      expect((await state(target)).refs).toEqual([]);
+    },
+  );
 
   it("completes a push whose token expired after the upload was accepted", async () => {
     const target = await pushTarget();

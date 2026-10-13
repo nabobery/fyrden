@@ -1,6 +1,12 @@
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import { authenticate } from "../middleware/auth.js";
-import { canAccess, type RepoAccess, type RepoEntry, resolveRepo } from "../repos/directory.js";
+import {
+  canAccess,
+  GIT_PERMISSION,
+  type RepoAccess,
+  type RepoEntry,
+  resolveRepo,
+} from "../repos/directory.js";
 import { type GitContext, gitText } from "./http.js";
 
 /** Token types a git client may use: git tokens and personal access tokens. */
@@ -65,7 +71,8 @@ export async function authorizeGit(
     consistency: access === "write" ? "primary" : "cached",
     metrics: c.get("metrics"),
   });
-  if (!repo || !canAccess(auth, repo, access)) return fail(gitText(c, 404, REPO_NOT_FOUND));
+  if (!repo || !canAccess(auth, repo, GIT_PERMISSION[access]))
+    return fail(gitText(c, 404, REPO_NOT_FOUND));
 
   c.set("auth", auth);
   c.set("authState", authn.state);

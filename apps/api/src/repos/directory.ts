@@ -2,7 +2,7 @@ import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import { TokenCache } from "@fyrden/adapters-cloudflare/auth";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { REPO_NAME_PATTERN } from "@fyrden/api-contract";
-import { isValidHandle } from "@fyrden/domain";
+import { evaluate, isValidHandle, type RepoPermission } from "@fyrden/domain";
 import { clock } from "../services.js";
 
 /** A name `repos.create` would accept; anything else cannot exist. */
@@ -86,16 +86,34 @@ export async function resolveRepo(
   return entry;
 }
 
+/** Access git asks for: fetch and clone read the contents, push writes them. */
 export type RepoAccess = "read" | "write";
 
+export const GIT_PERMISSION = {
+  read: "contents:read",
+  write: "contents:write",
+} as const satisfies Record<RepoAccess, RepoPermission>;
+
 /**
- * Whether a token may read or write a repository. Until roles exist, only
- * the owner may, through a token not limited to other repositories. Every
- * repository is private for now: there is no anonymous or public read.
+ * Whether a token may use `permission` on a repository. Until organizations
+ * and collaborators exist, a principal's only role is admin of the
+ * repositories it owns. Every repository is private for now: there is no
+ * anonymous or public read.
  */
-export function canAccess(auth: TokenRecord, repo: RepoEntry, _access: RepoAccess): boolean {
-  if (auth.repoIds !== null && !auth.repoIds.includes(repo.id)) return false;
-  return auth.principalId === repo.ownerId;
+export function canAccess(
+  auth: Pick<TokenRecord, "principalId" | "principalType" | "scopes" | "repoIds">,
+  repo: Pick<RepoEntry, "id" | "ownerId">,
+  permission: RepoPermission,
+): boolean {
+  const owner = auth.principalId === repo.ownerId;
+  return evaluate({
+    permission,
+    actorType: auth.principalType,
+    // Instance administration gives no repository role.
+    rights: { isInstanceAdmin: false, ownsAccount: owner, repoRole: owner ? "admin" : null },
+    token: { scopes: auth.scopes, repoIds: auth.repoIds },
+    repoId: repo.id,
+  }).allow;
 }
 
 /** Every repository starts with HEAD at this branch; the branch exists after the first push. */

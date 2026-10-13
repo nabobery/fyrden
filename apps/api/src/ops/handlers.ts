@@ -166,7 +166,7 @@ export const handlers: Handlers = {
   "repos.get": async ({ env, auth, metrics }, { owner, repo }) => {
     const entry = await resolveRepo(env, owner, repo, { metrics });
     // Missing and not visible look the same, so private names do not leak.
-    if (!entry || !canAccess(auth, entry, "read"))
+    if (!entry || !canAccess(auth, entry, "metadata:read"))
       throw new OperationError(404, "repo_not_found", `No repository ${owner}/${repo} was found.`);
     // HEAD is the repository object's (an import or a fork sets it from its source).
     metrics.count("do.request", { class: "RepoDO", method: "headTarget" });

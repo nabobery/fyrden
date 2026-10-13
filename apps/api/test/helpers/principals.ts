@@ -26,6 +26,19 @@ export async function principalWithToken(
       Date.now(),
     )
     .run();
+  return { principalId, token: await scopedToken(principalId, [], tokenType) };
+}
+
+/**
+ * Mints a token for an existing principal, limited to `scopes` (none: its
+ * full rights) and, when given, to the repositories `repoIds`.
+ */
+export async function scopedToken(
+  principalId: string,
+  scopes: string[],
+  tokenType: TokenType = "pat",
+  repoIds?: string[],
+): Promise<string> {
   const store = new D1TokenStore(env.DIRECTORY, {
     clock: () => Date.now(),
     newId,
@@ -34,9 +47,10 @@ export async function principalWithToken(
   const { token } = await store.mint({
     principalId,
     type: tokenType,
-    scopes: [],
+    scopes,
+    ...(repoIds && { repoIds }),
     ttlMs: 60 * 60 * 1000,
     audit: { actorId: principalId },
   });
-  return { principalId, token };
+  return token;
 }

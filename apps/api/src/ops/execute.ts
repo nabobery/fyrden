@@ -1,15 +1,14 @@
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
-  AUTHENTICATED,
   type FyrdenRegistry,
-  INSTANCE_ADMIN,
   type Input,
   makeProblem,
   type OperationDef,
   type Output,
   type Problem,
 } from "@fyrden/api-contract";
+import { checkOperation } from "@fyrden/domain";
 import type { AuthState } from "../middleware/auth.js";
 
 /** What every operation handler receives, whichever surface (REST or MCP) called it. */
@@ -70,14 +69,17 @@ function fail(
 }
 
 /**
- * Whether the caller holds an operation's permission. Until the authorization
- * layer (repository and org roles) exists, any other permission is denied:
- * an operation declared with one cannot run by accident.
+ * Whether the caller may call an operation with this permission at all: its
+ * principal type and its token's scopes, and for instance permissions the
+ * whole check. The handler checks repository and account permissions again,
+ * completely, once it has resolved the repository or account.
  */
-export function hasPermission(permission: string, auth: TokenRecord): boolean {
-  if (permission === AUTHENTICATED) return true;
-  if (permission === INSTANCE_ADMIN) return auth.isInstanceAdmin;
-  return false;
+export function hasPermission(permission: OperationDef["permission"], auth: TokenRecord): boolean {
+  return checkOperation(permission, {
+    actorType: auth.principalType,
+    isInstanceAdmin: auth.isInstanceAdmin,
+    scopes: auth.scopes,
+  }).allow;
 }
 
 /**

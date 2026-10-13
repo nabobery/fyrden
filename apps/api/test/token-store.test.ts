@@ -130,7 +130,7 @@ describe("D1TokenStore", () => {
 
   it("rejects expired tokens on both paths", async () => {
     const { store, advance } = setup();
-    const { token } = await store.mint({
+    const { token, id } = await store.mint({
       principalId: "usr_owner",
       type: "git",
       scopes: [],
@@ -140,7 +140,53 @@ describe("D1TokenStore", () => {
     expect((await store.verify(token, "read")).ok).toBe(true);
     advance(HOUR);
     expect(await store.verify(token, "read")).toEqual({ ok: false, reason: "expired" });
-    expect(await store.verify(token, "write")).toEqual({ ok: false, reason: "expired" });
+    expect(await store.verify(token, "write")).toEqual({
+      ok: false,
+      reason: "expired",
+      expiredRecord: expect.objectContaining({ id }),
+    });
+  });
+
+  it("reports what an expired token holds now on the primary", async () => {
+    const { store, advance } = setup();
+    const { token, id } = await store.mint({
+      principalId: "usr_owner",
+      type: "pat",
+      scopes: ["contents:write"],
+      ttlMs: HOUR,
+      audit,
+    });
+    expect((await store.verify(token, "read")).ok).toBe(true);
+    await env.DIRECTORY.prepare("UPDATE tokens SET scopes = '[\"contents:read\"]' WHERE id = ?")
+      .bind(id)
+      .run();
+    advance(HOUR);
+    const verified = await store.verify(token, "write");
+    expect(verified.ok).toBe(false);
+    expect(!verified.ok && verified.expiredRecord?.scopes).toEqual(["contents:read"]);
+  });
+
+  it.each([
+    ["scopes not a list", '{"length":0}', null],
+    ["scopes null", "null", null],
+    ["a scope not a string", '[["contents:write"]]', null],
+    ["repo list not a list", "[]", '"rep_a"'],
+    ["a repo id not a string", "[]", "[1]"],
+  ])("grants nothing for a stored token with %s", async (_, scopes, repoIds) => {
+    const { store, advance } = setup();
+    const { token, id } = await store.mint({
+      principalId: "usr_owner",
+      type: "pat",
+      scopes: [],
+      ttlMs: HOUR,
+      audit,
+    });
+    await env.DIRECTORY.prepare("UPDATE tokens SET scopes = ?, repo_ids = ? WHERE id = ?")
+      .bind(scopes, repoIds, id)
+      .run();
+    expect(await store.verify(token, "write")).toEqual({ ok: false, reason: "unknown" });
+    advance(2 * HOUR);
+    expect(await store.verify(token, "write")).toEqual({ ok: false, reason: "unknown" });
   });
 
   it("rejects a token revoked while cached on the next write, even with a warm cache", async () => {
@@ -246,7 +292,7 @@ describe("D1TokenStore", () => {
         ttlMs: 30_000,
         audit,
       });
-      expect(await store.verify(token, mode)).toEqual({ ok: false, reason: "expired" });
+      expect(await store.verify(token, mode)).toMatchObject({ ok: false, reason: "expired" });
       expect(cache.get(await hashToken(token))).toBeUndefined();
     },
   );

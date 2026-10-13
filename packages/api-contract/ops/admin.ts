@@ -1,4 +1,4 @@
-import { HANDLE_PATTERN } from "@fyrden/domain";
+import { HANDLE_PATTERN, PERMISSION_NAMES } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation, INSTANCE_ADMIN } from "../src/op.js";
 
@@ -58,7 +58,13 @@ export const createToken = defineOperation({
   input: z.object({
     user_id: z.string().min(1),
     type: z.enum(["pat", "git"]).default("pat"),
-    scopes: z.array(z.string().min(1).max(64)).max(32).default([]),
+    scopes: z
+      .array(z.enum(PERMISSION_NAMES))
+      .max(32)
+      .default([])
+      .describe(
+        "Permissions the token is limited to (and what they imply). Empty: the user's full rights.",
+      ),
     expires_in_days: z.number().int().min(1).max(MAX_TOKEN_DAYS).default(30),
   }),
   output: CreatedToken,

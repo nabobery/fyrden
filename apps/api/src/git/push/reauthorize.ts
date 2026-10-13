@@ -39,14 +39,14 @@ export async function reauthorizeWriter(
     decidedAt: Date.now(),
   });
   const verified = await request.authState.verifyForWrite();
-  if (!verified.ok && verified.reason !== "expired") return decide(TOKEN_REVOKED);
-  const record = verified.ok ? verified.record : accepted.auth;
-  if (record.id !== accepted.auth.id) return decide(TOKEN_REVOKED);
+  // An expired token is judged on what the primary says it holds now.
+  const record = verified.ok ? verified.record : verified.expiredRecord;
+  if (!record || record.id !== accepted.auth.id) return decide(TOKEN_REVOKED);
   const repo = await resolveRepo(request.env, repoName.owner, repoName.name, {
     consistency: "primary",
     metrics: request.metrics,
   });
-  if (!repo || repo.id !== accepted.repo.id || !canAccess(record, repo, "write")) {
+  if (!repo || repo.id !== accepted.repo.id || !canAccess(record, repo, "contents:write")) {
     return decide(ACCESS_LOST);
   }
   return decide();

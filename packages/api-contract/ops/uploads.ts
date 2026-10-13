@@ -1,6 +1,6 @@
 import { HANDLE_PATTERN } from "@fyrden/domain";
 import { z } from "zod";
-import { AUTHENTICATED, defineOperation } from "../src/op.js";
+import { defineOperation } from "../src/op.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 
 /*
@@ -82,7 +82,7 @@ export const createUpload = defineOperation({
     ref_updates: z.array(RefUpdateInput).min(1).max(1000),
   }),
   output: UploadSession,
-  permission: AUTHENTICATED,
+  permission: "contents:write",
   principals: ["user", "agent"],
   rateLimit: "write",
   idempotency: "key",
@@ -105,7 +105,7 @@ export const getUpload = defineOperation({
     "Returns an upload session started by the caller: which parts are stored, and the outcome once complete.",
   input: SessionPath,
   output: UploadSession,
-  permission: AUTHENTICATED,
+  permission: "contents:read",
   principals: ["user", "agent"],
   rateLimit: "read",
   idempotency: "none",
@@ -126,7 +126,7 @@ export const completeUpload = defineOperation({
     "Assembles the parts, indexes and checks the pack as a push is checked, and applies the ref updates in one transaction. Answers state `indexing` while a large pack is still being indexed: call it again. Must be called with the token that started the session.",
   input: SessionPath,
   output: UploadSession,
-  permission: AUTHENTICATED,
+  permission: "contents:write",
   principals: ["user", "agent"],
   rateLimit: "write",
   idempotency: "key",
@@ -147,7 +147,7 @@ export const abortUpload = defineOperation({
   description: "Ends an upload session that has not committed and deletes what it stored.",
   input: SessionPath,
   output: UploadSession,
-  permission: AUTHENTICATED,
+  permission: "contents:write",
   principals: ["user", "agent"],
   rateLimit: "write",
   idempotency: "key",
