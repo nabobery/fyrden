@@ -41,7 +41,7 @@ export type OpResult = { ok: true; output: unknown } | { ok: false; problem: Pro
 export class OperationError extends Error {
   override name = "OperationError";
   constructor(
-    readonly status: 400 | 404 | 409 | 422,
+    readonly status: 400 | 403 | 404 | 409 | 422,
     readonly code: string,
     detail: string,
   ) {

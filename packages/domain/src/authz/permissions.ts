@@ -1,5 +1,5 @@
 import { PRINCIPAL_TYPES, type PrincipalType } from "../principals/principal.js";
-import type { RepoRole } from "./roles.js";
+import type { OrgRole, RepoRole } from "./roles.js";
 
 /**
  * An operation that only needs an authenticated caller (whoami). Not a
@@ -21,7 +21,7 @@ interface PermissionBase {
 export type PermissionDef = PermissionBase &
   (
     | { resource: "instance" } // instance administrators
-    | { resource: "account" } // the owner of the account (a user's namespace, an org)
+    | { resource: "account"; minAccountRole: OrgRole } // that role in the account (a user owns its own namespace)
     | { resource: "repo"; minRole: RepoRole } // that role on the repository, or stronger
   );
 
@@ -41,9 +41,27 @@ export const PERMISSIONS = {
   },
   "repos:create": {
     resource: "account",
+    // GitHub's default: members of an organization may create its repositories.
+    minAccountRole: "member",
     summary: "Create repositories in an account, including forks.",
     principals: PRINCIPAL_TYPES,
     implies: [],
+    writes: true,
+  },
+  "members:read": {
+    resource: "account",
+    minAccountRole: "member",
+    summary: "See an organization's members and teams.",
+    principals: PRINCIPAL_TYPES,
+    implies: [],
+    writes: false,
+  },
+  "members:write": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "Add and remove an organization's members, and manage its teams.",
+    principals: ["user"],
+    implies: ["members:read"],
     writes: true,
   },
   "metadata:read": {

@@ -1,6 +1,7 @@
 export * from "../ops/admin.js";
 export * from "../ops/imports.js";
 export * from "../ops/meta.js";
+export * from "../ops/orgs.js";
 export * from "../ops/repos.js";
 export * from "../ops/uploads.js";
 export * from "./mcp.js";

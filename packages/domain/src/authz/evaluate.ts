@@ -7,20 +7,23 @@ import {
   permissionDef,
   scopesAllow,
 } from "./permissions.js";
-import { atLeast, type RepoRole } from "./roles.js";
+import { atLeast, atLeastInAccount, type OrgRole, type RepoRole } from "./roles.js";
 
 /** What one principal holds where a request applies. */
 export interface Rights {
   isInstanceAdmin: boolean;
-  /** Owns the account the request targets: its own namespace, or an org it owns. */
-  ownsAccount: boolean;
+  /**
+   * Its role in the account the request targets: `owner` of its own
+   * namespace or of an organization, `member` of an organization; null for none.
+   */
+  accountRole: OrgRole | null;
   /** Its role on the repository the request targets; null for none. */
   repoRole: RepoRole | null;
 }
 
 export const NO_RIGHTS: Rights = Object.freeze({
   isInstanceAdmin: false,
-  ownsAccount: false,
+  accountRole: null,
   repoRole: null,
 });
 
@@ -63,7 +66,7 @@ function holds(rights: Rights, def: PermissionDef): boolean {
     case "instance":
       return rights.isInstanceAdmin;
     case "account":
-      return rights.ownsAccount;
+      return atLeastInAccount(rights.accountRole, def.minAccountRole);
     case "repo":
       return atLeast(rights.repoRole, def.minRole);
   }

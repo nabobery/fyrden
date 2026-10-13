@@ -1,4 +1,10 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
+import {
+  createOrgOperation,
+  listMembersOperation,
+  removeMembershipOperation,
+  setMembershipOperation,
+} from "../accounts/orgs.js";
 import { allocateEpoch } from "../events/epochs.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import {
@@ -23,23 +29,10 @@ import {
 import { repoOutput } from "../repos/output.js";
 import { updateRepoOperation } from "../repos/update.js";
 import { clock, newId, tokenStore } from "../services.js";
+import { decodeCursor, encodeCursor } from "./cursor.js";
 import { type Handlers, type OpContext, OperationError } from "./execute.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** A page cursor: the last name of the page, opaque to clients. */
-function encodeCursor(name: string): string {
-  return btoa(name).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-}
-
-function decodeCursor(cursor: string): string | undefined {
-  try {
-    const name = atob(cursor.replaceAll("-", "+").replaceAll("_", "/"));
-    return isValidRepoName(name) ? name : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 type ProjectedDetails = { default_branch: string | null; description: string | null };
 
@@ -194,9 +187,7 @@ export const handlers: Handlers = {
   },
 
   "repos.list": async ({ env, auth, metrics }, { per_page, cursor }) => {
-    const after = cursor === undefined ? "" : decodeCursor(cursor);
-    if (after === undefined)
-      throw new OperationError(422, "invalid_cursor", "The cursor is not one this API returned.");
+    const after = decodeCursor(cursor, isValidRepoName);
     // Only repositories the token may see are read (its repository list in the
     // query), so a page and its cursor never reveal another one's name. One
     // more than a page tells whether another page follows.
@@ -244,6 +235,11 @@ export const handlers: Handlers = {
   "repos.update": updateRepoOperation,
   "repos.delete": deleteRepoOperation,
   "repos.delete_many": deleteReposOperation,
+
+  "admin.orgs.create": createOrgOperation,
+  "orgs.memberships.set": setMembershipOperation,
+  "orgs.memberships.remove": removeMembershipOperation,
+  "orgs.members.list": listMembersOperation,
 
   // Forks share the parent's packs in its fork network (network/).
   "repos.fork": forkRepoOperation,

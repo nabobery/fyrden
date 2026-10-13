@@ -272,7 +272,11 @@ export function canAccess(
     permission,
     actorType: auth.principalType,
     // Instance administration gives no repository role.
-    rights: { isInstanceAdmin: false, ownsAccount: owner, repoRole: owner ? "admin" : null },
+    rights: {
+      isInstanceAdmin: false,
+      accountRole: owner ? "owner" : null,
+      repoRole: owner ? "admin" : null,
+    },
     token: { scopes: auth.scopes, repoIds: auth.repoIds },
     repoId: repo.id,
   }).allow;

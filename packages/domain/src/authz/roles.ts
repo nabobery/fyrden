@@ -6,6 +6,11 @@ export type RepoRole = (typeof REPO_ROLES)[number];
 export const ORG_ROLES = ["member", "owner"] as const;
 export type OrgRole = (typeof ORG_ROLES)[number];
 
+/** Whether account role `role` is `min` or stronger; no role is never enough. */
+export function atLeastInAccount(role: OrgRole | null, min: OrgRole): boolean {
+  return role !== null && ORG_ROLES.indexOf(role) >= ORG_ROLES.indexOf(min);
+}
+
 /** Whether `role` is `min` or stronger; no role is never enough. */
 export function atLeast(role: RepoRole | null, min: RepoRole): boolean {
   return role !== null && REPO_ROLES.indexOf(role) >= REPO_ROLES.indexOf(min);

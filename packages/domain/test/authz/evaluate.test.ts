@@ -52,14 +52,16 @@ describe("evaluate: roles", () => {
   });
 
   it("gives account permissions to the account's owner only", () => {
-    expect(request("repos:create", { ...NO_RIGHTS, ownsAccount: true }).allow).toBe(true);
+    expect(request("repos:create", { ...NO_RIGHTS, accountRole: "owner" }).allow).toBe(true);
+    expect(request("repos:create", { ...NO_RIGHTS, accountRole: "member" }).allow).toBe(true);
+    expect(request("members:write", { ...NO_RIGHTS, accountRole: "member" }).allow).toBe(false);
     expect(request("repos:create", role("admin")).allow).toBe(false);
   });
 
   it("gives instance administration to instance administrators only", () => {
     expect(request("instance:admin", { ...NO_RIGHTS, isInstanceAdmin: true }).allow).toBe(true);
     expect(
-      request("instance:admin", { ...NO_RIGHTS, ownsAccount: true, repoRole: "admin" }).allow,
+      request("instance:admin", { ...NO_RIGHTS, accountRole: "owner", repoRole: "admin" }).allow,
     ).toBe(false);
   });
 
@@ -156,7 +158,7 @@ describe("evaluate: properties", () => {
   const maybeRole = fc.option(fc.constantFrom(...REPO_ROLES), { nil: null });
   const rights = fc.record({
     isInstanceAdmin: fc.boolean(),
-    ownsAccount: fc.boolean(),
+    accountRole: fc.constantFrom("owner", "member", null),
     repoRole: maybeRole,
   });
   const scopes = fc.array(fc.oneof(permission, fc.constantFrom("repo", "admin", "")), {
