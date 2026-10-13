@@ -296,6 +296,7 @@ describe("repository events", () => {
             ownerId: owner.principalId,
             name: "events",
             visibility: "private",
+            description: null,
             defaultBranch: "refs/heads/main",
             pushedAt: null,
             createdAt: expect.any(Number),

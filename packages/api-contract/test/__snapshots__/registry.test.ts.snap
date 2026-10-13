@@ -314,6 +314,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "default_branch": {
                       "type": "string",
                     },
+                    "description": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
                     "full_name": {
                       "description": "owner/name",
                       "type": "string",
@@ -344,6 +350,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "name",
                     "full_name",
                     "visibility",
+                    "description",
                     "default_branch",
                     "created_at",
                   ],
@@ -375,6 +382,153 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "user",
           "agent",
         ],
+      },
+      "patch": {
+        "description": "Renames a repository or changes its description or default branch; fields left out are kept. After a rename the old name keeps working for clone, fetch, push and this API, until a repository takes that name again.",
+        "operationId": "repos.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name (or a name it had before a rename).",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "default_branch": {
+                    "description": "An existing branch, without the refs/heads/ prefix.",
+                    "maxLength": 1013,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "maxLength": 350,
+                        "type": "string",
+                      },
+                      {
+                        "type": "null",
+                      },
+                    ],
+                    "description": "A short description; null or an empty string clears it.",
+                  },
+                  "name": {
+                    "description": "A new name.",
+                    "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "default_branch": {
+                      "type": "string",
+                    },
+                    "description": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "full_name": {
+                      "description": "owner/name",
+                      "type": "string",
+                    },
+                    "id": {
+                      "description": "Immutable repository id (rep_ prefix).",
+                      "type": "string",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "owner": {
+                      "description": "The owner's handle.",
+                      "type": "string",
+                    },
+                    "visibility": {
+                      "enum": [
+                        "public",
+                        "internal",
+                        "private",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "owner",
+                    "name",
+                    "full_name",
+                    "visibility",
+                    "description",
+                    "default_branch",
+                    "created_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Update a repository",
+        "x-fyrden-permission": "administration:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
       },
     },
     "/repos/{owner}/{repo}/forks": {
@@ -437,6 +591,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "default_branch": {
                       "type": "string",
                     },
+                    "description": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
                     "full_name": {
                       "description": "owner/name",
                       "type": "string",
@@ -467,6 +627,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "name",
                     "full_name",
                     "visibility",
+                    "description",
                     "default_branch",
                     "created_at",
                   ],
@@ -1676,6 +1837,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "default_branch": {
                             "type": "string",
                           },
+                          "description": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
                           "full_name": {
                             "description": "owner/name",
                             "type": "string",
@@ -1706,6 +1873,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name",
                           "full_name",
                           "visibility",
+                          "description",
                           "default_branch",
                           "created_at",
                         ],
@@ -1786,6 +1954,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "default_branch": {
                       "type": "string",
                     },
+                    "description": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
                     "full_name": {
                       "description": "owner/name",
                       "type": "string",
@@ -1816,6 +1990,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "name",
                     "full_name",
                     "visibility",
+                    "description",
                     "default_branch",
                     "created_at",
                   ],

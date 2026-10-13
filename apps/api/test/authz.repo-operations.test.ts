@@ -22,6 +22,7 @@ const SHA = "a".repeat(40);
  */
 const CASES: Record<string, { input: Record<string, unknown>; expected: Outcome }> = {
   "repos.get": { input: {}, expected: { status: 200 } },
+  "repos.update": { input: { description: "checked" }, expected: { status: 200 } },
   "uploads.create": {
     input: { size: 32, ref_updates: [{ ref: "refs/heads/main", old: null, new: SHA }] },
     expected: { status: 201 },

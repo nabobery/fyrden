@@ -107,4 +107,14 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX audit_segments_from ON audit_segments (from_seq);
     `,
   },
+  {
+    version: 5,
+    // Repository settings: the description, and the directory's rename
+    // count of the name recorded (renames can arrive out of order).
+    name: "repo_settings",
+    sql: `
+      ALTER TABLE repo_meta ADD COLUMN description TEXT;
+      ALTER TABLE repo_meta ADD COLUMN name_gen INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];

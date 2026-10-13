@@ -1,6 +1,7 @@
 import type { forkRepo, Input, Output } from "@fyrden/api-contract";
 import { repoFor } from "../git/chunked/operations.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { repoOutput } from "../repos/output.js";
 import { forkRepository, nameTaken } from "./fork.js";
 
 /** The `repos.fork` operation: the caller forks a repository it can read into one it owns. */
@@ -27,14 +28,5 @@ export async function forkRepoOperation(
     metrics: ctx.metrics,
   });
   if (!result.ok) throw new OperationError(result.status, result.code, result.error);
-  const { repo } = result;
-  return {
-    id: repo.id,
-    owner: repo.ownerHandle,
-    name: repo.name,
-    full_name: `${repo.ownerHandle}/${repo.name}`,
-    visibility: repo.visibility,
-    default_branch: result.defaultBranch,
-    created_at: repo.createdAt,
-  };
+  return repoOutput(result.repo, { defaultBranch: result.defaultBranch, description: null });
 }

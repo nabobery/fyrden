@@ -1,7 +1,7 @@
 import { createToken, createUser } from "../ops/admin.js";
 import { createImport, getImport } from "../ops/imports.js";
 import { whoami } from "../ops/meta.js";
-import { createRepo, forkRepo, getRepo, listRepos } from "../ops/repos.js";
+import { createRepo, forkRepo, getRepo, listRepos, updateRepo } from "../ops/repos.js";
 import { abortUpload, completeUpload, createUpload, getUpload } from "../ops/uploads.js";
 import { defineRegistry } from "./op.js";
 
@@ -13,6 +13,7 @@ export const registry = defineRegistry([
   createRepo,
   listRepos,
   getRepo,
+  updateRepo,
   forkRepo,
   createUpload,
   getUpload,

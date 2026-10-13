@@ -11,29 +11,20 @@ import { getRepoImport, startImport } from "../git/import/operations.js";
 import { forkRepoOperation } from "../network/operations.js";
 import {
   canAccess,
+  claimNameStatement,
   defaultBranchOf,
+  forgetResolved,
   INITIAL_BRANCH,
   isValidRepoName,
   listOwnedRepos,
-  type RepoEntry,
   resolveRepo,
 } from "../repos/directory.js";
+import { repoOutput } from "../repos/output.js";
+import { updateRepoOperation } from "../repos/update.js";
 import { clock, newId, tokenStore } from "../services.js";
 import { type Handlers, type OpContext, OperationError } from "./execute.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-function repoOutput(repo: RepoEntry, defaultBranch: string) {
-  return {
-    id: repo.id,
-    owner: repo.ownerHandle,
-    name: repo.name,
-    full_name: `${repo.ownerHandle}/${repo.name}`,
-    visibility: repo.visibility,
-    default_branch: defaultBranch,
-    created_at: repo.createdAt,
-  };
-}
 
 /** A page cursor: the last name of the page, opaque to clients. */
 function encodeCursor(name: string): string {
@@ -49,22 +40,24 @@ function decodeCursor(cursor: string): string | undefined {
   }
 }
 
-/** The default branches the read model has for `ids` (a repository not projected yet is absent). */
-async function readModelHeads(
+type ProjectedDetails = { default_branch: string | null; description: string | null };
+
+/** The details the read model has for `ids` (a repository not projected yet is absent). */
+async function readModelDetails(
   env: Env,
   ids: readonly string[],
   metrics: OpContext["metrics"],
-): Promise<Map<string, string | null>> {
+): Promise<Map<string, ProjectedDetails>> {
   if (ids.length === 0) return new Map();
-  metrics.count("d1.query", { db: "org", op: "repo_heads" });
+  metrics.count("d1.query", { db: "org", op: "repo_details" });
   const { results } = await readModelFor(env, DEFAULT_ORG_SHARD)
     .prepare(
-      `SELECT repo_id, default_branch FROM repos
+      `SELECT repo_id, default_branch, description FROM repos
        WHERE repo_id IN (SELECT value FROM json_each(?)) AND deleted = 0`,
     )
     .bind(JSON.stringify(ids))
-    .all<{ repo_id: string; default_branch: string | null }>();
-  return new Map(results.map((row) => [row.repo_id, row.default_branch]));
+    .all<ProjectedDetails & { repo_id: string }>();
+  return new Map(results.map((row) => [row.repo_id, row]));
 }
 
 // D1 reports a unique-index violation in the error message.
@@ -160,9 +153,10 @@ export const handlers: Handlers = {
     if (!init.ok) throw new Error(`initializing repository storage failed: ${init.error}`);
 
     const now = clock();
-    metrics.count("d1.query", { db: "directory", op: "repo_create" }, 2);
+    metrics.count("d1.query", { db: "directory", op: "repo_create" }, 3);
     try {
       await env.DIRECTORY.batch([
+        claimNameStatement(env.DIRECTORY, auth.principalId, name),
         env.DIRECTORY.prepare(
           `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, 'private', ?, ?)`,
@@ -181,6 +175,8 @@ export const handlers: Handlers = {
       if (error instanceof Error && UNIQUE_VIOLATION.test(error.message)) throw taken();
       throw error;
     }
+    // The name may have redirected to another repository here.
+    forgetResolved(auth.principalHandle ?? "", name);
     return repoOutput(
       {
         id,
@@ -190,8 +186,9 @@ export const handlers: Handlers = {
         networkId,
         visibility: "private",
         createdAt: now,
+        nameGen: 0,
       },
-      INITIAL_BRANCH,
+      { defaultBranch: INITIAL_BRANCH, description: null },
     );
   },
 
@@ -211,14 +208,20 @@ export const handlers: Handlers = {
     const page = scanned
       .slice(0, per_page)
       .filter((entry) => canAccess(auth, entry, "metadata:read"));
-    const heads = await readModelHeads(
+    const projected = await readModelDetails(
       env,
       page.map((entry) => entry.id),
       metrics,
     );
     const last = page.at(-1);
     return {
-      repos: page.map((entry) => repoOutput(entry, defaultBranchOf(heads.get(entry.id) ?? null))),
+      repos: page.map((entry) => {
+        const details = projected.get(entry.id);
+        return repoOutput(entry, {
+          defaultBranch: defaultBranchOf(details?.default_branch ?? null),
+          description: details?.description ?? null,
+        });
+      }),
       next_cursor: scanned.length > per_page && last ? encodeCursor(last.name) : null,
     };
   },
@@ -229,9 +232,15 @@ export const handlers: Handlers = {
     if (!entry || !canAccess(auth, entry, "metadata:read"))
       throw new OperationError(404, "repo_not_found", `No repository ${owner}/${repo} was found.`);
     // HEAD is the repository object's (an import or a fork sets it from its source).
-    metrics.count("do.request", { class: "RepoDO", method: "headTarget" });
-    return repoOutput(entry, defaultBranchOf(await env.REPO.getByName(entry.id).headTarget()));
+    metrics.count("do.request", { class: "RepoDO", method: "details" });
+    const details = await env.REPO.getByName(entry.id).details();
+    return repoOutput(entry, {
+      defaultBranch: defaultBranchOf(details.headTarget),
+      description: details.description,
+    });
   },
+
+  "repos.update": updateRepoOperation,
 
   // Forks share the parent's packs in its fork network (network/).
   "repos.fork": forkRepoOperation,

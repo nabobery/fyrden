@@ -1,4 +1,4 @@
-import { HANDLE_PATTERN } from "@fyrden/domain";
+import { HANDLE_PATTERN, MAX_DESCRIPTION_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 
@@ -22,6 +22,7 @@ export const Repo = z.object({
   name: z.string(),
   full_name: z.string().describe("owner/name"),
   visibility: z.enum(["public", "internal", "private"]),
+  description: z.string().nullable(),
   default_branch: z.string(),
   created_at: z.number().int().describe("Unix time in milliseconds."),
 });
@@ -101,6 +102,52 @@ export const getRepo = defineOperation({
     title: "Get a repository",
     description: "Get a repository by owner and name.",
     readOnly: true,
+  },
+});
+
+export const updateRepo = defineOperation({
+  id: "repos.update",
+  method: "PATCH",
+  path: "/repos/{owner}/{repo}",
+  summary: "Update a repository",
+  description:
+    "Renames a repository or changes its description or default branch; fields left out are kept. After a rename the old name keeps working for clone, fetch, push and this API, until a repository takes that name again.",
+  input: z
+    .object({
+      owner: z.string().regex(HANDLE_PATTERN).describe("The owner's handle."),
+      repo: RepoName.describe("The repository's name (or a name it had before a rename)."),
+      name: RepoName.optional().describe("A new name."),
+      description: z
+        .string()
+        .max(MAX_DESCRIPTION_LENGTH)
+        .nullable()
+        .optional()
+        .describe("A short description; null or an empty string clears it."),
+      default_branch: z
+        .string()
+        .min(1)
+        .max(1024 - "refs/heads/".length)
+        .optional()
+        .describe("An existing branch, without the refs/heads/ prefix."),
+    })
+    .refine(
+      (input) =>
+        input.name !== undefined ||
+        input.description !== undefined ||
+        input.default_branch !== undefined,
+      "Give at least one of name, description and default_branch.",
+    ),
+  output: Repo,
+  permission: "administration:write",
+  principals: ["user", "agent"],
+  rateLimit: "write",
+  idempotency: "key",
+  mcp: {
+    tool: "update_repo",
+    title: "Update a repository",
+    description:
+      "Rename a repository or change its description or default branch; the old name keeps working after a rename.",
+    readOnly: false,
   },
 });
 

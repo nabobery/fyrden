@@ -4,6 +4,7 @@ import {
   orphanReaperHandler,
   type PackRetireOptions,
   REFLOG_PRUNE_BATCH,
+  type RefActor,
   RepoGitStorage,
   recordRepoStorage,
   reflogPruneHandler,
@@ -64,8 +65,14 @@ import {
 } from "./base/audit-archiver.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
-import { RepoEvents, type RepoExport, type RepoIdentity } from "./repo/events.js";
+import { RepoEvents, type RepoExport, type RepoIdentity, type RepoUpdate } from "./repo/events.js";
 import { repoSchema } from "./schema/repo.js";
+
+/** What a repository object knows of the repository's details. */
+export interface RepoDetails {
+  readonly headTarget: string | null;
+  readonly description: string | null;
+}
 
 /**
  * Wall-clock budget for one alarm run of background jobs: no new slice
@@ -225,9 +232,48 @@ export class RepoDO extends MigratingDO {
     return this.#measured("lsRefs", () => lsRefsResponse({ git: this.git, memoryBlocks }, args));
   }
 
-  /** The ref HEAD points at (`refs/heads/<default branch>`), or null when it is not set. */
-  headTarget(): string | null {
-    return this.git.refStore.head();
+  /** The repository's details this object holds: the ref HEAD points at (`refs/heads/<default branch>`, or null when it is not set) and the description. */
+  details(): RepoDetails {
+    return { headTarget: this.git.refStore.head(), description: this.events.description() };
+  }
+
+  /** Whether the branch `name` (without `refs/heads/`) exists. */
+  hasBranch(name: string): boolean {
+    return this.git.refStore.hasRef(`refs/heads/${name}`);
+  }
+
+  /**
+   * Updates the repository's settings: a rename the directory has made,
+   * the description, the default branch (which must exist). Returns the
+   * details after the update.
+   */
+  updateSettings(input: {
+    name?: RepoUpdate["name"];
+    description?: string | null;
+    defaultBranch?: string;
+    actor: RefActor | null;
+  }): Promise<{ ok: true; details: RepoDetails } | { ok: false; code: "branch_not_found" }> {
+    return this.#measured("updateSettings", async () => {
+      await this.checkEpoch();
+      const head =
+        input.defaultBranch === undefined ? undefined : `refs/heads/${input.defaultBranch}`;
+      if (head !== undefined && !this.git.refStore.hasRef(head)) {
+        // The directory's name is recorded even so: it is already in use.
+        if (input.name) this.events.update({ name: input.name, actor: input.actor });
+        this.#armOutbox();
+        this.#ensureAuditArchive();
+        return { ok: false as const, code: "branch_not_found" as const };
+      }
+      this.events.update({
+        ...(input.name && { name: input.name }),
+        ...(input.description !== undefined && { description: input.description }),
+        ...(head !== undefined && { head }),
+        actor: input.actor,
+      });
+      this.#armOutbox();
+      this.#ensureAuditArchive();
+      return { ok: true as const, details: this.details() };
+    });
   }
 
   /** The receive-pack ref advertisement (protocol v0, or v1 with its version line). */

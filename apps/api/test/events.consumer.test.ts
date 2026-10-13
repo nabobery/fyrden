@@ -167,6 +167,23 @@ describe("events consumer", () => {
     });
   });
 
+  it("projects the description, and an older event without one as none", async () => {
+    const repoId = await listedRepo();
+    const description = async () =>
+      (
+        await env.ORG_READ.prepare("SELECT description FROM repos WHERE repo_id = ?")
+          .bind(repoId)
+          .first<{ description: string | null }>()
+      )?.description;
+    await deliver([
+      envelope(repoId, [snapshot(repoId, 1, { r: row({ description: "Widgets" }) })]),
+    ]);
+    expect(await description()).toBe("Widgets");
+    // Built before descriptions existed: the field is absent.
+    await deliver([envelope(repoId, [snapshot(repoId, 2)])]);
+    expect(await description()).toBeNull();
+  });
+
   it("applies a duplicate delivery once, leaving the row as it was", async () => {
     const repoId = await listedRepo();
     const body = envelope(repoId, [snapshot(repoId, 2)]);

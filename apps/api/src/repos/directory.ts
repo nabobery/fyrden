@@ -19,6 +19,8 @@ export interface RepoEntry {
   readonly networkId: string;
   readonly visibility: "public" | "internal" | "private";
   readonly createdAt: number;
+  /** How many times the repository was renamed. */
+  readonly nameGen: number;
 }
 
 type Row = {
@@ -29,17 +31,20 @@ type Row = {
   network_id: string;
   visibility: RepoEntry["visibility"];
   created_at: number;
+  name_gen: number;
 };
 
-// Found repositories, per isolate, for 30 s (the token cache's bound). A
-// rename or transfer (not built yet) must take effect within that bound.
+// Found repositories, per isolate, for 30 s (the token cache's bound): a
+// renamed repository can be reported by its old name for that long. A
+// transfer (not built yet) must take effect within that bound.
 const found = new TokenCache<RepoEntry>(clock);
 
 const cacheKey = (owner: string, name: string) => `${owner.toLowerCase()}/${name.toLowerCase()}`;
 
 /**
- * Resolves `owner/name` to its active repository; names compare ignoring
- * case, as handles and repo names do. `consistency: "primary"` reads the
+ * Resolves `owner/name` to its active repository, or to the one a rename
+ * gave that name up (a redirect); names compare ignoring case, as handles
+ * and repo names do. `consistency: "primary"` reads the
  * D1 primary and skips the cache (writes, and checks right after a create);
  * otherwise a cached or replica answer is used, falling back to the primary
  * on a miss so a repository created a moment ago is found.
@@ -59,12 +64,23 @@ export async function resolveRepo(
   }
   const lookup = async (session: D1DatabaseSession) => {
     options.metrics?.count("d1.query", { db: "directory", op: "repo_resolve" });
+    // Two index seeks: the repository with the name, else a redirect's.
+    // `state <> 'deleted'` lets the partial (owner_id, name) index serve it.
     return session
       .prepare(
-        `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at
-         FROM repos r JOIN principals p ON p.id = r.owner_id
-         WHERE p.handle = ? COLLATE NOCASE AND r.name = ? COLLATE NOCASE
-           AND r.state = 'active' AND p.disabled_at IS NULL`,
+        `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
+           r.name_gen, 0 AS redirected
+         FROM principals p JOIN repos r ON r.owner_id = p.id
+         WHERE p.handle = ?1 COLLATE NOCASE AND p.disabled_at IS NULL
+           AND r.name = ?2 COLLATE NOCASE AND r.state <> 'deleted' AND r.state = 'active'
+         UNION ALL
+         SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
+           r.name_gen, 1
+         FROM principals p JOIN repo_redirects d ON d.owner_id = p.id
+           JOIN repos r ON r.id = d.repo_id AND r.owner_id = d.owner_id
+         WHERE p.handle = ?1 COLLATE NOCASE AND p.disabled_at IS NULL
+           AND d.name = ?2 AND r.state = 'active'
+         ORDER BY redirected LIMIT 1`,
       )
       .bind(owner, name)
       .first<Row>();
@@ -87,6 +103,7 @@ function entryOf(row: Row): RepoEntry {
     networkId: row.network_id,
     visibility: row.visibility,
     createdAt: row.created_at,
+    nameGen: row.name_gen,
   };
 }
 
@@ -106,7 +123,8 @@ export async function listOwnedRepos(
   const { results } = await env.DIRECTORY.withSession("first-primary")
     .prepare(
       // `state <> 'deleted'` lets the partial (owner_id, name) index serve the query.
-      `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at
+      `SELECT r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility, r.created_at,
+         r.name_gen
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.owner_id = ?1 AND r.state <> 'deleted' AND r.state = 'active'
          AND r.name > ?2 COLLATE NOCASE
@@ -116,6 +134,87 @@ export async function listOwnedRepos(
     .bind(ownerId, options.after, options.onlyIds && JSON.stringify(options.onlyIds), options.limit)
     .all<Row>();
   return results.map(entryOf);
+}
+
+/**
+ * A statement that frees `name` in an owner's namespace of redirects, for the
+ * batch that gives a repository that name (a create, a fork). The batch must
+ * fail as a whole if the name is not taken after all (a unique violation).
+ */
+export function claimNameStatement(db: D1Database, ownerId: string, name: string) {
+  return db
+    .prepare("DELETE FROM repo_redirects WHERE owner_id = ? AND name = ?")
+    .bind(ownerId, name);
+}
+
+/** Forgets what this isolate resolved `owner/name` to: the name now belongs to another repository, or none. */
+export function forgetResolved(ownerHandle: string, name: string): void {
+  found.delete(cacheKey(ownerHandle, name));
+}
+
+/**
+ * Renames an active repository in the directory, in one batch: its old
+ * name becomes a redirect to it, a redirect holding the new name goes, and
+ * the rename is audited. Returns the name and the rename count to record
+ * in the repository object, `"name_taken"` when another repository of the
+ * owner has the name, or undefined when the repository is not active. This
+ * isolate forgets the old and new names, and `alias` (the name the caller
+ * used, maybe one a redirect holds), at once; others within the cache's bound.
+ */
+export async function renameRepo(
+  env: Env,
+  repo: Pick<RepoEntry, "id" | "ownerId" | "ownerHandle" | "name">,
+  name: string,
+  options: { actorId: string; requestId?: string; alias?: string; metrics?: Metrics },
+): Promise<{ value: string; gen: number } | "name_taken" | undefined> {
+  const db = env.DIRECTORY;
+  const now = clock();
+  options.metrics?.count("d1.query", { db: "directory", op: "repo_rename" }, 4);
+  let results: D1Result<{ name: string; name_gen: number; old_name: string }>[];
+  try {
+    results = await db.batch<{ name: string; name_gen: number; old_name: string }>([
+      // Only for an active repository: a failed rename keeps another one's redirect.
+      db
+        .prepare(
+          `DELETE FROM repo_redirects WHERE owner_id = ?2 AND name = ?3
+           AND EXISTS (SELECT 1 FROM repos WHERE id = ?1 AND state = 'active')`,
+        )
+        .bind(repo.id, repo.ownerId, name),
+      // The old name, read in the batch: a concurrent rename cannot make it stale.
+      db
+        .prepare(
+          `INSERT INTO repo_redirects (owner_id, name, repo_id, created_at)
+           SELECT owner_id, name, id, ?3 FROM repos
+           WHERE id = ?1 AND state = 'active' AND name <> ?2 COLLATE NOCASE
+           ON CONFLICT (owner_id, name) DO UPDATE SET repo_id = excluded.repo_id,
+             created_at = excluded.created_at`,
+        )
+        .bind(repo.id, name, now),
+      db
+        .prepare(
+          `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
+           SELECT ?3, ?4, 'repo.rename', id, json_object('from', name, 'to', ?2), ?5 FROM repos
+           WHERE id = ?1 AND state = 'active'
+           RETURNING json_extract(details, '$.from') AS old_name`,
+        )
+        .bind(repo.id, name, now, options.actorId, options.requestId ?? null),
+      db
+        .prepare(
+          `UPDATE repos SET name = ?2, name_gen = name_gen + 1, updated_at = ?3
+           WHERE id = ?1 AND state = 'active' RETURNING name, name_gen`,
+        )
+        .bind(repo.id, name, now),
+    ]);
+  } catch (error) {
+    if (error instanceof Error && /UNIQUE constraint failed/i.test(error.message))
+      return "name_taken";
+    throw error;
+  }
+  const previous = results[2]?.results[0]?.old_name ?? repo.name;
+  for (const forgotten of [previous, repo.name, name, options.alias ?? name])
+    forgetResolved(repo.ownerHandle, forgotten);
+  const row = results[3]?.results[0];
+  return row && { value: row.name, gen: row.name_gen };
 }
 
 /** Access git asks for: fetch and clone read the contents, push writes them. */

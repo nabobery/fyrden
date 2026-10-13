@@ -1,4 +1,4 @@
-import type { CommitContext, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import type { CommitContext, RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import { REPO_ENTITY, type RepoRow } from "@fyrden/domain";
 import { oidToHex } from "@fyrden/git-core";
 import type { NewEvent, Outbox } from "../base/outbox.js";
@@ -36,8 +36,21 @@ export interface RepoIdentity {
  */
 export const REFS_PER_EVENT = 500;
 
+/** One update of a repository's settings; fields left out are kept. */
+export interface RepoUpdate {
+  /**
+   * The directory's name and its rename count: a name older than the one
+   * recorded (a rename that arrives late) is ignored.
+   */
+  readonly name?: { readonly value: string; readonly gen: number };
+  readonly description?: string | null;
+  /** A branch ref (`refs/heads/...`) that exists. */
+  readonly head?: string;
+  readonly actor: RefActor | null;
+}
+
 const META_COLUMNS =
-  "repo_id, owner_gen, epoch_gen, version, owner_id, name, visibility, pushed_at, created_at";
+  "repo_id, owner_gen, epoch_gen, version, owner_id, name, name_gen, visibility, description, pushed_at, created_at";
 
 type MetaRow = {
   repo_id: string;
@@ -46,7 +59,9 @@ type MetaRow = {
   version: number;
   owner_id: string | null;
   name: string | null;
+  name_gen: number;
   visibility: RepoRow["visibility"] | null;
+  description: string | null;
   pushed_at: number | null;
   created_at: number;
 };
@@ -68,6 +83,9 @@ export class RepoEvents {
 
   /** The check in flight, shared by concurrent first writers. */
   #epochCheck: Promise<void> | undefined;
+
+  /** An update is moving HEAD: its own snapshot carries the new default branch. */
+  #updating = false;
 
   constructor(
     private readonly git: RepoGitStorage,
@@ -94,6 +112,11 @@ export class RepoEvents {
         { class: this.git.context.doClass, op },
         cursor.rowsWritten,
       );
+  }
+
+  /** The description, or null (also before the identity is recorded). */
+  description(): string | null {
+    return this.#meta()?.description ?? null;
   }
 
   /** The organization (or account) the repository belongs to, or null before its creation is recorded. */
@@ -234,20 +257,80 @@ export class RepoEvents {
         },
       });
     }
-    meta = meta as MetaRow;
+    this.#audit(meta as MetaRow, "refs.update", actor ?? null, context.now, {
+      via: actor?.via ?? null,
+      refs: refUpdates.length,
+    });
+  }
+
+  /**
+   * Applies an update in one transaction: the new settings and HEAD, one
+   * snapshot and the audit row of what changed; nothing when nothing
+   * changes. A repository without an identity only moves HEAD.
+   */
+  update(update: RepoUpdate): void {
+    this.#storage.transactionSync(() => {
+      const meta = this.#meta();
+      if (meta && !this.#epochChecked)
+        throw new Error("the repository's epoch must be checked before it changes");
+      const changes: Record<string, unknown> = {};
+      const head = this.git.refStore.head();
+      if (update.head !== undefined && update.head !== head) {
+        this.#updating = true;
+        try {
+          this.git.refStore.setHead(update.head);
+        } finally {
+          this.#updating = false;
+        }
+        changes.default_branch = { from: head, to: update.head };
+      }
+      if (!meta) return;
+      if (update.name && update.name.gen > meta.name_gen) {
+        this.#exec(
+          "events.rename",
+          "UPDATE repo_meta SET name = ?, name_gen = ? WHERE id = 1",
+          update.name.value,
+          update.name.gen,
+        );
+        if (update.name.value !== meta.name)
+          changes.name = { from: meta.name, to: update.name.value };
+      }
+      if (update.description !== undefined && update.description !== meta.description) {
+        this.#exec(
+          "events.describe",
+          "UPDATE repo_meta SET description = ? WHERE id = 1",
+          update.description,
+        );
+        changes.description = true;
+      }
+      if (Object.keys(changes).length === 0) return;
+      const who = update.actor?.principal ?? null;
+      const after = this.#emit("repo.updated", { actor: who, actChain: [], data: null }, true);
+      this.#audit(after, "repo.update", update.actor, this.git.context.now(), changes);
+    });
+  }
+
+  #audit(
+    meta: MetaRow,
+    action: string,
+    actor: RefActor | null,
+    at: number,
+    details: Record<string, unknown>,
+  ): void {
     this.#exec(
       "events.audit",
       `INSERT INTO audit_log (epoch_gen, at, actor_id, on_behalf_of, token_id, grant_id, action,
          target_id, result, details)
-       VALUES (?, ?, ?, ?, ?, ?, 'refs.update', ?, 'ok', ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ok', ?)`,
       meta.epoch_gen,
-      context.now,
+      at,
       actor?.principal ?? null,
       actor?.onBehalfOf ?? null,
       actor?.tokenId ?? null,
       actor?.grantId ?? null,
+      action,
       meta.repo_id,
-      JSON.stringify({ via: actor?.via ?? null, refs: refUpdates.length }),
+      JSON.stringify(details),
     );
   }
 
@@ -257,7 +340,7 @@ export class RepoEvents {
    * transaction.
    */
   onHeadChanged(): void {
-    if (!this.#meta()) return;
+    if (this.#updating || !this.#meta()) return;
     if (!this.#epochChecked)
       throw new Error("the repository's epoch must be checked before it changes");
     this.#emit("repo.updated", { actor: null, actChain: [], data: null }, true);
@@ -310,6 +393,7 @@ export class RepoEvents {
       ownerId: meta.owner_id as string,
       name: meta.name as string,
       visibility: meta.visibility as RepoRow["visibility"],
+      description: meta.description,
       defaultBranch: this.git.refStore.head(),
       pushedAt: meta.pushed_at,
       createdAt: meta.created_at,

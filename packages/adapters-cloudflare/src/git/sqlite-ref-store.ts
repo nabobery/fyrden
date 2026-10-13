@@ -206,6 +206,17 @@ export class SqliteRefStore implements RefStore {
     );
   }
 
+  /** Whether the branch or tag `name` (a full ref name) exists; one row read. */
+  hasRef(name: string): boolean {
+    return (
+      first<{ one: number }>(
+        this.context.storage,
+        "SELECT 1 AS one FROM refs WHERE name = ? AND kind = 'direct'",
+        name,
+      ) !== undefined
+    );
+  }
+
   /** Sets where HEAD points (the default branch). Does not move any ref. */
   setHead(target: string): void {
     checkRefName(target);

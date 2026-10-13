@@ -42,6 +42,7 @@ describe("repos.create", () => {
       name,
       full_name: `${handle}/${name}`,
       visibility: "private",
+      description: null,
       default_branch: "main",
       created_at: expect.any(Number),
     });

@@ -5,7 +5,12 @@ import { allocateEpoch } from "../events/epochs.js";
 import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
 import type { RewriteState } from "../git/maintenance/rewrite.js";
 import { packCapPolicy } from "../git/maintenance/tail-merge-plan.js";
-import { defaultBranchOf, type RepoEntry } from "../repos/directory.js";
+import {
+  claimNameStatement,
+  defaultBranchOf,
+  forgetResolved,
+  type RepoEntry,
+} from "../repos/directory.js";
 import { clock, newId } from "../services.js";
 import type { ForkExport, NetworkFailure, ViewPack } from "./types.js";
 import { chooseBaseCompaction, VIEW_CAP } from "./view-cap.js";
@@ -170,9 +175,10 @@ export async function forkRepository(
 
   // Published: the directory row is the last write.
   const now = clock();
-  request.metrics?.count("d1.query", { db: "directory", op: "repo_create" }, 2);
+  request.metrics?.count("d1.query", { db: "directory", op: "repo_create" }, 3);
   try {
     await env.DIRECTORY.batch([
+      claimNameStatement(env.DIRECTORY, request.ownerId, request.name),
       env.DIRECTORY.prepare(
         `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -204,6 +210,8 @@ export async function forkRepository(
       return { ok: false, status: 409, code: "name_taken", error: nameTaken(request.name) };
     throw error;
   }
+  // The name may have redirected to another repository here.
+  forgetResolved(request.ownerHandle, request.name);
   const publishMs = clock() - started;
   log.info("fork published", { forkId, publishMs, commitsCopied, packsCompacted });
   return {
@@ -216,6 +224,7 @@ export async function forkRepository(
       networkId,
       visibility: parent.visibility,
       createdAt: now,
+      nameGen: 0,
     },
     defaultBranch: defaultBranchOf(exported.head),
     publishMs,

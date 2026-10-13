@@ -27,6 +27,7 @@ describe("D1 directory schema", () => {
       "memberships",
       "principals",
       "repo_deletions",
+      "repo_redirects",
       "repos",
       "source_epochs",
       "tokens",

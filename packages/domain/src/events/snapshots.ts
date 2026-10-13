@@ -5,11 +5,16 @@ import { isId } from "../ids.js";
 
 export const REPO_ENTITY = "repo";
 
+/** The longest repository description (GitHub's limit). */
+export const MAX_DESCRIPTION_LENGTH = 350;
+
 export const RepoRowSchema = z.strictObject({
   /** Repositories belong to users and organizations. */
   ownerId: z.string().refine((s) => isId(s, "usr") || isId(s, "org"), "not an owner id"),
   name: z.string().min(1),
   visibility: z.enum(["public", "internal", "private"]),
+  /** Absent from the events of builds before descriptions existed. */
+  description: z.string().max(MAX_DESCRIPTION_LENGTH).nullable().optional(),
   /** The branch HEAD names, or null when it is not set. */
   // At most as long as the longest ref name an import accepts.
   defaultBranch: z.string().max(1024).refine(isBranchRef, "not a branch ref").nullable(),

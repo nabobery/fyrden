@@ -310,8 +310,8 @@ export function repoStatement(
   return db
     .prepare(
       `INSERT INTO repos (repo_id, owner_id, name, visibility, default_branch, pushed_at, created_at,
-         deleted, epoch_gen, version, owner_gen, updated_seq, updated_at)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
+         deleted, epoch_gen, version, owner_gen, updated_seq, updated_at, description)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
        WHERE ?9 >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?1)
          AND ?11 >= coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?1), 0)
        ON CONFLICT (repo_id) DO UPDATE SET
@@ -322,6 +322,8 @@ export function repoStatement(
            ELSE excluded.default_branch END,
          pushed_at = CASE WHEN excluded.deleted = 1 THEN repos.pushed_at ELSE excluded.pushed_at END,
          created_at = CASE WHEN excluded.deleted = 1 THEN repos.created_at ELSE excluded.created_at END,
+         description = CASE WHEN excluded.deleted = 1 THEN repos.description
+           ELSE excluded.description END,
          deleted = excluded.deleted,
          epoch_gen = excluded.epoch_gen,
          version = excluded.version,
@@ -344,5 +346,6 @@ export function repoStatement(
       event.ownerGen,
       event.id.sourceSeq,
       now,
+      row?.description ?? null,
     );
 }
