@@ -8,7 +8,7 @@ import {
 } from "@modelcontextprotocol/server";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { withConvertedJsonSchema } from "../src/mcp/mount.js";
+import { mcpOriginAllowed, withConvertedJsonSchema } from "../src/mcp/mount.js";
 import { api, user } from "./helpers/api.js";
 import { createRepo } from "./helpers/git-http.js";
 import { principalWithToken } from "./helpers/principals.js";
@@ -236,6 +236,25 @@ describe("MCP origins", () => {
     expect((await send("http://127.0.0.1:6274")).status).not.toBe(403);
     expect((await send()).status).not.toBe(403);
   });
+
+  it("take this deployment's own Workers, not the same names on another account", () => {
+    const at = "fyrden-api.alice.workers.dev";
+    expect(mcpOriginAllowed({}, "https://fyrden-web.alice.workers.dev", at)).toBe(true);
+    expect(mcpOriginAllowed({}, "https://fyrden-api.alice.workers.dev", at)).toBe(true);
+    expect(mcpOriginAllowed({}, "https://fyrden-web.mallory.workers.dev", at)).toBe(false);
+    expect(mcpOriginAllowed({}, "https://fyrden-web.alice.workers.dev.evil.example", at)).toBe(
+      false,
+    );
+    expect(mcpOriginAllowed({}, "https://other.alice.workers.dev", at)).toBe(false);
+    // On a custom domain: the listed hosts, and no workers.dev origin at all.
+    const own = { FYRDEN_OWN_HOSTS: "git.example.com, api.example.com" };
+    expect(mcpOriginAllowed(own, "https://git.example.com", "api.example.com")).toBe(true);
+    expect(mcpOriginAllowed(own, "https://fyrden-web.alice.workers.dev", "api.example.com")).toBe(
+      false,
+    );
+    expect(mcpOriginAllowed({}, "http://localhost:6274", at)).toBe(true);
+    expect(mcpOriginAllowed({}, "not a url", at)).toBe(false);
+  });
 });
 
 describe("MCP resources", () => {
@@ -263,6 +282,33 @@ describe("MCP resources", () => {
     const stranger = await user();
     const hidden = await (await rpc("resources/read", { uri }, `Bearer ${stranger.token}`)).text();
     expect(hidden).toContain("Resource not found");
+  });
+
+  it("answer an unexpected failure with a generic error and log it redacted", async () => {
+    const leaked = `fyrden_pat_${"T".repeat(36)}`;
+    const failing = {
+      ...env,
+      RATE_LIMIT_READ: {
+        limit: async () => {
+          throw new Error(`rate limiter failed for ${leaked}`);
+        },
+      },
+    } as unknown as Env;
+    const app = createApp();
+    const ctx = createExecutionContext();
+    const res = await rpc(
+      "resources/read",
+      { uri: "fyrden://repos/someone/something/files/README.md" },
+      undefined,
+      (url, init) => Promise.resolve(app.request(url, init, failing, ctx)),
+    );
+    await waitOnExecutionContext(ctx);
+    const text = await res.text();
+    expect(text).not.toContain("rate limiter failed");
+    expect(text).toContain("An unexpected error occurred.");
+    expect(logs.entries().find((e) => e.msg === "unhandled error")).toMatchObject({
+      operation: "repos.contents.get",
+    });
   });
 });
 

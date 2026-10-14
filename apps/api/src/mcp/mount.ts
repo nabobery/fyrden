@@ -126,6 +126,26 @@ async function readFileResource(
   };
 }
 
+/**
+ * Reads a file resource. As with tools, the SDK would answer an unexpected
+ * exception with its raw message, so only deliberate protocol errors pass
+ * through; anything else is logged through the redacting logger and
+ * answered generically.
+ */
+async function readResource(
+  ctx: OpContext,
+  uri: URL,
+  variables: Record<string, string | string[]>,
+): Promise<ReadResourceResult> {
+  try {
+    return await readFileResource(ctx, uri, variables);
+  } catch (error) {
+    if (error instanceof ProtocolError || error instanceof ResourceNotFoundError) throw error;
+    ctx.log.error("unhandled error", { error, operation: "repos.contents.get" });
+    throw new ProtocolError(-32603, "An unexpected error occurred.");
+  }
+}
+
 type JsonSchemaOf = StandardSchemaWithJSON["~standard"]["jsonSchema"]["input"];
 
 const convertedOnce = new WeakMap<StandardSchemaWithJSON, StandardSchemaWithJSON>();
@@ -189,7 +209,7 @@ function buildServer(ctx: OpContext): McpServer {
       description:
         "A file (or a directory's entries) on a repository's default branch: fyrden://repos/{owner}/{repo}/files/{path}.",
     },
-    (uri, variables) => readFileResource(ctx, uri, variables),
+    (uri, variables) => readResource(ctx, uri, variables),
   );
   for (const op of registry as readonly OperationDef[]) {
     if (!op.mcp) continue;
@@ -210,15 +230,24 @@ function buildServer(ctx: OpContext): McpServer {
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
+/** A Fyrden Worker's workers.dev name; the group is the account's subdomain. */
+const WORKERS_DEV = /^fyrden-(?:api|web)\.([a-z0-9-]+)\.workers\.dev$/;
+
 /**
  * Whether a request's `Origin` (a browser's) may reach the MCP server: none
- * (a native client), a loopback one, a workers.dev name of the
- * deployment's Workers, or a host `FYRDEN_OWN_HOSTS` lists (its custom
- * domains). The request's own `Host` is not trusted for this: a
- * DNS-rebinding page names itself in both (the MCP spec asks servers to
- * check `Origin`).
+ * (a native client), a loopback one, a host `FYRDEN_OWN_HOSTS` lists (the
+ * deployment's custom domains), or this deployment's own Workers on
+ * workers.dev: the same account subdomain as the request's host. That host
+ * is trustworthy only there, because Cloudflare routes a workers.dev name
+ * to its own account's Worker alone; elsewhere a DNS-rebinding page names
+ * itself in both `Host` and `Origin` (the MCP spec asks servers to check
+ * `Origin`).
  */
-export function mcpOriginAllowed(env: object, origin: string | undefined): boolean {
+export function mcpOriginAllowed(
+  env: object,
+  origin: string | undefined,
+  requestHost: string,
+): boolean {
   if (origin === undefined) return true;
   let host: string;
   try {
@@ -226,7 +255,9 @@ export function mcpOriginAllowed(env: object, origin: string | undefined): boole
   } catch {
     return false;
   }
-  if (LOOPBACK.has(host) || /^fyrden-(api|web)\.[a-z0-9-]+\.workers\.dev$/.test(host)) return true;
+  if (LOOPBACK.has(host)) return true;
+  const account = WORKERS_DEV.exec(requestHost.toLowerCase())?.[1];
+  if (account !== undefined && WORKERS_DEV.exec(host)?.[1] === account) return true;
   const listed = (env as { FYRDEN_OWN_HOSTS?: unknown }).FYRDEN_OWN_HOSTS;
   return (
     typeof listed === "string" &&
@@ -247,7 +278,7 @@ export function mountMcp(app: Hono<{ Bindings: Env; Variables: AuthVariables }>)
   // the executor re-verifies on the D1 primary before any write tool runs.
   // A browser's request from another site (DNS rebinding) is refused before anything else.
   app.all(MCP_PATH, async (c, next) => {
-    if (!mcpOriginAllowed(c.env, c.req.header("Origin")))
+    if (!mcpOriginAllowed(c.env, c.req.header("Origin"), new URL(c.req.url).hostname))
       return problem(c, 403, "origin_not_allowed", "Requests from this origin are not accepted.");
     await next();
   });
