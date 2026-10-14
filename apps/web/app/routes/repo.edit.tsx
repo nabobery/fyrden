@@ -1,6 +1,12 @@
 import { Form, Link, redirect, useActionData } from "react-router";
 import { apiCall, apiGet, assertSameOrigin } from "../lib/api.server.js";
-import { type Contents, decodeText, encodePath, encodeText } from "../lib/types.js";
+import {
+  type Contents,
+  decodeText,
+  encodePath,
+  encodeText,
+  withoutTrailingSlashes,
+} from "../lib/types.js";
 import type { Route } from "./+types/repo.edit";
 
 export function meta({ params }: Route.MetaArgs): Route.MetaDescriptors {
@@ -55,7 +61,7 @@ export async function action({ request, context, params }: Route.ActionArgs) {
   const dir = params["*"] ?? "";
   const adding = form.get("adding") === "1";
   const name = String(form.get("name") ?? "").trim();
-  const path = adding ? [dir.replace(/\/+$/, ""), name].filter(Boolean).join("/") : dir;
+  const path = adding ? [withoutTrailingSlashes(dir), name].filter(Boolean).join("/") : dir;
   const message =
     String(form.get("message") ?? "").trim() || (adding ? `Add ${path}` : `Update ${path}`);
   const base = `${repoPath(params.owner, params.repo)}/contents/${encodePath(path)}`;

@@ -133,7 +133,12 @@ function decodeBase64(text: string): string | undefined {
  * (`<base64>AA`), so each alignment decodes only whole 4-character groups.
  */
 export function base64RunHasToken(run: string): boolean {
-  const body = run.replace(/=+$/, "");
+  // A loop, not /=+$/: that regex backtracks quadratically on a long run
+  // of '=' that does not end the string. Today's callers pass runs with at
+  // most two, but the function must stay linear for any caller.
+  let end = run.length;
+  while (end > 0 && run.charCodeAt(end - 1) === 0x3d) end--;
+  const body = run.slice(0, end);
   for (let offset = 0; offset < 4 && offset < body.length; offset++) {
     const aligned = body.slice(offset);
     const decoded = decodeBase64(aligned.slice(0, aligned.length - (aligned.length % 4)));

@@ -51,4 +51,10 @@ describe("helpers", () => {
   it("checks every base64 alignment", () => {
     expect(base64RunHasToken(`Q${btoa(token)}`)).toBe(true);
   });
+
+  it("takes linear time on a long run of padding, whoever the caller", () => {
+    // A regex trim of trailing '=' backtracks quadratically on this shape.
+    expect(base64RunHasToken(`${"=".repeat(200_000)}x`)).toBe(false);
+    expect(base64RunHasToken(`${btoa(token)}${"=".repeat(200_000)}`)).toBe(true);
+  });
 });

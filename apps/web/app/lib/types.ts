@@ -45,6 +45,17 @@ export interface Commit {
   };
 }
 
+/**
+ * `path` without its trailing slashes. A loop, not /\/+$/: that regex is
+ * quadratic on many slashes that do not end the string, and a route's
+ * decoded path can carry thousands.
+ */
+export function withoutTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path.charCodeAt(end - 1) === 0x2f) end--;
+  return path.slice(0, end);
+}
+
 /** A repository path's segments, each encoded for a URL (slashes kept). */
 export const encodePath = (path: string): string =>
   path

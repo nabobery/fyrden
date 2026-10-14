@@ -73,13 +73,15 @@ export function openApiDocument(
   registry: Registry,
   info: { version: string; serverUrl?: string },
 ): JsonSchema {
-  const paths: Record<string, Record<string, JsonSchema>> = {};
+  // A Map, so no path (not even "__proto__") can reach an object's prototype.
+  const byPath = new Map<string, Record<string, JsonSchema>>();
   for (const op of registry) {
     const path = openApiPath(op.path);
-    const item = paths[path] ?? {};
+    const item = byPath.get(path) ?? {};
     item[op.method.toLowerCase()] = operationObject(op);
-    paths[path] = item;
+    byPath.set(path, item);
   }
+  const paths = Object.fromEntries(byPath);
   return {
     openapi: "3.1.1",
     info: { title: "Fyrden API", version: info.version },
