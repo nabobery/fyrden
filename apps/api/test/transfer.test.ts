@@ -4,9 +4,11 @@
 
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import type { Envelope } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { markDeletions } from "../src/repos/deletion.js";
 import { authorize, renameRepo, resolveRepo } from "../src/repos/directory.js";
 import { advanceTransfer } from "../src/repos/transfer.js";
@@ -60,7 +62,61 @@ const transfer = (who: Who, repo: Repo, body: Record<string, unknown>) =>
 const quota = async (path: string, token: string) =>
   (await json<{ storage_bytes: number }>(api("GET", path, token))).body.storage_bytes;
 
+/** Sends of `repoId`'s object, kept here instead of going to the queue. */
+const sentBy = new Map<string, Envelope[]>();
+
+/** From now on, until the object restarts, `repoId`'s sends are kept, not sent. */
+async function keepSends(repoId: string): Promise<void> {
+  await runInDurableObject(env.REPO.getByName(repoId), (repo: RepoDO) => {
+    if (!sentBy.has(repoId)) sentBy.set(repoId, []);
+    repo.sendEvents = async (envelope) => {
+      sentBy.get(repoId)?.push(envelope);
+    };
+  });
+}
+
+/** What `repoId`'s object sent since last asked (its outbox drained now). */
+async function sent(repoId: string): Promise<Envelope[]> {
+  await runInDurableObject(env.REPO.getByName(repoId), (repo: RepoDO) => repo.outbox.drain(repoId));
+  return sentBy.get(repoId)?.splice(0) ?? [];
+}
+
 describe("repository transfers", () => {
+  it("refuse a batch of the old owner that commits after the move, newer though it is", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    // An event of the old owner, routed (taken from the outbox) but not applied yet.
+    await keepSends(repo.id);
+    await api("PATCH", `/repos/${owner.handle}/${repo.name}`, owner.token, {
+      description: "stale",
+    });
+    const stale = await sent(repo.id);
+    const staleVersion = Math.max(
+      ...stale.flatMap((e) => e.events.map((event) => event.entity?.version ?? 0)),
+    );
+    expect(staleVersion).toBeGreaterThan(0);
+    const row = () =>
+      env.ORG_READ.prepare(
+        "SELECT owner_id, owner_gen, version, description FROM repos WHERE repo_id = ?",
+      )
+        .bind(repo.id)
+        .first<{ owner_id: string; owner_gen: number; version: number; description: string }>();
+    // The move commits first; then the old owner's batch, the newest event yet: refused.
+    const org = await newOrg(owner);
+    expect((await transfer(owner, repo, { new_owner: org })).status).toBe(200);
+    for (const envelope of stale) await applyEnvelope(env, envelope);
+    expect((await row())?.version ?? 0).toBeLessThan(staleVersion);
+    // The new owner's change lands, and the old batch, again, moves nothing back.
+    await keepSends(repo.id);
+    await api("PATCH", `/repos/${org}/${repo.name}`, owner.token, { description: "fresh" });
+    for (const envelope of await sent(repo.id))
+      expect(await applyEnvelope(env, envelope)).toBe("applied");
+    const fresh = await row();
+    expect(fresh).toMatchObject({ owner_gen: 2, description: "fresh" });
+    for (const envelope of stale) await applyEnvelope(env, envelope);
+    expect(await row()).toEqual(fresh);
+  });
+
   it("move a user's repository to an organization, with its history, collaborators and storage", async () => {
     const owner = await user();
     const repo = await pushedRepo(owner, "/user/repos");

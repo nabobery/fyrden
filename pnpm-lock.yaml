@@ -546,6 +546,9 @@ importers:
       '@fyrden/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@fyrden/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@fyrden/testing':
         specifier: workspace:*
         version: link:../../packages/testing
