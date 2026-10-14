@@ -42,6 +42,13 @@ export const Repo = z.object({
     .nullable()
     .describe("When it is deleted (Unix time in milliseconds); null to keep it."),
   parent_id: z.string().nullable().describe("The id of the repository it was forked from."),
+  source_id: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise.",
+    ),
   created_at: z.number().int().describe("Unix time in milliseconds."),
 });
 

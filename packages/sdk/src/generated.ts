@@ -567,6 +567,8 @@ export type ReposCreateOutput = {
   expires_at: number | null;
   /** The id of the repository it was forked from. */
   parent_id: string | null;
+  /** Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise. */
+  source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
 };
@@ -602,6 +604,8 @@ export type ReposListOutput = {
     expires_at: number | null;
     /** The id of the repository it was forked from. */
     parent_id: string | null;
+    /** Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise. */
+    source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
   })[];
@@ -639,6 +643,8 @@ export type ReposGetOutput = {
   expires_at: number | null;
   /** The id of the repository it was forked from. */
   parent_id: string | null;
+  /** Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise. */
+  source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
 };
@@ -683,6 +689,8 @@ export type ReposUpdateOutput = {
   expires_at: number | null;
   /** The id of the repository it was forked from. */
   parent_id: string | null;
+  /** Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise. */
+  source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
 };
@@ -755,6 +763,8 @@ export type ReposTransferOutput = {
     expires_at: number | null;
     /** The id of the repository it was forked from. */
     parent_id: string | null;
+    /** Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise. */
+    source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
   };
@@ -794,6 +804,8 @@ export type ReposForkOutput = {
   expires_at: number | null;
   /** The id of the repository it was forked from. */
   parent_id: string | null;
+  /** Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise. */
+  source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
 };
@@ -833,6 +845,8 @@ export type ReposForksListOutput = {
     expires_at: number | null;
     /** The id of the repository it was forked from. */
     parent_id: string | null;
+    /** Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise. */
+    source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
   })[];
@@ -876,6 +890,8 @@ export type ReposGenerateOutput = {
   expires_at: number | null;
   /** The id of the repository it was forked from. */
   parent_id: string | null;
+  /** Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise. */
+  source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
 };
@@ -1165,6 +1181,8 @@ export type StarsListOutput = {
     expires_at: number | null;
     /** The id of the repository it was forked from. */
     parent_id: string | null;
+    /** Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise. */
+    source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
     /** Unix time in milliseconds. */
@@ -2122,6 +2140,8 @@ export type OrgsReposCreateOutput = {
   expires_at: number | null;
   /** The id of the repository it was forked from. */
   parent_id: string | null;
+  /** Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise. */
+  source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
 };
@@ -2159,6 +2179,8 @@ export type OrgsReposListOutput = {
     expires_at: number | null;
     /** The id of the repository it was forked from. */
     parent_id: string | null;
+    /** Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise. */
+    source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
   })[];
@@ -2636,13 +2658,13 @@ export interface Operations {
   "meta.whoami": { input: MetaWhoamiInput; output: MetaWhoamiOutput };
   /** List the platform's signing keys. The public keys Fyrden signs the commits it makes with (file writes, generated repositories), as SSH public key lines: the current one, and retired ones commits may still carry. Check such a commit with `git verify-commit` (`gpg.format = ssh`) and these keys in an allowed-signers file. */
   "meta.signing_keys.list": { input: MetaSigningKeysListInput; output: MetaSigningKeysListOutput };
-  /** List your SSH signing keys. The SSH keys the authenticated user signs commits with, oldest first. */
+  /** List your SSH signing keys. The SSH keys the authenticated user (or an agent, with its own token) signs commits with, oldest first. */
   "users.ssh_signing_keys.list": { input: UsersSshSigningKeysListInput; output: UsersSshSigningKeysListOutput };
-  /** Add an SSH signing key. Adds an Ed25519 SSH public key the authenticated user signs commits with (`gpg.format = ssh`). A commit with a valid signature by it is verified when its committer email is the user's no-reply address (`<user id>@users.noreply.<host>`). A key belongs to one user: one already added answers 422 `key_in_use`. */
+  /** Add an SSH signing key. Adds an Ed25519 SSH public key the authenticated user signs commits with (`gpg.format = ssh`). A commit with a valid signature by it is verified when its committer email is the user's no-reply address (`<user id>@users.noreply.<host>`). An agent adds its own with its own token (its commits then use `<agent id>@users.noreply.<host>`); acting for a user under a grant it adds none. A key belongs to one principal: one already added answers 422 `key_in_use`. */
   "users.ssh_signing_keys.create": { input: UsersSshSigningKeysCreateInput; output: UsersSshSigningKeysCreateOutput };
-  /** Get an SSH signing key. One of the authenticated user's SSH signing keys. */
+  /** Get an SSH signing key. One of the authenticated user's (or agent's) SSH signing keys. */
   "users.ssh_signing_keys.get": { input: UsersSshSigningKeysGetInput; output: UsersSshSigningKeysGetOutput };
-  /** Delete an SSH signing key. Removes one of the authenticated user's SSH signing keys; commits it signed are no longer verified. */
+  /** Delete an SSH signing key. Removes one of the authenticated user's (or agent's) SSH signing keys; commits it signed are no longer verified. */
   "users.ssh_signing_keys.delete": { input: UsersSshSigningKeysDeleteInput; output: UsersSshSigningKeysDeleteOutput };
   /** List your tokens. Your personal access and git tokens, newest first; revoked and expired ones too. */
   "users.tokens.list": { input: UsersTokensListInput; output: UsersTokensListOutput };

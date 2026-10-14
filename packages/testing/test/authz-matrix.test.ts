@@ -56,6 +56,15 @@ describe("authorization matrix", () => {
     expect(allow("agent", "instance-admin", "instance:admin")).toBe(false);
     expect(allow("user", "instance-admin", "instance:admin")).toBe(true);
     expect(allow("user", "instance-admin", "contents:read")).toBe(false);
+    // Signing keys: an account's owner's own, a user's or an agent's; nobody else's.
+    for (const permission of ["ssh_signing_keys:read", "ssh_signing_keys:write"]) {
+      expect(allow("user", "account-owner", permission), permission).toBe(true);
+      expect(allow("agent", "account-owner", permission), permission).toBe(true);
+      expect(allow("installation", "account-owner", permission), permission).toBe(false);
+      expect(allow("org", "account-owner", permission), permission).toBe(false);
+      expect(allow("user", "account-member", permission), permission).toBe(false);
+      expect(allow("agent", "admin", permission), permission).toBe(false);
+    }
   });
 
   it("covers every repository role", () => {

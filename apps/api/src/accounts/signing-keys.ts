@@ -11,7 +11,7 @@ import { decodeSeekCursor, encodeSeekCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock, newId } from "../services.js";
 
-/** SSH signing keys one user may have. Proposed. */
+/** SSH signing keys one user or agent may have. Proposed. */
 export const MAX_SIGNING_KEYS = 100;
 
 type KeyRow = { id: string; title: string; key: string; fingerprint: string; created_at: number };
@@ -26,6 +26,21 @@ const output = (row: KeyRow): Output<typeof getSshSigningKey> => ({
 
 const notFound = (id: string) =>
   new OperationError(404, "key_not_found", `You have no SSH signing key ${id}.`);
+
+/**
+ * Whose keys the caller manages: its own (a user's, or an agent's with its
+ * own token). An agent acting for a user under a grant manages none: they
+ * would be the user's.
+ */
+function keyOwner(ctx: OpContext): string {
+  if (ctx.auth.grantId !== null)
+    throw new OperationError(
+      403,
+      "forbidden",
+      "Acting for a user, an agent manages no signing keys; with its own token it manages its own.",
+    );
+  return ctx.auth.principalId;
+}
 
 /** The `users.ssh_signing_keys.create` operation. */
 export async function createSshSigningKeyOperation(
@@ -50,7 +65,7 @@ export async function createSshSigningKeyOperation(
     created_at: clock(),
   };
   const db = ctx.env.DIRECTORY;
-  const principal = ctx.auth.principalId;
+  const principal = keyOwner(ctx);
   ctx.metrics.count("d1.query", { db: "directory", op: "signing_key_create" }, 3);
   let refused: "key_in_use" | "too_many_keys" | undefined;
   try {
@@ -97,13 +112,13 @@ export async function createSshSigningKeyOperation(
     throw new OperationError(
       422,
       "key_in_use",
-      "That key is already added, by you or another user.",
+      "That key is already added, by you or another user or agent.",
     );
   if (refused)
     throw new OperationError(
       422,
       "too_many_keys",
-      `You have ${MAX_SIGNING_KEYS} SSH signing keys, as many as one user may; delete one first.`,
+      `You have ${MAX_SIGNING_KEYS} SSH signing keys, as many as one user or agent may; delete one first.`,
     );
   return output(row);
 }
@@ -121,7 +136,7 @@ export async function listSshSigningKeysOperation(
        WHERE principal_id = ? AND (created_at, id) > (?, ?)
        ORDER BY created_at, id LIMIT ?`,
     )
-    .bind(ctx.auth.principalId, after.at, after.id, input.per_page + 1)
+    .bind(keyOwner(ctx), after.at, after.id, input.per_page + 1)
     .all<KeyRow>();
   const page = results.slice(0, input.per_page);
   const last = page.at(-1);
@@ -145,7 +160,7 @@ export async function getSshSigningKeyOperation(
       `SELECT id, title, key, fingerprint, created_at FROM ssh_signing_keys
        WHERE id = ? AND principal_id = ?`,
     )
-    .bind(input.key_id, ctx.auth.principalId)
+    .bind(input.key_id, keyOwner(ctx))
     .first<KeyRow>();
   if (!row) throw notFound(input.key_id);
   return output(row);
@@ -165,10 +180,10 @@ export async function deleteSshSigningKeyOperation(
          SELECT ?1, ?2, 'ssh_signing_key.delete', id, json_object('fingerprint', fingerprint), ?4
          FROM ssh_signing_keys WHERE id = ?3 AND principal_id = ?2`,
       )
-      .bind(clock(), ctx.auth.principalId, input.key_id, ctx.requestId ?? null),
+      .bind(clock(), keyOwner(ctx), input.key_id, ctx.requestId ?? null),
     db
       .prepare("DELETE FROM ssh_signing_keys WHERE id = ? AND principal_id = ?")
-      .bind(input.key_id, ctx.auth.principalId),
+      .bind(input.key_id, keyOwner(ctx)),
   ]);
   if ((audit?.meta.changes ?? 0) === 0) throw notFound(input.key_id);
   return { id: input.key_id, state: "deleted" };

@@ -208,6 +208,25 @@ export async function findReposById(
   return results.map(entryOf);
 }
 
+/** The active repository fork network `networkId` grew from (forked from none), if any. */
+export async function findNetworkSource(
+  env: Env,
+  networkId: string,
+  metrics?: Metrics,
+): Promise<RepoEntry | undefined> {
+  metrics?.count("d1.query", { db: "directory", op: "network_source" });
+  const row = await env.DIRECTORY.prepare(
+    `SELECT ${REPO_COLUMNS}
+     FROM repos r JOIN principals p ON p.id = r.owner_id
+     WHERE r.network_id = ? AND r.parent_id IS NULL AND r.state = 'active'
+       AND p.disabled_at IS NULL
+     LIMIT 1`,
+  )
+    .bind(networkId)
+    .first<RepoRow>();
+  return row ? entryOf(row) : undefined;
+}
+
 /**
  * A principal's active repositories in name order (ignoring case), the
  * first `limit` after `after` and, when given, among `onlyIds` (a token's

@@ -82,7 +82,7 @@ import {
 } from "../repos/file-writes.js";
 import { generateRepoOperation } from "../repos/generate.js";
 import { listAccountRepos } from "../repos/listing.js";
-import { repoOutput, starCounts, visibleParents } from "../repos/output.js";
+import { networkSource, repoOutput, starCounts, visibleParents } from "../repos/output.js";
 import {
   createRulesetOperation,
   deleteRulesetOperation,
@@ -241,14 +241,20 @@ export const handlers: Handlers = {
     // HEAD is the repository object's (an import or a fork sets it from its source).
     metrics.count("do.request", { class: "RepoDO", method: "details" });
     const details = await env.REPO.getByName(entry.id).details();
-    const parents = await visibleParents(env, auth, [entry], metrics);
-    const stars = await starCounts(env, [entry.id], metrics);
-    return repoOutput(entry, {
-      defaultBranch: defaultBranchOf(details.headTarget),
-      description: details.description,
-      parentVisible: parents.has(entry.parentId ?? ""),
-      stars: stars.get(entry.id) ?? 0,
-    });
+    const [parents, stars, source] = await Promise.all([
+      visibleParents(env, auth, [entry], metrics),
+      starCounts(env, [entry.id], metrics),
+      networkSource(env, auth, entry, metrics),
+    ]);
+    return {
+      ...repoOutput(entry, {
+        defaultBranch: defaultBranchOf(details.headTarget),
+        description: details.description,
+        parentVisible: parents.has(entry.parentId ?? ""),
+        stars: stars.get(entry.id) ?? 0,
+      }),
+      source_id: source,
+    };
   },
 
   "repos.update": updateRepoOperation,

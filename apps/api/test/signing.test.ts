@@ -2,7 +2,7 @@
 // key and show as verified; the public keys are published; a signature by a
 // key Fyrden does not know is not verified.
 
-import { env } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import {
   ed25519FromSeed,
   ed25519PublicKeyBlob,
@@ -14,6 +14,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { MAX_SIGNING_KEYS } from "../src/accounts/signing-keys.js";
 import type { CommitView } from "../src/do/repo/browse.js";
 import { checkSignature } from "../src/do/repo/signature.js";
+import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { platformKeys, platformSigner } from "../src/signing/platform-key.js";
 import { resolveVerification } from "../src/signing/verification.js";
 import { api, json, user, type Who } from "./helpers/api.js";
@@ -193,6 +194,88 @@ describe("commit signing", () => {
   });
 });
 
+describe("agents' signing keys", () => {
+  it("verify an agent's commits by a key of its own, never one it adds acting for a user", async () => {
+    const owner = await user();
+    const agent = await json<{ id: string; handle: string }>(
+      api("POST", "/agents", owner.token, { handle: uniqueId("signer").slice(0, 39) }),
+    );
+    const own = await json<{ token: string }>(
+      api("POST", `/agents/${agent.body.handle}/tokens`, owner.token, {}),
+    );
+    const pair = await ed25519FromSeed(seed(41));
+    const line = `ssh-ed25519 ${btoa(String.fromCharCode(...ed25519PublicKeyBlob(pair.publicKey)))}`;
+    const added = await json<{ id: string }>(
+      api("POST", "/user/ssh_signing_keys", own.body.token, { title: "ci", key: line }),
+    );
+    expect(added.status).toBe(201);
+    expect((await api("GET", "/user/ssh_signing_keys", own.body.token)).status).toBe(200);
+    // A key belongs to one principal: its user cannot add the agent's.
+    expect(
+      (
+        await json<{ code: string }>(
+          api("POST", "/user/ssh_signing_keys", owner.token, { title: "mine", key: line }),
+        )
+      ).body,
+    ).toMatchObject({ code: "key_in_use" });
+    const email = `${agent.body.id.toLowerCase()}@users.noreply.fyrden.test`;
+    const [view] = await resolveVerification({ env }, [
+      await viewOf(await signedBody(seed(41), email), email),
+    ]);
+    expect(view?.commit.verification).toMatchObject({ verified: true, reason: "valid" });
+    const verifyAgain = async () =>
+      (
+        await resolveVerification({ env }, [await viewOf(await signedBody(seed(41), email), email)])
+      )[0]?.commit.verification;
+    // Acting for its user under a grant, it is the user's keys it would touch: none.
+    const granted = await json<{ id: string }>(
+      api("POST", "/grants", owner.token, {
+        agent: agent.body.handle,
+        scopes: ["ssh_signing_keys:write"],
+      }),
+    );
+    expect(granted.status).toBe(201);
+    const exchanged = await exports.default.fetch("https://fyrden.test/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: TOKEN_EXCHANGE,
+        subject_token: own.body.token,
+        subject_token_type: ACCESS_TOKEN_TYPE,
+        grant_id: granted.body.id,
+      }).toString(),
+    });
+    const { access_token } = await exchanged.json<{ access_token: string }>();
+    expect((await api("GET", "/user/ssh_signing_keys", access_token)).status).toBe(403);
+    // Nor reads or deletes the user's, though the grant would allow it.
+    const users = await json<{ id: string }>(
+      api("POST", "/user/ssh_signing_keys", owner.token, {
+        title: "u",
+        key: `ssh-ed25519 ${btoa(String.fromCharCode(...ed25519PublicKeyBlob((await ed25519FromSeed(seed(43))).publicKey)))}`,
+      }),
+    );
+    expect(users.status).toBe(201);
+    for (const method of ["GET", "DELETE"])
+      expect(
+        (await api(method, `/user/ssh_signing_keys/${users.body.id}`, access_token)).status,
+      ).toBe(403);
+    expect((await api("GET", `/user/ssh_signing_keys/${users.body.id}`, owner.token)).status).toBe(
+      200,
+    );
+    const other = await ed25519FromSeed(seed(42));
+    const otherLine = `ssh-ed25519 ${btoa(String.fromCharCode(...ed25519PublicKeyBlob(other.publicKey)))}`;
+    expect(
+      (await api("POST", "/user/ssh_signing_keys", access_token, { title: "x", key: otherLine }))
+        .status,
+    ).toBe(403);
+    // Its keys hold while its owner does: disabling the owner stops them.
+    await env.DIRECTORY.prepare("UPDATE principals SET disabled_at = ? WHERE id = ?")
+      .bind(Date.now(), owner.principalId)
+      .run();
+    expect(await verifyAgain()).toMatchObject({ verified: false, reason: "unknown_key" });
+  });
+});
+
 /** One key short of the limit, written directly. */
 async function seed99(who: Who) {
   await env.DIRECTORY.batch(
@@ -280,7 +363,8 @@ describe("SSH signing keys", () => {
       write: [200, 200, 201, 200],
       other: [403, 403, 403, 403],
       all: [200, 200, 201, 200],
-      agent: [403, 403, 403, 403],
+      // Its own keys: none of the user's.
+      agent: [200, 404, 201, 404],
     };
     let n = 60;
     for (const [caller, token] of Object.entries(callers) as [keyof typeof callers, string][]) {

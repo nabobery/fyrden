@@ -1,6 +1,6 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { getRepo, Output } from "@fyrden/api-contract";
-import { authorize, findReposById, type RepoEntry } from "./directory.js";
+import { authorize, findNetworkSource, findReposById, type RepoEntry } from "./directory.js";
 
 /**
  * A repository as the API answers it: its directory entry and the details
@@ -33,6 +33,23 @@ export function repoOutput(
     parent_id: details.parentVisible ? repo.parentId : null,
     created_at: repo.createdAt,
   };
+}
+
+/**
+ * The repository a fork's network grew from (the one forked from no other),
+ * by id, when the caller may see it (its metadata); null for a repository
+ * forked from nothing, or a source gone or hidden from the caller.
+ */
+export async function networkSource(
+  env: Env,
+  auth: Parameters<typeof authorize>[1],
+  repo: RepoEntry,
+  metrics?: Metrics,
+): Promise<string | null> {
+  if (repo.parentId === null) return null;
+  const source = await findNetworkSource(env, repo.networkId, metrics);
+  if (!source || (auth.repoIds !== null && !auth.repoIds.includes(source.id))) return null;
+  return (await authorize(env, auth, source, "metadata:read", metrics)) ? source.id : null;
 }
 
 /** Which of the parents of `repos` the caller may see (its metadata), by id. */

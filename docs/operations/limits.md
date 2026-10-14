@@ -448,7 +448,7 @@ acting, the current one first, and audit rows carry it.
 | Passing down | An agent holding a user's grant may pass a narrower one (scopes, repositories, expiry) to another agent of its owner; one hop at most (depth 2) |
 | Delegated token | Type `oat`, up to 1 hour, and never past any grant of its chain or the agent's own token; scopes and repositories within the grant and the agent's token; for the REST API unless `resource` asks for the MCP server |
 | Revocation | Revoking a grant revokes the grants passed down from it; tokens under them, an agent's token its owner revokes (`DELETE /agents/{agent}/tokens/{token_id}`; `GET /agents/{agent}/tokens` lists them), and an agent's tokens once it (or its owner) is disabled, stop at once for writes and within 30 seconds for reads |
-| Delegated tokens may not | Make or revoke grants, mint tokens (but a git token for themselves), change who has access (collaborators, team repositories), or call user-only operations (transfer, stars, signing keys) |
+| Delegated tokens may not | Make or revoke grants, mint tokens (but a git token for themselves), change who has access (collaborators, team repositories), call user-only operations (transfer, stars), or manage signing keys (they would be the user's) |
 | Repositories an agent creates | Acting for a user under a grant with `repos:create` (create and fork): the user's, within every acting agent's owner's rights; each expires after 7 days (`AGENT_REPO_TTL_DAYS`) unless `expires_at` says when (at most a year: an agent may move it, only the user may clear it), and counts against the agent's own limit (see Quotas). An agent's own token, or a token limited to repositories (by its grant or the agent's token; it could not reach the new one), creates none |
 | An agent's own token | Never wider than the token that minted it (scopes and repositories) |
 | Token endpoint | Bodies up to 16 KiB; rate limited per client address |
@@ -577,8 +577,8 @@ the API carries GitHub's `verification` object.
 | The key | The Worker secret `SIGNING_KEY`: a 32-byte Ed25519 seed, base64. `fyrden deploy` makes one when the Worker has none and never shows it |
 | Published at | `GET /api/meta/signing-keys` (any token; the `list_signing_keys` MCP tool): each key's `key_id` (the SHA-256 fingerprint ssh-keygen shows), its public key line, and whether it is current |
 | Rotation | Set a new `SIGNING_KEY` and list the old public key line in `SIGNING_KEYS_RETIRED` (one per line), so commits it signed still verify |
-| Verified | A valid signature by the platform's key, current or retired; or by a key a user added (`POST /user/ssh_signing_keys`) on a commit whose committer email is that user's no-reply address, `<user id>@users.noreply.<host>` (else `bad_email`) |
-| Users' signing keys | Ed25519 only; 100 per user; a key belongs to one user (`key_in_use`); deleting one unverifies what it signed |
+| Verified | A valid signature by the platform's key, current or retired; or by a key a user (or an agent, with its own token) added (`POST /user/ssh_signing_keys`) on a commit whose committer email is that principal's no-reply address, `<user or agent id>@users.noreply.<host>` (else `bad_email`) |
+| Users' and agents' signing keys | Ed25519 only; 100 per user or agent (an agent adds its own with its own token); a key belongs to one of them (`key_in_use`); deleting one unverifies what it signed, and so does disabling its user, its agent or the agent's owner |
 | Not verified | `unsigned`, `unknown_key` (valid, by a key Fyrden does not know), `invalid` (the commit or signature was changed), `malformed_signature`, `unknown_signature_type` (OpenPGP, or a key type other than Ed25519) |
 | Without `SIGNING_KEY` | Fyrden's commits are unsigned |
 | A malformed `SIGNING_KEY` | Writes it would sign are refused (logged); reading and verifying go on, with the keys that can be read |

@@ -111,7 +111,10 @@ async function userKeys(
   const { results } = await ctx.env.DIRECTORY.prepare(
     `SELECT k.fingerprint, k.principal_id FROM ssh_signing_keys k
      JOIN principals p ON p.id = k.principal_id
-     WHERE k.fingerprint IN (SELECT value FROM json_each(?)) AND p.disabled_at IS NULL`,
+     -- An agent's keys hold while its owner does too.
+     LEFT JOIN principals o ON o.id = p.owner_id
+     WHERE k.fingerprint IN (SELECT value FROM json_each(?)) AND p.disabled_at IS NULL
+       AND o.disabled_at IS NULL`,
   )
     .bind(JSON.stringify(fingerprints))
     .all<{ fingerprint: string; principal_id: string }>();

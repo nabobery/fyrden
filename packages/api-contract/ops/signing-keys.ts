@@ -19,7 +19,8 @@ export const listSshSigningKeys = defineOperation({
   method: "GET",
   path: "/user/ssh_signing_keys",
   summary: "List your SSH signing keys",
-  description: "The SSH keys the authenticated user signs commits with, oldest first.",
+  description:
+    "The SSH keys the authenticated user (or an agent, with its own token) signs commits with, oldest first.",
   input: z.object({
     per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
     cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
@@ -32,7 +33,7 @@ export const listSshSigningKeys = defineOperation({
       .describe("Pass as `cursor` for the next page; null on the last page."),
   }),
   permission: "ssh_signing_keys:read",
-  principals: ["user"],
+  principals: ["user", "agent"],
   rateLimit: "read",
   idempotency: "none",
   mcp: {
@@ -49,7 +50,7 @@ export const createSshSigningKey = defineOperation({
   path: "/user/ssh_signing_keys",
   summary: "Add an SSH signing key",
   description:
-    "Adds an Ed25519 SSH public key the authenticated user signs commits with (`gpg.format = ssh`). A commit with a valid signature by it is verified when its committer email is the user's no-reply address (`<user id>@users.noreply.<host>`). A key belongs to one user: one already added answers 422 `key_in_use`.",
+    "Adds an Ed25519 SSH public key the authenticated user signs commits with (`gpg.format = ssh`). A commit with a valid signature by it is verified when its committer email is the user's no-reply address (`<user id>@users.noreply.<host>`). An agent adds its own with its own token (its commits then use `<agent id>@users.noreply.<host>`); acting for a user under a grant it adds none. A key belongs to one principal: one already added answers 422 `key_in_use`.",
   input: z.object({
     title: z.string().min(1).max(100).describe("A name for the key."),
     key: z
@@ -60,7 +61,7 @@ export const createSshSigningKey = defineOperation({
   }),
   output: SshSigningKey,
   permission: "ssh_signing_keys:write",
-  principals: ["user"],
+  principals: ["user", "agent"],
   rateLimit: "write",
   idempotency: "key",
   successStatus: 201,
@@ -77,11 +78,11 @@ export const getSshSigningKey = defineOperation({
   method: "GET",
   path: "/user/ssh_signing_keys/{key_id}",
   summary: "Get an SSH signing key",
-  description: "One of the authenticated user's SSH signing keys.",
+  description: "One of the authenticated user's (or agent's) SSH signing keys.",
   input: z.object({ key_id: KeyId }),
   output: SshSigningKey,
   permission: "ssh_signing_keys:read",
-  principals: ["user"],
+  principals: ["user", "agent"],
   rateLimit: "read",
   idempotency: "none",
   mcp: {
@@ -98,11 +99,11 @@ export const deleteSshSigningKey = defineOperation({
   path: "/user/ssh_signing_keys/{key_id}",
   summary: "Delete an SSH signing key",
   description:
-    "Removes one of the authenticated user's SSH signing keys; commits it signed are no longer verified.",
+    "Removes one of the authenticated user's (or agent's) SSH signing keys; commits it signed are no longer verified.",
   input: z.object({ key_id: KeyId }),
   output: z.object({ id: z.string(), state: z.literal("deleted") }),
   permission: "ssh_signing_keys:write",
-  principals: ["user"],
+  principals: ["user", "agent"],
   rateLimit: "write",
   idempotency: "key",
   mcp: {

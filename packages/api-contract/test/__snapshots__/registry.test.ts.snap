@@ -2521,6 +2521,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "source_id": {
+                            "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
                           "stargazers_count": {
                             "description": "How many users starred it.",
                             "maximum": 9007199254740991,
@@ -2690,6 +2697,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     },
                     "parent_id": {
                       "description": "The id of the repository it was forked from.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "source_id": {
+                      "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
                       "type": [
                         "string",
                         "null",
@@ -3525,6 +3539,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "source_id": {
+                      "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
                     "stargazers_count": {
                       "description": "How many users starred it.",
                       "maximum": 9007199254740991,
@@ -3723,6 +3744,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     },
                     "parent_id": {
                       "description": "The id of the repository it was forked from.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "source_id": {
+                      "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
                       "type": [
                         "string",
                         "null",
@@ -7261,6 +7289,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "source_id": {
+                            "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
                           "stargazers_count": {
                             "description": "How many users starred it.",
                             "maximum": 9007199254740991,
@@ -7438,6 +7473,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     },
                     "parent_id": {
                       "description": "The id of the repository it was forked from.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "source_id": {
+                      "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
                       "type": [
                         "string",
                         "null",
@@ -9833,6 +9875,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "null",
                           ],
                         },
+                        "source_id": {
+                          "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
+                          "type": [
+                            "string",
+                            "null",
+                          ],
+                        },
                         "stargazers_count": {
                           "description": "How many users starred it.",
                           "maximum": 9007199254740991,
@@ -10746,6 +10795,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "source_id": {
+                      "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
                     "stargazers_count": {
                       "description": "How many users starred it.",
                       "maximum": 9007199254740991,
@@ -11224,6 +11280,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "source_id": {
+                            "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
                           "stargazers_count": {
                             "description": "How many users starred it.",
                             "maximum": 9007199254740991,
@@ -11381,6 +11444,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     },
                     "parent_id": {
                       "description": "The id of the repository it was forked from.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "source_id": {
+                      "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
                       "type": [
                         "string",
                         "null",
@@ -11552,7 +11622,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/user/ssh_signing_keys": {
       "get": {
-        "description": "The SSH keys the authenticated user signs commits with, oldest first.",
+        "description": "The SSH keys the authenticated user (or an agent, with its own token) signs commits with, oldest first.",
         "operationId": "users.ssh_signing_keys.list",
         "parameters": [
           {
@@ -11660,10 +11730,11 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-fyrden-permission": "ssh_signing_keys:read",
         "x-fyrden-principals": [
           "user",
+          "agent",
         ],
       },
       "post": {
-        "description": "Adds an Ed25519 SSH public key the authenticated user signs commits with (\`gpg.format = ssh\`). A commit with a valid signature by it is verified when its committer email is the user's no-reply address (\`<user id>@users.noreply.<host>\`). A key belongs to one user: one already added answers 422 \`key_in_use\`.",
+        "description": "Adds an Ed25519 SSH public key the authenticated user signs commits with (\`gpg.format = ssh\`). A commit with a valid signature by it is verified when its committer email is the user's no-reply address (\`<user id>@users.noreply.<host>\`). An agent adds its own with its own token (its commits then use \`<agent id>@users.noreply.<host>\`); acting for a user under a grant it adds none. A key belongs to one principal: one already added answers 422 \`key_in_use\`.",
         "operationId": "users.ssh_signing_keys.create",
         "requestBody": {
           "content": {
@@ -11755,13 +11826,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-fyrden-permission": "ssh_signing_keys:write",
         "x-fyrden-principals": [
           "user",
+          "agent",
         ],
         "x-idempotency": "Idempotency-Key header",
       },
     },
     "/user/ssh_signing_keys/{key_id}": {
       "delete": {
-        "description": "Removes one of the authenticated user's SSH signing keys; commits it signed are no longer verified.",
+        "description": "Removes one of the authenticated user's (or agent's) SSH signing keys; commits it signed are no longer verified.",
         "operationId": "users.ssh_signing_keys.delete",
         "parameters": [
           {
@@ -11820,11 +11892,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-fyrden-permission": "ssh_signing_keys:write",
         "x-fyrden-principals": [
           "user",
+          "agent",
         ],
         "x-idempotency": "Idempotency-Key header",
       },
       "get": {
-        "description": "One of the authenticated user's SSH signing keys.",
+        "description": "One of the authenticated user's (or agent's) SSH signing keys.",
         "operationId": "users.ssh_signing_keys.get",
         "parameters": [
           {
@@ -11900,6 +11973,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-fyrden-permission": "ssh_signing_keys:read",
         "x-fyrden-principals": [
           "user",
+          "agent",
         ],
       },
     },
@@ -12002,6 +12076,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           },
                           "parent_id": {
                             "description": "The id of the repository it was forked from.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "source_id": {
+                            "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
                             "type": [
                               "string",
                               "null",

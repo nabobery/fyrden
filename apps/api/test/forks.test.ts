@@ -123,6 +123,23 @@ describe("forks", () => {
       });
   });
 
+  it("name their network's source, a fork of a fork too, only to a caller who can see it", async () => {
+    const fork = await forkAs(owner);
+    const path = `/repos/${owner.handle}/${fork.name}`;
+    const grandchild = await json<{ name: string }>(
+      api("POST", `${path}/forks`, owner.token, { name: uniqueId("grand") }),
+    );
+    const read = await json<{ parent_id: string; source_id: string | null }>(
+      api("GET", `/repos/${owner.handle}/${grandchild.body.name}`, owner.token),
+    );
+    expect(read.body).toMatchObject({ parent_id: fork.id, source_id: target.repo.id });
+    // The source itself, and a repository forked from nothing, have none.
+    expect((await json(api("GET", base, owner.token))).body).toMatchObject({ source_id: null });
+    // A token limited to the fork does not see the source.
+    const limited = await scopedToken(owner.principalId, [], "pat", [fork.id]);
+    expect((await json(api("GET", path, limited))).body).toMatchObject({ source_id: null });
+  });
+
   it("name their parent only to a caller who can see it", async () => {
     const reader = await user();
     await api("PUT", `${base}/collaborators/${reader.handle}`, owner.token, { permission: "pull" });
@@ -131,6 +148,7 @@ describe("forks", () => {
     expect((await json(api("GET", path, reader.token))).body).toMatchObject({
       fork: true,
       parent_id: target.repo.id,
+      source_id: target.repo.id,
     });
     // A token limited to the fork does not see the parent.
     const limited = await scopedToken(reader.principalId, [], "pat", [fork.id]);
@@ -144,6 +162,7 @@ describe("forks", () => {
     expect((await json(api("GET", path, reader.token))).body).toMatchObject({
       fork: true,
       parent_id: null,
+      source_id: null,
     });
     expect(
       (await json(api("PATCH", path, reader.token, { description: "mine now" }))).body,
