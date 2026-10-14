@@ -60,8 +60,6 @@ jobs:
       # Every package runs to the end, so one run reports every failure.
       - name: Unit and workerd integration tests with Istanbul coverage
         run: pnpm turbo run test:coverage --continue=dependencies-successful
-      - name: Shuffle guard (order-dependent workerd tests)
-        run: pnpm turbo run test:shuffle --continue=dependencies-successful
       - name: Dry-run deploy of both Workers
         run: pnpm turbo run deploy:dry-run
       - name: Both Workers together locally, through the service binding
@@ -113,6 +111,25 @@ jobs:
           export FYRDEN_GIT_BINARY="$HOME/.cache/fyrden-git/$GIT_VERSION/bin/git"
           "$FYRDEN_GIT_BINARY" --version
           pnpm --filter @fyrden/ci-tools test:interop
+
+  # The workerd suites again in random file and test order, several seeds:
+  # an order-dependent test fails here, with its seed, instead of flaking
+  # later. Its own job: three full passes outgrow the check job's budget.
+  shuffle:
+    name: Shuffle guard (order-dependent workerd tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run test:shuffle --continue=dependencies-successful
 
   # The API's contracts, against fyrden-api under wrangler dev: the MCP
   # conformance suite (pinned, with its baseline of known failures) and
@@ -234,7 +251,7 @@ jobs:
   # forks and fresh clones stay green.
   deploy:
     name: Deploy ${{ matrix.target }}
-    needs: [check, interop, contract]
+    needs: [check, shuffle, interop, contract]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
