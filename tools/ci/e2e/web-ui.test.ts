@@ -37,6 +37,8 @@ let browser: Browser | undefined;
 let page: Page;
 let token = "";
 let envFile = "";
+/** What the browser refused under the pages' Content Security Policy, on any page. */
+const refused: string[] = [];
 
 function run(args: string[], cwd: string): Promise<{ code: number | null; output: string }> {
   return new Promise((done, fail) => {
@@ -132,6 +134,9 @@ beforeAll(async () => {
   browser = await chromium.launch();
   const context = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
   page = await context.newPage();
+  page.on("console", (message) => {
+    if (message.text().includes("Content Security Policy")) refused.push(message.text());
+  });
 }, 180_000);
 
 afterAll(async () => {
@@ -199,6 +204,32 @@ describe("the web UI", () => {
     await accessible("commits");
   });
 
+  it("sends a Content Security Policy whose nonce only the page's own scripts carry", async () => {
+    const response = await page.goto(`${origin}/ada/demo`);
+    const policy = response?.headers()["content-security-policy"] ?? "";
+    const nonce = /script-src 'self' 'nonce-([^']+)'/.exec(policy)?.[1];
+    expect(nonce, policy).toBeTruthy();
+    expect(policy).toContain("object-src 'none'");
+    expect(policy).toContain("frame-ancestors 'none'");
+    // Every inline script React Router rendered carries it (the browser hides the
+    // attribute's value from the DOM, but keeps it in the `nonce` property).
+    const inline = await page.evaluate(() => {
+      // In the page (this package has no DOM types).
+      const { document } = globalThis as unknown as {
+        document: { querySelectorAll(selector: string): ArrayLike<{ nonce: string }> };
+      };
+      return Array.from(document.querySelectorAll("script:not([src])"), (s) => s.nonce);
+    });
+    expect(inline.length).toBeGreaterThan(0);
+    expect(inline.every((n) => n === nonce)).toBe(true);
+    // HEAD answers the same headers.
+    const head = await fetch(`${origin}/`, { method: "HEAD" });
+    expect(head.headers.get("content-security-policy")).toMatch(/script-src 'self' 'nonce-/);
+    // A new one on the next response.
+    const again = await page.goto(`${origin}/ada/demo`);
+    expect(again?.headers()["content-security-policy"]).not.toContain(nonce);
+  });
+
   it("creates a git token and an agent", async () => {
     await page.goto(`${origin}/settings/tokens`);
     await page.getByRole("button", { name: "Create token" }).click();
@@ -209,5 +240,9 @@ describe("the web UI", () => {
     await page.getByRole("button", { name: "Create agent" }).click();
     await see(page.getByRole("cell", { name: "ada-bot" })).toBeVisible();
     await accessible("agents");
+  });
+
+  it("never had a script, style or image refused by the policy on any page", () => {
+    expect(refused).toEqual([]);
   });
 });
