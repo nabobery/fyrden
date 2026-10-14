@@ -126,7 +126,7 @@ export async function putContentsOperation(
       sha: result.blobs[0] as string,
       size: content.length,
     },
-    commit: await resolveOne(ctx.env, result.commit),
+    commit: await resolveOne(ctx, result.commit),
   };
 }
 
@@ -141,7 +141,7 @@ export async function deleteContentsOperation(
     message: input.message,
     changes: [{ path: input.path, delete: true, expectedSha: input.sha }],
   });
-  return { content: null, commit: await resolveOne(ctx.env, result.commit) };
+  return { content: null, commit: await resolveOne(ctx, result.commit) };
 }
 
 /** The `repos.file_commits.create` operation. */
@@ -178,7 +178,7 @@ export async function createFileCommitOperation(
   });
   return {
     branch: result.branch,
-    commit: await resolveOne(ctx.env, result.commit),
+    commit: await resolveOne(ctx, result.commit),
     files: input.changes.map((c, i) => ({ path: c.path, sha: result.blobs[i] ?? null })),
   };
 }

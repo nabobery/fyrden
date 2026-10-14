@@ -30,6 +30,7 @@ describe("D1 directory schema", () => {
       "repo_redirects",
       "repos",
       "source_epochs",
+      "ssh_signing_keys",
       "stars",
       "tokens",
     ]);

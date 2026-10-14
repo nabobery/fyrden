@@ -80,6 +80,22 @@ export const PERMISSIONS = {
     implies: ["starring:read"],
     writes: true,
   },
+  "ssh_signing_keys:read": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "See the SSH keys the user signs commits with.",
+    principals: ["user"],
+    implies: [],
+    writes: false,
+  },
+  "ssh_signing_keys:write": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "Add and remove the SSH keys the user signs commits with.",
+    principals: ["user"],
+    implies: ["ssh_signing_keys:read"],
+    writes: true,
+  },
   "metadata:read": {
     resource: "repo",
     minRole: "read",

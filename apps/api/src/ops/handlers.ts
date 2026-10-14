@@ -23,6 +23,12 @@ import {
   setQuotaOperation,
 } from "../accounts/quotas.js";
 import {
+  createSshSigningKeyOperation,
+  deleteSshSigningKeyOperation,
+  getSshSigningKeyOperation,
+  listSshSigningKeysOperation,
+} from "../accounts/signing-keys.js";
+import {
   abortUploadSession,
   completeUploadSession,
   createUploadSession,
@@ -81,6 +87,11 @@ export const handlers: Handlers = {
       current: k.current,
     })),
   }),
+
+  "users.ssh_signing_keys.list": listSshSigningKeysOperation,
+  "users.ssh_signing_keys.create": createSshSigningKeyOperation,
+  "users.ssh_signing_keys.get": getSshSigningKeyOperation,
+  "users.ssh_signing_keys.delete": deleteSshSigningKeyOperation,
 
   "admin.users.create": async ({ env, auth, requestId, metrics }, { handle }) => {
     const db = env.DIRECTORY;

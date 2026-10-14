@@ -441,7 +441,8 @@ the API carries GitHub's `verification` object.
 | The key | The Worker secret `SIGNING_KEY`: a 32-byte Ed25519 seed, base64. `fyrden deploy` makes one when the Worker has none and never shows it |
 | Published at | `GET /api/meta/signing-keys` (any token; the `list_signing_keys` MCP tool): each key's `key_id` (the SHA-256 fingerprint ssh-keygen shows), its public key line, and whether it is current |
 | Rotation | Set a new `SIGNING_KEY` and list the old public key line in `SIGNING_KEYS_RETIRED` (one per line), so commits it signed still verify |
-| Verified | A valid signature by the platform's key, current or retired |
+| Verified | A valid signature by the platform's key, current or retired; or by a key a user added (`POST /user/ssh_signing_keys`) on a commit whose committer email is that user's no-reply address, `<user id>@users.noreply.<host>` (else `bad_email`) |
+| Users' signing keys | Ed25519 only; 100 per user; a key belongs to one user (`key_in_use`); deleting one unverifies what it signed |
 | Not verified | `unsigned`, `unknown_key` (valid, by a key Fyrden does not know), `invalid` (the commit or signature was changed), `malformed_signature`, `unknown_signature_type` (OpenPGP, or a key type other than Ed25519) |
 | Without `SIGNING_KEY` | Fyrden's commits are unsigned |
 | A malformed `SIGNING_KEY` | Writes it would sign are refused (logged); reading and verifying go on, with the keys that can be read |

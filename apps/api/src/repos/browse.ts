@@ -71,7 +71,7 @@ export async function getBranchOperation(
   const branch = value(await stub.browseBranch(input.branch));
   ctx.metrics.count("do.request", { class: "RepoDO", method: "browseCommit" });
   const commit = value(await stub.browseCommit(branch.commit.sha));
-  return { name: branch.name, commit: await resolveOne(ctx.env, commit), protected: false };
+  return { name: branch.name, commit: await resolveOne(ctx, commit), protected: false };
 }
 
 /** The `repos.tags.list` operation. */
@@ -130,7 +130,7 @@ export async function listCommitsOperation(
     }),
   );
   return {
-    commits: await resolveVerification(ctx.env, log.commits),
+    commits: await resolveVerification(ctx, log.commits),
     next_cursor: encodeLogCursor(log.next),
   };
 }
@@ -142,7 +142,7 @@ export async function getCommitOperation(
 ): Promise<Output<typeof getCommit>> {
   const stub = await repoStub(ctx, input.owner, input.repo);
   ctx.metrics.count("do.request", { class: "RepoDO", method: "browseCommit" });
-  return resolveOne(ctx.env, value(await stub.browseCommit(input.ref)));
+  return resolveOne(ctx, value(await stub.browseCommit(input.ref)));
 }
 
 /** The `repos.compare` operation. */
@@ -163,9 +163,9 @@ export async function compareCommitsOperation(
     ahead_by: compared.aheadBy,
     behind_by: compared.behindBy,
     total_commits: compared.aheadBy,
-    base_commit: await resolveOne(ctx.env, compared.baseCommit),
-    merge_base_commit: await resolveOne(ctx.env, compared.mergeBaseCommit),
-    commits: await resolveVerification(ctx.env, compared.commits),
+    base_commit: await resolveOne(ctx, compared.baseCommit),
+    merge_base_commit: await resolveOne(ctx, compared.mergeBaseCommit),
+    commits: await resolveVerification(ctx, compared.commits),
   };
 }
 

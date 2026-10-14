@@ -17,7 +17,8 @@ const permission = fc.constantFrom(...PERMISSION_NAMES);
 
 describe("the permission table", () => {
   it("names permissions <area>:<action>, as GitHub's fine-grained tokens do", () => {
-    for (const name of PERMISSION_NAMES) expect(name).toMatch(/^[a-z]+:(read|write|create|admin)$/);
+    for (const name of PERMISSION_NAMES)
+      expect(name).toMatch(/^[a-z]+(_[a-z]+)*:(read|write|create|admin)$/);
   });
 
   it("keeps authenticated out: it is not a grantable permission", () => {

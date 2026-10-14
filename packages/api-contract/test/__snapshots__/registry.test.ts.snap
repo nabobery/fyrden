@@ -393,6 +393,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "members:write",
                         "starring:read",
                         "starring:write",
+                        "ssh_signing_keys:read",
+                        "ssh_signing_keys:write",
                         "metadata:read",
                         "contents:read",
                         "contents:write",
@@ -2706,7 +2708,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             },
                             "verification": {
                               "additionalProperties": false,
-                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address.",
                               "properties": {
                                 "payload": {
                                   "description": "What the signature covers: the commit without it.",
@@ -2716,7 +2718,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                   ],
                                 },
                                 "reason": {
-                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`bad_email\` (a user's key, on a commit whose committer is not that user), \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
                                   "type": "string",
                                 },
                                 "signature": {
@@ -3307,7 +3309,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               },
                               "verification": {
                                 "additionalProperties": false,
-                                "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                                "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address.",
                                 "properties": {
                                   "payload": {
                                     "description": "What the signature covers: the commit without it.",
@@ -3317,7 +3319,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                     ],
                                   },
                                   "reason": {
-                                    "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                    "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`bad_email\` (a user's key, on a commit whose committer is not that user), \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
                                     "type": "string",
                                   },
                                   "signature": {
@@ -3534,7 +3536,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         },
                         "verification": {
                           "additionalProperties": false,
-                          "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                          "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address.",
                           "properties": {
                             "payload": {
                               "description": "What the signature covers: the commit without it.",
@@ -3544,7 +3546,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               ],
                             },
                             "reason": {
-                              "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                              "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`bad_email\` (a user's key, on a commit whose committer is not that user), \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
                               "type": "string",
                             },
                             "signature": {
@@ -3753,7 +3755,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             },
                             "verification": {
                               "additionalProperties": false,
-                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address.",
                               "properties": {
                                 "payload": {
                                   "description": "What the signature covers: the commit without it.",
@@ -3763,7 +3765,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                   ],
                                 },
                                 "reason": {
-                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`bad_email\` (a user's key, on a commit whose committer is not that user), \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
                                   "type": "string",
                                 },
                                 "signature": {
@@ -3901,7 +3903,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               },
                               "verification": {
                                 "additionalProperties": false,
-                                "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                                "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address.",
                                 "properties": {
                                   "payload": {
                                     "description": "What the signature covers: the commit without it.",
@@ -3911,7 +3913,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                     ],
                                   },
                                   "reason": {
-                                    "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                    "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`bad_email\` (a user's key, on a commit whose committer is not that user), \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
                                     "type": "string",
                                   },
                                   "signature": {
@@ -4047,7 +4049,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 },
                                 "verification": {
                                   "additionalProperties": false,
-                                  "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                                  "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address.",
                                   "properties": {
                                     "payload": {
                                       "description": "What the signature covers: the commit without it.",
@@ -4057,7 +4059,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                       ],
                                     },
                                     "reason": {
-                                      "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                      "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`bad_email\` (a user's key, on a commit whose committer is not that user), \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
                                       "type": "string",
                                     },
                                     "signature": {
@@ -4634,7 +4636,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             },
                             "verification": {
                               "additionalProperties": false,
-                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address.",
                               "properties": {
                                 "payload": {
                                   "description": "What the signature covers: the commit without it.",
@@ -4644,7 +4646,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                   ],
                                 },
                                 "reason": {
-                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`bad_email\` (a user's key, on a commit whose committer is not that user), \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
                                   "type": "string",
                                 },
                                 "signature": {
@@ -5213,7 +5215,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             },
                             "verification": {
                               "additionalProperties": false,
-                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address.",
                               "properties": {
                                 "payload": {
                                   "description": "What the signature covers: the commit without it.",
@@ -5223,7 +5225,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                   ],
                                 },
                                 "reason": {
-                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`bad_email\` (a user's key, on a commit whose committer is not that user), \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
                                   "type": "string",
                                 },
                                 "signature": {
@@ -5558,7 +5560,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             },
                             "verification": {
                               "additionalProperties": false,
-                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address.",
                               "properties": {
                                 "payload": {
                                   "description": "What the signature covers: the commit without it.",
@@ -5568,7 +5570,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                   ],
                                 },
                                 "reason": {
-                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`bad_email\` (a user's key, on a commit whose committer is not that user), \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
                                   "type": "string",
                                 },
                                 "signature": {
@@ -8402,6 +8404,359 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "agent",
         ],
         "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/user/ssh_signing_keys": {
+      "get": {
+        "description": "The SSH keys the authenticated user signs commits with, oldest first.",
+        "operationId": "users.ssh_signing_keys.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "fingerprint": {
+                            "description": "Its SHA-256 fingerprint, as ssh-keygen shows it.",
+                            "type": "string",
+                          },
+                          "id": {
+                            "description": "The key's id (key_ prefix).",
+                            "type": "string",
+                          },
+                          "key": {
+                            "description": "The public key line (\`ssh-ed25519 AAAA...\`), without its comment.",
+                            "type": "string",
+                          },
+                          "title": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "title",
+                          "key",
+                          "fingerprint",
+                          "created_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                  },
+                  "required": [
+                    "keys",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List your SSH signing keys",
+        "x-fyrden-permission": "ssh_signing_keys:read",
+        "x-fyrden-principals": [
+          "user",
+        ],
+      },
+      "post": {
+        "description": "Adds an Ed25519 SSH public key the authenticated user signs commits with (\`gpg.format = ssh\`). A commit with a valid signature by it is verified when its committer email is the user's no-reply address (\`<user id>@users.noreply.<host>\`). A key belongs to one user: one already added answers 422 \`key_in_use\`.",
+        "operationId": "users.ssh_signing_keys.create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "key": {
+                    "description": "The public key line (\`ssh-ed25519 AAAA... [comment]\`).",
+                    "maxLength": 1024,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "title": {
+                    "description": "A name for the key.",
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "title",
+                  "key",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "fingerprint": {
+                      "description": "Its SHA-256 fingerprint, as ssh-keygen shows it.",
+                      "type": "string",
+                    },
+                    "id": {
+                      "description": "The key's id (key_ prefix).",
+                      "type": "string",
+                    },
+                    "key": {
+                      "description": "The public key line (\`ssh-ed25519 AAAA...\`), without its comment.",
+                      "type": "string",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "title",
+                    "key",
+                    "fingerprint",
+                    "created_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Add an SSH signing key",
+        "x-fyrden-permission": "ssh_signing_keys:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/user/ssh_signing_keys/{key_id}": {
+      "delete": {
+        "description": "Removes one of the authenticated user's SSH signing keys; commits it signed are no longer verified.",
+        "operationId": "users.ssh_signing_keys.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "description": "The key's id.",
+              "pattern": "^key_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                    },
+                    "state": {
+                      "const": "deleted",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete an SSH signing key",
+        "x-fyrden-permission": "ssh_signing_keys:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "One of the authenticated user's SSH signing keys.",
+        "operationId": "users.ssh_signing_keys.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "description": "The key's id.",
+              "pattern": "^key_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "fingerprint": {
+                      "description": "Its SHA-256 fingerprint, as ssh-keygen shows it.",
+                      "type": "string",
+                    },
+                    "id": {
+                      "description": "The key's id (key_ prefix).",
+                      "type": "string",
+                    },
+                    "key": {
+                      "description": "The public key line (\`ssh-ed25519 AAAA...\`), without its comment.",
+                      "type": "string",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "title",
+                    "key",
+                    "fingerprint",
+                    "created_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get an SSH signing key",
+        "x-fyrden-permission": "ssh_signing_keys:read",
+        "x-fyrden-principals": [
+          "user",
+        ],
       },
     },
     "/user/starred": {

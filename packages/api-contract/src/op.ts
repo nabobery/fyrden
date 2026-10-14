@@ -64,7 +64,7 @@ export class RegistryError extends Error {
 
 const ID = /^[a-z][a-z0-9]*(\.[a-z][a-z0-9_]*)+$/;
 const TOOL = /^[a-z][a-z0-9_]{0,63}$/;
-const PATH = /^(\/([a-z0-9-]+|\{[a-z_]+\}))*(\/\{[a-z_]+\+\})?$/;
+const PATH = /^(\/([a-z0-9_-]+|\{[a-z_]+\}))*(\/\{[a-z_]+\+\})?$/;
 
 export function pathParams(path: string): string[] {
   return [...path.matchAll(/\{([a-z_]+)\+?\}/g)].map((m) => m[1] as string);

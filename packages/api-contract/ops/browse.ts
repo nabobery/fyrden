@@ -40,7 +40,7 @@ export const CommitObject = z.object({
         reason: z
           .string()
           .describe(
-            "`valid` (signed by a known key), `unsigned`, `unknown_key`, `invalid`, `malformed_signature` or `unknown_signature_type`, as GitHub names them.",
+            "`valid` (signed by a known key), `unsigned`, `unknown_key`, `bad_email` (a user's key, on a commit whose committer is not that user), `invalid`, `malformed_signature` or `unknown_signature_type`, as GitHub names them.",
           ),
         signature: z.string().nullable().describe("The armored signature."),
         payload: z
@@ -50,7 +50,7 @@ export const CommitObject = z.object({
         verified_at: z.string().nullable(),
       })
       .describe(
-        "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+        "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address.",
       ),
   }),
   parents: z.array(z.object({ sha: Sha })),

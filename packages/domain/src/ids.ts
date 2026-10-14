@@ -35,7 +35,7 @@ export function ulid(now: number, randomBytes: RandomBytes): string {
   return time + random;
 }
 
-export const ID_PREFIXES = ["usr", "org", "agt", "ins", "tok", "rep", "net"] as const;
+export const ID_PREFIXES = ["usr", "org", "agt", "ins", "tok", "rep", "net", "key"] as const;
 export type IdPrefix = (typeof ID_PREFIXES)[number];
 
 export type IdFactory = (prefix: IdPrefix) => string;

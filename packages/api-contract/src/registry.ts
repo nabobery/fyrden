@@ -38,6 +38,12 @@ import {
   listRepos,
   updateRepo,
 } from "../ops/repos.js";
+import {
+  createSshSigningKey,
+  deleteSshSigningKey,
+  getSshSigningKey,
+  listSshSigningKeys,
+} from "../ops/signing-keys.js";
 import { listStarred, starRepo, unstarRepo } from "../ops/stars.js";
 import { abortUpload, completeUpload, createUpload, getUpload } from "../ops/uploads.js";
 import { defineRegistry } from "./op.js";
@@ -46,6 +52,10 @@ import { defineRegistry } from "./op.js";
 export const registry = defineRegistry([
   whoami,
   listSigningKeys,
+  listSshSigningKeys,
+  createSshSigningKey,
+  getSshSigningKey,
+  deleteSshSigningKey,
   createUser,
   createToken,
   createOrg,

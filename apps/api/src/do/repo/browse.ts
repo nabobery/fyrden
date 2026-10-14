@@ -547,10 +547,6 @@ function tooLarge(): BrowseFailure {
   return fail(422, "comparison_too_large", "The comparison has too many commits to count.");
 }
 
-async function readCommit(reader: ObjectReader, oid: Oid): Promise<Commit> {
-  return parseCommit(await commitBody(reader, oid)).value;
-}
-
 async function commitBody(reader: ObjectReader, oid: Oid): Promise<Uint8Array> {
   const object = await reader.readObject(oid);
   if (object?.type !== "commit") throw new Error(`commit ${oidToHex(oid)} is missing`);
