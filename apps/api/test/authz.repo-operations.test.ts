@@ -13,6 +13,12 @@ import { principalWithToken, scopedToken } from "./helpers/principals.js";
 const ORIGIN = "https://fyrden.test";
 const UPLOAD_ID = "0".repeat(26);
 const SHA = "a".repeat(40);
+const RULESET = {
+  name: "checked",
+  enforcement: "active",
+  conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } },
+  rules: [{ type: "deletion" }],
+};
 
 /**
  * For each repository operation: an input beyond the path, and what the
@@ -45,6 +51,19 @@ const CASES: Record<
   "repos.trees.get": { input: {}, expected: { status: 404, code: "ref_not_found" } },
   "repos.archives.get": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.forks.list": { input: {}, expected: { status: 200 } },
+  // No ruleset 1 exists: named ones are not found; a new one is made.
+  "repos.rulesets.list": { input: {}, expected: { status: 200 } },
+  "repos.rulesets.get": { input: {}, expected: { status: 404, code: "ruleset_not_found" } },
+  "repos.rulesets.create": {
+    input: RULESET,
+    expected: { status: 201 },
+    ownRepo: true,
+  },
+  "repos.rulesets.update": {
+    input: RULESET,
+    expected: { status: 404, code: "ruleset_not_found" },
+  },
+  "repos.rulesets.delete": { input: {}, expected: { status: 404, code: "ruleset_not_found" } },
   // Writes change their own repository: the first commit of an empty one.
   "repos.contents.put": {
     input: { message: "add", content: "aGk=" },
@@ -126,7 +145,8 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{basehead+}", "main...main")
     .replace("{path+}", "README.md")
     .replace("{tree_sha+}", "main")
-    .replace("{format}", "zip");
+    .replace("{format}", "zip")
+    .replace("{ruleset_id}", "1");
   const input = CASES[op.id]?.input ?? SECONDARY[op.id]?.input ?? {};
   const get = op.method === "GET";
   return exports.default.fetch(`${ORIGIN}/api${path}`, {

@@ -7,3 +7,5 @@ export * from "./ids.js";
 export * from "./principals/principal.js";
 export * from "./principals/token.js";
 export * from "./repos/expiry.js";
+export * from "./rulesets/evaluate.js";
+export * from "./rulesets/ruleset.js";

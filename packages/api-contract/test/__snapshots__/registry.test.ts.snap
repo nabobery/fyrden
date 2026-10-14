@@ -6767,6 +6767,1385 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
     },
+    "/repos/{owner}/{repo}/rulesets": {
+      "get": {
+        "description": "The repository's rulesets, by id.",
+        "operationId": "repos.rulesets.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "rulesets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actor_types": {
+                            "anyOf": [
+                              {
+                                "description": "Fyrden: the principal types it applies to (all when left out); \`["agent"]\` makes agents use pull requests.",
+                                "items": {
+                                  "enum": [
+                                    "user",
+                                    "org",
+                                    "agent",
+                                    "installation",
+                                  ],
+                                  "type": "string",
+                                },
+                                "minItems": 1,
+                                "type": "array",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "bypass_actors": {
+                            "default": [],
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "actor_id": {
+                                  "description": "Callers with this role or a stronger one bypass the ruleset.",
+                                  "enum": [
+                                    "read",
+                                    "triage",
+                                    "write",
+                                    "maintain",
+                                    "admin",
+                                  ],
+                                  "type": "string",
+                                },
+                                "actor_type": {
+                                  "const": "RepositoryRole",
+                                  "type": "string",
+                                },
+                                "bypass_mode": {
+                                  "const": "always",
+                                  "default": "always",
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "actor_type",
+                                "actor_id",
+                                "bypass_mode",
+                              ],
+                              "type": "object",
+                            },
+                            "maxItems": 10,
+                            "type": "array",
+                          },
+                          "conditions": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "ref_name": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "exclude": {
+                                    "default": [],
+                                    "items": {
+                                      "description": "A full ref name pattern (\`refs/heads/main\`, \`refs/heads/release/*\`, \`refs/tags/**\`), \`~DEFAULT_BRANCH\` or \`~ALL\`. \`*\` stays within a path segment; \`**\` crosses them.",
+                                      "maxLength": 255,
+                                      "minLength": 1,
+                                      "type": "string",
+                                    },
+                                    "maxItems": 50,
+                                    "type": "array",
+                                  },
+                                  "include": {
+                                    "items": {
+                                      "description": "A full ref name pattern (\`refs/heads/main\`, \`refs/heads/release/*\`, \`refs/tags/**\`), \`~DEFAULT_BRANCH\` or \`~ALL\`. \`*\` stays within a path segment; \`**\` crosses them.",
+                                      "maxLength": 255,
+                                      "minLength": 1,
+                                      "type": "string",
+                                    },
+                                    "maxItems": 50,
+                                    "minItems": 1,
+                                    "type": "array",
+                                  },
+                                },
+                                "required": [
+                                  "include",
+                                  "exclude",
+                                ],
+                                "type": "object",
+                              },
+                            },
+                            "required": [
+                              "ref_name",
+                            ],
+                            "type": "object",
+                          },
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "enforcement": {
+                            "description": "\`active\` blocks, \`evaluate\` only reports what it would block, \`disabled\` does nothing.",
+                            "enum": [
+                              "active",
+                              "evaluate",
+                              "disabled",
+                            ],
+                            "type": "string",
+                          },
+                          "id": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "name": {
+                            "description": "Unique in the repository.",
+                            "maxLength": 100,
+                            "minLength": 1,
+                            "type": "string",
+                          },
+                          "rules": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "type": {
+                                  "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests).",
+                                  "enum": [
+                                    "creation",
+                                    "update",
+                                    "deletion",
+                                    "non_fast_forward",
+                                    "required_signatures",
+                                    "pull_request",
+                                  ],
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "type",
+                              ],
+                              "type": "object",
+                            },
+                            "maxItems": 6,
+                            "minItems": 1,
+                            "type": "array",
+                          },
+                          "target": {
+                            "default": "branch",
+                            "enum": [
+                              "branch",
+                              "tag",
+                            ],
+                            "type": "string",
+                          },
+                          "updated_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "target",
+                          "enforcement",
+                          "conditions",
+                          "rules",
+                          "bypass_actors",
+                          "created_at",
+                          "updated_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "rulesets",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List rulesets",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Adds rules on the branches or tags whose names match: pushes, file writes and every other change of a matching ref are checked against them (refused ones are \`ng\`, naming the ruleset). Rules on names and kinds of change are checked before a push is stored; force pushes and signatures at its commit, with the rulesets current then. At most 50 per repository. Administrators only.",
+        "operationId": "repos.rulesets.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "actor_types": {
+                    "description": "Fyrden: the principal types it applies to (all when left out); \`["agent"]\` makes agents use pull requests.",
+                    "items": {
+                      "enum": [
+                        "user",
+                        "org",
+                        "agent",
+                        "installation",
+                      ],
+                      "type": "string",
+                    },
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                  "bypass_actors": {
+                    "default": [],
+                    "items": {
+                      "properties": {
+                        "actor_id": {
+                          "description": "Callers with this role or a stronger one bypass the ruleset.",
+                          "enum": [
+                            "read",
+                            "triage",
+                            "write",
+                            "maintain",
+                            "admin",
+                          ],
+                          "type": "string",
+                        },
+                        "actor_type": {
+                          "const": "RepositoryRole",
+                          "type": "string",
+                        },
+                        "bypass_mode": {
+                          "const": "always",
+                          "default": "always",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "actor_type",
+                        "actor_id",
+                      ],
+                      "type": "object",
+                    },
+                    "maxItems": 10,
+                    "type": "array",
+                  },
+                  "conditions": {
+                    "properties": {
+                      "ref_name": {
+                        "properties": {
+                          "exclude": {
+                            "default": [],
+                            "items": {
+                              "description": "A full ref name pattern (\`refs/heads/main\`, \`refs/heads/release/*\`, \`refs/tags/**\`), \`~DEFAULT_BRANCH\` or \`~ALL\`. \`*\` stays within a path segment; \`**\` crosses them.",
+                              "maxLength": 255,
+                              "minLength": 1,
+                              "type": "string",
+                            },
+                            "maxItems": 50,
+                            "type": "array",
+                          },
+                          "include": {
+                            "items": {
+                              "description": "A full ref name pattern (\`refs/heads/main\`, \`refs/heads/release/*\`, \`refs/tags/**\`), \`~DEFAULT_BRANCH\` or \`~ALL\`. \`*\` stays within a path segment; \`**\` crosses them.",
+                              "maxLength": 255,
+                              "minLength": 1,
+                              "type": "string",
+                            },
+                            "maxItems": 50,
+                            "minItems": 1,
+                            "type": "array",
+                          },
+                        },
+                        "required": [
+                          "include",
+                        ],
+                        "type": "object",
+                      },
+                    },
+                    "required": [
+                      "ref_name",
+                    ],
+                    "type": "object",
+                  },
+                  "enforcement": {
+                    "description": "\`active\` blocks, \`evaluate\` only reports what it would block, \`disabled\` does nothing.",
+                    "enum": [
+                      "active",
+                      "evaluate",
+                      "disabled",
+                    ],
+                    "type": "string",
+                  },
+                  "name": {
+                    "description": "Unique in the repository.",
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "rules": {
+                    "items": {
+                      "properties": {
+                        "type": {
+                          "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests).",
+                          "enum": [
+                            "creation",
+                            "update",
+                            "deletion",
+                            "non_fast_forward",
+                            "required_signatures",
+                            "pull_request",
+                          ],
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                      ],
+                      "type": "object",
+                    },
+                    "maxItems": 6,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                  "target": {
+                    "default": "branch",
+                    "enum": [
+                      "branch",
+                      "tag",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "name",
+                  "enforcement",
+                  "conditions",
+                  "rules",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "actor_types": {
+                      "anyOf": [
+                        {
+                          "description": "Fyrden: the principal types it applies to (all when left out); \`["agent"]\` makes agents use pull requests.",
+                          "items": {
+                            "enum": [
+                              "user",
+                              "org",
+                              "agent",
+                              "installation",
+                            ],
+                            "type": "string",
+                          },
+                          "minItems": 1,
+                          "type": "array",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "bypass_actors": {
+                      "default": [],
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actor_id": {
+                            "description": "Callers with this role or a stronger one bypass the ruleset.",
+                            "enum": [
+                              "read",
+                              "triage",
+                              "write",
+                              "maintain",
+                              "admin",
+                            ],
+                            "type": "string",
+                          },
+                          "actor_type": {
+                            "const": "RepositoryRole",
+                            "type": "string",
+                          },
+                          "bypass_mode": {
+                            "const": "always",
+                            "default": "always",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "actor_type",
+                          "actor_id",
+                          "bypass_mode",
+                        ],
+                        "type": "object",
+                      },
+                      "maxItems": 10,
+                      "type": "array",
+                    },
+                    "conditions": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "ref_name": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "exclude": {
+                              "default": [],
+                              "items": {
+                                "description": "A full ref name pattern (\`refs/heads/main\`, \`refs/heads/release/*\`, \`refs/tags/**\`), \`~DEFAULT_BRANCH\` or \`~ALL\`. \`*\` stays within a path segment; \`**\` crosses them.",
+                                "maxLength": 255,
+                                "minLength": 1,
+                                "type": "string",
+                              },
+                              "maxItems": 50,
+                              "type": "array",
+                            },
+                            "include": {
+                              "items": {
+                                "description": "A full ref name pattern (\`refs/heads/main\`, \`refs/heads/release/*\`, \`refs/tags/**\`), \`~DEFAULT_BRANCH\` or \`~ALL\`. \`*\` stays within a path segment; \`**\` crosses them.",
+                                "maxLength": 255,
+                                "minLength": 1,
+                                "type": "string",
+                              },
+                              "maxItems": 50,
+                              "minItems": 1,
+                              "type": "array",
+                            },
+                          },
+                          "required": [
+                            "include",
+                            "exclude",
+                          ],
+                          "type": "object",
+                        },
+                      },
+                      "required": [
+                        "ref_name",
+                      ],
+                      "type": "object",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "enforcement": {
+                      "description": "\`active\` blocks, \`evaluate\` only reports what it would block, \`disabled\` does nothing.",
+                      "enum": [
+                        "active",
+                        "evaluate",
+                        "disabled",
+                      ],
+                      "type": "string",
+                    },
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "name": {
+                      "description": "Unique in the repository.",
+                      "maxLength": 100,
+                      "minLength": 1,
+                      "type": "string",
+                    },
+                    "rules": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "type": {
+                            "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests).",
+                            "enum": [
+                              "creation",
+                              "update",
+                              "deletion",
+                              "non_fast_forward",
+                              "required_signatures",
+                              "pull_request",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "type",
+                        ],
+                        "type": "object",
+                      },
+                      "maxItems": 6,
+                      "minItems": 1,
+                      "type": "array",
+                    },
+                    "target": {
+                      "default": "branch",
+                      "enum": [
+                        "branch",
+                        "tag",
+                      ],
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "target",
+                    "enforcement",
+                    "conditions",
+                    "rules",
+                    "bypass_actors",
+                    "created_at",
+                    "updated_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create a ruleset",
+        "x-fyrden-permission": "administration:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/rulesets/{ruleset_id}": {
+      "delete": {
+        "description": "Removes a ruleset. Administrators only.",
+        "operationId": "repos.rulesets.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "ruleset_id",
+            "required": true,
+            "schema": {
+              "description": "The ruleset's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "const": "deleted",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete a ruleset",
+        "x-fyrden-permission": "administration:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "One of the repository's rulesets.",
+        "operationId": "repos.rulesets.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "ruleset_id",
+            "required": true,
+            "schema": {
+              "description": "The ruleset's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "actor_types": {
+                      "anyOf": [
+                        {
+                          "description": "Fyrden: the principal types it applies to (all when left out); \`["agent"]\` makes agents use pull requests.",
+                          "items": {
+                            "enum": [
+                              "user",
+                              "org",
+                              "agent",
+                              "installation",
+                            ],
+                            "type": "string",
+                          },
+                          "minItems": 1,
+                          "type": "array",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "bypass_actors": {
+                      "default": [],
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actor_id": {
+                            "description": "Callers with this role or a stronger one bypass the ruleset.",
+                            "enum": [
+                              "read",
+                              "triage",
+                              "write",
+                              "maintain",
+                              "admin",
+                            ],
+                            "type": "string",
+                          },
+                          "actor_type": {
+                            "const": "RepositoryRole",
+                            "type": "string",
+                          },
+                          "bypass_mode": {
+                            "const": "always",
+                            "default": "always",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "actor_type",
+                          "actor_id",
+                          "bypass_mode",
+                        ],
+                        "type": "object",
+                      },
+                      "maxItems": 10,
+                      "type": "array",
+                    },
+                    "conditions": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "ref_name": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "exclude": {
+                              "default": [],
+                              "items": {
+                                "description": "A full ref name pattern (\`refs/heads/main\`, \`refs/heads/release/*\`, \`refs/tags/**\`), \`~DEFAULT_BRANCH\` or \`~ALL\`. \`*\` stays within a path segment; \`**\` crosses them.",
+                                "maxLength": 255,
+                                "minLength": 1,
+                                "type": "string",
+                              },
+                              "maxItems": 50,
+                              "type": "array",
+                            },
+                            "include": {
+                              "items": {
+                                "description": "A full ref name pattern (\`refs/heads/main\`, \`refs/heads/release/*\`, \`refs/tags/**\`), \`~DEFAULT_BRANCH\` or \`~ALL\`. \`*\` stays within a path segment; \`**\` crosses them.",
+                                "maxLength": 255,
+                                "minLength": 1,
+                                "type": "string",
+                              },
+                              "maxItems": 50,
+                              "minItems": 1,
+                              "type": "array",
+                            },
+                          },
+                          "required": [
+                            "include",
+                            "exclude",
+                          ],
+                          "type": "object",
+                        },
+                      },
+                      "required": [
+                        "ref_name",
+                      ],
+                      "type": "object",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "enforcement": {
+                      "description": "\`active\` blocks, \`evaluate\` only reports what it would block, \`disabled\` does nothing.",
+                      "enum": [
+                        "active",
+                        "evaluate",
+                        "disabled",
+                      ],
+                      "type": "string",
+                    },
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "name": {
+                      "description": "Unique in the repository.",
+                      "maxLength": 100,
+                      "minLength": 1,
+                      "type": "string",
+                    },
+                    "rules": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "type": {
+                            "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests).",
+                            "enum": [
+                              "creation",
+                              "update",
+                              "deletion",
+                              "non_fast_forward",
+                              "required_signatures",
+                              "pull_request",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "type",
+                        ],
+                        "type": "object",
+                      },
+                      "maxItems": 6,
+                      "minItems": 1,
+                      "type": "array",
+                    },
+                    "target": {
+                      "default": "branch",
+                      "enum": [
+                        "branch",
+                        "tag",
+                      ],
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "target",
+                    "enforcement",
+                    "conditions",
+                    "rules",
+                    "bypass_actors",
+                    "created_at",
+                    "updated_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a ruleset",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "put": {
+        "description": "Replaces a ruleset. Administrators only.",
+        "operationId": "repos.rulesets.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "ruleset_id",
+            "required": true,
+            "schema": {
+              "description": "The ruleset's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "actor_types": {
+                    "description": "Fyrden: the principal types it applies to (all when left out); \`["agent"]\` makes agents use pull requests.",
+                    "items": {
+                      "enum": [
+                        "user",
+                        "org",
+                        "agent",
+                        "installation",
+                      ],
+                      "type": "string",
+                    },
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                  "bypass_actors": {
+                    "default": [],
+                    "items": {
+                      "properties": {
+                        "actor_id": {
+                          "description": "Callers with this role or a stronger one bypass the ruleset.",
+                          "enum": [
+                            "read",
+                            "triage",
+                            "write",
+                            "maintain",
+                            "admin",
+                          ],
+                          "type": "string",
+                        },
+                        "actor_type": {
+                          "const": "RepositoryRole",
+                          "type": "string",
+                        },
+                        "bypass_mode": {
+                          "const": "always",
+                          "default": "always",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "actor_type",
+                        "actor_id",
+                      ],
+                      "type": "object",
+                    },
+                    "maxItems": 10,
+                    "type": "array",
+                  },
+                  "conditions": {
+                    "properties": {
+                      "ref_name": {
+                        "properties": {
+                          "exclude": {
+                            "default": [],
+                            "items": {
+                              "description": "A full ref name pattern (\`refs/heads/main\`, \`refs/heads/release/*\`, \`refs/tags/**\`), \`~DEFAULT_BRANCH\` or \`~ALL\`. \`*\` stays within a path segment; \`**\` crosses them.",
+                              "maxLength": 255,
+                              "minLength": 1,
+                              "type": "string",
+                            },
+                            "maxItems": 50,
+                            "type": "array",
+                          },
+                          "include": {
+                            "items": {
+                              "description": "A full ref name pattern (\`refs/heads/main\`, \`refs/heads/release/*\`, \`refs/tags/**\`), \`~DEFAULT_BRANCH\` or \`~ALL\`. \`*\` stays within a path segment; \`**\` crosses them.",
+                              "maxLength": 255,
+                              "minLength": 1,
+                              "type": "string",
+                            },
+                            "maxItems": 50,
+                            "minItems": 1,
+                            "type": "array",
+                          },
+                        },
+                        "required": [
+                          "include",
+                        ],
+                        "type": "object",
+                      },
+                    },
+                    "required": [
+                      "ref_name",
+                    ],
+                    "type": "object",
+                  },
+                  "enforcement": {
+                    "description": "\`active\` blocks, \`evaluate\` only reports what it would block, \`disabled\` does nothing.",
+                    "enum": [
+                      "active",
+                      "evaluate",
+                      "disabled",
+                    ],
+                    "type": "string",
+                  },
+                  "name": {
+                    "description": "Unique in the repository.",
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "rules": {
+                    "items": {
+                      "properties": {
+                        "type": {
+                          "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests).",
+                          "enum": [
+                            "creation",
+                            "update",
+                            "deletion",
+                            "non_fast_forward",
+                            "required_signatures",
+                            "pull_request",
+                          ],
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                      ],
+                      "type": "object",
+                    },
+                    "maxItems": 6,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                  "target": {
+                    "default": "branch",
+                    "enum": [
+                      "branch",
+                      "tag",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "name",
+                  "enforcement",
+                  "conditions",
+                  "rules",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "actor_types": {
+                      "anyOf": [
+                        {
+                          "description": "Fyrden: the principal types it applies to (all when left out); \`["agent"]\` makes agents use pull requests.",
+                          "items": {
+                            "enum": [
+                              "user",
+                              "org",
+                              "agent",
+                              "installation",
+                            ],
+                            "type": "string",
+                          },
+                          "minItems": 1,
+                          "type": "array",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "bypass_actors": {
+                      "default": [],
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actor_id": {
+                            "description": "Callers with this role or a stronger one bypass the ruleset.",
+                            "enum": [
+                              "read",
+                              "triage",
+                              "write",
+                              "maintain",
+                              "admin",
+                            ],
+                            "type": "string",
+                          },
+                          "actor_type": {
+                            "const": "RepositoryRole",
+                            "type": "string",
+                          },
+                          "bypass_mode": {
+                            "const": "always",
+                            "default": "always",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "actor_type",
+                          "actor_id",
+                          "bypass_mode",
+                        ],
+                        "type": "object",
+                      },
+                      "maxItems": 10,
+                      "type": "array",
+                    },
+                    "conditions": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "ref_name": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "exclude": {
+                              "default": [],
+                              "items": {
+                                "description": "A full ref name pattern (\`refs/heads/main\`, \`refs/heads/release/*\`, \`refs/tags/**\`), \`~DEFAULT_BRANCH\` or \`~ALL\`. \`*\` stays within a path segment; \`**\` crosses them.",
+                                "maxLength": 255,
+                                "minLength": 1,
+                                "type": "string",
+                              },
+                              "maxItems": 50,
+                              "type": "array",
+                            },
+                            "include": {
+                              "items": {
+                                "description": "A full ref name pattern (\`refs/heads/main\`, \`refs/heads/release/*\`, \`refs/tags/**\`), \`~DEFAULT_BRANCH\` or \`~ALL\`. \`*\` stays within a path segment; \`**\` crosses them.",
+                                "maxLength": 255,
+                                "minLength": 1,
+                                "type": "string",
+                              },
+                              "maxItems": 50,
+                              "minItems": 1,
+                              "type": "array",
+                            },
+                          },
+                          "required": [
+                            "include",
+                            "exclude",
+                          ],
+                          "type": "object",
+                        },
+                      },
+                      "required": [
+                        "ref_name",
+                      ],
+                      "type": "object",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "enforcement": {
+                      "description": "\`active\` blocks, \`evaluate\` only reports what it would block, \`disabled\` does nothing.",
+                      "enum": [
+                        "active",
+                        "evaluate",
+                        "disabled",
+                      ],
+                      "type": "string",
+                    },
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "name": {
+                      "description": "Unique in the repository.",
+                      "maxLength": 100,
+                      "minLength": 1,
+                      "type": "string",
+                    },
+                    "rules": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "type": {
+                            "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests).",
+                            "enum": [
+                              "creation",
+                              "update",
+                              "deletion",
+                              "non_fast_forward",
+                              "required_signatures",
+                              "pull_request",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "type",
+                        ],
+                        "type": "object",
+                      },
+                      "maxItems": 6,
+                      "minItems": 1,
+                      "type": "array",
+                    },
+                    "target": {
+                      "default": "branch",
+                      "enum": [
+                        "branch",
+                        "tag",
+                      ],
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "target",
+                    "enforcement",
+                    "conditions",
+                    "rules",
+                    "bypass_actors",
+                    "created_at",
+                    "updated_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Update a ruleset",
+        "x-fyrden-permission": "administration:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}/tags": {
       "get": {
         "description": "Lists a repository's tags by name, each with the commit it points to (annotated tags are peeled; tags of other objects are not listed).",

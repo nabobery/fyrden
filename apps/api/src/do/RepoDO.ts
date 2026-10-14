@@ -18,8 +18,20 @@ import {
   measureInvocation,
   type RequestMeta,
 } from "@fyrden/adapters-cloudflare/obs";
-import type { Envelope, RepoRole } from "@fyrden/domain";
-import { type BlockCache, type LsRefsArgs, oidToHex } from "@fyrden/git-core";
+import { type Envelope, REPO_ROLES, type RepoRole } from "@fyrden/domain";
+import {
+  type BlockCache,
+  bytesBody,
+  encodePushResponse,
+  failAtomically,
+  type LsRefsArgs,
+  liveCommands,
+  type Oid,
+  oidToHex,
+  type PackId,
+  planPush,
+  readPushBody,
+} from "@fyrden/git-core";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
 import { checkObjectAccess } from "../git/cache/object-check.js";
@@ -33,6 +45,7 @@ import { answerFetchPlan, FETCH_LEASE_TTL_MS } from "../git/fetch/plan.js";
 import type { FetchPlanReply, FetchPlanRequest } from "../git/fetch/wire.js";
 import { type BeginImport, type ImportRecord, RepoImports } from "../git/import/job.js";
 import { defaultImportNetwork, type ImportNetwork } from "../git/import/network.js";
+import { openLiveReader, ReadBudgetError } from "../git/live-reader.js";
 import type { GcHooks } from "../git/maintenance/gc-job.js";
 import { maintenanceHandlers } from "../git/maintenance/handlers.js";
 import { MAINTENANCE_DEFAULTS, type MaintenancePolicy } from "../git/maintenance/policy.js";
@@ -61,6 +74,7 @@ import type {
 } from "../network/types.js";
 import type { CompactSliceInput } from "../network/view-cap.js";
 import { platformSigner } from "../signing/platform-key.js";
+import { type SignedFact, verdicts } from "../signing/verification.js";
 import {
   AUDIT_ARCHIVE_JOB,
   AUDIT_ARCHIVE_POLICY,
@@ -79,6 +93,7 @@ import {
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
 import {
+  BROWSE_POLICY,
   type Browsed,
   type CommitView,
   type CompareView,
@@ -112,6 +127,14 @@ import {
   type FileWriteResult,
   writeFiles,
 } from "./repo/file-writes.js";
+import {
+  checkPushRules,
+  hasPrecheckRules,
+  precheckPushRules,
+  type RuleSnapshot,
+} from "./repo/push-rules.js";
+import { RepoRulesets, type RulesetInput, type RulesetRecord } from "./repo/rulesets.js";
+import { factOf } from "./repo/signature.js";
 import {
   type TemplateTree,
   type TemplateWriteInput,
@@ -424,6 +447,59 @@ export class RepoDO extends MigratingDO {
     });
   }
 
+  /** The repository's rulesets, created on first use. */
+  #rulesetStore: RepoRulesets | undefined;
+
+  get rulesetStore(): RepoRulesets {
+    this.#rulesetStore ??= new RepoRulesets(
+      this.ctx.storage,
+      (action, actor, details) => this.events.auditChange(action, actor, details),
+      () => this.git.context.now(),
+    );
+    return this.#rulesetStore;
+  }
+
+  /** The rulesets and their version (anyone who may read the repository; the Worker checked it). */
+  rulesets(): { version: number; rulesets: RulesetRecord[] } {
+    return this.rulesetStore.current();
+  }
+
+  /**
+   * Creates, replaces or deletes a ruleset for an administrator (the
+   * Worker checked it; checked again here, with no await before the change).
+   */
+  changeRuleset(
+    change:
+      | { readonly op: "create"; readonly input: RulesetInput }
+      | { readonly op: "update"; readonly id: number; readonly input: RulesetInput }
+      | { readonly op: "delete"; readonly id: number },
+    actor: RefActor,
+  ): Promise<
+    | { ok: true; record: RulesetRecord | null }
+    | { ok: false; code: "repo_deleted" | "access_lost" | "not_found" | "name_taken" | "too_many" }
+  > {
+    return this.#measured("changeRuleset", async () => {
+      await this.checkEpoch();
+      await this.acl.roleOf(actor.principal, "write");
+      if (this.#closed || this.events.isDeleted())
+        return { ok: false as const, code: "repo_deleted" as const };
+      if (!this.acl.allows(actor.principal, "admin"))
+        return { ok: false as const, code: "access_lost" as const };
+      const store = this.rulesetStore;
+      const done =
+        change.op === "create"
+          ? store.create(change.input, actor)
+          : change.op === "update"
+            ? (store.update(change.id, change.input, actor) ?? ("not_found" as const))
+            : store.delete(change.id, actor)
+              ? null
+              : ("not_found" as const);
+      if (typeof done === "string") return { ok: false as const, code: done };
+      this.#ensureAuditArchive();
+      return { ok: true as const, record: done };
+    });
+  }
+
   /** The receive-pack ref advertisement (protocol v0, or v1 with its version line). */
   receivePackAdvertisement(version: 0 | 1): Uint8Array {
     return receivePackAdvertisement(this.git, version);
@@ -508,6 +584,7 @@ export class RepoDO extends MigratingDO {
       metrics: this.git.context.metrics,
       writerRole: (principalId) => this.acl.roleOf(principalId, "write"),
       ...(signer && { signer }),
+      precheck: (principal, updates) => this.#precheckUpdates(principal, updates),
     };
   }
 
@@ -674,6 +751,26 @@ export class RepoDO extends MigratingDO {
       await this.acl.roleOf(principal, "write");
       return this.acl.allows(principal, "write") ? undefined : ACCESS_LOST;
     };
+    this.#pushes.rules = {
+      stamp: (principal) => this.#ruleSnapshot(principal).stamp,
+      check: async (input) => {
+        // The pusher's role pulled fresh; then everything the check reads,
+        // and its stamp, taken together with no await between them.
+        await this.acl.roleOf(input.principal, "write");
+        const { snapshot, stamp } = this.#ruleSnapshot(input.principal);
+        const refusals = await checkPushRules(
+          {
+            git: this.git,
+            signatures: (oids, packs) => this.#signatureFacts(oids, packs),
+            verdicts: (facts) =>
+              verdicts({ env: this.env, metrics: this.git.context.metrics }, facts),
+          },
+          snapshot,
+          input,
+        );
+        return { stamp, refusals };
+      },
+    };
     const account = () => {
       // A repository from before identities were recorded has no account to charge.
       const owner = this.events.account();
@@ -717,10 +814,143 @@ export class RepoDO extends MigratingDO {
     return this.#pushes;
   }
 
+  /**
+   * The signature facts of `oids`, read from the live packs and a push's
+   * own `packs` (within one request's read budget; a commit that could not
+   * be read is left out).
+   */
+  async #signatureFacts(
+    oids: readonly Oid[],
+    packs: readonly PackId[],
+  ): Promise<Map<string, SignedFact>> {
+    const facts = new Map<string, SignedFact>();
+    this.#blocks ??= createClockBlockCache();
+    let reader: Awaited<ReturnType<typeof openLiveReader>>;
+    try {
+      reader = await openLiveReader(
+        { git: this.git, memoryBlocks: this.#blocks },
+        {
+          deltaBaseCacheBytes: 4 * 1024 * 1024,
+          maxCacheCalls: BROWSE_POLICY.cacheCalls,
+          maxReads: BROWSE_POLICY.maxReads,
+          extraPacks: packs,
+        },
+      );
+    } catch (error) {
+      if (error instanceof ReadBudgetError) return facts;
+      throw error;
+    }
+    if (!reader) return facts;
+    try {
+      await reader.prefetch(oids);
+      for (const oid of oids) {
+        const object = await reader.readObject(oid);
+        if (object?.type === "commit") facts.set(oidToHex(oid), await factOf(object.bytes));
+      }
+    } catch (error) {
+      // Out of reads: what was read counts; the rest is unreadable, so refused.
+      if (!(error instanceof ReadBudgetError)) throw error;
+    } finally {
+      reader.release();
+    }
+    return facts;
+  }
+
   /** Opens a push: the upload and its pack rows, before any byte is stored. Returns the body's R2 key. */
   beginPush(input: BeginPushInput): BeginPushResult {
     if (this.#refusesAdmission()) return { ok: false, error: REPO_DELETED };
-    return this.#push().begin(input);
+    const begun = this.#push().begin(input);
+    return begun.ok && hasPrecheckRules(this.rulesetStore) ? { ...begun, precheck: true } : begun;
+  }
+
+  /**
+   * The rulesets' check of a push's commands before its body is stored
+   * (`head` is the start of the body): the git response refusing it when no
+   * command may go on; otherwise the push goes on, and its refused commands
+   * are refused again at its commit. A head that does not hold the whole
+   * command section is not checked here.
+   */
+  async precheckPush(
+    uploadId: string,
+    head: Uint8Array,
+  ): Promise<{ ok: true } | { ok: false; response: Uint8Array }> {
+    const upload = this.git.uploads.get(uploadId);
+    if (!upload) return { ok: true };
+    let plan: ReturnType<typeof planPush>;
+    try {
+      const { request } = await readPushBody(bytesBody(head), { pushOptionsAdvertised: true });
+      plan = planPush(request, this.git.refStore.readRefsSync());
+    } catch {
+      return { ok: true };
+    }
+    const live = liveCommands(plan);
+    await this.acl.roleOf(upload.principal, "write");
+    const refusals = precheckPushRules(
+      this.#ruleSnapshot(upload.principal).snapshot,
+      upload.principal,
+      live.map((cmd) => ({ index: cmd.index, name: cmd.name as string, kind: cmd.kind })),
+    );
+    const messages: string[] = [];
+    for (const cmd of live) {
+      const refusal = refusals.get(cmd.index);
+      if (refusal === undefined) continue;
+      cmd.error = refusal;
+      messages.push(`error: ${refusal}`);
+    }
+    failAtomically(plan);
+    if (liveCommands(plan).length > 0) return { ok: true };
+    return {
+      ok: false,
+      response: encodePushResponse(
+        { unpackError: undefined, commands: plan.commands },
+        plan.capabilities,
+        messages,
+      ),
+    };
+  }
+
+  /** The strongest role the current ACL snapshot allows (an owner's: admin). */
+  #ruleRoleNow(principal: string): RepoRole | null {
+    for (const role of [...REPO_ROLES].reverse()) if (this.acl.allows(principal, role)) return role;
+    return null;
+  }
+
+  /**
+   * What a push's rules read, taken at once: the rulesets (with their
+   * version), HEAD and the pusher's role, and a stamp of them that the
+   * commit's transaction compares.
+   */
+  #ruleSnapshot(principal: string): { snapshot: RuleSnapshot; stamp: string } {
+    const { version, rulesets } = this.rulesetStore.current();
+    const head = this.git.refStore.head();
+    const role = this.#ruleRoleNow(principal);
+    return {
+      snapshot: { rulesets: rulesets.map((r) => r.ruleset), head, role },
+      stamp: JSON.stringify([version, head, role]),
+    };
+  }
+
+  /** The rulesets' refusal of ref updates a write or upload session asks for, before anything is stored. */
+  async #precheckUpdates(
+    principal: string,
+    updates: readonly {
+      readonly ref: string;
+      readonly old: string | null;
+      readonly new: string | null;
+    }[],
+  ): Promise<string | undefined> {
+    if (!hasPrecheckRules(this.rulesetStore)) return undefined;
+    await this.acl.roleOf(principal, "write");
+    const refusals = precheckPushRules(
+      this.#ruleSnapshot(principal).snapshot,
+      principal,
+      updates.map((u, index) => ({
+        index,
+        name: u.ref,
+        kind: u.old === null ? "create" : u.new === null ? "delete" : "update",
+      })),
+    );
+    return refusals.size === 0 ? undefined : [...refusals.values()].join("; ");
   }
 
   /** The push body is stored: plan it and index for up to `budgetMs`, then the alarm continues. */
@@ -773,11 +1003,15 @@ export class RepoDO extends MigratingDO {
         code: "repo_not_found",
         error: REPO_DELETED,
       });
-    return this.#measured("beginChunked", () =>
-      this.#refusesAdmission()
-        ? ({ ok: false, status: 404, code: "repo_not_found", error: REPO_DELETED } as const)
-        : this.#chunked().begin(input),
-    );
+    return this.#measured("beginChunked", async () => {
+      if (this.#refusesAdmission())
+        return { ok: false, status: 404, code: "repo_not_found", error: REPO_DELETED } as const;
+      // A session commits all its updates or none: one refused update refuses it.
+      const refused = await this.#precheckUpdates(input.principal, input.updates);
+      if (refused)
+        return { ok: false, status: 409, code: "ruleset_violation", error: refused } as const;
+      return this.#chunked().begin(input);
+    });
   }
 
   /** Where part `part` of `bytes` bytes goes (key, multipart id, R2 part number), if the session takes it now, and the token reserving it. */

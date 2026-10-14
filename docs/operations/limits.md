@@ -448,6 +448,26 @@ the API carries GitHub's `verification` object.
 | A malformed `SIGNING_KEY` | Writes it would sign are refused (logged); reading and verifying go on, with the keys that can be read |
 | Signatures read | 64 KiB at most; a longer `gpgsig` is `malformed_signature`, not shown |
 
+## Rulesets
+
+Repository rulesets (`/repos/{owner}/{repo}/rulesets`, GitHub's shape) hold
+rules on the branches or tags whose full names match: `creation`, `update`,
+`deletion`, `non_fast_forward`, `required_signatures`, `pull_request` (no
+direct change at all; changes come through pull requests). Bypass is by
+repository role; Fyrden's `actor_types` limits a ruleset to principal types
+(`["agent"]` with `pull_request`: agents must use pull requests).
+
+| What | Value |
+|---|---|
+| Rulesets per repository | 50 |
+| Checked before anything is stored | `creation`, `update`, `deletion`, `pull_request`: a push whose every command is refused is answered before its body reaches R2 (repositories with such a ruleset read the push's command section first; others stream it to R2 untouched); an upload session or a file write a rule refuses answers 409 `ruleset_violation`. Not before storing: gzip pushes and command sections longer than 64 KiB (they are refused at the commit) |
+| Checked at the commit | Every rule, with the rulesets current then (a change of the rulesets, the default branch or the pusher's role in between refuses the push; push again): force pushes against the commit graph, signatures of every new commit (reachable from the new tip, not from that ref's old one; ancestors from other branches included) |
+| Required signatures | Branch rulesets only. Each new commit verified as the API shows it (platform key, or a user's key on that user's commits); at most 1,000 new commits per ref update (and 20,000 commits walked to find them), more is refused (push in parts); commits are read from the repository's packs and the push's own |
+| Default branch | `~DEFAULT_BRANCH` names the current default branch and, for an import, the one it sets |
+| Refusal text | 2,000 bytes at most per ref |
+| Refusals | `ng <ref> <reason> (ruleset "<name>")`; an atomic push fails as a whole |
+| `evaluate` | Reported to nobody yet; does not block |
+
 ## Configuration variables
 
 Set these as Worker variables of `fyrden-api`: add a `"vars"` object to

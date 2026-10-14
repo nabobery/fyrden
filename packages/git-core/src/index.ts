@@ -301,6 +301,7 @@ export {
   type CommandKind,
   casConflict,
   DEFAULT_PUSH_POLICY,
+  failAtomically,
   liveCommands,
   type PushCapabilities,
   type PushCommandState,
@@ -310,6 +311,7 @@ export {
 } from "./receive-pack/commands.js";
 export type { IndexPhase, PushTip, UnpackFailure } from "./receive-pack/cursor.js";
 export {
+  type CheckedCommand,
   type FinalizeEnv,
   finalizePush,
   type PushCommitRequest,

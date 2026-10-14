@@ -1,0 +1,140 @@
+import type {
+  createRuleset,
+  deleteRuleset,
+  getRuleset,
+  Input,
+  listRulesets,
+  Output,
+  updateRuleset,
+} from "@fyrden/api-contract";
+import type { RulesetInput, RulesetRecord } from "../do/repo/rulesets.js";
+import { repoFor } from "../git/chunked/operations.js";
+import { type OpContext, OperationError } from "../ops/execute.js";
+import type { RepoEntry } from "./directory.js";
+
+type RulesetOutput = Output<typeof getRuleset>;
+
+function output(record: RulesetRecord): RulesetOutput {
+  const { ruleset } = record;
+  return {
+    id: ruleset.id,
+    name: ruleset.name,
+    target: ruleset.target,
+    enforcement: ruleset.enforcement,
+    conditions: {
+      ref_name: {
+        include: [...ruleset.conditions.ref_name.include],
+        exclude: [...ruleset.conditions.ref_name.exclude],
+      },
+    },
+    rules: ruleset.rules.map((r) => ({ type: r.type })),
+    bypass_actors: ruleset.bypass_actors.map((b) => ({ ...b })),
+    actor_types: ruleset.actor_types ? [...ruleset.actor_types] : null,
+    created_at: record.createdAt,
+    updated_at: record.updatedAt,
+  };
+}
+
+function inputOf(input: Input<typeof createRuleset>): RulesetInput {
+  return {
+    name: input.name,
+    target: input.target,
+    enforcement: input.enforcement,
+    conditions: input.conditions,
+    rules: input.rules,
+    bypass_actors: input.bypass_actors,
+    ...(input.actor_types && { actor_types: input.actor_types }),
+  };
+}
+
+const notFound = (id: number) =>
+  new OperationError(404, "ruleset_not_found", `The repository has no ruleset ${id}.`);
+
+async function change(
+  ctx: OpContext,
+  entry: RepoEntry,
+  request: Parameters<DurableObjectStub<import("../do/RepoDO.js").RepoDO>["changeRuleset"]>[0],
+  id?: number,
+): Promise<RulesetRecord | null> {
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "changeRuleset" });
+  const result = await ctx.env.REPO.getByName(entry.id).changeRuleset(request, {
+    principal: ctx.auth.principalId,
+    tokenId: ctx.auth.id,
+    via: "api",
+  });
+  if (result.ok) return result.record;
+  switch (result.code) {
+    case "not_found":
+      throw notFound(id ?? 0);
+    case "name_taken":
+      throw new OperationError(422, "name_taken", "The repository has a ruleset with that name.");
+    case "too_many":
+      throw new OperationError(422, "too_many_rulesets", "A repository has 50 rulesets at most.");
+    default:
+      throw new OperationError(
+        404,
+        "repo_not_found",
+        `No repository ${entry.ownerHandle}/${entry.name} was found.`,
+      );
+  }
+}
+
+/** The `repos.rulesets.list` operation. */
+export async function listRulesetsOperation(
+  ctx: OpContext,
+  input: Input<typeof listRulesets>,
+): Promise<Output<typeof listRulesets>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "metadata:read");
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "rulesets" });
+  const { rulesets } = await ctx.env.REPO.getByName(entry.id).rulesets();
+  return { rulesets: rulesets.map(output) };
+}
+
+/** The `repos.rulesets.get` operation. */
+export async function getRulesetOperation(
+  ctx: OpContext,
+  input: Input<typeof getRuleset>,
+): Promise<Output<typeof getRuleset>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "metadata:read");
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "rulesets" });
+  const { rulesets } = await ctx.env.REPO.getByName(entry.id).rulesets();
+  const record = rulesets.find((r) => r.ruleset.id === input.ruleset_id);
+  if (!record) throw notFound(input.ruleset_id);
+  return output(record);
+}
+
+/** The `repos.rulesets.create` operation. */
+export async function createRulesetOperation(
+  ctx: OpContext,
+  input: Input<typeof createRuleset>,
+): Promise<Output<typeof createRuleset>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "administration:write");
+  return output(
+    (await change(ctx, entry, { op: "create", input: inputOf(input) })) as RulesetRecord,
+  );
+}
+
+/** The `repos.rulesets.update` operation. */
+export async function updateRulesetOperation(
+  ctx: OpContext,
+  input: Input<typeof updateRuleset>,
+): Promise<Output<typeof updateRuleset>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "administration:write");
+  const record = await change(
+    ctx,
+    entry,
+    { op: "update", id: input.ruleset_id, input: inputOf(input) },
+    input.ruleset_id,
+  );
+  return output(record as RulesetRecord);
+}
+
+/** The `repos.rulesets.delete` operation. */
+export async function deleteRulesetOperation(
+  ctx: OpContext,
+  input: Input<typeof deleteRuleset>,
+): Promise<Output<typeof deleteRuleset>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "administration:write");
+  await change(ctx, entry, { op: "delete", id: input.ruleset_id }, input.ruleset_id);
+  return { id: input.ruleset_id, state: "deleted" };
+}

@@ -284,7 +284,11 @@ export class RepoImports {
   async #commit(record: ImportRecord): Promise<ImportRecord> {
     const decision = await reauthorizeByToken(this.env.DIRECTORY, record, this.writerRole);
     const report = readPushReport(
-      await this.push.finalize(record.uploadId, decision, { repoId: record.repoId }),
+      await this.push.finalize(record.uploadId, decision, {
+        repoId: record.repoId,
+        // The rulesets see the default branch the import is about to set.
+        ...(record.head && { head: record.head }),
+      }),
     );
     if (!report.ok) return this.#save({ ...record, state: "failed", error: report.error });
     // The new default branch and its snapshot event commit together.

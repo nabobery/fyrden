@@ -112,9 +112,16 @@ export interface FileWriteDeps {
   readonly writerRole: (principalId: string) => Promise<RepoRole | null>;
   readonly signer?: Signer;
   readonly now?: () => number;
+  /** The rulesets' refusal of the branch update, checked before anything is built or stored. */
+  readonly precheck?: (
+    principal: string,
+    updates: readonly { ref: string; old: string | null; new: string | null }[],
+  ) => Promise<string | undefined>;
 }
 
 const encoder = new TextEncoder();
+/** Stands for the commit not made yet in a ruleset check (only its kind matters there). */
+const ZERO_ID = "0".repeat(40);
 
 /** Makes the commit `input` describes and moves its branch to it. */
 export async function writeFiles(
@@ -137,6 +144,10 @@ export async function writeFiles(
     return fail(409, "head_moved", `The branch ${branch} is no longer at the expected head.`);
   const baseTree = head ? git.commitGraph.readSync([head], "verified")[0]?.tree : null;
   if (baseTree === undefined) throw new Error(`branch ${branch} points at an unknown commit`);
+  const refused = await deps.precheck?.(input.principal, [
+    { ref, old: head ? oidToHex(head) : null, new: ZERO_ID },
+  ]);
+  if (refused) return fail(409, "ruleset_violation", refused);
 
   const now = Math.floor((deps.now ?? Date.now)() / 1000);
   // Built and stored under one reservation; nothing of it is held while it is indexed.

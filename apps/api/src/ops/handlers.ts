@@ -60,6 +60,13 @@ import {
 import { generateRepoOperation } from "../repos/generate.js";
 import { listAccountRepos } from "../repos/listing.js";
 import { repoOutput, starCounts, visibleParents } from "../repos/output.js";
+import {
+  createRulesetOperation,
+  deleteRulesetOperation,
+  getRulesetOperation,
+  listRulesetsOperation,
+  updateRulesetOperation,
+} from "../repos/rulesets.js";
 import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "../repos/stars.js";
 import { updateRepoOperation } from "../repos/update.js";
 import { clock, newId, tokenStore } from "../services.js";
@@ -208,6 +215,13 @@ export const handlers: Handlers = {
   "repos.fork": forkRepoOperation,
   "repos.forks.list": listForksOperation,
   "repos.generate": generateRepoOperation,
+
+  // Rulesets live in the repository's object (repos/rulesets).
+  "repos.rulesets.list": listRulesetsOperation,
+  "repos.rulesets.get": getRulesetOperation,
+  "repos.rulesets.create": createRulesetOperation,
+  "repos.rulesets.update": updateRulesetOperation,
+  "repos.rulesets.delete": deleteRulesetOperation,
 
   // Stars are the caller's own, of repositories it can read (repos/stars).
   "stars.put": starRepoOperation,

@@ -9,6 +9,7 @@ export * from "../ops/meta.js";
 export * from "../ops/orgs.js";
 export * from "../ops/quotas.js";
 export * from "../ops/repos.js";
+export * from "../ops/rulesets.js";
 export * from "../ops/signing-keys.js";
 export * from "../ops/stars.js";
 export * from "../ops/uploads.js";

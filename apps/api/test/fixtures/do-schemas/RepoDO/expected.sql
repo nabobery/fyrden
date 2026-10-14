@@ -14,6 +14,7 @@ CREATE INDEX packs_unit ON packs (unit_id) WHERE unit_id IS NOT NULL;
 CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
 CREATE INDEX refs_oid ON refs (oid);
+CREATE UNIQUE INDEX rulesets_name ON rulesets (name);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);
 CREATE TABLE acl_snapshot (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -220,6 +221,17 @@ CREATE TABLE repo_meta (
         created_at INTEGER NOT NULL
       , epoch_uuid TEXT, source_seq INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, owner_id TEXT, name TEXT, visibility TEXT
         CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER) STRICT;
+CREATE TABLE ruleset_version (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        version INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE rulesets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        body TEXT NOT NULL CHECK (json_valid(body)),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE shallow (
     oid BLOB PRIMARY KEY CHECK (length(oid) = 20)
   ) STRICT, WITHOUT ROWID;

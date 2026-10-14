@@ -39,6 +39,13 @@ import {
   updateRepo,
 } from "../ops/repos.js";
 import {
+  createRuleset,
+  deleteRuleset,
+  getRuleset,
+  listRulesets,
+  updateRuleset,
+} from "../ops/rulesets.js";
+import {
   createSshSigningKey,
   deleteSshSigningKey,
   getSshSigningKey,
@@ -68,6 +75,11 @@ export const registry = defineRegistry([
   forkRepo,
   listForks,
   generateRepo,
+  listRulesets,
+  getRuleset,
+  createRuleset,
+  updateRuleset,
+  deleteRuleset,
   starRepo,
   unstarRepo,
   listStarred,

@@ -1,0 +1,110 @@
+import type { RepoRole } from "../authz/roles.js";
+import type { PrincipalType } from "../principals/principal.js";
+
+/**
+ * Rulesets, shaped as GitHub's repository rulesets: rules on the branches
+ * or tags whose names match, for everyone but the actors who may bypass
+ * them. Fyrden adds `actor_types`, the principal types a ruleset applies
+ * to (all when absent): "agents must use pull requests" is a
+ * `pull_request` rule for `agent`.
+ */
+
+/** The rules Fyrden enforces, by GitHub's names. */
+export const RULE_TYPES = [
+  "creation",
+  "update",
+  "deletion",
+  "non_fast_forward",
+  "required_signatures",
+  "pull_request",
+] as const;
+export type RuleType = (typeof RULE_TYPES)[number];
+
+export interface Rule {
+  readonly type: RuleType;
+}
+
+/** A ruleset's own state: `active` blocks, `evaluate` only reports, `disabled` does nothing. */
+export type Enforcement = "active" | "evaluate" | "disabled";
+
+export interface BypassActor {
+  /** The repository roles that bypass it (that role or stronger). */
+  readonly actor_type: "RepositoryRole";
+  readonly actor_id: RepoRole;
+  readonly bypass_mode: "always";
+}
+
+export interface Ruleset {
+  readonly id: number;
+  readonly name: string;
+  readonly target: "branch" | "tag";
+  readonly enforcement: Enforcement;
+  readonly conditions: {
+    readonly ref_name: { readonly include: readonly string[]; readonly exclude: readonly string[] };
+  };
+  readonly rules: readonly Rule[];
+  readonly bypass_actors: readonly BypassActor[];
+  /** The principal types it applies to; every type when absent. */
+  readonly actor_types?: readonly PrincipalType[];
+}
+
+/** Rules that need only the ref name and the kind of update: checked before an upload. */
+export const PRECHECK_RULES: ReadonlySet<RuleType> = new Set([
+  "creation",
+  "update",
+  "deletion",
+  "pull_request",
+]);
+
+const PREFIX = { branch: "refs/heads/", tag: "refs/tags/" } as const;
+
+/**
+ * Whether `pattern` matches the full ref name `ref`, as GitHub's ruleset
+ * conditions do: `~ALL`, `~DEFAULT_BRANCH`, or an fnmatch pattern over the
+ * full name where `*` stays within a path segment and `**` crosses them.
+ */
+export function refPatternMatches(
+  pattern: string,
+  ref: string,
+  target: Ruleset["target"],
+  defaultBranch: string | null,
+): boolean {
+  if (!ref.startsWith(PREFIX[target])) return false;
+  if (pattern === "~ALL") return true;
+  if (pattern === "~DEFAULT_BRANCH")
+    return target === "branch" && defaultBranch !== null && ref === `refs/heads/${defaultBranch}`;
+  return globMatches(pattern, ref);
+}
+
+/**
+ * fnmatch over full ref names, without backtracking: the set of ref
+ * positions the pattern can have reached is carried token by token (`*`
+ * any run without `/`, `**` any run, `?` one character but `/`, anything
+ * else itself), so the work is at most the pattern's length times the
+ * ref's, whatever the pattern.
+ */
+export function globMatches(pattern: string, ref: string): boolean {
+  const n = ref.length;
+  let reach = new Uint8Array(n + 1);
+  reach[0] = 1;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i] as string;
+    const next = new Uint8Array(n + 1);
+    if (c === "*") {
+      const crosses = pattern[i + 1] === "*";
+      if (crosses) i++;
+      // From each reached position, any run (of non-`/`, for a single `*`).
+      let open = false;
+      for (let at = 0; at <= n; at++) {
+        if (reach[at]) open = true;
+        if (open) next[at] = 1;
+        if (!crosses && ref[at] === "/") open = false;
+      }
+    } else {
+      for (let at = 0; at < n; at++)
+        if (reach[at] && (c === "?" ? ref[at] !== "/" : ref[at] === c)) next[at + 1] = 1;
+    }
+    reach = next;
+  }
+  return reach[n] === 1;
+}

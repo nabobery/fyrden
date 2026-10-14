@@ -9,10 +9,12 @@ import {
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
   type BlockCache,
+  type CheckedCommand,
   encodeFatalError,
   encodePushResponse,
   finalizePush,
   type IndexOutcome,
+  type Oid,
   type PackId,
   ProtocolError,
   PushIndexer,
@@ -83,7 +85,13 @@ export interface BeginPushInput {
 }
 
 export type BeginPushResult =
-  | { readonly ok: true; readonly uploadId: string; readonly bodyKey: string }
+  | {
+      readonly ok: true;
+      readonly uploadId: string;
+      readonly bodyKey: string;
+      /** Rulesets check the commands before the body is stored (`precheckPush`). */
+      readonly precheck?: boolean;
+    }
   | { readonly ok: false; readonly error: string };
 
 /**
@@ -115,6 +123,10 @@ const noBlockCache = (): BlockCache => ({ get: async () => undefined, put: async
 
 const PUSH_OPTIONS = { pushOptionsAdvertised: true } as const;
 
+/** The rulesets changed between the push's check and its commit. */
+export const RULESETS_CHANGED =
+  "the repository's rulesets changed while the push was checked; try the push again";
+
 const fatal = (message: string, sideband: boolean): PushProgress => ({
   state: "done",
   response: encodeFatalError(message, sideband),
@@ -125,6 +137,8 @@ type Planned = NonNullable<PushRecord["planned"]>;
 export interface PushLogMeta {
   readonly requestId?: string;
   readonly repoId?: string;
+  /** The default branch the push sets as it commits (an import's), for the rulesets. */
+  readonly head?: string;
 }
 
 export class RepoPush {
@@ -143,6 +157,26 @@ export class RepoPush {
    * repository's usage; an upload aborted without committing `release`s
    * what it held.
    */
+  /**
+   * The repository's rulesets at the commit point: refusals by command
+   * index (`packs` are the push's own, not live yet; `head`, a default
+   * branch the push sets as it commits, as an import's), and a stamp of
+   * what they were checked against (the rulesets' version, HEAD, the
+   * pusher's role); the commit is refused when `stamp` differs then.
+   */
+  rules:
+    | {
+        readonly check: (input: {
+          readonly principal: string;
+          readonly uploadId: string;
+          readonly packs: readonly PackId[];
+          readonly head: string | undefined;
+          readonly commands: readonly CheckedCommand[];
+        }) => Promise<{ stamp: string; refusals: ReadonlyMap<number, string> }>;
+        readonly stamp: (principal: string) => string;
+      }
+    | undefined;
+
   storage:
     | {
         readonly charge: (uploadId: string, bytes: number) => Promise<string | undefined>;
@@ -397,6 +431,8 @@ export class RepoPush {
 
     const committed: CommittedTransaction[] = [];
     const merged: TailMergeOutcome[] = [];
+    let rulesStamp: string | undefined;
+    const rules = this.rules;
     const outcome = await this.git.locks.withLock(
       LOCK_REF_COMMIT,
       `push:${uploadId}`,
@@ -416,6 +452,19 @@ export class RepoPush {
             decision.refusal ??
             (await this.accessCheck?.(upload.principal)) ??
             (await this.storage?.charge(uploadId, record.bodyBytes)),
+          ...(rules && {
+            checkCommands: async (commands: readonly CheckedCommand[]) => {
+              const checked = await rules.check({
+                principal: upload.principal,
+                uploadId,
+                packs: indexed?.ok ? indexed.packs : [],
+                head: meta.head,
+                commands,
+              });
+              rulesStamp = checked.stamp;
+              return checked.refusals;
+            },
+          }),
           commit: pushCommitter(
             this.git,
             upload,
@@ -423,6 +472,11 @@ export class RepoPush {
             lock,
             committed,
             this.#capGate(uploadId, merged),
+            // In the commit's transaction: the rulesets checked are still the current ones.
+            () =>
+              rules && rulesStamp !== undefined && rules.stamp(upload.principal) !== rulesStamp
+                ? RULESETS_CHANGED
+                : undefined,
           ),
         });
         return { plan, indexed, result };

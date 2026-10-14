@@ -28,6 +28,8 @@ export async function openLiveReader(
      */
     readonly maxReads?: number;
     readonly counts?: { reads: number };
+    /** A push's own packs, not live yet, read too (its commit point). */
+    readonly extraPacks?: readonly string[];
   },
 ): Promise<ObjectReader | undefined> {
   const { git } = deps;
@@ -37,10 +39,14 @@ export async function openLiveReader(
     if (counts.reads >= maxReads) throw new ReadBudgetError(maxReads);
     counts.reads++;
   };
-  const view = liveView(git, () => {
-    spend();
-    git.context.metrics.count("r2.class_b", { bucket: "fyrden-git", op: "get_idx" });
-  });
+  const view = liveView(
+    git,
+    () => {
+      spend();
+      git.context.metrics.count("r2.class_b", { bucket: "fyrden-git", op: "get_idx" });
+    },
+    limits.extraPacks,
+  );
   if (view.packs.length === 0) return undefined;
   const blocks = await openRequestBlockCache(deps.memoryBlocks, {
     scope: view.scope,

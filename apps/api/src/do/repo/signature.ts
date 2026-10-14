@@ -1,4 +1,5 @@
-import { splitSignedCommit, verifySshSignature } from "@fyrden/git-core";
+import { parseCommit, splitSignedCommit, verifySshSignature } from "@fyrden/git-core";
+import type { SignedFact } from "../../signing/verification.js";
 
 /**
  * What a commit's signature says on its own: whether it is a valid SSH
@@ -44,4 +45,14 @@ export async function checkSignature(body: Uint8Array): Promise<SignatureCheck> 
         ? "malformed_signature"
         : "invalid";
   return { reason, key: null, signature, payload };
+}
+
+/** A commit's signature check and its committer email (for the rulesets). */
+export async function factOf(body: Uint8Array): Promise<SignedFact> {
+  const check = await checkSignature(body);
+  return {
+    reason: check.reason,
+    key: check.key,
+    committerEmail: text.decode(parseCommit(body).value.committer.email),
+  };
 }

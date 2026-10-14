@@ -4,6 +4,7 @@ import { isRepoDeleted } from "../do/repo/events.js";
 import { authorizeGit } from "./auth.js";
 import { checkRequestType, type GitContext, gitPayload, gitText, repoParams } from "./http.js";
 import { contentType, NO_CACHE_HEADERS } from "./protocol.js";
+import { readBodyHead } from "./push/body-head.js";
 import { releaseUpload, reserveUpload } from "./push/quota.js";
 import { reauthorizePush } from "./push/reauthorize.js";
 import { pushResponseBody } from "./push/respond.js";
@@ -154,6 +155,28 @@ export async function receivePack(c: GitContext): Promise<Response> {
     return gitPayload(encodeFatalError(reservation.message, sideband), contentType.result(SERVICE));
   }
   const storeMax = Math.min(maxBytes, reservation.bytes);
+
+  // The rulesets' check of the commands, before a byte is stored (only where
+  // a ruleset has such rules: elsewhere the body goes to R2 untouched).
+  if (begun.precheck && !gzip && request.body) {
+    let checked: Awaited<ReturnType<typeof stub.precheckPush>>;
+    let body: Awaited<ReturnType<typeof readBodyHead>> | undefined;
+    try {
+      body = await readBodyHead(request.body);
+      call("precheckPush");
+      checked = await stub.precheckPush(begun.uploadId, body.head);
+    } catch (error) {
+      await body?.cancel();
+      abort(begun.uploadId);
+      throw error;
+    }
+    if (!checked.ok) {
+      await body.cancel();
+      abort(begun.uploadId);
+      return gitPayload(new Uint8Array(checked.response), contentType.result(SERVICE));
+    }
+    request = new Request(request, { body: body.rest(declared), duplex: "half" } as RequestInit);
+  }
 
   let stored: Awaited<ReturnType<typeof storePushBody>>;
   try {

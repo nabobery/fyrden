@@ -219,4 +219,27 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 10,
+    // Rulesets on the repository's refs, as JSON; `ruleset_version` counts
+    // every change, so a push checked against one version is refused when
+    // another is current at its commit.
+    name: "rulesets",
+    sql: `
+      CREATE TABLE rulesets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        body TEXT NOT NULL CHECK (json_valid(body)),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE UNIQUE INDEX rulesets_name ON rulesets (name);
+
+      CREATE TABLE ruleset_version (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        version INTEGER NOT NULL
+      ) STRICT;
+
+    `,
+  },
 ];

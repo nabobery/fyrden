@@ -379,6 +379,15 @@ export class RepoEvents {
     });
   }
 
+  /**
+   * Audits a change of the repository's own settings (rulesets) in the
+   * caller's transaction; nothing before the identity is recorded.
+   */
+  auditChange(action: string, actor: RefActor | null, details: Record<string, unknown>): void {
+    const meta = this.#meta();
+    if (meta) this.#audit(meta, action, actor, this.git.context.now(), details);
+  }
+
   #audit(
     meta: MetaRow,
     action: string,

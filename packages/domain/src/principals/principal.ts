@@ -11,6 +11,12 @@ export const PRINCIPAL_ID_PREFIX = {
   installation: "ins",
 } as const satisfies Record<PrincipalType, IdPrefix>;
 
+/** The type of principal an id names, by its prefix; undefined for any other id. */
+export function principalTypeOf(id: string): PrincipalType | undefined {
+  const prefix = id.slice(0, id.indexOf("_"));
+  return PRINCIPAL_TYPES.find((type) => PRINCIPAL_ID_PREFIX[type] === prefix);
+}
+
 export interface Principal {
   id: string;
   type: PrincipalType;

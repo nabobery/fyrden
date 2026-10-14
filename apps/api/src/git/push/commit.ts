@@ -84,9 +84,13 @@ export function pushCommitter(
   lock: LockHandle,
   committed: CommittedTransaction[],
   cap?: PushCapGate,
+  /** A last refusal checked in the transaction (the rulesets are still the ones checked). */
+  fence?: () => string | undefined,
 ): (request: PushCommitRequest) => Promise<PushCommitResult> {
   const authorize = ({ now }: { now: number }, removing: readonly PackId[]): string | undefined => {
     if (!git.locks.isHeld(lock)) return "the push lost its turn to commit; try the push again";
+    const fenced = fence?.();
+    if (fenced) return fenced;
     if (anyLeased(git, removing)) return PACKS_IN_USE;
     if (upload.tokenId !== decision.tokenId) return "the push was authorized for another token";
     if (now - decision.decidedAt > DECISION_MAX_AGE_MS)
