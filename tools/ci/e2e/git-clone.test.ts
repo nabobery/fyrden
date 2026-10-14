@@ -210,6 +210,10 @@ describe.each(["free", "paid"] as const)("stock git clones and fetches (plan %s)
         "127.0.0.1",
         "--port",
         String(port),
+        // Its own inspector port: concurrent servers each probing up from
+        // 9229 can pick the same one, and the later fails to bind.
+        "--inspector-port",
+        String(port + 1),
       ],
       {
         cwd: join(root, "apps/api"),

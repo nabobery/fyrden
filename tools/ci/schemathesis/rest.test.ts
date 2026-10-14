@@ -168,6 +168,10 @@ describe("the REST API under Schemathesis", () => {
         "127.0.0.1",
         "--port",
         String(port),
+        // Its own inspector port: concurrent servers each probing up from
+        // 9229 can pick the same one, and the later fails to bind.
+        "--inspector-port",
+        String(await freePort()),
       ],
       {
         cwd: join(root, "apps/api"),
