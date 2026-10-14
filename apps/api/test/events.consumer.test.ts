@@ -29,8 +29,10 @@ const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H7";
 
 /** A repository listed in the directory (its object is never touched unless a test stores a payload). */
-async function listedRepo(state: "active" | "deleting" = "active"): Promise<string> {
-  const id = newId("rep");
+async function listedRepo(
+  state: "active" | "deleting" = "active",
+  id: string = newId("rep"),
+): Promise<string> {
   await env.DIRECTORY.prepare(
     "INSERT INTO principals (id, type, handle, created_at) VALUES (?, 'user', ?, 0) ON CONFLICT DO NOTHING",
   )
@@ -276,12 +278,7 @@ describe("events consumer", () => {
     expect(sent).toEqual([{ body: { waitingSince: since, envelope: body }, delaySeconds: 120 }]);
 
     // Once the repository is listed, the put-back message is applied.
-    await env.DIRECTORY.prepare(
-      `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'default', 'private', 0, 0)`,
-    )
-      .bind(repoId, OWNER, repoId.toLowerCase(), newId("net"))
-      .run();
+    await listedRepo("active", repoId);
     sent.length = 0;
     expect((await deliver([{ waitingSince: since, envelope: body }], queue)).explicitAcks).toEqual([
       "m0",
