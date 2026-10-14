@@ -48,5 +48,13 @@ export default async function handleRequest(
   }
 
   responseHeaders.set("Content-Type", "text/html");
+  // No page is framed (clickjacking, even by a sibling site the session cookie reaches), and
+  // pages carrying a person's data are not kept by shared caches.
+  responseHeaders.set("Content-Security-Policy", "frame-ancestors 'none'");
+  responseHeaders.set("X-Frame-Options", "DENY");
+  responseHeaders.set("X-Content-Type-Options", "nosniff");
+  responseHeaders.set("Referrer-Policy", "same-origin");
+  if (!responseHeaders.has("Cache-Control"))
+    responseHeaders.set("Cache-Control", "private, no-store");
   return new Response(body, { headers: responseHeaders, status: responseStatusCode });
 }

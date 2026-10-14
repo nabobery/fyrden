@@ -118,6 +118,65 @@ export type UsersSshSigningKeysDeleteOutput = {
   state: "deleted";
 };
 
+/** Input of `users.tokens.list`: List your tokens. */
+export type UsersTokensListInput = {
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `users.tokens.list`. */
+export type UsersTokensListOutput = {
+  tokens: ({
+    /** Token id (tok_ prefix). */
+    id: string;
+    type: "pat" | "git";
+    scopes: string[];
+    /** Repository ids it is limited to; null for every one the user can reach. */
+    repositories: string[] | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    expires_at: number;
+    last_used_at: number | null;
+    revoked: boolean;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `users.tokens.create`: Create a token. */
+export type UsersTokensCreateInput = {
+  type?: "pat" | "git";
+  /** Permissions it is limited to (and what they imply). Empty: your token's. */
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  expires_in_days?: number;
+};
+
+/** Output of `users.tokens.create`. */
+export type UsersTokensCreateOutput = {
+  id: string;
+  /** The token. Shown once and never stored. */
+  token: string;
+  type: "pat" | "git";
+  scopes: string[];
+  /** Unix time in milliseconds. */
+  expires_at: number;
+};
+
+/** Input of `users.tokens.revoke`: Revoke a token. */
+export type UsersTokensRevokeInput = {
+  /** The token's id. */
+  token_id: string;
+};
+
+/** Output of `users.tokens.revoke`. */
+export type UsersTokensRevokeOutput = {
+  id: string;
+  revoked: true;
+};
+
 /** Input of `admin.users.create`: Create a user. */
 export type AdminUsersCreateInput = {
   /** 1-39 letters, digits and single inner hyphens; unique, ignoring case. */
@@ -139,7 +198,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
   expires_in_days?: number;
 };
 
@@ -256,7 +315,7 @@ export type AgentsTokensCreateInput = {
   agent: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
   expires_in_days?: number;
 };
 
@@ -278,7 +337,7 @@ export type GrantsCreateInput = {
   /** The agent's handle. */
   agent: string;
   /** Permissions the agent may use for you (and what they imply). */
-  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
   /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
   repositories?: string[];
   expires_in_days?: number;
@@ -2429,6 +2488,9 @@ export const OPERATIONS = {
   "users.ssh_signing_keys.create": { method: "POST", path: "/user/ssh_signing_keys", pathParams: [], idempotent: true },
   "users.ssh_signing_keys.get": { method: "GET", path: "/user/ssh_signing_keys/{key_id}", pathParams: ["key_id"], idempotent: false },
   "users.ssh_signing_keys.delete": { method: "DELETE", path: "/user/ssh_signing_keys/{key_id}", pathParams: ["key_id"], idempotent: true },
+  "users.tokens.list": { method: "GET", path: "/user/tokens", pathParams: [], idempotent: false, items: "tokens" },
+  "users.tokens.create": { method: "POST", path: "/user/tokens", pathParams: [], idempotent: true },
+  "users.tokens.revoke": { method: "DELETE", path: "/user/tokens/{token_id}", pathParams: ["token_id"], idempotent: true },
   "admin.users.create": { method: "POST", path: "/admin/users", pathParams: [], idempotent: true },
   "admin.tokens.create": { method: "POST", path: "/admin/users/{user_id}/tokens", pathParams: ["user_id"], idempotent: true },
   "agents.create": { method: "POST", path: "/agents", pathParams: [], idempotent: true },
@@ -2512,6 +2574,12 @@ export interface Operations {
   "users.ssh_signing_keys.get": { input: UsersSshSigningKeysGetInput; output: UsersSshSigningKeysGetOutput };
   /** Delete an SSH signing key. Removes one of the authenticated user's SSH signing keys; commits it signed are no longer verified. */
   "users.ssh_signing_keys.delete": { input: UsersSshSigningKeysDeleteInput; output: UsersSshSigningKeysDeleteOutput };
+  /** List your tokens. Your personal access and git tokens, newest first; revoked and expired ones too. */
+  "users.tokens.list": { input: UsersTokensListInput; output: UsersTokensListOutput };
+  /** Create a token. Mints a personal access token (`pat`) or a git token (`git`, for clone, fetch and push) for you, never wider than the token or session making it, and returns it once. */
+  "users.tokens.create": { input: UsersTokensCreateInput; output: UsersTokensCreateOutput };
+  /** Revoke a token. Revokes one of your tokens: it stops working at once for writes (within 30 seconds for reads). */
+  "users.tokens.revoke": { input: UsersTokensRevokeInput; output: UsersTokensRevokeOutput };
   /** Create a user. Creates a user account. Instance administrators only. */
   "admin.users.create": { input: AdminUsersCreateInput; output: AdminUsersCreateOutput };
   /** Create a token for a user. Mints a personal access token (`pat`) or git token (`git`) for a user and returns it once. Instance administrators only. */

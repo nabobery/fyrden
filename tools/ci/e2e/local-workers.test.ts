@@ -98,11 +98,11 @@ describe("fyrden-web and fyrden-api running together", () => {
   it("never logs a token from a URL React Router cannot match", async () => {
     const token = generateToken("pat", secureRandomBytes);
     const before = output.length;
-    const res = await fetch(`http://127.0.0.1:${port}/no-such-page/${token}`);
+    const res = await fetch(`http://127.0.0.1:${port}/no/such/page/${token}`);
     expect(res.status).toBe(404);
     await res.text();
     // This request's own error line: proves the log was written before checking it.
-    await waitForLine(before, /"msg":"web server error".*no-such-page/);
+    await waitForLine(before, /"msg":"web server error".*no\/such\/page/);
     const written = workerLines(before);
     expect(written.filter(mentionsToken).map((l) => l.replaceAll(token, "<TOKEN>"))).toEqual([]);
   });

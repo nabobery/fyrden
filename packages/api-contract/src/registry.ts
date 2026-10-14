@@ -61,6 +61,7 @@ import {
   listSshSigningKeys,
 } from "../ops/signing-keys.js";
 import { listStarred, starRepo, unstarRepo } from "../ops/stars.js";
+import { createUserToken, listUserTokens, revokeUserToken } from "../ops/tokens.js";
 import { abortUpload, completeUpload, createUpload, getUpload } from "../ops/uploads.js";
 import { defineRegistry } from "./op.js";
 
@@ -72,6 +73,9 @@ export const registry = defineRegistry([
   createSshSigningKey,
   getSshSigningKey,
   deleteSshSigningKey,
+  listUserTokens,
+  createUserToken,
+  revokeUserToken,
   createUser,
   createToken,
   createAgent,

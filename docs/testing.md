@@ -8,7 +8,7 @@
 | Workerd integration | `apps/api`, `packages/adapters-cloudflare` | workerd via `@cloudflare/vitest-plugin`, with local D1, R2, KV, Queues and Durable Objects | `pnpm turbo run test` |
 | Shuffle guard | workerd suites | the same, in random file and test order with several seeds | `pnpm turbo run test:shuffle` |
 | Dry-run deploy | both Workers | wrangler bundling | `pnpm turbo run deploy:dry-run` |
-| Local end to end | both Workers under one `wrangler dev`, with the real service binding | Node driving workerd | `pnpm turbo run test:e2e` |
+| Local end to end | both Workers under one `wrangler dev`, with the real service binding; the web UI in Chromium through Playwright, every page checked with axe (WCAG 2.x A and AA) | Node driving workerd and the browser (Playwright's Chromium must be installed: `pnpm --filter @fyrden/ci-tools exec playwright install chromium`) | `pnpm turbo run test:e2e` |
 | Smoke | a deployed instance | Node | `node tools/ci/src/smoke.ts <api-url> <web-url>` |
 | Git interoperability | `tools/ci/interop`: real git (and JGit) against `fyrden-api` under `wrangler dev` | Node driving git and workerd | `pnpm --filter @fyrden/ci-tools test:interop` |
 | MCP conformance | `tools/ci/conformance`: the MCP conformance suite (pinned version, the 2026-07-28 requirement set) against `fyrden-api` under `wrangler dev`, with a per-check baseline of known failures, and the authorization server metadata scenario | Node driving the suite (needs network for `npx`) | `pnpm --filter @fyrden/ci-tools test:conformance` |

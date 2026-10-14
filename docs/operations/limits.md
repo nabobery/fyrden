@@ -488,6 +488,24 @@ limits), which is how the first passkey is added.
 | Requests | Every change (sign in, sign out, add or remove a passkey) only from this origin's own pages (`Origin`); sign-in attempts rate limited per client address |
 | Audit | `session.start` (with how), `passkey.add`, `passkey.remove` |
 
+## Web UI
+
+`fyrden-web` is the one origin people use: it serves its pages, and hands
+the API's paths (`/api`, `/mcp`, `/oauth`, `/auth`, `/.well-known`, `/v0`
+and git's) to `fyrden-api` over the service binding unchanged, so the
+session cookie, OAuth and git all work on it. Its server calls the API as
+the signed-in user: the session cookie with an `X-Fyrden-Session: 1`
+header, which no other site's page can send (the API grants no CORS).
+
+| What | Value |
+|---|---|
+| Pages | Sign in, repositories (list, create), files (browse, view, edit, add, delete), README (GitHub-flavored Markdown with Mermaid diagrams), commits with their verification, clone URL, archives, repository settings, tokens, agents and delegation grants |
+| Forms | Taken only from the web origin's own pages (`Origin`) |
+| Markdown | Raw HTML escaped, unsafe link protocols dropped; Mermaid drawn in the browser in strict mode |
+| Raw files | Served as downloads (`application/octet-stream`, `nosniff`, a sandboxing CSP), never rendered on the origin |
+| A session's credential | The user's full rights, rechecked on the primary each request; tokens and grants made from a session may last their full allowed time |
+| Custom domains | List them in `FYRDEN_OWN_HOSTS` (MCP takes browser requests only from the deployment's own hosts) |
+
 ## Templates
 
 `POST /repos/{template_owner}/{template_repo}/generate` makes a repository

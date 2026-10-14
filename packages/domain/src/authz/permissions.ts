@@ -96,6 +96,22 @@ export const PERMISSIONS = {
     implies: ["ssh_signing_keys:read"],
     writes: true,
   },
+  "tokens:read": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "See the user's own personal access and git tokens.",
+    principals: ["user"],
+    implies: [],
+    writes: false,
+  },
+  "tokens:write": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "Create and revoke the user's own personal access and git tokens.",
+    principals: ["user"],
+    implies: ["tokens:read"],
+    writes: true,
+  },
   "agents:read": {
     resource: "account",
     minAccountRole: "owner",

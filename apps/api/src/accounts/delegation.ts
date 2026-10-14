@@ -207,8 +207,9 @@ export async function createGrantOperation(
       "repositories_exceed_parent",
       "The repositories exceed the parent grant's.",
     );
-  // Never longer, nor wider, than the token making it: a narrow token cannot hand out more than it holds.
-  expiresAt = Math.min(expiresAt, auth.expiresAt);
+  // Never longer (a signed-in session aside: it is the user itself), nor wider, than the token
+  // making it: a narrow token cannot hand out more than it holds.
+  if (auth.type !== "ses") expiresAt = Math.min(expiresAt, auth.expiresAt);
   if (expiresAt <= clock())
     throw new OperationError(409, "grant_inactive", "Your token or the parent grant has expired.");
   if (!within(input.scopes, auth.scopes))

@@ -14,6 +14,7 @@ export * from "../ops/repos.js";
 export * from "../ops/rulesets.js";
 export * from "../ops/signing-keys.js";
 export * from "../ops/stars.js";
+export * from "../ops/tokens.js";
 export * from "../ops/uploads.js";
 export * from "./mcp.js";
 export * from "./op.js";

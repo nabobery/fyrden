@@ -22,6 +22,8 @@ export interface SessionUser {
   readonly sessionId: string;
   readonly userId: string;
   readonly handle: string;
+  readonly isInstanceAdmin: boolean;
+  readonly expiresAt: number;
 }
 
 /** The signed-in user the request's session cookie names, if it is live and the user enabled. */
@@ -30,13 +32,28 @@ export async function sessionUser(c: OAuthContext): Promise<SessionUser | undefi
   if (!cookie || !parseToken(cookie).ok || !cookie.startsWith("fyrden_ses_")) return undefined;
   const row = await c.env.DIRECTORY.withSession("first-primary")
     .prepare(
-      `SELECT s.id, s.user_id, p.handle FROM sessions s JOIN principals p ON p.id = s.user_id
+      `SELECT s.id, s.user_id, p.handle, p.is_instance_admin, s.expires_at
+       FROM sessions s JOIN principals p ON p.id = s.user_id
        WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
          AND p.type = 'user' AND p.disabled_at IS NULL`,
     )
     .bind(await hashToken(cookie), clock())
-    .first<{ id: string; user_id: string; handle: string }>();
-  return row ? { sessionId: row.id, userId: row.user_id, handle: row.handle } : undefined;
+    .first<{
+      id: string;
+      user_id: string;
+      handle: string;
+      is_instance_admin: number;
+      expires_at: number;
+    }>();
+  return row
+    ? {
+        sessionId: row.id,
+        userId: row.user_id,
+        handle: row.handle,
+        isInstanceAdmin: row.is_instance_admin === 1,
+        expiresAt: row.expires_at,
+      }
+    : undefined;
 }
 
 /** Starts a session for `userId`, audited; returns the cookie's value, shown once. */

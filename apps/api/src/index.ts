@@ -1,5 +1,5 @@
 import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
-import { createApp } from "./app.js";
+import { app } from "./app-instance.js";
 import { archiveDirectoryAudit } from "./cron/directory-audit-archiver.js";
 import { reapExpiredRepos } from "./cron/expiry-reaper.js";
 import { sweepEffects } from "./effects/dispatcher.js";
@@ -17,8 +17,6 @@ export { RepoDO } from "./do/RepoDO.js";
 export { RunDO } from "./do/RunDO.js";
 export { UserDO } from "./do/UserDO.js";
 export { ApiRpc } from "./rpc.js";
-
-const app = createApp();
 
 export default {
   fetch: app.fetch,

@@ -4,6 +4,7 @@ import { createMiddleware } from "hono/factory";
 import { problem } from "../http/problem.js";
 import { checkProof, DPOP_ALGS, takeJti } from "../oauth/dpop.js";
 import { audienceAllows, bearerChallenge, type Resource } from "../oauth/resources.js";
+import { sessionUser } from "../oauth/session.js";
 import { tokenStore } from "../services.js";
 import type { ObsVariables } from "./obs.js";
 
@@ -42,6 +43,52 @@ export function extractCredential(
     }
   }
   return undefined;
+}
+
+/** The header with which the web UI's server presents a signed-in user's session cookie. */
+export const SESSION_HEADER = "X-Fyrden-Session";
+
+/**
+ * A signed-in user's session as a credential: the user's full rights,
+ * checked on the primary each time (a revoked session stops at once).
+ */
+async function sessionCredential(
+  c: Context<{ Bindings: Env; Variables: AuthVariables }>,
+): Promise<AuthState | undefined> {
+  const client = c.req.header("CF-Connecting-IP") ?? "unknown";
+  if (!(await c.env.RATE_LIMIT_AUTH.limit({ key: client })).success) return undefined;
+  const record = async (): Promise<VerifyResult> => {
+    const user = await sessionUser(c);
+    if (!user) return { ok: false, reason: "revoked" };
+    return {
+      ok: true,
+      record: {
+        id: user.sessionId,
+        type: "ses",
+        principalId: user.userId,
+        principalType: "user",
+        principalHandle: user.handle,
+        isInstanceAdmin: user.isInstanceAdmin,
+        scopes: [],
+        repoIds: null,
+        expiresAt: user.expiresAt,
+        lastUsedAt: null,
+        act: [],
+        grantId: null,
+        ceilingIds: [],
+        audience: null,
+        dpopJkt: null,
+        requiresDpop: false,
+      },
+    };
+  };
+  const first = await record();
+  if (!first.ok) return undefined;
+  c.set(
+    "log",
+    c.get("log").child({ principalId: first.record.principalId, principalType: "user" }),
+  );
+  return { record: first.record, mode: "write", verifyForWrite: record };
 }
 
 /** The token alone (see `extractCredential`). */
@@ -94,7 +141,16 @@ export async function authenticate(
   mode: VerifyMode,
 ): Promise<Authentication> {
   const credential = extractCredential(c.req.header("Authorization"));
-  if (!credential) return { ok: false, reason: "missing" };
+  if (!credential) {
+    // The web UI's server, for a signed-in user: the session cookie, with a header no
+    // cross-site page can send (it would need a CORS preflight the API never grants).
+    if (c.req.header(SESSION_HEADER) === "1") {
+      const session = await sessionCredential(c);
+      if (session) return { ok: true, state: session };
+      return { ok: false, reason: "invalid" };
+    }
+    return { ok: false, reason: "missing" };
+  }
   const { token } = credential;
   const client = c.req.header("CF-Connecting-IP") ?? "unknown";
   if (!(await c.env.RATE_LIMIT_AUTH.limit({ key: client })).success) {

@@ -44,6 +44,11 @@ import {
   listSshSigningKeysOperation,
 } from "../accounts/signing-keys.js";
 import {
+  createUserTokenOperation,
+  listUserTokensOperation,
+  revokeUserTokenOperation,
+} from "../accounts/tokens.js";
+import {
   abortUploadSession,
   completeUploadSession,
   createUploadSession,
@@ -127,6 +132,9 @@ export const handlers: Handlers = {
     },
   }),
 
+  "users.tokens.list": listUserTokensOperation,
+  "users.tokens.create": createUserTokenOperation,
+  "users.tokens.revoke": revokeUserTokenOperation,
   "orgs.update": updateOrgOperation,
   "agents.create": createAgentOperation,
   "agents.list": listAgentsOperation,

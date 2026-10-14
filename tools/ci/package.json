@@ -14,13 +14,15 @@
     "test:conformance": "vitest run -c vitest.conformance.config.ts"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@fyrden/api-contract": "workspace:*",
+    "@fyrden/domain": "workspace:*",
     "@fyrden/testing": "workspace:*",
+    "@playwright/test": "1.63.0",
     "@types/node": "catalog:",
+    "@vitest/coverage-istanbul": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "@vitest/coverage-istanbul": "catalog:",
-    "wrangler": "catalog:",
-    "@fyrden/api-contract": "workspace:*",
-    "@fyrden/domain": "workspace:*"
+    "wrangler": "catalog:"
   }
 }

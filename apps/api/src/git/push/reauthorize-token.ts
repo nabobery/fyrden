@@ -3,7 +3,7 @@ import {
   parseTokenRestrictions,
   readGrantLinks,
 } from "@fyrden/adapters-cloudflare/auth";
-import type { PrincipalType, RepoRole } from "@fyrden/domain";
+import { isId, type PrincipalType, type RepoRole } from "@fyrden/domain";
 import { allowedWithRole } from "../../repos/directory.js";
 import type { PushDecision } from "./commit.js";
 import { ACCESS_LOST, TOKEN_REVOKED } from "./reauthorize.js";
@@ -27,7 +27,8 @@ type Row = {
  * The commit-point check for a write the repository object makes itself
  * (an import from its alarm, a file write), with no Worker holding the
  * token: the token (by id) and the repository are read from the D1
- * primary. As for a push, a token that merely expired since the write was
+ * primary (or, for one made from the web UI, the signed-in session). As
+ * for a push, a token that merely expired since the write was
  * accepted does not stop it; a revoked token (or delegation grant), a
  * disabled principal, agent or owner, a deleted repository or lost write
  * access (the principal's, or an acting agent's owner's) does.
@@ -44,6 +45,28 @@ export async function reauthorizeByToken(
     decidedAt: Date.now(),
   });
   const session = db.withSession("first-primary");
+  // A write made from the web UI: a signed-in session, with the user's full rights.
+  if (isId(accepted.tokenId, "ses")) {
+    const signedIn = await session
+      .prepare(
+        `SELECT s.user_id, r.owner_id, r.state AS repo_state FROM sessions s
+         JOIN principals p ON p.id = s.user_id LEFT JOIN repos r ON r.id = ?
+         WHERE s.id = ? AND s.revoked_at IS NULL AND p.disabled_at IS NULL`,
+      )
+      .bind(accepted.repoId, accepted.tokenId)
+      .first<{ user_id: string; owner_id: string | null; repo_state: string | null }>();
+    if (!signedIn || signedIn.user_id !== accepted.principal) return decide(TOKEN_REVOKED);
+    if (signedIn.owner_id === null || signedIn.repo_state !== "active") return decide(ACCESS_LOST);
+    const role = signedIn.user_id === signedIn.owner_id ? "admin" : await roleOf(signedIn.user_id);
+    return allowedWithRole(
+      { principalId: signedIn.user_id, principalType: "user", scopes: [], repoIds: null },
+      { id: accepted.repoId },
+      "contents:write",
+      role,
+    )
+      ? decide()
+      : decide(ACCESS_LOST);
+  }
   const row = await session
     .prepare(
       `SELECT t.principal_id, p.type AS principal_type, p.owner_id AS agent_owner_id,
