@@ -123,17 +123,27 @@ describe("glob matching", () => {
 
   it("stops as soon as a pattern can no longer match: every pattern against a page of branches", async () => {
     const { globMatches } = await import("../../src/rulesets/ruleset.js");
-    // The most a repository may hold (50 rulesets of 50 patterns), against 100 long branch names.
-    const patterns = Array.from({ length: 2_500 }, (_, i) =>
-      i % 2 === 0 ? `refs/heads/f${i}/${"x".repeat(200)}*` : `refs/heads/f${i}/${"x".repeat(200)}`,
-    );
+    // Patterns that differ from every branch early: their length past that
+    // costs nothing. Timed against patterns ten times as long on the same
+    // machine (a clock's bound fails on a slow or instrumented run; a
+    // matcher that walks whole patterns takes about ten times as long).
     const refs = Array.from({ length: 100 }, (_, i) => `refs/heads/${"b".repeat(226)}${i}`);
-    const started = Date.now();
-    let matched = 0;
-    for (const ref of refs)
-      for (const pattern of patterns) if (globMatches(pattern, ref)) matched++;
-    expect(matched).toBe(0);
-    expect(Date.now() - started).toBeLessThan(2_000);
+    const timed = (length: number) => {
+      const patterns = Array.from({ length: 1_000 }, (_, i) =>
+        i % 2 === 0
+          ? `refs/heads/f${i}/${"x".repeat(length)}*`
+          : `refs/heads/f${i}/${"x".repeat(length)}`,
+      );
+      const started = performance.now();
+      let matched = 0;
+      for (const ref of refs)
+        for (const pattern of patterns) if (globMatches(pattern, ref)) matched++;
+      expect(matched).toBe(0);
+      return performance.now() - started;
+    };
+    timed(200); // Warm.
+    const short = timed(200);
+    expect(timed(2_000)).toBeLessThan(3 * short + 50);
     // Still exact where it matters.
     expect(globMatches(`refs/heads/${"b".repeat(5)}`, `refs/heads/${"b".repeat(5)}`)).toBe(true);
     expect(globMatches("refs/heads/b*", `refs/heads/${"b".repeat(240)}`)).toBe(true);

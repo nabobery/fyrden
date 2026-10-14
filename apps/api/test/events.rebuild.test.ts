@@ -11,6 +11,20 @@ import { ORIGIN } from "./helpers/git-http.js";
 import { principalWithToken } from "./helpers/principals.js";
 import { inRepo, oid } from "./helpers/repo-git.js";
 
+/**
+ * What each repository's object sent, kept here instead of going to the
+ * queue: its alarm sends a second after an event, which a slow run outlasts
+ * before `deliver` asks for them.
+ */
+const sentBy = new Map<string, Envelope[]>();
+
+function keepSends(repo: RepoDO, repoId: string): void {
+  if (!sentBy.has(repoId)) sentBy.set(repoId, []);
+  repo.sendEvents = async (envelope) => {
+    sentBy.get(repoId)?.push(envelope);
+  };
+}
+
 async function createRepo(token: string): Promise<string> {
   const res = await exports.default.fetch(`${ORIGIN}/api/user/repos`, {
     method: "POST",
@@ -22,12 +36,16 @@ async function createRepo(token: string): Promise<string> {
     body: JSON.stringify({ name: uniqueId("rebuilt") }),
   });
   expect(res.status).toBe(201);
-  return (await res.json<{ id: string }>()).id;
+  const { id } = await res.json<{ id: string }>();
+  await runInDurableObject(env.REPO.getByName(id), (repo: RepoDO) => keepSends(repo, id));
+  return id;
 }
 
 /** Moves `refs/heads/main` to `oid(n)` (the commit after `n - 1`). */
 async function commit(repoId: string, n: number) {
   await inRepo(env.REPO.getByName(repoId), async (repo) => {
+    // A restarted object sends to the queue again until told otherwise.
+    keepSends(repo, repoId);
     await repo.checkEpoch();
     const { version } = repo.git.refStore.state();
     const result = repo.git.refStore.commitSync({
@@ -44,16 +62,13 @@ async function commit(repoId: string, n: number) {
   });
 }
 
-/** Drains a repository's outbox and applies what it sent, as the consumer would. */
+/** Drains a repository's outbox and applies what it sent (since last asked), as the consumer would. */
 async function deliver(repoId: string) {
-  const sent = await runInDurableObject(env.REPO.getByName(repoId), async (repo: RepoDO) => {
-    const out: Envelope[] = [];
-    repo.sendEvents = async (e) => {
-      out.push(e);
-    };
+  await runInDurableObject(env.REPO.getByName(repoId), async (repo: RepoDO) => {
+    keepSends(repo, repoId);
     await repo.outbox.drain(repoId);
-    return out;
   });
+  const sent = sentBy.get(repoId)?.splice(0) ?? [];
   for (const envelope of sent) expect(await applyEnvelope(env, envelope)).toBe("applied");
   return sent.flatMap((e) => e.events);
 }
@@ -97,9 +112,10 @@ describe("read-model rebuild", () => {
     await commit(a, 1);
     await commit(a, 2);
     await commit(b, 1);
-    await inRepo(env.REPO.getByName(c), (repo) =>
-      repo.git.context.storage.transactionSync(() => repo.git.refStore.setHead("refs/heads/trunk")),
-    );
+    await inRepo(env.REPO.getByName(c), (repo) => {
+      keepSends(repo, c);
+      repo.git.context.storage.transactionSync(() => repo.git.refStore.setHead("refs/heads/trunk"));
+    });
     for (const id of ids) await deliver(id);
     const incremental = await rows(ids);
     expect(incremental).toHaveLength(5);

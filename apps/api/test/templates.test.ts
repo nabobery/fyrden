@@ -290,11 +290,13 @@ describe("templates", () => {
     expect(res.status).toBe(500);
     const since = await generatingSince(owner.handle, name);
     expect(since).toBeTypeOf("number");
-    // Not before it is overdue; then deleted, and its name free again.
-    expect(await settleStaleGenerations(env, { now: (since ?? 0) + 1 })).toBe(0);
+    // Not before it is overdue; then deleted, and its name free again. (Counts
+    // include what other tests here left overdue, so this one's state is checked.)
+    await settleStaleGenerations(env, { now: (since ?? 0) + 1 });
+    expect(await generatingSince(owner.handle, name)).toBe(since);
     expect(
       await settleStaleGenerations(env, { now: (since ?? 0) + GENERATION_POLICY.timeoutMs + 1 }),
-    ).toBe(1);
+    ).toBeGreaterThanOrEqual(1);
     expect((await api("GET", `/repos/${owner.handle}/${name}`, owner.token)).status).toBe(404);
   });
 
@@ -340,7 +342,7 @@ describe("templates", () => {
     )
       .bind(name, owner.principalId)
       .run();
-    expect(await settleStaleGenerations(env, { now: GENERATION_POLICY.timeoutMs + 2 })).toBe(0);
+    await settleStaleGenerations(env, { now: GENERATION_POLICY.timeoutMs + 2 });
     expect(await generatingSince(owner.handle, name)).toBeNull();
     expect((await api("GET", `/repos/${owner.handle}/${name}`, owner.token)).status).toBe(200);
   });
