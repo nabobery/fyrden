@@ -52,10 +52,11 @@ const envelope = (repoId: string, events: DomainEvent[]): Envelope => ({
 });
 
 /**
- * A sink with one target per push event, recording deliveries as a real
- * destination would: deduped by effect id, with every attempt counted.
+ * A sink with one target per push event, recording `repoId`'s deliveries as
+ * a real destination would: deduped by effect id, with every attempt counted.
+ * The sweep is global: other tests' effects are taken and not recorded.
  */
-function recordingSink() {
+function recordingSink(repoId: string) {
   const received = new Map<string, Effect>();
   const calls: string[] = [];
   let failing = 0;
@@ -64,6 +65,7 @@ function recordingSink() {
     plan: (event) =>
       event.type === "refs.updated" ? [{ target: "hook_1", payload: { event: event.type } }] : [],
     deliver: async (effect) => {
+      if (!effect.id.startsWith(`${repoId}:`)) return;
       calls.push(effect.id);
       if (failing > 0) {
         failing--;
@@ -90,7 +92,7 @@ const sweep = (sinks: readonly EffectSink[], now: number, db: D1Database = env.O
 describe("effects journal", () => {
   it("journals an event's effect with its projection and delivers it once", async () => {
     const repoId = await listedRepo();
-    const { sink, received, calls } = recordingSink();
+    const { sink, received, calls } = recordingSink(repoId);
     await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
       sinks: [sink],
       now: () => T0,
@@ -111,7 +113,7 @@ describe("effects journal", () => {
 
   it("retries a failed delivery from the sweeper, with backoff", async () => {
     const repoId = await listedRepo();
-    const { sink, received, failNext } = recordingSink();
+    const { sink, received, failNext } = recordingSink(repoId);
     failNext(2);
     await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
       sinks: [sink],
@@ -130,7 +132,7 @@ describe("effects journal", () => {
 
   it("delivers again with the same id after a crash between delivery and the mark, and the destination dedupes", async () => {
     const repoId = await listedRepo();
-    const { sink, received, calls } = recordingSink();
+    const { sink, received, calls } = recordingSink(repoId);
     // The mark after the first delivery is lost.
     let dropped = false;
     const losingMark = new Proxy(env.ORG_READ, {
@@ -166,7 +168,7 @@ describe("effects journal", () => {
 
   it("keeps a failed effect's backoff when its event is delivered again", async () => {
     const repoId = await listedRepo();
-    const { sink, calls, failNext } = recordingSink();
+    const { sink, calls, failNext } = recordingSink(repoId);
     failNext(1);
     const body = envelope(repoId, [pushEvent(repoId, 1)]);
     await applyEnvelope(env, body, { sinks: [sink], now: () => T0 });
@@ -248,7 +250,7 @@ describe("effects journal", () => {
 
   it("does not deliver at once an effect the sweeper already tried", async () => {
     const repoId = await listedRepo();
-    const { sink, calls } = recordingSink();
+    const { sink, calls } = recordingSink(repoId);
     await env.ORG_READ.prepare(
       `INSERT INTO effects (effect_id, sink, target, payload, attempts, next_attempt_at, created_at)
        VALUES (?, 'test_hook', 'hook_1', '{}', 1, ?, ?)`,
@@ -336,7 +338,7 @@ describe("effects journal", () => {
 
   it("journals nothing for an event of an older epoch", async () => {
     const repoId = await listedRepo();
-    const { sink } = recordingSink();
+    const { sink } = recordingSink(repoId);
     await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1, 2)]), {
       sinks: [sink],
       now: () => T0,
@@ -352,7 +354,7 @@ describe("effects journal", () => {
 
   it("marks an effect failed after the last attempt, or when its sink is gone", async () => {
     const repoId = await listedRepo();
-    const { sink, failNext } = recordingSink();
+    const { sink, failNext } = recordingSink(repoId);
     failNext(1_000);
     await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
       sinks: [sink],
@@ -383,7 +385,7 @@ describe("effects journal", () => {
 
   it("deletes delivered effects after the retention", async () => {
     const repoId = await listedRepo();
-    const { sink } = recordingSink();
+    const { sink } = recordingSink(repoId);
     await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
       sinks: [sink],
       now: () => T0,
