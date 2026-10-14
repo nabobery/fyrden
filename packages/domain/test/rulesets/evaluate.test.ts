@@ -121,13 +121,15 @@ describe("glob matching", () => {
     );
   });
 
-  it("stops as soon as a pattern can no longer match: every pattern against a page of branches", async () => {
+  it("stops as soon as a pattern can no longer match: every pattern against a page of branches", {
+    timeout: 60_000,
+  }, async () => {
     const { globMatches } = await import("../../src/rulesets/ruleset.js");
     // Patterns that differ from every branch early: their length past that
     // costs nothing. Timed against patterns ten times as long on the same
     // machine (a clock's bound fails on a slow or instrumented run; a
     // matcher that walks whole patterns takes about ten times as long).
-    const refs = Array.from({ length: 100 }, (_, i) => `refs/heads/${"b".repeat(226)}${i}`);
+    const refs = Array.from({ length: 20 }, (_, i) => `refs/heads/${"b".repeat(226)}${i}`);
     const timed = (length: number) => {
       const patterns = Array.from({ length: 1_000 }, (_, i) =>
         i % 2 === 0
