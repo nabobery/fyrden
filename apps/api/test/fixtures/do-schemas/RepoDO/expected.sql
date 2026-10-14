@@ -7,6 +7,7 @@ CREATE INDEX audit_segments_archived ON audit_segments (archived_at) WHERE state
 CREATE INDEX audit_segments_from ON audit_segments (from_seq);
 CREATE INDEX audit_segments_pending ON audit_segments (from_seq) WHERE state = 'pending';
 CREATE INDEX audit_segments_to ON audit_segments (to_seq);
+CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
 CREATE INDEX leases_pack ON leases (pack_id, expires_at);
 CREATE INDEX packs_state ON packs (state, created_at);
@@ -98,7 +99,7 @@ CREATE TABLE event_payloads (
         event_key TEXT PRIMARY KEY,
         payload TEXT NOT NULL CHECK (json_valid(payload)),
         created_at INTEGER NOT NULL
-      ) STRICT;
+      , sent_at INTEGER) STRICT;
 CREATE TABLE generation (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         template_id TEXT NOT NULL,

@@ -1,5 +1,6 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
+import { applyDoMigrations } from "@fyrden/adapters-cloudflare/migrations";
 import {
   createIdFactory,
   type DomainEvent,
@@ -18,6 +19,7 @@ import {
 } from "../src/do/base/outbox.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { REFS_PER_EVENT } from "../src/do/repo/events.js";
+import { repoSchema } from "../src/do/schema/repo.js";
 import { allocateEpoch } from "../src/events/epochs.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { principalWithToken } from "./helpers/principals.js";
@@ -188,6 +190,101 @@ describe("Outbox", () => {
     expect(result.payloads[0]?.event_key).toBe(`${SOURCE}:1:1`);
     expect(JSON.parse(result.payloads[0]?.payload ?? "{}").data.pad).toHaveLength(2_000);
     expect(result.sent.every((e) => parseEnvelope(e).ok)).toBe(true);
+  });
+
+  it("keeps a sent event's stored payload for the retention after it was sent, then deletes it", async () => {
+    const result = await withOutbox(
+      async ({ outbox, storage, setSend, advance }) => {
+        const count = () =>
+          storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM event_payloads").one().n;
+        // The queue is down for eight days: the event waits, its payload with it.
+        setSend(async () => {
+          throw new Error("queue down");
+        });
+        outbox.append(id(1), activity({ pad: "x".repeat(2_000) }));
+        advance(8 * 24 * 60 * 60 * 1_000);
+        await outbox.drain(SOURCE);
+        const whileUnsent = { count: count(), pruneDue: outbox.dueAt() };
+        setSend(async () => {});
+        await outbox.drain(SOURCE);
+        const sentAt = 1_000_000 + 8 * 24 * 60 * 60 * 1_000;
+        // Kept for the whole retention after it was sent.
+        const due = outbox.dueAt();
+        advance(OUTBOX_POLICY.payloadRetentionMs - 1);
+        outbox.prunePayloads();
+        const justBefore = count();
+        advance(1);
+        outbox.prunePayloads();
+        return { whileUnsent, due, sentAt, justBefore, after: count(), dueAfter: outbox.dueAt() };
+      },
+      { storeAboveBytes: 1_000 },
+    );
+    expect(result.whileUnsent.count).toBe(1);
+    expect(result.due).toBe(result.sentAt + OUTBOX_POLICY.payloadRetentionMs);
+    expect(result).toMatchObject({ justBefore: 1, after: 0, dueAfter: null });
+  });
+
+  it("counts payloads stored before the upgrade as sent unless their event waits, and arms the alarm", async () => {
+    const name = uniqueId("upgrade");
+    const stub = env.REPO.getByName(name);
+    // As a version-12 object left it: two payloads stored in the same
+    // millisecond, one whose event was sent and one whose event waits.
+    await runInDurableObject(stub, async (_: RepoDO, state) => {
+      await state.storage.deleteAll();
+      applyDoMigrations(state.storage, repoSchema.slice(0, 12));
+      for (const seq of [1, 2])
+        state.storage.sql.exec(
+          "INSERT INTO event_payloads (event_key, payload, created_at) VALUES (?, '{}', 5)",
+          `${SOURCE}:1:${seq}`,
+        );
+      const waiting = JSON.stringify({ id: id(2) });
+      state.storage.sql.exec(
+        "INSERT INTO outbox (source_seq, event, bytes, created_at) VALUES (2, ?, ?, 5)",
+        waiting,
+        waiting.length,
+      );
+    });
+    // Woken again by the upgraded code.
+    await runInDurableObject(stub, (_: RepoDO, state) => {
+      state.abort("upgrade");
+    }).catch(() => {});
+    // A new stub (the old one stays broken): its first call starts a new
+    // instance, which migrates on wake.
+    const after = await runInDurableObject(env.REPO.getByName(name), async (_: RepoDO, state) => ({
+      sent: state.storage.sql
+        .exec<{ event_key: string; sent_at: number | null }>(
+          "SELECT event_key, sent_at FROM event_payloads ORDER BY event_key",
+        )
+        .toArray(),
+      alarm: await state.storage.getAlarm(),
+    }));
+    expect(after.sent).toEqual([
+      { event_key: `${SOURCE}:1:1`, sent_at: 5 },
+      { event_key: `${SOURCE}:1:2`, sent_at: null },
+    ]);
+    expect(after.alarm).not.toBeNull();
+  });
+
+  it("never brings a send forward or spins on a payload whose event cannot be sent", async () => {
+    const result = await withOutbox(
+      async ({ outbox, setSend, advance }) => {
+        setSend(async () => {
+          throw new Error("queue down");
+        });
+        outbox.append(id(1), activity({ pad: "x".repeat(2_000) }));
+        advance(OUTBOX_POLICY.payloadRetentionMs * 2);
+        await outbox.drain(SOURCE);
+        // Backing off: the next attempt is in the future, whatever the payload's age.
+        return {
+          due: outbox.dueAt(),
+          sendDue: outbox.sendDueAt(),
+          now: 1_000_000 + OUTBOX_POLICY.payloadRetentionMs * 2,
+        };
+      },
+      { storeAboveBytes: 1_000 },
+    );
+    expect(result.due).toBe(result.sendDue);
+    expect(result.due).toBeGreaterThan(result.now);
   });
 
   it("keeps a sent batch whose rows could not be deleted, and sends it again with the same ids", async () => {

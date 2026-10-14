@@ -271,4 +271,23 @@ export const repoSchema: readonly DoMigration[] = [
       ALTER TABLE generation ADD COLUMN abandoned_at INTEGER;
     `,
   },
+  {
+    version: 13,
+    // When a stored payload's event was sent: the payload is kept for a
+    // retention from then (consumers fetch it by the event's id), and
+    // never deleted before. Payloads stored before this version whose event
+    // is no longer in the outbox (matched by its id) count as sent when
+    // they were stored.
+    name: "event_payloads_sent_at",
+    sql: `
+      ALTER TABLE event_payloads ADD COLUMN sent_at INTEGER;
+      UPDATE event_payloads SET sent_at = created_at
+        WHERE event_key NOT IN (
+          SELECT json_extract(event, '$.id.sourceId') || ':' ||
+            json_extract(event, '$.id.epochGen') || ':' ||
+            json_extract(event, '$.id.sourceSeq')
+          FROM outbox);
+      CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
+    `,
+  },
 ];

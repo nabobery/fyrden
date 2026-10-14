@@ -275,6 +275,7 @@ alarm. These periods are defaults and are not configurable in this version:
 | Uncommitted uploads and their stored bytes | 24 hours after the upload started |
 | Stored fetch responses (regenerated or framed packs) | 1 hour after the last clone that read them |
 | Outputs of an interrupted repack | 24 hours |
+| An event's stored data (a change too large for one queue message keeps its data in the repository, for consumers to fetch) | 7 days after the event was sent; never while it waits to be sent |
 
 A repack that replaces packs a clone is reading waits up to 1 hour for that
 clone before it switches; the old packs stay readable either way.

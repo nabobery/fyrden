@@ -28,6 +28,14 @@ export interface OutboxPolicy {
   /** First retry delay after a failed send; doubles per attempt up to `maxBackoffMs`. */
   readonly backoffMs: number;
   readonly maxBackoffMs: number;
+  /**
+   * How long a stored payload is kept after its event was sent, for
+   * consumers and effects that fetch it by the event's id; one whose event
+   * is not sent yet is kept regardless.
+   */
+  readonly payloadRetentionMs: number;
+  /** Stored payloads one drain deletes at most. */
+  readonly payloadPruneLimit: number;
 }
 
 /**
@@ -45,6 +53,8 @@ export const OUTBOX_POLICY: OutboxPolicy = {
   maxBatches: 10,
   backoffMs: 1_000,
   maxBackoffMs: 5 * 60 * 1_000,
+  payloadRetentionMs: 7 * 24 * 60 * 60 * 1_000,
+  payloadPruneLimit: 500,
 };
 
 /** An event before the outbox gives it its place in the stream. */
@@ -132,14 +142,30 @@ export class Outbox {
     return stored;
   }
 
-  /** When the next drain is due, or null when the outbox is empty. */
-  dueAt(): number | null {
+  /** When events waiting to be sent are next due (a backoff included), or null when none wait. */
+  sendDueAt(): number | null {
     const row = this.storage.sql
       .exec<{ at: number | null }>(
         "SELECT next_drain_at AS at FROM outbox_state WHERE id = 1 AND EXISTS (SELECT 1 FROM outbox)",
       )
       .toArray()[0];
     return row ? (row.at ?? this.deps.now()) : null;
+  }
+
+  /**
+   * When the object next has outbox work: a send (`sendDueAt`), or the
+   * end of the oldest sent payload's retention; null when neither.
+   */
+  dueAt(): number | null {
+    const sendAt = this.sendDueAt();
+    const oldest = this.storage.sql
+      .exec<{ at: number | null }>(
+        "SELECT min(sent_at) AS at FROM event_payloads WHERE sent_at IS NOT NULL",
+      )
+      .one().at;
+    const pruneAt = oldest === null ? null : oldest + this.#policy.payloadRetentionMs;
+    if (sendAt === null) return pruneAt;
+    return pruneAt === null ? sendAt : Math.min(sendAt, pruneAt);
   }
 
   /** Rows waiting to be sent. */
@@ -158,6 +184,7 @@ export class Outbox {
     const policy = this.#policy;
     let sent = 0;
     try {
+      this.prunePayloads();
       for (let batch = 0; batch < policy.maxBatches; batch++) {
         const events = this.#nextBatch(sourceId);
         if (events.length === 0) break;
@@ -166,6 +193,16 @@ export class Outbox {
         this.deps.metrics?.count("queue.send", { queue: "events" });
         this.storage.transactionSync(() => {
           this.#exec("outbox.delete", "DELETE FROM outbox WHERE source_seq <= ?", last);
+          // Their stored payloads' retention starts now.
+          const stored = events.filter((e) => e.stored).map((e) => eventKey(e.id));
+          if (stored.length > 0)
+            this.#exec(
+              "outbox.payload_sent",
+              `UPDATE event_payloads SET sent_at = ? WHERE sent_at IS NULL
+                 AND event_key IN (SELECT value FROM json_each(?))`,
+              this.deps.now(),
+              JSON.stringify(stored),
+            );
           this.#exec(
             "outbox.state",
             "UPDATE outbox_state SET attempts = 0, last_error = NULL WHERE id = 1 AND attempts > 0",
@@ -190,6 +227,24 @@ export class Outbox {
       }
       return { ok: false, sent, error };
     }
+  }
+
+  /**
+   * Deletes stored payloads whose retention since their event was sent
+   * has ended, oldest first and a bounded number at a time; one whose
+   * event is not sent yet has no `sent_at` and is never deleted.
+   */
+  prunePayloads(): void {
+    const policy = this.#policy;
+    this.#exec(
+      "outbox.payload_prune",
+      `DELETE FROM event_payloads WHERE event_key IN (
+         SELECT event_key FROM event_payloads
+         WHERE sent_at IS NOT NULL AND sent_at <= ?
+         ORDER BY sent_at LIMIT ?)`,
+      this.deps.now() - policy.payloadRetentionMs,
+      policy.payloadPruneLimit,
+    );
   }
 
   /** The oldest rows that fit one message: at least one, then while under both limits. */

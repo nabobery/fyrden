@@ -257,6 +257,13 @@ export class RepoDO extends MigratingDO {
       this.#armOutbox();
       this.#ensureAuditArchive();
     };
+    // First wake since an upgrade: the new version may have work for the
+    // alarm that nothing set it for (stored payloads now due for deletion).
+    // After the migration, which the base class runs in the same way.
+    ctx.blockConcurrencyWhile(async () => {
+      if (!this.migration || this.migration.from >= this.migration.to) return;
+      if ((await ctx.storage.getAlarm()) === null) this.#armOutbox();
+    });
   }
 
   /** Queues the audit archiver while audit rows wait to be archived. */
@@ -1345,13 +1352,22 @@ export class RepoDO extends MigratingDO {
     });
   }
 
-  /** Sends due events; a failure backs off and never fails the alarm or stops the jobs. */
+  /**
+   * Sends events when they are due (a backoff stands), and deletes stored
+   * payloads past their retention; a failure backs off and never fails the
+   * alarm or stops the jobs.
+   */
   async #drainOutbox(): Promise<void> {
     try {
-      const due = this.outbox.dueAt();
-      if (due === null || due > this.git.context.now()) return;
-      const result = await this.outbox.drain(this.#repoId());
-      if (!result.ok) this.#log().warn("sending events failed", { error: result.error });
+      const now = this.git.context.now();
+      const sendAt = this.outbox.sendDueAt();
+      if (sendAt !== null && sendAt <= now) {
+        const result = await this.outbox.drain(this.#repoId());
+        if (!result.ok) this.#log().warn("sending events failed", { error: result.error });
+      } else {
+        const due = this.outbox.dueAt();
+        if (due !== null && due <= now) this.outbox.prunePayloads();
+      }
     } catch (error) {
       this.#log().warn("draining the outbox failed", { error });
     }
