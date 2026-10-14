@@ -16,8 +16,10 @@
 | Parser fuzzing | `packages/git-core/fuzz` | Node (Vitest), time-boxed | `pnpm --filter @fyrden/git-core fuzz` |
 | Mutation testing | `packages/git-core`, one `src/` directory per run | Stryker | `FYRDEN_MUTATION_SCOPE=<scope> pnpm --filter @fyrden/git-core mutation` |
 
-Pull requests run the unit, workerd, shuffle, dry-run and end-to-end tiers,
-the interoperability subset with the current pinned git, and mutation testing
+Pull requests and pushes to `main` run the unit, workerd, shuffle, dry-run
+and end-to-end tiers, MCP conformance and REST API fuzzing (one job,
+`contract`, which deploys also wait for), and the interoperability subset with
+the current pinned git. Pull requests also run mutation testing
 (incremental) for the `git-core` scopes they change. The nightly workflow runs
 every interoperability case on every pinned git, long fuzzing budgets, and a
 full mutation run of every scope.
