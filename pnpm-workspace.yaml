@@ -61,3 +61,9 @@ peerDependencyRules:
 
 overrides:
   "@types/node": "catalog:"
+  # Reviewed 2026-10-14: typed-rest-client 2.3.1 (Stryker's dashboard client,
+  # dev only; Stryker 10.0.0 wants ~2.3.0) pins qs 6.15.1, which has three
+  # moderate advisories (GHSA-q8mj-m7cp-5q26, GHSA-x5fp-wj9c-mxmx,
+  # GHSA-4mjr-xmp4-gh2g). 6.16.0 is the patched release of the same major.
+  # Drop this once Stryker moves to typed-rest-client 3.
+  "typed-rest-client>qs": "6.16.0"
