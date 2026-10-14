@@ -2,9 +2,15 @@ import type { completeUpload, createUpload, getUpload, Input, Output } from "@fy
 import { PERMISSIONS, type RepoPermission } from "@fyrden/domain";
 import { type OpContext, OperationError } from "../../ops/execute.js";
 import { authorize, type RepoEntry, resolveRepo } from "../../repos/directory.js";
+import { reserveUpload } from "../push/quota.js";
 import { reauthorizeWriter } from "../push/reauthorize.js";
 import { pushTuning } from "../push/tuning.js";
-import { type PushReportSummary, readPushReport, refUpdateProblem } from "./head.js";
+import {
+  buildCommandHead,
+  type PushReportSummary,
+  readPushReport,
+  refUpdateProblem,
+} from "./head.js";
 import type { ChunkedFailure, ChunkedView } from "./session.js";
 import { chunkedTuning } from "./tuning.js";
 
@@ -84,8 +90,30 @@ export async function createUploadSession(
       updates: input.ref_updates,
     }),
   );
+  // The account's storage for the whole upload, held until it commits or ends.
+  ctx.metrics.count("do.request", { class: "OrgDO", method: "reserveStorage" });
+  // What its commit is charged: the command section and the pack.
+  const bodyBytes = buildCommandHead(input.ref_updates).length + input.size;
+  // Not reserved (or not known to be): the session goes, and what it holds with it.
+  const abort = () =>
+    ctx.env.REPO.getByName(repo.id).abortChunked(begun.view.uploadId, ctx.auth.principalId);
+  const reservation = await reserveUpload(ctx.env, repo, begun.view.uploadId, {
+    declared: bodyBytes,
+    maxBytes: bodyBytes,
+    ttlMs: Math.max(0, begun.view.expiresAt - Date.now()) + RESERVATION_MARGIN_MS,
+  }).catch(async (error: unknown) => {
+    await abort().catch(() => undefined);
+    throw error;
+  });
+  if (!reservation.ok) {
+    await abort();
+    throw new OperationError(403, "quota_exceeded", `${reservation.message}.`);
+  }
   return output(repo, begun.view);
 }
+
+/** How much longer than its session a chunked upload's reservation lasts. */
+const RESERVATION_MARGIN_MS = 60 * 60 * 1000;
 
 export async function getUploadSession(ctx: OpContext, input: SessionInput): Promise<Session> {
   const repo = await repoFor(ctx, input.owner, input.repo, "contents:read");

@@ -136,6 +136,21 @@ export class RepoPush {
    */
   accessCheck: ((principal: string) => Promise<string | undefined>) | undefined;
 
+  /**
+   * The account's storage quota: at the commit point, after the access
+   * check, `charge` holds the upload's stored bytes (a refusal message
+   * when they do not fit); once committed, `confirm` makes them the
+   * repository's usage; an upload aborted without committing `release`s
+   * what it held.
+   */
+  storage:
+    | {
+        readonly charge: (uploadId: string, bytes: number) => Promise<string | undefined>;
+        readonly confirm: (uploadId: string, bytes: number) => Promise<void>;
+        readonly release: (uploadId: string) => Promise<void>;
+      }
+    | undefined;
+
   constructor(
     private readonly git: RepoGitStorage,
     private readonly metrics: Metrics,
@@ -397,7 +412,10 @@ export class RepoPush {
           commitGraph: this.git.commitGraph,
           // The caller's decision (token, repository), then the object's
           // own access check for the pusher.
-          reauthorize: async () => decision.refusal ?? (await this.accessCheck?.(upload.principal)),
+          reauthorize: async () =>
+            decision.refusal ??
+            (await this.accessCheck?.(upload.principal)) ??
+            (await this.storage?.charge(uploadId, record.bodyBytes)),
           commit: pushCommitter(
             this.git,
             upload,
@@ -417,6 +435,7 @@ export class RepoPush {
     const { plan, indexed, result } = outcome.value;
     const response = encodePushResponse(result.report, plan.capabilities, result.messages);
     if (result.uploadCommitted) {
+      await this.storage?.confirm(uploadId, record.bodyBytes);
       const cursorObject = this.#cursors.objectKey(uploadId);
       this.#cursors.saveResponse(uploadId, response);
       await deleteScratch(
@@ -467,7 +486,10 @@ export class RepoPush {
   /** Aborts an upload that will not commit and deletes what it stored (the reaper retries what fails). */
   async #discard(uploadId: string): Promise<void> {
     const cursorObject = this.#cursors.objectKey(uploadId);
-    const keys = this.git.uploads.abort(uploadId) ?? [];
+    const aborted = this.git.uploads.abort(uploadId);
+    // Only an upload this aborted (not one committed meanwhile) frees what it held.
+    if (aborted) await this.storage?.release(uploadId);
+    const keys = aborted ?? [];
     const networkId = this.git.networkId();
     const files = keys.flatMap((key) => [key, key.replace(/\.pack$/, ".idx")]);
     try {

@@ -24,6 +24,7 @@ import { createFileCommit, deleteContents, putContents } from "../ops/file-write
 import { createImport, getImport } from "../ops/imports.js";
 import { whoami } from "../ops/meta.js";
 import { createOrg, listMembers, removeMembership, setMembership } from "../ops/orgs.js";
+import { getOrgQuota, getUserQuota, setQuota } from "../ops/quotas.js";
 import {
   createOrgRepo,
   createRepo,
@@ -59,6 +60,9 @@ export const registry = defineRegistry([
   starRepo,
   unstarRepo,
   listStarred,
+  getUserQuota,
+  getOrgQuota,
+  setQuota,
   listBranches,
   getBranch,
   listTags,

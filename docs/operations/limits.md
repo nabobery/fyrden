@@ -388,6 +388,23 @@ deletion, audited as `repo.expire` with no actor.
 | Repositories marked per cron run | 50; the rest in later runs |
 | Deletions advanced per cron run | 10 (as for any deletion) |
 
+## Quotas
+
+Each account (a user or an organization) has two limits, set per account by
+an instance administrator (`PUT /admin/accounts/{account}/quota`) or else the
+instance defaults below; `GET /user/quota` and `GET /orgs/{org}/quota` show
+them and their use.
+
+| What | Value |
+|---|---|
+| Active repositories | 1,000 by default (`QUOTA_MAX_REPOS`). Create, organization create, fork and generate past it answer 403 `quota_exceeded`; the check holds against concurrent creates. Repositories being deleted do not count |
+| Storage | 1 GiB by default (`QUOTA_MAX_STORAGE_BYTES`): the bytes the account's repositories' pushes stored, as received (pack and commands). Forks count nothing until pushed to; repacking does not change it; a deleted repository's bytes are free once its deletion finishes |
+| Before a push is stored | Its `Content-Length` is reserved, or, without one, as much as is free (up to the body limit); a push larger than the reservation is refused with a message git shows. A chunked upload reserves its declared size |
+| At the commit | The push's stored bytes are held for it; one that does not fit (the limit was lowered, or a write the repository makes itself: file writes, imports, generation) is refused, every ref `ng`, nothing changed. Once committed, the bytes become the repository's usage |
+| A push that commits nothing | What it reserved or held is free again |
+| Holds | A reservation lasts the push's longest wait plus 15 minutes (a chunked upload's session plus an hour), a commit's hold 30 minutes; a lapsed one counts nothing. A commit whose confirmation is lost goes uncounted rather than counted twice |
+| Forks | A fork that loses the last slot to a concurrent create is deleted again |
+
 ## Templates
 
 `POST /repos/{template_owner}/{template_repo}/generate` makes a repository
@@ -439,6 +456,8 @@ and the default applies.
 | `GIT_UPLOAD_COMPLETE_WAIT_MS` | 20,000 | 0 | How long one `complete` call waits |
 | `GIT_IMPORT_MAX_BYTES` | 4,294,967,296 (4 GiB) | 32 | Largest pack an import fetches |
 | `GIT_IMPORT_MAX_MS` | 600,000 (10 min) | 1,000 | Longest an import's fetch may take |
+| `QUOTA_MAX_REPOS` | 1,000 | 0 | Active repositories an account may have, unless an administrator set its own |
+| `QUOTA_MAX_STORAGE_BYTES` | 1,073,741,824 (1 GiB) | 0 | Bytes an account's pushes may store, unless an administrator set its own |
 
 `fyrden-api` also needs the secret `BOOTSTRAP_SECRET`, which `fyrden deploy`
 sets. The `fyrden` CLI reads `FYRDEN_TOKEN` (the token for `fyrden push`),

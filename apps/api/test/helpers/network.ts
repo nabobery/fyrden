@@ -60,6 +60,7 @@ export async function fork(
       ownerId: owner.principalId,
       ownerHandle: handleOf(owner),
       name,
+      maxRepos: Number.MAX_SAFE_INTEGER,
     },
     options,
   );

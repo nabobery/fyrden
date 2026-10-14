@@ -8,6 +8,12 @@ import {
   strongestRole,
 } from "@fyrden/domain";
 import { MigratingDO } from "./base/MigratingDO.js";
+import {
+  AccountQuotas,
+  defaultLimits,
+  type QuotaLimits,
+  type StorageStatus,
+} from "./org/quotas.js";
 import { orgSchema } from "./schema/org.js";
 
 /** An account as its object records it. */
@@ -410,7 +416,82 @@ export class OrgDO extends MigratingDO {
       );
       this.ctx.storage.sql.exec("DELETE FROM collaborators WHERE repo_id = ?", repoId);
       this.ctx.storage.sql.exec("DELETE FROM team_repos WHERE repo_id = ?", repoId);
+      this.#quotas().forgetRepo(repoId);
     });
+  }
+
+  #quotas(): AccountQuotas {
+    return new AccountQuotas(this.ctx.storage, defaultLimits(this.env), () => this.#now());
+  }
+
+  /** The account's quota limits in force. */
+  quotaLimits(): QuotaLimits {
+    return this.#quotas().limits();
+  }
+
+  /** The account's limits and storage use. */
+  quotaStatus(): StorageStatus {
+    return this.#quotas().status();
+  }
+
+  /**
+   * Sets the account's limits (an instance administrator; the Worker
+   * checked it), with its audit row in the same transaction; the row is
+   * delivered to the directory like any other.
+   */
+  setQuotaLimits(
+    change: { readonly maxRepos?: number | null; readonly maxStorageBytes?: number | null },
+    audit: { readonly accountId: string; readonly actor: ChangeActor },
+  ): QuotaLimits {
+    const limits = this.#quotas().setLimits(change, () =>
+      this.ctx.storage.sql.exec(
+        `INSERT INTO pending_audit (at, actor_id, action, target_id, details, request_id)
+         VALUES (?, ?, 'quota.set', ?, ?, ?)`,
+        this.#now(),
+        audit.actor.principalId,
+        audit.accountId,
+        // Only what the change names: null is a return to the instance default.
+        JSON.stringify({
+          ...(change.maxRepos !== undefined && { max_repos: change.maxRepos }),
+          ...(change.maxStorageBytes !== undefined && {
+            max_storage_bytes: change.maxStorageBytes,
+          }),
+        }),
+        audit.actor.requestId ?? null,
+      ),
+    );
+    void this.ctx.storage.getAlarm().then((current) => {
+      const at = this.#now() + AUDIT_RETRY_MS;
+      if (current === null || current > at) return this.ctx.storage.setAlarm(at);
+    });
+    return limits;
+  }
+
+  /** Reserves storage for an upload being stored (see `AccountQuotas.reserve`). */
+  reserveStorage(input: Parameters<AccountQuotas["reserve"]>[0]): {
+    reserved: number;
+    freeBytes: number;
+  } {
+    if (this.#forgotten(input.repoId)) return { reserved: 0, freeBytes: 0 };
+    return this.#quotas().reserve(input);
+  }
+
+  /** Holds a committing upload's bytes (see `AccountQuotas.charge`); false when they do not fit. */
+  chargeStorage(input: Parameters<AccountQuotas["charge"]>[0]): boolean {
+    // A deleted repository's storage is not counted again.
+    if (this.#forgotten(input.repoId)) return false;
+    return this.#quotas().charge(input);
+  }
+
+  /** An upload committed: its bytes become its repository's usage (see `AccountQuotas.confirm`). */
+  confirmStorage(input: Parameters<AccountQuotas["confirm"]>[0]): void {
+    if (this.#forgotten(input.repoId)) return;
+    this.#quotas().confirm(input);
+  }
+
+  /** An upload ended without committing: what it holds is free again. */
+  releaseStorage(uploadId: string): void {
+    this.#quotas().release(uploadId);
   }
 
   #forgotten(repoId: string): boolean {

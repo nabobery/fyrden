@@ -16,6 +16,9 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   repositories.
  * - `forgotten_repos` (v2): deleted repositories, so a grant that arrives
  *   after their records were removed is refused.
+ * - `quota_limits`, `quota_usage`, `quota_holds`, `quota_confirmed` (v3):
+ *   the account's quotas, the storage its repositories' committed uploads
+ *   use, and what uploads not committed yet hold.
  * - `pending_audit`: audit rows of access changes, written in the change's
  *   transaction and delivered to the directory's `audit_log` (then
  *   deleted); the alarm retries what could not be delivered.
@@ -100,6 +103,44 @@ export const orgSchema: readonly DoMigration[] = [
         repo_id TEXT PRIMARY KEY,
         forgotten_at INTEGER NOT NULL
       ) STRICT;
+    `,
+  },
+  {
+    version: 3,
+    name: "quotas",
+    // Limits (null: the instance default); bytes each repository's
+    // committed uploads stored; holds of uploads not committed yet (a
+    // reservation while one is stored, a charge from its commit until it
+    // is confirmed), which lapse at `expires_at`; uploads confirmed, so a
+    // confirmation counts once.
+    sql: `
+      CREATE TABLE quota_limits (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        max_repos INTEGER CHECK (max_repos >= 0),
+        max_storage_bytes INTEGER CHECK (max_storage_bytes >= 0),
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE quota_usage (
+        repo_id TEXT PRIMARY KEY,
+        bytes INTEGER NOT NULL CHECK (bytes >= 0)
+      ) STRICT;
+
+      CREATE TABLE quota_holds (
+        upload_id TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('reserved', 'charged')),
+        bytes INTEGER NOT NULL CHECK (bytes >= 0),
+        expires_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX quota_holds_expiry ON quota_holds (expires_at);
+      CREATE INDEX quota_holds_repo ON quota_holds (repo_id);
+
+      CREATE TABLE quota_confirmed (
+        upload_id TEXT PRIMARY KEY,
+        confirmed_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX quota_confirmed_at ON quota_confirmed (confirmed_at);
     `,
   },
 ];

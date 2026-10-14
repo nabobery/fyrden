@@ -52,6 +52,139 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
   },
   "openapi": "3.1.1",
   "paths": {
+    "/admin/accounts/{account}/quota": {
+      "put": {
+        "description": "Sets a user's or organization's limits; null goes back to the instance default, and a limit left out is kept. Lowering a limit below the use refuses new repositories and pushes; nothing is deleted. Instance administrators only.",
+        "operationId": "admin.quotas.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account",
+            "required": true,
+            "schema": {
+              "description": "The user's or organization's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "max_repos": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer",
+                      },
+                      {
+                        "type": "null",
+                      },
+                    ],
+                  },
+                  "max_storage_bytes": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer",
+                      },
+                      {
+                        "type": "null",
+                      },
+                    ],
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "account": {
+                      "description": "The account's handle.",
+                      "type": "string",
+                    },
+                    "max_repos": {
+                      "description": "Active repositories the account may have.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "max_storage_bytes": {
+                      "description": "Bytes its repositories' pushes may store (pack and commands, as received).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "repos": {
+                      "description": "Its active repositories now.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "reserved_bytes": {
+                      "description": "Bytes reserved by pushes being received.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "storage_bytes": {
+                      "description": "Bytes stored by committed pushes.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "account",
+                    "max_repos",
+                    "repos",
+                    "max_storage_bytes",
+                    "storage_bytes",
+                    "reserved_bytes",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Set an account's quota",
+        "x-fyrden-permission": "instance:admin",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/admin/organizations": {
       "post": {
         "description": "Creates an organization with a user as its first owner. Instance administrators only.",
@@ -662,6 +795,102 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "user",
         ],
         "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/orgs/{org}/quota": {
+      "get": {
+        "description": "An organization's quota and its use, for its members.",
+        "operationId": "quotas.org.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "account": {
+                      "description": "The account's handle.",
+                      "type": "string",
+                    },
+                    "max_repos": {
+                      "description": "Active repositories the account may have.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "max_storage_bytes": {
+                      "description": "Bytes its repositories' pushes may store (pack and commands, as received).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "repos": {
+                      "description": "Its active repositories now.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "reserved_bytes": {
+                      "description": "Bytes reserved by pushes being received.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "storage_bytes": {
+                      "description": "Bytes stored by committed pushes.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "account",
+                    "max_repos",
+                    "repos",
+                    "max_storage_bytes",
+                    "storage_bytes",
+                    "reserved_bytes",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get an organization's quota",
+        "x-fyrden-permission": "members:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
       },
     },
     "/orgs/{org}/repos": {
@@ -7209,6 +7438,89 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "org",
           "agent",
           "installation",
+        ],
+      },
+    },
+    "/user/quota": {
+      "get": {
+        "description": "The authenticated user's quota: how many repositories it may have and how many bytes their pushes may store, and how much of each is used. A deleted repository's bytes are free again once its deletion finishes.",
+        "operationId": "quotas.user.get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "account": {
+                      "description": "The account's handle.",
+                      "type": "string",
+                    },
+                    "max_repos": {
+                      "description": "Active repositories the account may have.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "max_storage_bytes": {
+                      "description": "Bytes its repositories' pushes may store (pack and commands, as received).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "repos": {
+                      "description": "Its active repositories now.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "reserved_bytes": {
+                      "description": "Bytes reserved by pushes being received.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "storage_bytes": {
+                      "description": "Bytes stored by committed pushes.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "account",
+                    "max_repos",
+                    "repos",
+                    "max_storage_bytes",
+                    "storage_bytes",
+                    "reserved_bytes",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get your quota",
+        "x-fyrden-permission": "members:read",
+        "x-fyrden-principals": [
+          "user",
         ],
       },
     },

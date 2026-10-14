@@ -51,7 +51,7 @@ export const PERMISSIONS = {
   "members:read": {
     resource: "account",
     minAccountRole: "member",
-    summary: "See an organization's members and teams.",
+    summary: "See an account's quota, and an organization's members and teams.",
     principals: PRINCIPAL_TYPES,
     implies: [],
     writes: false,

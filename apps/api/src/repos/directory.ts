@@ -10,6 +10,7 @@ import {
   type RepoPermission,
   type RepoRole,
 } from "@fyrden/domain";
+import { OperationError } from "../ops/execute.js";
 import { clock } from "../services.js";
 
 /** A name `repos.create` would accept; anything else cannot exist. */
@@ -243,16 +244,140 @@ export async function findOwnedRepos(
   return results.map(entryOf);
 }
 
-/**
- * A statement that frees `name` in an owner's namespace of redirects, for the
- * batch that gives a repository that name (a create, a fork). The batch must
- * fail as a whole if the name is not taken after all (a unique violation).
- */
-export function claimNameStatement(db: D1Database, ownerId: string, name: string) {
-  return db
-    .prepare("DELETE FROM repo_redirects WHERE owner_id = ? AND name = ?")
-    .bind(ownerId, name);
+/** A repository row a create or a fork inserts. */
+export interface NewRepoRow {
+  readonly id: string;
+  readonly ownerId: string;
+  readonly name: string;
+  readonly networkId: string;
+  readonly orgShard: string;
+  readonly visibility: RepoEntry["visibility"];
+  readonly parentId: string | null;
+  readonly expiresAt: number | null;
+  readonly now: number;
 }
+
+/**
+ * The statements of one directory batch that publishes a new repository:
+ * its row, taking the name from any redirect holding it, and its audit
+ * row, all only while the owner has fewer than `maxRepos` active
+ * repositories and none of that name (checked in the batch, so concurrent
+ * creates cannot pass the limit or take the name twice). Pass the batch's
+ * results to `heldBack` for why it was held back, read in the same
+ * transaction.
+ */
+export function newRepoStatements(
+  db: D1Database,
+  row: NewRepoRow,
+  audit: {
+    readonly actorId: string;
+    readonly requestId?: string;
+    readonly action: string;
+    readonly details: Record<string, unknown>;
+  },
+  maxRepos: number,
+): D1PreparedStatement[] {
+  const inserted = "EXISTS (SELECT 1 FROM repos WHERE id = ?)";
+  return [
+    // What the insert below sees: the name taken, the active repositories.
+    db
+      .prepare(
+        `SELECT EXISTS (SELECT 1 FROM repos WHERE owner_id = ?1 AND name = ?2 COLLATE NOCASE
+                  AND state <> 'deleted') AS taken,
+                (SELECT count(*) FROM repos WHERE owner_id = ?1 AND state <> 'deleted'
+                  AND state = 'active') AS repos`,
+      )
+      .bind(row.ownerId, row.name),
+    db
+      .prepare(
+        `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, parent_id,
+           expires_at, created_at, updated_at)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9
+         WHERE (SELECT count(*) FROM repos WHERE owner_id = ?2 AND state <> 'deleted'
+           AND state = 'active') < ?10
+           AND NOT EXISTS (SELECT 1 FROM repos WHERE owner_id = ?2 AND name = ?3 COLLATE NOCASE
+             AND state <> 'deleted')`,
+      )
+      .bind(
+        row.id,
+        row.ownerId,
+        row.name,
+        row.networkId,
+        row.orgShard,
+        row.visibility,
+        row.parentId,
+        row.expiresAt,
+        row.now,
+        maxRepos,
+      ),
+    db
+      .prepare(`DELETE FROM repo_redirects WHERE owner_id = ? AND name = ? AND ${inserted}`)
+      .bind(row.ownerId, row.name, row.id),
+    db
+      .prepare(
+        `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
+         SELECT ?, ?, ?, ?, ?, ? WHERE ${inserted}`,
+      )
+      .bind(
+        row.now,
+        audit.actorId,
+        audit.action,
+        row.id,
+        JSON.stringify(audit.details),
+        audit.requestId ?? null,
+        row.id,
+      ),
+  ];
+}
+
+/**
+ * Why a `newRepoStatements` batch did not publish its repository (the
+ * name was taken, or the quota full), or undefined when it did.
+ */
+export function heldBack(
+  results: readonly D1Result[],
+): "name_taken" | "quota_exceeded" | undefined {
+  if ((results[1]?.meta.changes ?? 0) > 0) return undefined;
+  const seen = results[0]?.results[0] as { taken: number } | undefined;
+  return seen?.taken ? "name_taken" : "quota_exceeded";
+}
+
+/**
+ * Whether `ownerId` may create repository `name` now: not when it has one
+ * of that name (409 `name_taken`), or has `maxRepos` active ones (403
+ * `quota_exceeded`). Read from the D1 primary; the create's batch checks
+ * the limit again.
+ */
+export async function checkNewRepo(
+  env: Env,
+  owner: { readonly id: string; readonly handle: string },
+  name: string,
+  maxRepos: number,
+  metrics?: Metrics,
+): Promise<void> {
+  metrics?.count("d1.query", { db: "directory", op: "repo_name_check" });
+  const row = await env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT EXISTS (SELECT 1 FROM repos WHERE owner_id = ?1 AND name = ?2 COLLATE NOCASE
+                AND state <> 'deleted') AS taken,
+              (SELECT count(*) FROM repos WHERE owner_id = ?1 AND state <> 'deleted'
+                AND state = 'active') AS repos`,
+    )
+    .bind(owner.id, name)
+    .first<{ taken: number; repos: number }>();
+  if (row?.taken) throw nameTakenError(owner.handle, name);
+  if ((row?.repos ?? 0) >= maxRepos) throw repoQuotaError(owner.handle, maxRepos);
+}
+
+export const nameTakenError = (handle: string, name: string) =>
+  new OperationError(409, "name_taken", `${handle} already has a repository named ${name}.`);
+
+export const repoQuotaError = (handle: string, maxRepos: number) =>
+  new OperationError(
+    403,
+    "quota_exceeded",
+    `${handle} has ${maxRepos} repositories, as many as its quota allows; delete one first.`,
+  );
 
 /** This isolate stops resolving `repoId` from its cache, under any name (its deletion started). */
 export function forgetRepo(repoId: string): void {

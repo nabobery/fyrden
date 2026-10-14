@@ -70,6 +70,11 @@ import {
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
 import type { AclSnapshot } from "./OrgDO.js";
+import {
+  STORAGE_CHARGE_TTL_MS,
+  STORAGE_QUOTA_EXCEEDED,
+  STORAGE_QUOTA_UNAVAILABLE,
+} from "./org/quotas.js";
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
 import {
@@ -664,6 +669,46 @@ export class RepoDO extends MigratingDO {
       // Pulls a snapshot past its write window first (fail closed).
       await this.acl.roleOf(principal, "write");
       return this.acl.allows(principal, "write") ? undefined : ACCESS_LOST;
+    };
+    const account = () => {
+      // A repository from before identities were recorded has no account to charge.
+      const owner = this.events.account();
+      return owner && this.env.ORG.getByName(owner.accountId);
+    };
+    this.#pushes.storage = {
+      charge: async (uploadId, bytes) => {
+        const stub = account();
+        if (!stub) return undefined;
+        try {
+          const fits = await stub.chargeStorage({
+            uploadId,
+            repoId: this.#repoId(),
+            bytes,
+            ttlMs: STORAGE_CHARGE_TTL_MS,
+          });
+          return fits ? undefined : STORAGE_QUOTA_EXCEEDED;
+        } catch (error) {
+          // Fail closed: an account that cannot be asked takes no bytes.
+          this.#log().warn("storage charge failed", { uploadId, error });
+          return STORAGE_QUOTA_UNAVAILABLE;
+        }
+      },
+      confirm: async (uploadId, bytes) => {
+        // Not confirmed, the charge lapses and the bytes go uncounted.
+        await account()
+          ?.confirmStorage({ uploadId, repoId: this.#repoId(), bytes })
+          .catch((error: unknown) =>
+            this.#log().warn("storage confirm failed", { uploadId, error }),
+          );
+      },
+      release: async (uploadId) => {
+        // Not released, what the upload held lapses on its own.
+        await account()
+          ?.releaseStorage(uploadId)
+          .catch((error: unknown) =>
+            this.#log().warn("storage release failed", { uploadId, error }),
+          );
+      },
     };
     return this.#pushes;
   }

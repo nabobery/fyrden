@@ -18,6 +18,11 @@ import {
   setMembershipOperation,
 } from "../accounts/orgs.js";
 import {
+  getOrgQuotaOperation,
+  getUserQuotaOperation,
+  setQuotaOperation,
+} from "../accounts/quotas.js";
+import {
   abortUploadSession,
   completeUploadSession,
   createUploadSession,
@@ -188,6 +193,11 @@ export const handlers: Handlers = {
   "stars.put": starRepoOperation,
   "stars.delete": unstarRepoOperation,
   "stars.list": listStarredOperation,
+
+  // Quotas live in each account's object (accounts/quotas).
+  "quotas.user.get": getUserQuotaOperation,
+  "quotas.org.get": getOrgQuotaOperation,
+  "admin.quotas.set": setQuotaOperation,
 
   // Branches, tags, commits and comparisons (repos/browse).
   "repos.branches.list": listBranchesOperation,
