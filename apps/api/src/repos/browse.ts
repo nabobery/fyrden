@@ -24,6 +24,7 @@ import {
   invalidCursor,
 } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { resolveOne, resolveVerification } from "../signing/verification.js";
 
 /*
  * Branches, tags, commits and comparisons, answered by the repository's
@@ -70,7 +71,7 @@ export async function getBranchOperation(
   const branch = value(await stub.browseBranch(input.branch));
   ctx.metrics.count("do.request", { class: "RepoDO", method: "browseCommit" });
   const commit = value(await stub.browseCommit(branch.commit.sha));
-  return { name: branch.name, commit, protected: false };
+  return { name: branch.name, commit: await resolveOne(ctx.env, commit), protected: false };
 }
 
 /** The `repos.tags.list` operation. */
@@ -128,7 +129,10 @@ export async function listCommitsOperation(
       limit: input.per_page,
     }),
   );
-  return { commits: log.commits, next_cursor: encodeLogCursor(log.next) };
+  return {
+    commits: await resolveVerification(ctx.env, log.commits),
+    next_cursor: encodeLogCursor(log.next),
+  };
 }
 
 /** The `repos.commits.get` operation. */
@@ -138,7 +142,7 @@ export async function getCommitOperation(
 ): Promise<Output<typeof getCommit>> {
   const stub = await repoStub(ctx, input.owner, input.repo);
   ctx.metrics.count("do.request", { class: "RepoDO", method: "browseCommit" });
-  return value(await stub.browseCommit(input.ref));
+  return resolveOne(ctx.env, value(await stub.browseCommit(input.ref)));
 }
 
 /** The `repos.compare` operation. */
@@ -159,9 +163,9 @@ export async function compareCommitsOperation(
     ahead_by: compared.aheadBy,
     behind_by: compared.behindBy,
     total_commits: compared.aheadBy,
-    base_commit: compared.baseCommit,
-    merge_base_commit: compared.mergeBaseCommit,
-    commits: compared.commits,
+    base_commit: await resolveOne(ctx.env, compared.baseCommit),
+    merge_base_commit: await resolveOne(ctx.env, compared.mergeBaseCommit),
+    commits: await resolveVerification(ctx.env, compared.commits),
   };
 }
 

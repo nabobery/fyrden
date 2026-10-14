@@ -34,3 +34,32 @@ export const whoami = defineOperation({
     readOnly: true,
   },
 });
+
+export const listSigningKeys = defineOperation({
+  id: "meta.signing_keys.list",
+  method: "GET",
+  path: "/meta/signing-keys",
+  summary: "List the platform's signing keys",
+  description:
+    "The public keys Fyrden signs the commits it makes with (file writes, generated repositories), as SSH public key lines: the current one, and retired ones commits may still carry. Check such a commit with `git verify-commit` (`gpg.format = ssh`) and these keys in an allowed-signers file.",
+  input: z.object({}),
+  output: z.object({
+    keys: z.array(
+      z.object({
+        key_id: z.string().describe("The key's SHA-256 fingerprint, as ssh-keygen shows it."),
+        key: z.string().describe("The public key line (`ssh-ed25519 AAAA...`)."),
+        current: z.boolean().describe("Whether new commits are signed with it."),
+      }),
+    ),
+  }),
+  permission: AUTHENTICATED,
+  principals: PRINCIPAL_TYPES,
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "list_signing_keys",
+    title: "List the platform's signing keys",
+    description: "List the public keys Fyrden signs the commits it makes with.",
+    readOnly: true,
+  },
+});

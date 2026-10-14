@@ -26,6 +26,7 @@ import { reauthorizeByToken } from "../../git/push/reauthorize-token.js";
 import type { RepoPush } from "../../git/push/repo-push.js";
 import { BUCKET_NAME, headKey, packKey } from "../../git/push/scratch.js";
 import { type Browsed, type CommitView, fail } from "./browse.js";
+import { checkSignature, type SignatureCheck } from "./signature.js";
 
 /*
  * File writes: create, update and delete files as one commit on a branch,
@@ -155,6 +156,7 @@ export async function writeFiles(
           author: person(input.author ?? input.committer, now),
           committer: person(input.committer, now),
           tree: { sha: oidToHex(built.tree) },
+          verification: built.verification,
         },
         parents: head ? [{ sha: oidToHex(head) }] : [],
       },
@@ -179,7 +181,12 @@ async function build(
   },
 ): Promise<
   Browsed<{
-    built: { commit: Oid; tree: Oid; blobs: readonly (Oid | null)[] };
+    built: {
+      commit: Oid;
+      tree: Oid;
+      blobs: readonly (Oid | null)[];
+      verification: SignatureCheck;
+    };
     upload: StoredUpload;
   }>
 > {
@@ -277,7 +284,15 @@ async function build(
     return {
       ok: true,
       value: {
-        built: { commit: built.commit, tree: built.tree, blobs: built.blobs },
+        built: {
+          commit: built.commit,
+          tree: built.tree,
+          blobs: built.blobs,
+          // As any reader of the commit will find it.
+          verification: await checkSignature(
+            built.objects.find((o) => o.type === "commit")?.data ?? new Uint8Array(0),
+          ),
+        },
         upload: upload.value,
       },
     };

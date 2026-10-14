@@ -15,6 +15,7 @@ import {
 } from "../do/repo/file-writes.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { resolveOne } from "../signing/verification.js";
 
 /*
  * File writes: one file (GitHub's contents API) or several (one commit).
@@ -125,7 +126,7 @@ export async function putContentsOperation(
       sha: result.blobs[0] as string,
       size: content.length,
     },
-    commit: result.commit,
+    commit: await resolveOne(ctx.env, result.commit),
   };
 }
 
@@ -140,7 +141,7 @@ export async function deleteContentsOperation(
     message: input.message,
     changes: [{ path: input.path, delete: true, expectedSha: input.sha }],
   });
-  return { content: null, commit: result.commit };
+  return { content: null, commit: await resolveOne(ctx.env, result.commit) };
 }
 
 /** The `repos.file_commits.create` operation. */
@@ -177,7 +178,7 @@ export async function createFileCommitOperation(
   });
   return {
     branch: result.branch,
-    commit: result.commit,
+    commit: await resolveOne(ctx.env, result.commit),
     files: input.changes.map((c, i) => ({ path: c.path, sha: result.blobs[i] ?? null })),
   };
 }

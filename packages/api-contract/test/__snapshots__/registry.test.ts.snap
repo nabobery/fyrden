@@ -495,6 +495,79 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/meta/signing-keys": {
+      "get": {
+        "description": "The public keys Fyrden signs the commits it makes with (file writes, generated repositories), as SSH public key lines: the current one, and retired ones commits may still carry. Check such a commit with \`git verify-commit\` (\`gpg.format = ssh\`) and these keys in an allowed-signers file.",
+        "operationId": "meta.signing_keys.list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "current": {
+                            "description": "Whether new commits are signed with it.",
+                            "type": "boolean",
+                          },
+                          "key": {
+                            "description": "The public key line (\`ssh-ed25519 AAAA...\`).",
+                            "type": "string",
+                          },
+                          "key_id": {
+                            "description": "The key's SHA-256 fingerprint, as ssh-keygen shows it.",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "key_id",
+                          "key",
+                          "current",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "keys",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List the platform's signing keys",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+          "org",
+          "agent",
+          "installation",
+        ],
+      },
+    },
     "/orgs/{org}/members": {
       "get": {
         "description": "Lists an organization's members by handle, ignoring case. Members only.",
@@ -2631,12 +2704,54 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               ],
                               "type": "object",
                             },
+                            "verification": {
+                              "additionalProperties": false,
+                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                              "properties": {
+                                "payload": {
+                                  "description": "What the signature covers: the commit without it.",
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "reason": {
+                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                  "type": "string",
+                                },
+                                "signature": {
+                                  "description": "The armored signature.",
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "verified": {
+                                  "type": "boolean",
+                                },
+                                "verified_at": {
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                              },
+                              "required": [
+                                "verified",
+                                "reason",
+                                "signature",
+                                "payload",
+                                "verified_at",
+                              ],
+                              "type": "object",
+                            },
                           },
                           "required": [
                             "message",
                             "author",
                             "committer",
                             "tree",
+                            "verification",
                           ],
                           "type": "object",
                         },
@@ -3190,12 +3305,54 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 ],
                                 "type": "object",
                               },
+                              "verification": {
+                                "additionalProperties": false,
+                                "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                                "properties": {
+                                  "payload": {
+                                    "description": "What the signature covers: the commit without it.",
+                                    "type": [
+                                      "string",
+                                      "null",
+                                    ],
+                                  },
+                                  "reason": {
+                                    "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                    "type": "string",
+                                  },
+                                  "signature": {
+                                    "description": "The armored signature.",
+                                    "type": [
+                                      "string",
+                                      "null",
+                                    ],
+                                  },
+                                  "verified": {
+                                    "type": "boolean",
+                                  },
+                                  "verified_at": {
+                                    "type": [
+                                      "string",
+                                      "null",
+                                    ],
+                                  },
+                                },
+                                "required": [
+                                  "verified",
+                                  "reason",
+                                  "signature",
+                                  "payload",
+                                  "verified_at",
+                                ],
+                                "type": "object",
+                              },
                             },
                             "required": [
                               "message",
                               "author",
                               "committer",
                               "tree",
+                              "verification",
                             ],
                             "type": "object",
                           },
@@ -3375,12 +3532,54 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           ],
                           "type": "object",
                         },
+                        "verification": {
+                          "additionalProperties": false,
+                          "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                          "properties": {
+                            "payload": {
+                              "description": "What the signature covers: the commit without it.",
+                              "type": [
+                                "string",
+                                "null",
+                              ],
+                            },
+                            "reason": {
+                              "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                              "type": "string",
+                            },
+                            "signature": {
+                              "description": "The armored signature.",
+                              "type": [
+                                "string",
+                                "null",
+                              ],
+                            },
+                            "verified": {
+                              "type": "boolean",
+                            },
+                            "verified_at": {
+                              "type": [
+                                "string",
+                                "null",
+                              ],
+                            },
+                          },
+                          "required": [
+                            "verified",
+                            "reason",
+                            "signature",
+                            "payload",
+                            "verified_at",
+                          ],
+                          "type": "object",
+                        },
                       },
                       "required": [
                         "message",
                         "author",
                         "committer",
                         "tree",
+                        "verification",
                       ],
                       "type": "object",
                     },
@@ -3552,12 +3751,54 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               ],
                               "type": "object",
                             },
+                            "verification": {
+                              "additionalProperties": false,
+                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                              "properties": {
+                                "payload": {
+                                  "description": "What the signature covers: the commit without it.",
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "reason": {
+                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                  "type": "string",
+                                },
+                                "signature": {
+                                  "description": "The armored signature.",
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "verified": {
+                                  "type": "boolean",
+                                },
+                                "verified_at": {
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                              },
+                              "required": [
+                                "verified",
+                                "reason",
+                                "signature",
+                                "payload",
+                                "verified_at",
+                              ],
+                              "type": "object",
+                            },
                           },
                           "required": [
                             "message",
                             "author",
                             "committer",
                             "tree",
+                            "verification",
                           ],
                           "type": "object",
                         },
@@ -3658,12 +3899,54 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 ],
                                 "type": "object",
                               },
+                              "verification": {
+                                "additionalProperties": false,
+                                "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                                "properties": {
+                                  "payload": {
+                                    "description": "What the signature covers: the commit without it.",
+                                    "type": [
+                                      "string",
+                                      "null",
+                                    ],
+                                  },
+                                  "reason": {
+                                    "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                    "type": "string",
+                                  },
+                                  "signature": {
+                                    "description": "The armored signature.",
+                                    "type": [
+                                      "string",
+                                      "null",
+                                    ],
+                                  },
+                                  "verified": {
+                                    "type": "boolean",
+                                  },
+                                  "verified_at": {
+                                    "type": [
+                                      "string",
+                                      "null",
+                                    ],
+                                  },
+                                },
+                                "required": [
+                                  "verified",
+                                  "reason",
+                                  "signature",
+                                  "payload",
+                                  "verified_at",
+                                ],
+                                "type": "object",
+                              },
                             },
                             "required": [
                               "message",
                               "author",
                               "committer",
                               "tree",
+                              "verification",
                             ],
                             "type": "object",
                           },
@@ -3762,12 +4045,54 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                   ],
                                   "type": "object",
                                 },
+                                "verification": {
+                                  "additionalProperties": false,
+                                  "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                                  "properties": {
+                                    "payload": {
+                                      "description": "What the signature covers: the commit without it.",
+                                      "type": [
+                                        "string",
+                                        "null",
+                                      ],
+                                    },
+                                    "reason": {
+                                      "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                      "type": "string",
+                                    },
+                                    "signature": {
+                                      "description": "The armored signature.",
+                                      "type": [
+                                        "string",
+                                        "null",
+                                      ],
+                                    },
+                                    "verified": {
+                                      "type": "boolean",
+                                    },
+                                    "verified_at": {
+                                      "type": [
+                                        "string",
+                                        "null",
+                                      ],
+                                    },
+                                  },
+                                  "required": [
+                                    "verified",
+                                    "reason",
+                                    "signature",
+                                    "payload",
+                                    "verified_at",
+                                  ],
+                                  "type": "object",
+                                },
                               },
                               "required": [
                                 "message",
                                 "author",
                                 "committer",
                                 "tree",
+                                "verification",
                               ],
                               "type": "object",
                             },
@@ -4307,12 +4632,54 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               ],
                               "type": "object",
                             },
+                            "verification": {
+                              "additionalProperties": false,
+                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                              "properties": {
+                                "payload": {
+                                  "description": "What the signature covers: the commit without it.",
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "reason": {
+                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                  "type": "string",
+                                },
+                                "signature": {
+                                  "description": "The armored signature.",
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "verified": {
+                                  "type": "boolean",
+                                },
+                                "verified_at": {
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                              },
+                              "required": [
+                                "verified",
+                                "reason",
+                                "signature",
+                                "payload",
+                                "verified_at",
+                              ],
+                              "type": "object",
+                            },
                           },
                           "required": [
                             "message",
                             "author",
                             "committer",
                             "tree",
+                            "verification",
                           ],
                           "type": "object",
                         },
@@ -4844,12 +5211,54 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               ],
                               "type": "object",
                             },
+                            "verification": {
+                              "additionalProperties": false,
+                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                              "properties": {
+                                "payload": {
+                                  "description": "What the signature covers: the commit without it.",
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "reason": {
+                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                  "type": "string",
+                                },
+                                "signature": {
+                                  "description": "The armored signature.",
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "verified": {
+                                  "type": "boolean",
+                                },
+                                "verified_at": {
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                              },
+                              "required": [
+                                "verified",
+                                "reason",
+                                "signature",
+                                "payload",
+                                "verified_at",
+                              ],
+                              "type": "object",
+                            },
                           },
                           "required": [
                             "message",
                             "author",
                             "committer",
                             "tree",
+                            "verification",
                           ],
                           "type": "object",
                         },
@@ -5147,12 +5556,54 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               ],
                               "type": "object",
                             },
+                            "verification": {
+                              "additionalProperties": false,
+                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+                              "properties": {
+                                "payload": {
+                                  "description": "What the signature covers: the commit without it.",
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "reason": {
+                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                  "type": "string",
+                                },
+                                "signature": {
+                                  "description": "The armored signature.",
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "verified": {
+                                  "type": "boolean",
+                                },
+                                "verified_at": {
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                              },
+                              "required": [
+                                "verified",
+                                "reason",
+                                "signature",
+                                "payload",
+                                "verified_at",
+                              ],
+                              "type": "object",
+                            },
                           },
                           "required": [
                             "message",
                             "author",
                             "committer",
                             "tree",
+                            "verification",
                           ],
                           "type": "object",
                         },

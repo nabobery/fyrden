@@ -22,7 +22,7 @@ import {
 import { getContents, getReadme, getRootContents, getTree } from "../ops/contents.js";
 import { createFileCommit, deleteContents, putContents } from "../ops/file-writes.js";
 import { createImport, getImport } from "../ops/imports.js";
-import { whoami } from "../ops/meta.js";
+import { listSigningKeys, whoami } from "../ops/meta.js";
 import { createOrg, listMembers, removeMembership, setMembership } from "../ops/orgs.js";
 import { getOrgQuota, getUserQuota, setQuota } from "../ops/quotas.js";
 import {
@@ -45,6 +45,7 @@ import { defineRegistry } from "./op.js";
 /** Every operation Fyrden exposes. Order is the order in OpenAPI and MCP listings. */
 export const registry = defineRegistry([
   whoami,
+  listSigningKeys,
   createUser,
   createToken,
   createOrg,

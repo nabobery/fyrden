@@ -34,6 +34,24 @@ export const CommitObject = z.object({
     author: Person,
     committer: Person,
     tree: z.object({ sha: z.string() }),
+    verification: z
+      .object({
+        verified: z.boolean(),
+        reason: z
+          .string()
+          .describe(
+            "`valid` (signed by a known key), `unsigned`, `unknown_key`, `invalid`, `malformed_signature` or `unknown_signature_type`, as GitHub names them.",
+          ),
+        signature: z.string().nullable().describe("The armored signature."),
+        payload: z
+          .string()
+          .nullable()
+          .describe("What the signature covers: the commit without it."),
+        verified_at: z.string().nullable(),
+      })
+      .describe(
+        "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories).",
+      ),
   }),
   parents: z.array(z.object({ sha: Sha })),
 });

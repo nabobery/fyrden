@@ -117,8 +117,10 @@ describe("generated artifacts", () => {
   });
 
   it("names a permission from the table for every other operation", () => {
+    // Facts about the caller or the instance, for any authenticated caller.
+    const anyCaller = new Set(["meta.whoami", "meta.signing_keys.list"]);
     for (const op of registry) {
-      if (op.id === "meta.whoami") continue;
+      if (anyCaller.has(op.id)) continue;
       expect(isPermission(op.permission), op.id).toBe(true);
     }
   });

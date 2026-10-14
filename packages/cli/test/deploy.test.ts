@@ -81,6 +81,23 @@ describe("fyrden deploy", () => {
     await expect(stat(file)).rejects.toThrow();
   });
 
+  it("makes a commit signing key once, never shown, and keeps it", async () => {
+    const fake = fakeWrangler();
+    const { d, lines } = deps(fake.runner);
+    await deploy(d);
+    const key = fake.state.secrets.get("SIGNING_KEY") as string;
+    expect(Buffer.from(key, "base64")).toHaveLength(32);
+    expect(lines.join("\n")).not.toContain(key);
+    expect(fake.calls.some((c) => c.args.join(" ").includes(key))).toBe(false);
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.secrets.get("SIGNING_KEY")).toBe(key);
+    // A deployment from before signing gets one with its next deploy.
+    fake.state.secrets.delete("SIGNING_KEY");
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.secrets.get("SIGNING_KEY")).not.toBe(key);
+    expect(fake.state.secrets.get("BOOTSTRAP_SECRET")).toBe("s3cret-value");
+  });
+
   it("is idempotent: a second run creates nothing and keeps the secret", async () => {
     const fake = fakeWrangler();
     await deploy(deps(fake.runner).d);

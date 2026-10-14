@@ -57,6 +57,7 @@ import { repoOutput, starCounts, visibleParents } from "../repos/output.js";
 import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "../repos/stars.js";
 import { updateRepoOperation } from "../repos/update.js";
 import { clock, newId, tokenStore } from "../services.js";
+import { platformKeys } from "../signing/platform-key.js";
 import { type Handlers, OperationError } from "./execute.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -71,6 +72,14 @@ export const handlers: Handlers = {
     handle: auth.principalHandle,
     is_instance_admin: auth.isInstanceAdmin,
     token: { id: auth.id, type: auth.type, scopes: auth.scopes, expires_at: auth.expiresAt },
+  }),
+
+  "meta.signing_keys.list": async ({ env }) => ({
+    keys: (await platformKeys(env)).map((k) => ({
+      key_id: k.fingerprint,
+      key: k.key,
+      current: k.current,
+    })),
   }),
 
   "admin.users.create": async ({ env, auth, requestId, metrics }, { handle }) => {

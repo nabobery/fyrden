@@ -371,7 +371,7 @@ branch moves, and the branch moves only from the head the commit was built on.
 | A directory a write changes | 1 MiB as a tree object (about 25,000 entries), 4 MiB of trees in all; larger answers `too_expensive` (push instead); memory for them is reserved, or the write answers `busy` |
 | Request body (REST and MCP) | 8 MiB; larger answers 413 `body_too_large` before it is read |
 | Retrying a write | `Idempotency-Key` is not replayed yet: a retried single-file write answers `sha_mismatch`; give `expected_head` to make a multi-file retry safe |
-| Signature | Unsigned for now |
+| Signature | Signed with the platform key (see [Commit signing](#commit-signing)) |
 
 ## Repository expiry
 
@@ -428,6 +428,24 @@ A star is one directory row per user and repository. Starring needs
 needs `starring:read`. A repository's `stargazers_count` counts stars of
 enabled users. Deleting a repository deletes its stars. A listing leaves out
 repositories the caller can no longer read, so a page can be short.
+
+## Commit signing
+
+Commits Fyrden makes itself (file writes, generated repositories) are signed
+with the platform's Ed25519 key as SSH signatures (`gpg.format = ssh`), so
+`git verify-commit` checks them against the published key. Every commit in
+the API carries GitHub's `verification` object.
+
+| What | Value |
+|---|---|
+| The key | The Worker secret `SIGNING_KEY`: a 32-byte Ed25519 seed, base64. `fyrden deploy` makes one when the Worker has none and never shows it |
+| Published at | `GET /api/meta/signing-keys` (any token; the `list_signing_keys` MCP tool): each key's `key_id` (the SHA-256 fingerprint ssh-keygen shows), its public key line, and whether it is current |
+| Rotation | Set a new `SIGNING_KEY` and list the old public key line in `SIGNING_KEYS_RETIRED` (one per line), so commits it signed still verify |
+| Verified | A valid signature by the platform's key, current or retired |
+| Not verified | `unsigned`, `unknown_key` (valid, by a key Fyrden does not know), `invalid` (the commit or signature was changed), `malformed_signature`, `unknown_signature_type` (OpenPGP, or a key type other than Ed25519) |
+| Without `SIGNING_KEY` | Fyrden's commits are unsigned |
+| A malformed `SIGNING_KEY` | Writes it would sign are refused (logged); reading and verifying go on, with the keys that can be read |
+| Signatures read | 64 KiB at most; a longer `gpgsig` is `malformed_signature`, not shown |
 
 ## Configuration variables
 

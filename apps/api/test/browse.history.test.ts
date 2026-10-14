@@ -4,6 +4,7 @@
 
 import { exports } from "cloudflare:workers";
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
+import { oidFromHex } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, inject, it } from "vitest";
 import { type BrowsePolicy, decoderForLabel, RepoBrowse } from "../src/do/repo/browse.js";
@@ -41,6 +42,14 @@ function expected(c: OracleCommit) {
       author: { name: c.authorName, email: c.authorEmail, date: iso(c.authorTime) },
       committer: { name: c.committerName, email: c.committerEmail, date: iso(c.committerTime) },
       tree: { sha: c.tree },
+      // The fixture's commits are unsigned.
+      verification: {
+        verified: false,
+        reason: "unsigned",
+        signature: null,
+        payload: null,
+        verified_at: null,
+      },
     },
     parents: c.parents.map((sha) => ({ sha })),
   };
@@ -177,6 +186,37 @@ describe("commits", () => {
   it("lists the default branch without sha, with whole commits", async () => {
     const res = await get<{ commits: unknown[] }>(`${base}/commits?per_page=3`);
     expect(res.body.commits).toEqual((fx.logs.main as string[]).slice(0, 3).map(commitOf));
+  });
+
+  it("refuses a commit too large for the answer before building its view", async () => {
+    const tip = (fx.logs.main as string[])[0] as string;
+    const size = await inRepo(target.repo.stub, async ({ git }) => {
+      const b = new RepoBrowse({ git, memoryBlocks: createClockBlockCache() });
+      try {
+        return await b.reading(async (reader) => ({
+          ok: true as const,
+          value: (await reader.readHeader(oidFromHex(tip)))?.size ?? 0,
+        }));
+      } finally {
+        b.close();
+      }
+    });
+    if (!size.ok) throw new Error("no size");
+    const page = (maxResponseBytes: number) =>
+      inRepo(target.repo.stub, async ({ git }) => {
+        const b = new RepoBrowse({
+          git,
+          memoryBlocks: createClockBlockCache(),
+          policy: { maxResponseBytes },
+        });
+        try {
+          return await b.log({ ref: "main", limit: 1 });
+        } finally {
+          b.close();
+        }
+      });
+    expect(await page(4 * size.value + 255)).toMatchObject({ ok: false, code: "too_large" });
+    expect(await page(4 * size.value + 256)).toMatchObject({ ok: true });
   });
 
   it("ends a page when its R2 reads run out, with a cursor that goes on", async () => {

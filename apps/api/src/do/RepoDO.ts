@@ -60,6 +60,7 @@ import type {
   ViewPack,
 } from "../network/types.js";
 import type { CompactSliceInput } from "../network/view-cap.js";
+import { platformSigner } from "../signing/platform-key.js";
 import {
   AUDIT_ARCHIVE_JOB,
   AUDIT_ARCHIVE_POLICY,
@@ -495,8 +496,10 @@ export class RepoDO extends MigratingDO {
   }
 
   /** What a write this object makes itself needs (file writes, generation from a template). */
-  #writeDeps(): FileWriteDeps {
+  async #writeDeps(): Promise<FileWriteDeps> {
     this.#blocks ??= createClockBlockCache();
+    // The commits it makes are signed with the platform's key, when one is set.
+    const signer = await platformSigner(this.env);
     return {
       git: this.git,
       push: this.#push(),
@@ -504,6 +507,7 @@ export class RepoDO extends MigratingDO {
       memoryBlocks: this.#blocks,
       metrics: this.git.context.metrics,
       writerRole: (principalId) => this.acl.roleOf(principalId, "write"),
+      ...(signer && { signer }),
     };
   }
 
@@ -515,7 +519,7 @@ export class RepoDO extends MigratingDO {
   writeFiles(input: FileWriteInput): Promise<Browsed<FileWriteResult>> {
     if (this.#closed || this.#refusesAdmission())
       return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
-    return this.#measured("writeFiles", () => writeFiles(this.#writeDeps(), input));
+    return this.#measured("writeFiles", async () => writeFiles(await this.#writeDeps(), input));
   }
 
   /** The trees and files of the default branch, for a repository generated from this one. */
@@ -543,7 +547,7 @@ export class RepoDO extends MigratingDO {
     const template = await this.env.REPO.getByName(templateId).templateTree();
     if (!template.ok) return template;
     return this.#measured("generateFrom", async () => {
-      const made = await writeTemplate(this.#writeDeps(), input, template.value);
+      const made = await writeTemplate(await this.#writeDeps(), input, template.value);
       if (made.ok) this.ctx.storage.sql.exec("DELETE FROM generation");
       return made;
     });

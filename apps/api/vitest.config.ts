@@ -19,6 +19,8 @@ export default defineConfig(async () => {
             DIRECTORY_MIGRATIONS: directoryMigrations,
             ORG_MIGRATIONS: orgMigrations,
             BOOTSTRAP_SECRET: "test-bootstrap-secret",
+            // A fixed platform signing key (an Ed25519 seed), so server-made commits are signed.
+            SIGNING_KEY: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
           },
         },
       }),

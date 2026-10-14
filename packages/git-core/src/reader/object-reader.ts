@@ -217,8 +217,18 @@ export class ObjectReader {
     const max = this.#limits.maxObjectBytes;
     const { header } = await readEntryHeader(this.#blocks.read, this.#pack(at), at.offset, max);
     if (isObjectType(header.kind)) return { type: header.kind, size: header.size };
-    const delta = await readEntry(this.#blocks.read, this.#zlib, this.#pack(at), at.offset, max);
-    const size = readDeltaHeader(delta.data, max).resultSize;
+    // The program is inflated whole, so a large one is reserved first, as in `#resolve`.
+    const reservation =
+      header.size > DEFAULT_PACK_LIMITS.largeObjectBytes
+        ? await reservePackMemory(this.#memory, header.size, "a delta program", at.offset)
+        : undefined;
+    let size: number;
+    try {
+      const delta = await readEntry(this.#blocks.read, this.#zlib, this.#pack(at), at.offset, max);
+      size = readDeltaHeader(delta.data, max).resultSize;
+    } finally {
+      reservation?.release();
+    }
     let current = await this.#baseOf(at, header);
     for (let depth = 1; ; depth++) {
       if (depth > this.#limits.maxDeltaDepth) throw tooDeep(this.#limits, at.offset);

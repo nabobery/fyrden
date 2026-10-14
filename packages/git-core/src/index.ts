@@ -357,6 +357,28 @@ export {
 } from "./refs/namespace.js";
 export { isValidRefname } from "./refs/refname.js";
 export {
+  MAX_SIGNATURE_BYTES,
+  type SignedCommit,
+  splitSignedCommit,
+  verifyCommitSignature,
+} from "./sign/commit-signature.js";
+export {
+  armorSshSignature,
+  ed25519FromSeed,
+  ed25519KeyOf,
+  ed25519PublicKeyBlob,
+  GIT_NAMESPACE,
+  parseSshPublicKey,
+  parseSshSignature,
+  type SshSignature,
+  SshSignatureError,
+  type SshVerification,
+  sshCommitSigner,
+  sshFingerprint,
+  sshSignedData,
+  verifySshSignature,
+} from "./sign/sshsig.js";
+export {
   framedCopyKey,
   type RegeneratedKeyInput,
   regeneratedPackKey,

@@ -23,6 +23,7 @@ import { HEX_OID } from "../../git/cache/object-access.js";
 import { pathSegments } from "../../git/cache/object-check.js";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
 import { peelOid } from "../../git/peel.js";
+import { checkSignature, type SignatureCheck } from "./signature.js";
 
 /*
  * Browsing a repository's history, inside its object: branches, tags,
@@ -103,6 +104,8 @@ export interface CommitView {
     readonly author: PersonView;
     readonly committer: PersonView;
     readonly tree: { readonly sha: string };
+    /** The signature on its own; the Worker resolves it into GitHub's `verification`. */
+    readonly verification: SignatureCheck;
   };
   readonly parents: { readonly sha: string }[];
 }
@@ -473,6 +476,13 @@ export class RepoBrowse {
     try {
       await reader.prefetch(oids);
       for (const oid of oids) {
+        // A view holds the commit's text about twice (its message and, when
+        // signed, the signed payload), at two bytes a character, and a fixed
+        // part (`viewBytes`): refused before it is built, so a huge commit is
+        // never read into memory.
+        const header = await reader.readHeader(oid);
+        if (header && this.#bytes + 4 * header.size + 256 > this.#policy.maxResponseBytes)
+          throw new ResponseTooLargeError();
         const view = await commitView(reader, oid);
         this.take(viewBytes(view));
         views.push(view);
@@ -517,7 +527,12 @@ export async function guarded<T>(run: () => Promise<Browsed<T>>): Promise<Browse
 function viewBytes(view: CommitView): number {
   const { commit } = view;
   const people = [commit.author, commit.committer];
-  const text = people.reduce((n, p) => n + p.name.length + p.email.length, commit.message.length);
+  const signed =
+    (commit.verification.signature?.length ?? 0) + (commit.verification.payload?.length ?? 0);
+  const text = people.reduce(
+    (n, p) => n + p.name.length + p.email.length,
+    commit.message.length + signed,
+  );
   return 2 * text + 256 + 48 * view.parents.length;
 }
 export const BUSY = fail(409, "busy", "The repository is busy; try again shortly.");
@@ -533,13 +548,18 @@ function tooLarge(): BrowseFailure {
 }
 
 async function readCommit(reader: ObjectReader, oid: Oid): Promise<Commit> {
+  return parseCommit(await commitBody(reader, oid)).value;
+}
+
+async function commitBody(reader: ObjectReader, oid: Oid): Promise<Uint8Array> {
   const object = await reader.readObject(oid);
   if (object?.type !== "commit") throw new Error(`commit ${oidToHex(oid)} is missing`);
-  return parseCommit(object.bytes).value;
+  return object.bytes;
 }
 
 export async function commitView(reader: ObjectReader, oid: Oid): Promise<CommitView> {
-  const commit = await readCommit(reader, oid);
+  const body = await commitBody(reader, oid);
+  const commit = parseCommit(body).value;
   const text = decoderFor(commit);
   return {
     sha: oidToHex(oid),
@@ -548,6 +568,7 @@ export async function commitView(reader: ObjectReader, oid: Oid): Promise<Commit
       author: person(commit.author, text),
       committer: person(commit.committer, text),
       tree: { sha: oidToHex(commit.tree) },
+      verification: await checkSignature(body),
     },
     parents: commit.parents.map((p) => ({ sha: oidToHex(p) })),
   };
