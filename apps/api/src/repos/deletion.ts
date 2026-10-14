@@ -49,7 +49,13 @@ export const DELETION_POLICY = {
   perBulkRequest: 3,
 };
 
-type Deletion = { step: DeletionStep; requested_by: string | null; org_shard: string };
+type Deletion = {
+  step: DeletionStep;
+  requested_by: string | null;
+  act_chain: string | null;
+  request_id: string | null;
+  org_shard: string;
+};
 
 /**
  * Starts deleting `repos` (active repositories) in one directory batch.
@@ -114,11 +120,13 @@ export async function markDeletions(
       .bind(ids, now, null, null, expiry, owners),
     db
       .prepare(
-        `INSERT INTO repo_deletions (repo_id, step, attempts, updated_at, requested_by)
-         SELECT id, 'prepare', 0, ?2, ?3 FROM repos WHERE ${inIds} AND state = 'deleting'
+        `INSERT INTO repo_deletions (repo_id, step, attempts, updated_at, requested_by,
+           act_chain, request_id)
+         SELECT id, 'prepare', 0, ?2, ?3, ?4, ?5 FROM repos
+         WHERE ${inIds} AND state = 'deleting'
          ON CONFLICT (repo_id) DO NOTHING`,
       )
-      .bind(ids, now, options.actorId),
+      .bind(ids, now, options.actorId, actChain(options.act), options.requestId ?? null),
     db
       .prepare(
         `DELETE FROM repo_redirects WHERE repo_id IN (SELECT value FROM json_each(?1))
@@ -159,7 +167,7 @@ export async function advanceDeletion(
   metrics?.count("d1.query", { db: "directory", op: "deletion_read" });
   const deletion = await db
     .prepare(
-      `SELECT d.step, d.requested_by, r.org_shard FROM repo_deletions d
+      `SELECT d.step, d.requested_by, d.act_chain, d.request_id, r.org_shard FROM repo_deletions d
        JOIN repos r ON r.id = d.repo_id WHERE d.repo_id = ?`,
     )
     .bind(repoId)
@@ -206,7 +214,13 @@ async function runStep(
     case "prepare": {
       metrics?.count("do.request", { class: "RepoDO", method: "prepareDeletion" });
       const prepared = await stub.prepareDeletion(
-        deletion.requested_by,
+        deletion.requested_by === null
+          ? null
+          : {
+              principal: deletion.requested_by,
+              actChain: deletion.act_chain === null ? [] : JSON.parse(deletion.act_chain),
+              requestId: deletion.request_id,
+            },
         DELETION_POLICY.prepareBudgetMs,
       );
       return prepared.ready ? "purge" : "prepare";

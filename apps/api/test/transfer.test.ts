@@ -119,6 +119,32 @@ describe("repository transfers", () => {
     expect(pushed.report).toContain("ok refs/heads/main\n");
   });
 
+  it("record the request that started them, in the directory and in the repository", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const org = await newOrg(owner);
+    const res = await api("POST", `/repos/${owner.handle}/${repo.name}/transfer`, owner.token, {
+      new_owner: org,
+    });
+    expect(res.status).toBe(200);
+    const requestId = res.headers.get("X-Request-Id");
+    expect(requestId).toBeTruthy();
+    const directory = await env.DIRECTORY.prepare(
+      "SELECT request_id FROM audit_log WHERE action = 'repo.transfer' AND target_id = ?",
+    )
+      .bind(repo.id)
+      .first<{ request_id: string | null }>();
+    expect(directory?.request_id).toBe(requestId);
+    const own = await runInDurableObject(env.REPO.getByName(repo.id), (_: RepoDO, state) =>
+      state.storage.sql
+        .exec<{ actor_id: string; request_id: string | null }>(
+          "SELECT actor_id, request_id FROM audit_log WHERE action = 'repo.transfer'",
+        )
+        .one(),
+    );
+    expect(own).toEqual({ actor_id: owner.principalId, request_id: requestId });
+  });
+
   it("leave the old organization's team grants behind, keeping collaborators", async () => {
     const owner = await user();
     const org = await newOrg(owner);

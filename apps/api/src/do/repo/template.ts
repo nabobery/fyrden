@@ -118,7 +118,10 @@ export function templateTree(
 }
 
 export interface TemplateWriteInput
-  extends Pick<FileWriteInput, "principal" | "tokenId" | "repoId" | "committer" | "message"> {}
+  extends Pick<
+    FileWriteInput,
+    "principal" | "tokenId" | "repoId" | "committer" | "message" | "requestId"
+  > {}
 
 /**
  * Commits `template` as the first commit on the default branch of this

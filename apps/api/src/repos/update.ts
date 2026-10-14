@@ -74,7 +74,14 @@ export async function updateRepoOperation(
     name,
     ...(input.description !== undefined && { description: input.description || null }),
     ...(input.default_branch !== undefined && { defaultBranch: input.default_branch }),
-    actor: { principal: auth.principalId, tokenId: auth.id, grantId: auth.grantId, via: "api" },
+    actor: {
+      principal: auth.principalId,
+      tokenId: auth.id,
+      grantId: auth.grantId,
+      actChain: auth.act,
+      requestId: ctx.requestId ?? null,
+      via: "api",
+    },
   });
   if (!result.ok && result.code === "repo_transferring") throw transferring();
   if (!result.ok && (result.code === "repo_deleted" || result.code === "access_lost"))

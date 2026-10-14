@@ -161,7 +161,7 @@ export async function completeUploadSession(
   let report: PushReportSummary | undefined;
   if (progress.state === "ready") {
     const decision = await reauthorizeWriter(
-      { env: ctx.env, authState: ctx.authState, metrics: ctx.metrics },
+      { env: ctx.env, authState: ctx.authState, metrics: ctx.metrics, requestId: ctx.requestId },
       { auth: ctx.auth, repo },
       { owner: repo.ownerHandle, name: repo.name },
     );

@@ -51,7 +51,7 @@ async function call(target: PushTarget, method: string, body?: unknown, vars = O
   // biome-ignore lint/suspicious/noExplicitAny: test assertions over JSON
   const json: any = await response.json();
   await waitOnExecutionContext(ctx);
-  return { status: response.status, json };
+  return { status: response.status, json, requestId: response.headers.get("X-Request-Id") };
 }
 
 const decoder = new TextDecoder();
@@ -158,6 +158,10 @@ describe("server-side import", () => {
       head: cx.source.head,
       scratch: 0,
     });
+    // The job keeps the request that started it, which its commit's
+    // re-check hands to the commit (as a file write's does).
+    expect(started.requestId).toBeTruthy();
+    expect((await target.repo.stub.importRecord())?.requestId).toBe(started.requestId);
     // Every request went to the source URL (through the guard).
     expect(seen).toEqual([
       `GET ${SOURCE}/info/refs?service=git-upload-pack`,

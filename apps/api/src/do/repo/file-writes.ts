@@ -95,6 +95,8 @@ export interface FileWriteInput {
   readonly expectedHead?: string;
   readonly message: string;
   readonly changes: readonly FileWriteChange[];
+  /** The request making the write, for its audit row. */
+  readonly requestId?: string | null;
 }
 
 export interface FileWriteResult {
@@ -416,7 +418,7 @@ async function blobAt(
 /** Who makes a write, and where: what the push path checks at its commit point. */
 export type WriterOf<T extends FileWriteInput> = Pick<
   T,
-  "principal" | "tokenId" | "grantId" | "repoId"
+  "principal" | "tokenId" | "grantId" | "repoId" | "requestId"
 >;
 
 /** A write stored as a push's body: its upload and scratch objects. */
@@ -499,7 +501,12 @@ export async function finishUpload(
     }
     const decision = await reauthorizeByToken(
       deps.db,
-      { tokenId: input.tokenId, principal: input.principal, repoId: input.repoId },
+      {
+        tokenId: input.tokenId,
+        principal: input.principal,
+        repoId: input.repoId,
+        requestId: input.requestId ?? null,
+      },
       deps.writerRole,
     );
     const response = await push.finalize(uploadId, decision, { repoId: input.repoId });

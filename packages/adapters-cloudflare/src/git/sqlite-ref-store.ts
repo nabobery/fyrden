@@ -37,6 +37,10 @@ export interface RefActor {
   readonly grantId?: string | null;
   readonly tokenId?: string | null;
   readonly onBehalfOf?: string | null;
+  /** The agents acting for `principal` (a delegated token's act chain), the current one first. */
+  readonly actChain?: readonly string[];
+  /** The request that made the change. */
+  readonly requestId?: string | null;
   readonly via: "push" | "merge" | "api" | "import";
 }
 

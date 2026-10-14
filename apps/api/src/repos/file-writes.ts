@@ -102,6 +102,7 @@ async function write(
       grantId: ctx.auth.grantId,
       repoId: entry.id,
       committer: committerOf(ctx),
+      requestId: ctx.requestId ?? null,
     }),
   );
 }

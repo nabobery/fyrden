@@ -4,6 +4,7 @@
 // once that copy is done. Clones of the fork are checked against what git
 // says the refs reach.
 
+import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, inject, it } from "vitest";
@@ -256,6 +257,15 @@ describe("repos.fork operation", () => {
     expect(body).toMatchObject({ owner: handleOf(user), name, visibility: "private" });
     const entry = await resolveRepo(env, handleOf(user), name, { consistency: "primary" });
     expect(entry?.networkId).toBe(await inRepo(parent.stub, ({ git }) => git.networkId()));
+    // Its first commit is the caller's, made by this request.
+    const requestId = res.headers.get("X-Request-Id");
+    expect(requestId).toBeTruthy();
+    const audit = await runInDurableObject(env.REPO.getByName(entry?.id ?? ""), (_, state) =>
+      state.storage.sql
+        .exec("SELECT actor_id, request_id FROM audit_log WHERE action = 'refs.update'")
+        .toArray(),
+    );
+    expect(audit).toEqual([{ actor_id: user.principalId, request_id: requestId }]);
   });
 
   it("needs repos:create and read access to the source from a scoped token", async () => {

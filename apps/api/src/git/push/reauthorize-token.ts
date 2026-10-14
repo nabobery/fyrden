@@ -35,14 +35,23 @@ type Row = {
  */
 export async function reauthorizeByToken(
   db: D1Database,
-  accepted: { readonly tokenId: string; readonly principal: string; readonly repoId: string },
+  accepted: {
+    readonly tokenId: string;
+    readonly principal: string;
+    readonly repoId: string;
+    /** The request making the write, for its audit row. */
+    readonly requestId?: string | null;
+  },
   /** The principal's role for a write, from the repository's own ACL snapshot. */
   roleOf: (principalId: string) => Promise<RepoRole | null>,
 ): Promise<PushDecision> {
+  let actChain: readonly string[] = [];
   const decide = (refusal?: string): PushDecision => ({
     ...(refusal === undefined ? {} : { refusal }),
     tokenId: accepted.tokenId,
     decidedAt: Date.now(),
+    actChain,
+    requestId: accepted.requestId ?? null,
   });
   const session = db.withSession("first-primary");
   // A write made from the web UI: a signed-in session, with the user's full rights.
@@ -99,6 +108,7 @@ export async function reauthorizeByToken(
         )
       : null;
   if (!restrictions || delegation === undefined) return decide(TOKEN_REVOKED);
+  if (delegation) actChain = JSON.parse(row.act_chain ?? "[]") as string[];
   if (row.owner_id === null || row.repo_state !== "active") return decide(ACCESS_LOST);
   // The same rule the request path applies, from the fields it reads.
   const token = {

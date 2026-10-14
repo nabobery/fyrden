@@ -10,6 +10,10 @@ export interface PushDecision {
   readonly tokenId: string;
   /** When the Worker made the decision (ms since the epoch). */
   readonly decidedAt: number;
+  /** The agents acting for the pusher, from the token checked (a delegated token's act chain). */
+  readonly actChain?: readonly string[];
+  /** The request committing the push, for its audit row. */
+  readonly requestId?: string | null;
 }
 
 /**
@@ -135,6 +139,8 @@ export function pushCommitter(
           principal: upload.principal,
           grantId: upload.grantId,
           tokenId: upload.tokenId,
+          actChain: decision.actChain ?? [],
+          requestId: decision.requestId ?? null,
           via: "push",
         },
         fastForward: request.fastForward,

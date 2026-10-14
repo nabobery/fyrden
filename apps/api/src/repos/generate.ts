@@ -79,6 +79,7 @@ export async function generateRepoOperation(
       repoId: created.id,
       committer: committerOf(ctx),
       message: "Initial commit",
+      requestId: ctx.requestId ?? null,
     })
     .catch((error: unknown) => {
       failure = error;

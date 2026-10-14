@@ -37,6 +37,30 @@ export interface RepoIdentity {
  */
 export const REFS_PER_EVENT = 500;
 
+/**
+ * Who started a job that changes the repository later (a deletion, a
+ * transfer): the principal, the agents acting for it and the request, as
+ * the job recorded them. A bare id is a principal with neither.
+ */
+export interface JobActor {
+  readonly principal: string;
+  readonly actChain?: readonly string[];
+  readonly requestId?: string | null;
+}
+
+/** The commit actor for `actor`, as a job's change records it. */
+function jobRefActor(actor: JobActor | string | null): RefActor | null {
+  if (actor === null) return null;
+  return typeof actor === "string"
+    ? { principal: actor, via: "api" }
+    : {
+        principal: actor.principal,
+        actChain: actor.actChain ?? [],
+        requestId: actor.requestId ?? null,
+        via: "api",
+      };
+}
+
 /** What a repository being deleted answers every write (and, once erased, every call). */
 export const REPO_DELETED = "the repository is being deleted";
 /** Why a repository takes no change while it moves to another account. */
@@ -262,7 +286,7 @@ export class RepoEvents {
    * Freezes the repository for its deletion: from now on no ref, HEAD or
    * setting changes; emits its tombstone and the audit row, once.
    */
-  markDeleted(actor: string | null): void {
+  markDeleted(actor: JobActor | string | null): void {
     this.#storage.transactionSync(() => {
       const meta = this.#meta();
       if (!meta || meta.deleting_at !== null) return;
@@ -274,16 +298,13 @@ export class RepoEvents {
         "UPDATE repo_meta SET write_frozen = 1, deleting_at = ? WHERE id = 1",
         now,
       );
-      const after = this.#emit("repo.deleted", { actor, actChain: [], data: null }, true);
-      this.#audit(
-        after,
-        "repo.delete",
-        actor === null ? null : { principal: actor, via: "api" },
-        now,
-        {
-          name: meta.name,
-        },
+      const who = jobRefActor(actor);
+      const after = this.#emit(
+        "repo.deleted",
+        { actor: who?.principal ?? null, actChain: [...(who?.actChain ?? [])], data: null },
+        true,
       );
+      this.#audit(after, "repo.delete", who, now, { name: meta.name });
     });
   }
 
@@ -386,7 +407,7 @@ export class RepoEvents {
       readonly name: string;
       readonly nameGen: number;
     },
-    actor: string | null,
+    actor: JobActor | string | null,
   ): { ownerGen: number; changed: boolean } {
     return this.#storage.transactionSync(() => {
       const meta = this.#meta();
@@ -407,15 +428,18 @@ export class RepoEvents {
         to.name,
         to.nameGen,
       );
-      const after = this.#emit("repo.updated", { actor, actChain: [], data: null }, true);
-      this.#endTransfer(to.transferId, true, after.owner_gen);
-      this.#audit(
-        after,
-        "repo.transfer",
-        actor === null ? null : { principal: actor, via: "api" },
-        this.git.context.now(),
-        { from: meta.owner_id, to: to.ownerId, name: to.name },
+      const who = jobRefActor(actor);
+      const after = this.#emit(
+        "repo.updated",
+        { actor: who?.principal ?? null, actChain: [...(who?.actChain ?? [])], data: null },
+        true,
       );
+      this.#endTransfer(to.transferId, true, after.owner_gen);
+      this.#audit(after, "repo.transfer", who, this.git.context.now(), {
+        from: meta.owner_id,
+        to: to.ownerId,
+        name: to.name,
+      });
       return { ownerGen: after.owner_gen, changed: true };
     });
   }
@@ -450,7 +474,7 @@ export class RepoEvents {
     if (!this.#epochChecked)
       throw new Error("the repository's epoch must be checked before it commits");
     this.#exec("events.pushed_at", "UPDATE repo_meta SET pushed_at = ? WHERE id = 1", context.now);
-    const who = { actor: actor?.principal ?? null, actChain: [] };
+    const who = { actor: actor?.principal ?? null, actChain: [...(actor?.actChain ?? [])] };
     this.#emit("repo.updated", { ...who, data: null }, true);
     // A commit may move thousands of refs (a fork's first commit): one event
     // per slice keeps a stored payload under the 2 MB row limit.
@@ -521,7 +545,8 @@ export class RepoEvents {
       }
       if (Object.keys(changes).length === 0) return;
       const who = update.actor?.principal ?? null;
-      const after = this.#emit("repo.updated", { actor: who, actChain: [], data: null }, true);
+      const actChain = [...(update.actor?.actChain ?? [])];
+      const after = this.#emit("repo.updated", { actor: who, actChain, data: null }, true);
       this.#audit(after, "repo.update", update.actor, this.git.context.now(), changes);
     });
   }
@@ -544,18 +569,20 @@ export class RepoEvents {
   ): void {
     this.#exec(
       "events.audit",
-      `INSERT INTO audit_log (epoch_gen, at, actor_id, on_behalf_of, token_id, grant_id, action,
-         target_id, result, details)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ok', ?)`,
+      `INSERT INTO audit_log (epoch_gen, at, actor_id, on_behalf_of, act_chain, token_id, grant_id,
+         action, target_id, result, details, request_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ok', ?, ?)`,
       meta.epoch_gen,
       at,
       actor?.principal ?? null,
       actor?.onBehalfOf ?? null,
+      actor?.actChain?.length ? JSON.stringify(actor.actChain) : null,
       actor?.tokenId ?? null,
       actor?.grantId ?? null,
       action,
       meta.repo_id,
       JSON.stringify(details),
+      actor?.requestId ?? null,
     );
   }
 

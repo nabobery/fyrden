@@ -1,4 +1,4 @@
-import type { JobHandler, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import type { JobHandler, RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import type { Logger } from "@fyrden/adapters-cloudflare/obs";
 import type { BlockCache } from "@fyrden/git-core";
 import type { MaintenancePolicy } from "../git/maintenance/policy.js";
@@ -109,8 +109,8 @@ export class RepoNetwork {
     return { frontier, copied, pages };
   }
 
-  finishFork(refs: readonly ExportedRef[]): void {
-    finishFork(this.#git, refs);
+  finishFork(refs: readonly ExportedRef[], actor?: RefActor): void {
+    finishFork(this.#git, refs, actor);
   }
 
   compactSlice(input: CompactSliceInput): Promise<{ runId: string; outcome: RewriteOutcome }> {

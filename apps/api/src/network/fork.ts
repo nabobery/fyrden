@@ -168,7 +168,11 @@ export async function forkRepository(
       packsCompacted = chosen.length;
     }
 
-    await fork.finishFork(exported.refs);
+    await fork.finishFork(exported.refs, {
+      principal: request.ownerId,
+      requestId: request.requestId ?? null,
+      via: "api",
+    });
     if (!(await network.completeFork({ networkId, forkRepoId: forkId })))
       throw new Error("the fork is no longer joining its network");
   } catch (error) {

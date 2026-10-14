@@ -21,7 +21,12 @@ export function reauthorizePush(
   repoName: { readonly owner: string; readonly name: string },
 ): Promise<PushDecision> {
   return reauthorizeWriter(
-    { env: c.env, authState: c.get("authState"), metrics: c.get("metrics") },
+    {
+      env: c.env,
+      authState: c.get("authState"),
+      metrics: c.get("metrics"),
+      requestId: c.get("requestId"),
+    },
     accepted,
     repoName,
   );
@@ -29,18 +34,28 @@ export function reauthorizePush(
 
 /** The same check for any request that holds the writer's token (an API operation). */
 export async function reauthorizeWriter(
-  request: { readonly env: Env; readonly authState: AuthState; readonly metrics: Metrics },
+  request: {
+    readonly env: Env;
+    readonly authState: AuthState;
+    readonly metrics: Metrics;
+    readonly requestId?: string | undefined;
+  },
   accepted: { readonly auth: TokenRecord; readonly repo: RepoEntry },
   repoName: { readonly owner: string; readonly name: string },
 ): Promise<PushDecision> {
+  // The agents acting, as the primary says when it says (what the commit records).
+  let actChain: readonly string[] = accepted.auth.act;
   const decide = (refusal?: string): PushDecision => ({
     ...(refusal === undefined ? {} : { refusal }),
     tokenId: accepted.auth.id,
     decidedAt: Date.now(),
+    actChain,
+    requestId: request.requestId ?? null,
   });
   const verified = await request.authState.verifyForWrite();
   // An expired token is judged on what the primary says it holds now.
   const record = verified.ok ? verified.record : verified.expiredRecord;
+  if (record) actChain = record.act;
   if (!record || record.id !== accepted.auth.id) return decide(TOKEN_REVOKED);
   const repo = await resolveRepo(request.env, repoName.owner, repoName.name, {
     consistency: "primary",

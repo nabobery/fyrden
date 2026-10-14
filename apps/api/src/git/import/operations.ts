@@ -46,6 +46,7 @@ export async function startImport(
     repoId: repo.id,
     url: check.url,
     ownHosts,
+    requestId: ctx.requestId ?? null,
     limits: {
       maxBytes: tuning.maxImportBytes,
       maxMs: tuning.maxImportMs,

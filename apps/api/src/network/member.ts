@@ -1,5 +1,5 @@
 import { createWorkersZlib, DEFAULT_CACHE_API_CALLS } from "@fyrden/adapters-cloudflare";
-import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import type { RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import {
   type BlockCache,
   ObjectReader,
@@ -329,8 +329,15 @@ export function initFork(
   });
 }
 
-/** Points the fork's refs where the parent's were. Refs already set (a repeated call) are kept. */
-export function finishFork(git: RepoGitStorage, refs: readonly ExportedRef[]): void {
+/**
+ * Points the fork's refs where the parent's were, as `actor` (who forked).
+ * Refs already set (a repeated call) are kept.
+ */
+export function finishFork(
+  git: RepoGitStorage,
+  refs: readonly ExportedRef[],
+  actor?: RefActor,
+): void {
   const current = git.refStore.readRefsSync();
   const updates = refs
     .filter((r) => !current.refs.has(r.name))
@@ -341,6 +348,7 @@ export function finishFork(git: RepoGitStorage, refs: readonly ExportedRef[]): v
     removePacks: [],
     refUpdates: updates,
     expectedVersion: current.version,
+    ...(actor && { actor }),
   });
   if (!result.ok) throw new Error(`setting the fork's refs failed (${result.reason})`);
 }

@@ -116,6 +116,7 @@ import {
 } from "./repo/contents.js";
 import { type EraseOutcome, eraseRepository, recordNetwork } from "./repo/erase.js";
 import {
+  type JobActor,
   REPO_DELETED,
   REPO_TRANSFERRING,
   RepoEvents,
@@ -602,7 +603,7 @@ export class RepoDO extends MigratingDO {
       readonly name: string;
       readonly nameGen: number;
     },
-    actor: string | null,
+    actor: JobActor | string | null,
   ): Promise<number> {
     return this.#measured("completeTransfer", async () => {
       await this.checkEpoch();
@@ -762,8 +763,7 @@ export class RepoDO extends MigratingDO {
   abandonGeneration(): Promise<"committed" | "abandoned" | "none"> {
     return this.#measured("abandonGeneration", async () =>
       this.ctx.storage.transactionSync(() => {
-        const committed =
-          this.#hasGitStorage() && this.git.refStore.readRefsSync().refs.size > 0;
+        const committed = this.#hasGitStorage() && this.git.refStore.readRefsSync().refs.size > 0;
         if (this.#generatingFrom() === undefined)
           return committed ? ("committed" as const) : ("none" as const);
         if (committed) {
@@ -1497,10 +1497,10 @@ export class RepoDO extends MigratingDO {
     return this.#network().copyGraphStep(input);
   }
 
-  /** Sets a new fork's refs, once its commit graph is complete. */
-  async finishFork(refs: readonly ExportedRef[]): Promise<void> {
+  /** Sets a new fork's refs, once its commit graph is complete, as `actor` (who forked). */
+  async finishFork(refs: readonly ExportedRef[], actor?: RefActor): Promise<void> {
     await this.checkEpoch();
-    this.#network().finishFork(refs);
+    this.#network().finishFork(refs, actor);
   }
 
   /**
@@ -1534,7 +1534,7 @@ export class RepoDO extends MigratingDO {
    * and no other call or alarm runs in this object.
    */
   prepareDeletion(
-    actor: string | null,
+    actor: JobActor | string | null,
     budgetMs: number,
   ): Promise<{ ready: boolean; events: number; auditRows: number }> {
     return this.#measured("prepareDeletion", async () => {

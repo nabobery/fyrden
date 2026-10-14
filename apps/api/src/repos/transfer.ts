@@ -54,6 +54,7 @@ type Transfer = {
   to_name: string;
   step: TransferStep;
   requested_by: string | null;
+  request_id: string | null;
   last_error: string | null;
   org_shard: string;
 };
@@ -99,19 +100,29 @@ export async function transferRepoOperation(
   // Only from the owner the caller was authorized for, with no deletion and no other transfer going.
   const started = await env.DIRECTORY.prepare(
     `INSERT INTO repo_transfers (repo_id, transfer_id, from_owner, from_name, to_owner, to_name,
-       step, requested_by, created_at, updated_at)
-     SELECT id, ?2, owner_id, name, ?3, ?4, 'freeze', ?5, ?6, ?6 FROM repos
+       step, requested_by, request_id, created_at, updated_at)
+     SELECT id, ?2, owner_id, name, ?3, ?4, 'freeze', ?5, ?8, ?6, ?6 FROM repos
      WHERE id = ?1 AND owner_id = ?7 AND state = 'active'
        AND NOT EXISTS (SELECT 1 FROM repo_deletions WHERE repo_id = ?1)
      ON CONFLICT (repo_id) DO UPDATE SET transfer_id = excluded.transfer_id,
        from_owner = excluded.from_owner, from_name = excluded.from_name,
        to_owner = excluded.to_owner, to_name = excluded.to_name, step = 'freeze',
-       requested_by = excluded.requested_by, lease_id = NULL, lease_until = NULL,
+       requested_by = excluded.requested_by, request_id = excluded.request_id,
+       lease_id = NULL, lease_until = NULL,
        attempts = 0, last_error = NULL,
        created_at = excluded.created_at, updated_at = excluded.updated_at
      WHERE repo_transfers.step IN ('done', 'failed')`,
   )
-    .bind(entry.id, newId("trf"), to.id, name, auth.principalId, now, entry.ownerId)
+    .bind(
+      entry.id,
+      newId("trf"),
+      to.id,
+      name,
+      auth.principalId,
+      now,
+      entry.ownerId,
+      ctx.requestId ?? null,
+    )
     .run();
   if ((started.meta.changes ?? 0) === 0)
     throw new OperationError(
@@ -218,7 +229,7 @@ export async function advanceTransfer(
   const transfer = await env.DIRECTORY.withSession("first-primary")
     .prepare(
       `SELECT t.repo_id, t.transfer_id, t.from_owner, t.from_name, t.to_owner, t.to_name, t.step,
-         t.requested_by, t.last_error, r.org_shard
+         t.requested_by, t.request_id, t.last_error, r.org_shard
        FROM repo_transfers t JOIN repos r ON r.id = t.repo_id WHERE t.repo_id = ?`,
     )
     .bind(repoId)
@@ -359,7 +370,9 @@ async function runStep(
       metrics?.count("do.request", { class: "RepoDO", method: "completeTransfer" });
       await stub.completeTransfer(
         { transferId, ownerId: transfer.to_owner, name: row.name, nameGen: row.name_gen },
-        transfer.requested_by,
+        transfer.requested_by === null
+          ? null
+          : { principal: transfer.requested_by, requestId: transfer.request_id },
       );
       return "done";
     }
@@ -425,10 +438,10 @@ async function moveInDirectory(
       .prepare(
         `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
          SELECT ?5, ?9, 'repo.transfer', id,
-           json_object('from', ?4, 'to', ?2, 'from_name', name, 'to_name', ?3), NULL
+           json_object('from', ?4, 'to', ?2, 'from_name', name, 'to_name', ?3), ?10
          FROM repos WHERE ${eligible}`,
       )
-      .bind(...args, transfer.requested_by),
+      .bind(...args, transfer.requested_by, transfer.request_id),
     db
       .prepare(
         `UPDATE repos SET owner_id = ?2, name = ?3, name_gen = name_gen + 1, updated_at = ?5

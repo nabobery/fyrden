@@ -47,6 +47,8 @@ export interface ImportRecord {
   readonly principal: string;
   readonly tokenId: string;
   readonly repoId: string;
+  /** The request that started the import, for the commit's audit row. */
+  readonly requestId?: string | null;
   readonly limits: ImportLimits;
   readonly state: ImportState;
   readonly bytes: number;
@@ -69,6 +71,8 @@ export interface BeginImport {
   readonly url: string;
   readonly ownHosts: readonly string[];
   readonly limits: ImportLimits;
+  /** The request starting the import. */
+  readonly requestId?: string | null;
 }
 
 const RECORD_KEY = "git-import";
@@ -127,6 +131,7 @@ export class RepoImports {
       principal: input.principal,
       tokenId: input.tokenId,
       repoId: input.repoId,
+      ...(input.requestId && { requestId: input.requestId }),
       limits: input.limits,
       state: "fetching",
       bytes: 0,

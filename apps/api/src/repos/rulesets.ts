@@ -61,6 +61,8 @@ async function change(
     principal: ctx.auth.principalId,
     tokenId: ctx.auth.id,
     grantId: ctx.auth.grantId,
+    actChain: ctx.auth.act,
+    requestId: ctx.requestId ?? null,
     via: "api",
   });
   if (result.ok) return result.record;

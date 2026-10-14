@@ -4,10 +4,17 @@
 // pass a narrower grant down one hop; revoking a grant ends every token
 // under it; an agent never exceeds its owner.
 
+import {
+  createExecutionContext,
+  runInDurableObject,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, it } from "vitest";
 import { recordedAccount } from "../src/accounts/grants.js";
+import { createApp } from "../src/app.js";
+import type { RepoDO } from "../src/do/RepoDO.js";
 import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { ORIGIN } from "./helpers/git-http.js";
@@ -479,6 +486,122 @@ describe("delegation grants", () => {
         )
       ).body,
     ).toMatchObject({ code: "delegated_token" });
+  });
+});
+
+describe("what a delegated token changes in a repository", () => {
+  it("names the agents acting and the request, in its audit rows and its events", async () => {
+    const owner = await user();
+    const repo = await repoOf(owner);
+    const agent = await agentOf(owner);
+    const made = await grant(owner, {
+      agent: agent.handle,
+      scopes: ["contents:write", "administration:write"],
+    });
+    const token = (await delegated(agent.token, made.body.id)).body.access_token;
+    const wrote = await api("PUT", `${repo.path}/contents/notes.md`, token, {
+      message: "Add notes",
+      content: btoa("notes"),
+    });
+    expect(wrote.status).toBe(200);
+    const fileRequest = wrote.headers.get("X-Request-Id");
+    expect(fileRequest).toBeTruthy();
+    const updated = await api("PATCH", repo.path, token, { description: "by an agent" });
+    expect(updated.status).toBe(200);
+    const settingsRequest = updated.headers.get("X-Request-Id");
+    expect(settingsRequest).toBeTruthy();
+    const recorded = await runInDurableObject(env.REPO.getByName(repo.id), (_, state) => ({
+      audit: state.storage.sql
+        .exec<{
+          action: string;
+          actor_id: string;
+          act_chain: string | null;
+          request_id: string | null;
+        }>(
+          "SELECT action, actor_id, act_chain, request_id FROM audit_log WHERE action IN ('refs.update', 'repo.update') ORDER BY seq",
+        )
+        .toArray(),
+      events: state.storage.sql
+        .exec<{ event: string }>("SELECT event FROM outbox ORDER BY source_seq")
+        .toArray()
+        .map((r) => JSON.parse(r.event) as { type: string; actor: string; actChain: string[] }),
+    }));
+    expect(recorded.audit).toEqual([
+      {
+        action: "refs.update",
+        actor_id: owner.principalId,
+        act_chain: JSON.stringify([agent.id]),
+        request_id: fileRequest,
+      },
+      {
+        action: "repo.update",
+        actor_id: owner.principalId,
+        act_chain: JSON.stringify([agent.id]),
+        request_id: settingsRequest,
+      },
+    ]);
+    const acted = recorded.events.filter((e) => e.type !== "repo.created");
+    expect(acted.length).toBeGreaterThan(0);
+    for (const event of acted) expect(event.actChain).toEqual([agent.id]);
+  });
+});
+
+describe("a delegated deletion", () => {
+  it("reaches the repository naming the agents acting and the request", async () => {
+    const owner = await user();
+    const repo = await repoOf(owner);
+    const agent = await agentOf(owner);
+    const made = await grant(owner, { agent: agent.handle, scopes: ["administration:write"] });
+    const token = (await delegated(agent.token, made.body.id)).body.access_token;
+    // What the deletion job hands the repository, and what the repository records.
+    let handed: unknown;
+    let recorded: unknown;
+    const REPO = new Proxy(env.REPO, {
+      get(target, property) {
+        if (property !== "getByName") {
+          const value = (target as unknown as Record<PropertyKey, unknown>)[property];
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+        return (name: string) =>
+          new Proxy(target.getByName(name), {
+            get(stub, method) {
+              if (method === "prepareDeletion")
+                return async (...args: Parameters<RepoDO["prepareDeletion"]>) => {
+                  handed = args[0];
+                  const prepared = await stub.prepareDeletion(...args);
+                  recorded = await runInDurableObject(stub, (_: RepoDO, state) =>
+                    state.storage.sql
+                      .exec(
+                        "SELECT act_chain, request_id FROM audit_log WHERE action = 'repo.delete'",
+                      )
+                      .one(),
+                  );
+                  return prepared;
+                };
+              const value: unknown = Reflect.get(stub, method);
+              return typeof value === "function"
+                ? (...args: unknown[]) => Reflect.apply(value, stub, args)
+                : value;
+            },
+          });
+      },
+    });
+    const ctx = createExecutionContext();
+    const res = await createApp().request(
+      `${ORIGIN}/api${repo.path}`,
+      {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}`, "Idempotency-Key": crypto.randomUUID() },
+      },
+      { ...env, REPO },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    const requestId = res.headers.get("X-Request-Id");
+    expect(requestId).toBeTruthy();
+    expect(handed).toEqual({ principal: owner.principalId, actChain: [agent.id], requestId });
+    expect(recorded).toEqual({ act_chain: JSON.stringify([agent.id]), request_id: requestId });
   });
 });
 
