@@ -463,7 +463,7 @@ from `/mcp` or `/api` names in its `WWW-Authenticate`.
 |---|---|
 | Clients | Public only (`token_endpoint_auth_method: none`): known by a client ID metadata document (an `https` `client_id` URL with a path, fetched through the outbound URL policy, at most 5 KiB, naming itself, kept a day, a week if it cannot be fetched again), or registered at `POST /oauth/register` (RFC 7591); redirect URIs `https`, loopback `http`, or a private-use scheme, matched exactly (loopback with any port) |
 | DPoP (RFC 9449) | A token request with a proof (ES256 or EdDSA) gets tokens bound to its key (`token_type: DPoP`), taken only with `Authorization: DPoP` and a fresh proof by that key (60 seconds either way; each proof once); `dpop_jkt` at authorization binds the code; a bound refresh family needs proofs by its key |
-| Organization policy | `PATCH /orgs/{org}` `require_dpop`: the organization's agents' API tokens are taken only DPoP-bound (at once for writes, within 30 seconds for reads, like a revocation), and token exchange for them needs a proof (git tokens are exempt) |
+| Organization policy | `PATCH /orgs/{org}` `require_dpop`: the organization's agents' API tokens are taken only DPoP-bound (at once for writes, within 30 seconds for reads, like a revocation), and token exchange for them needs a proof (git tokens only where git itself uses them, since git cannot send a proof; at the REST API or MCP they are refused like any other) |
 | Authorization | `GET /oauth/authorize`: code flow only, PKCE `S256` required, `resource` required (`{origin}/mcp` or `{origin}/api`), scopes are Fyrden permissions; the signed-in user consents on a Fyrden page; the answer must come from Fyrden's own origin |
 | Codes | Single use, 60 seconds; redeemed again, the tokens they issued are revoked |
 | Access tokens | Type `oat`, 1 hour, accepted only at their resource (RFC 8707) |
@@ -499,7 +499,7 @@ shared after that.
 | What | Value |
 |---|---|
 | Tools | 63; `tools/list` answers about 136 KB |
-| Browser requests | Only from the deployment's own hosts (`Origin`, against DNS rebinding); native clients send none |
+| Browser requests | Only from the deployment's own hosts (`Origin`, against DNS rebinding): on `workers.dev`, both Fyrden Workers on the request's account subdomain; the hosts in `FYRDEN_OWN_HOSTS`; loopback. Native clients send no `Origin` |
 | Request body | 8 MiB, as REST |
 | CPU per request | **Measured** on Workers Free (2026-10-14, `wrangler tail`): `tools/list` 5 ms on a warm isolate (45 to 160 ms before tool schemas were converted once per isolate); `whoami` 32 ms and `resources/read` 16 ms (measured before that change) |
 | First request on a new isolate | **Measured** on Workers Free (2026-10-14): 60 to 190 ms of CPU for `tools/list`, paid once per isolate: loading the Worker's code, the MCP SDK building its protocol schemas on first use, and converting every tool's schema. New isolates are most common right after a deploy and when traffic grows |

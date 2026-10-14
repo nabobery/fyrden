@@ -99,17 +99,19 @@ export const extractToken = (header: string | undefined): string | undefined =>
  * Whether a verified token is presented as it must be: a DPoP-bound one
  * with the `DPoP` scheme and a fresh proof by its key naming this request
  * and the token (each proof taken once); a bearer one not with the `DPoP`
- * scheme; and, where an acting agent's owner requires DPoP, an API token
- * only DPoP-bound (git tokens are exempt: git cannot send proofs).
+ * scheme; and, where an acting agent's owner requires DPoP, only a
+ * DPoP-bound token, except a git token used by git itself (`git`: git
+ * cannot send proofs; the same token at the REST API or MCP is refused).
  */
 async function presentedAsBound(
   c: Context<{ Bindings: Env; Variables: AuthVariables }>,
   record: TokenRecord,
   credential: { token: string; scheme: string },
+  git: boolean,
 ): Promise<boolean> {
   if (record.dpopJkt === null) {
     if (credential.scheme === "dpop") return false;
-    return !(record.requiresDpop && record.type !== "git");
+    return !(record.requiresDpop && !(git && record.type === "git"));
   }
   const proof = c.req.header("DPoP");
   if (credential.scheme !== "dpop" || !proof) return false;
@@ -134,11 +136,12 @@ export type Authentication =
  * Verifies the request's token in `mode`. Every attempt is rate limited per
  * client address before the token is looked up, so a stream of made-up
  * tokens cannot drive unbounded D1 reads. On success the request's logger
- * names the principal.
+ * names the principal. `git`: the request is git's own (smart HTTP).
  */
 export async function authenticate(
   c: Context<{ Bindings: Env; Variables: AuthVariables }>,
   mode: VerifyMode,
+  options: { readonly git?: boolean } = {},
 ): Promise<Authentication> {
   const credential = extractCredential(c.req.header("Authorization"));
   if (!credential) {
@@ -167,7 +170,8 @@ export async function authenticate(
     outcome: result.ok ? "ok" : result.reason,
   });
   if (!result.ok) return { ok: false, reason: "invalid" };
-  if (!(await presentedAsBound(c, result.record, credential))) return { ok: false, reason: "dpop" };
+  if (!(await presentedAsBound(c, result.record, credential, options.git === true)))
+    return { ok: false, reason: "dpop" };
 
   c.set(
     "log",

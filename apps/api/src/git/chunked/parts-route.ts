@@ -35,6 +35,10 @@ function declaredLength(request: Request): number | undefined {
  */
 export async function uploadPart(c: GitContext): Promise<Response> {
   const { owner, name } = repoParams(c);
+  // Parts carry one git push too large for one request (`fyrden push
+  // --chunked`), with the same git token as receive-pack: like git's own
+  // requests, they take a git token where an owner requires DPoP (it can
+  // push through receive-pack anyway).
   const access = await authorizeGit(c, owner, name, "write", PART_TOKEN_TYPES);
   if (!access.ok) return access.response;
 

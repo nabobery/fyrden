@@ -3,10 +3,10 @@
 // not replayable; an organization can require its agents' API tokens to be
 // bound. And clients known by a client ID metadata document.
 
-import { exports } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { metadataNetwork } from "../src/oauth/clients.js";
+import { clientById, metadataNetwork } from "../src/oauth/clients.js";
 import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { api, json, user } from "./helpers/api.js";
 import { dpopKey } from "./helpers/dpop.js";
@@ -85,6 +85,43 @@ describe("DPoP-bound tokens", () => {
     expect(await refreshed.json()).toMatchObject({ token_type: "DPoP" });
   });
 
+  it("bind a bearer family's next refresh token to the key that refreshed it", async () => {
+    const { key, clientId, params } = await boundTokens();
+    const first = await (await form("/oauth/token", params)).json<{
+      token_type: string;
+      refresh_token: string;
+    }>();
+    expect(first.token_type).toBe("Bearer");
+    // Refreshed with a proof: from here on the family is bound to that key (RFC 9449 §5).
+    const refresh = (token: string) => ({
+      grant_type: "refresh_token",
+      refresh_token: token,
+      client_id: clientId,
+    });
+    const bound = await (
+      await form("/oauth/token", refresh(first.refresh_token), {
+        DPoP: await key.proof("POST", TOKEN_URL),
+      })
+    ).json<{ token_type: string; refresh_token: string }>();
+    expect(bound.token_type).toBe("DPoP");
+    // Without a proof, or with another key's: refused, and nothing is used up.
+    expect(await (await form("/oauth/token", refresh(bound.refresh_token))).json()).toMatchObject({
+      error: "invalid_dpop_proof",
+    });
+    expect(
+      await (
+        await form("/oauth/token", refresh(bound.refresh_token), {
+          DPoP: await (await dpopKey()).proof("POST", TOKEN_URL),
+        })
+      ).json(),
+    ).toMatchObject({ error: "invalid_dpop_proof" });
+    // With its key: taken.
+    const again = await form("/oauth/token", refresh(bound.refresh_token), {
+      DPoP: await key.proof("POST", TOKEN_URL),
+    });
+    expect(await again.json()).toMatchObject({ token_type: "DPoP" });
+  });
+
   it("are refused for a code bound to another key, and a stale proof", async () => {
     const { params } = await boundTokens({ bindCode: true });
     const other = await dpopKey();
@@ -121,6 +158,25 @@ describe("an organization's DPoP policy", () => {
     const agentToken = minted.body.token;
     // Its own token is refused at the API (it cannot be bound)...
     expect((await api("GET", "/user", agentToken)).status).toBe(401);
+    // A git token too: it is exempt only where git uses it, and git cannot send a proof.
+    const gitToken = (
+      await json<{ token: string }>(
+        api("POST", `/agents/${made.body.handle}/tokens`, owner.token, { type: "git" }),
+      )
+    ).body.token;
+    expect((await api("GET", "/user", gitToken)).status).toBe(401);
+    expect((await api("POST", "/grants", gitToken, { agent: made.body.handle })).status).toBe(401);
+    // Over git (protocol v2, so the request is authenticated): taken, then the
+    // repository is not found; a made-up token is not taken.
+    const overGit = (token: string) =>
+      call(`/${login}/missing.git/info/refs?service=git-upload-pack`, {
+        headers: {
+          Authorization: `Basic ${btoa(`x-access-token:${token}`)}`,
+          "Git-Protocol": "version=2",
+        },
+      });
+    expect((await overGit(gitToken)).status).toBe(404);
+    expect((await overGit(`fyrden_git_${"x".repeat(43)}`)).status).toBe(401);
     // ...and a delegated one is issued only against a proof.
     const granted = await json<{ id: string }>(
       api("POST", "/grants", owner.token, { agent: made.body.handle, scopes: ["metadata:read"] }),
@@ -151,6 +207,23 @@ describe("client ID metadata documents", () => {
   const original = metadataNetwork.fetch;
   afterEach(() => {
     metadataNetwork.fetch = original;
+  });
+
+  it("are fetched with the deployment's own hosts refused, the configured ones included", async () => {
+    let ownHosts: readonly string[] = [];
+    metadataNetwork.fetch = async (url, _init, policy) => {
+      ownHosts = policy.ownHosts ?? [];
+      return Response.json({ client_id: url, redirect_uris: [REDIRECT] });
+    };
+    const configured = { ...env, FYRDEN_OWN_HOSTS: "api.example.com, git.example.com" } as Env;
+    await clientById(
+      configured,
+      `https://client.example/${uniqueId("app")}/oauth.json`,
+      "web.example.com",
+    );
+    expect(ownHosts).toEqual(
+      expect.arrayContaining(["web.example.com", "api.example.com", "git.example.com"]),
+    );
   });
 
   it("name a client by its document's URL, which must name itself", async () => {

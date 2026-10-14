@@ -326,6 +326,45 @@ describe("refresh tokens", () => {
     });
     expect(after.status).toBe(401);
   });
+
+  it("are audited when revoked: who, which family or token, never the token itself", async () => {
+    const clientId = await registered();
+    const { cookie } = await signedIn();
+    const family = await tokens(clientId, cookie, `${ORIGIN}/api`);
+    const other = await tokens(clientId, cookie, `${ORIGIN}/api`);
+    await form("/oauth/revoke", { token: family.refresh_token, client_id: clientId });
+    await form("/oauth/revoke", { token: other.access_token, client_id: clientId });
+    // Unknown and already revoked: the same answer, no audit row.
+    await form("/oauth/revoke", { token: "fyrden_ort_nothing", client_id: clientId });
+    await form("/oauth/revoke", { token: other.access_token, client_id: clientId });
+    const { results } = await env.DIRECTORY.prepare(
+      `SELECT actor_id, target_id, details, request_id FROM audit_log
+       WHERE action = 'token.revoke' AND json_extract(details, '$.client_id') = ?
+       ORDER BY json_extract(details, '$.kind')`,
+    )
+      .bind(clientId)
+      .all<{ actor_id: string; target_id: string; details: string; request_id: string | null }>();
+    const owner = await env.DIRECTORY.prepare(
+      "SELECT user_id, family_id FROM refresh_tokens WHERE client_id = ? AND revoked_at IS NOT NULL LIMIT 1",
+    )
+      .bind(clientId)
+      .first<{ user_id: string; family_id: string }>();
+    expect(results).toHaveLength(2);
+    expect(results.map((r) => JSON.parse(r.details).kind)).toEqual([
+      "access_token",
+      "refresh_family",
+    ]);
+    // Who revoked whose: the tokens' user, the token's id or the family's.
+    for (const row of results) {
+      expect(row.actor_id).toBe(owner?.user_id);
+      expect(row.request_id).toBeTruthy();
+    }
+    expect(results[0]?.target_id).toMatch(/^tok_/);
+    expect(results[1]?.target_id).toBe(owner?.family_id);
+    const text = JSON.stringify(results);
+    for (const secret of [family.refresh_token, family.access_token, other.access_token])
+      expect(text).not.toContain(secret);
+  });
 });
 
 describe("pruning", () => {

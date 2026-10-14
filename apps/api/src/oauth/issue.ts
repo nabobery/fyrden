@@ -361,7 +361,9 @@ export async function refreshGrant(
       requestId: c.get("requestId"),
       via: "refresh_token",
       accessJkt: proof.jkt,
-      refreshJkt: row.dpop_jkt,
+      // A family refreshed with a proof stays bound to that key from here
+      // on (RFC 9449 §5: a public client's refresh token is bound when DPoP is used).
+      refreshJkt: row.dpop_jkt ?? proof.jkt,
     },
     `EXISTS (SELECT 1 FROM refresh_tokens WHERE replaced_by = ?10)`,
   );
@@ -398,21 +400,49 @@ export async function revokeToken(c: OAuthContext, params: Map<string, string>):
   const db = c.env.DIRECTORY;
   const hash = token ? await hashToken(token).catch(() => "") : "";
   const now = clock();
+  const requestId = c.get("requestId") ?? null;
   if (hash && clientId) {
     const refresh = await db
       .withSession("first-primary")
       .prepare("SELECT family_id FROM refresh_tokens WHERE token_hash = ? AND client_id = ?")
       .bind(hash, clientId)
       .first<{ family_id: string }>();
-    if (refresh) await db.batch(revokeFamilyStatements(db, refresh.family_id, now));
+    // Each revocation with its audit row, in one batch (one transaction).
+    // The row is written first, only while something is still live, so a
+    // request that revokes nothing (it was revoked before, or by a request
+    // in the same millisecond) records nothing.
+    if (refresh)
+      await db.batch([
+        db
+          .prepare(
+            `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
+             SELECT ?1, user_id, 'token.revoke', family_id,
+               json_object('kind', 'refresh_family', 'client_id', ?2), ?3
+             FROM refresh_tokens WHERE family_id = ?4
+               AND (EXISTS (SELECT 1 FROM refresh_tokens WHERE family_id = ?4 AND revoked_at IS NULL)
+                 OR EXISTS (SELECT 1 FROM tokens WHERE family_id = ?4 AND revoked_at IS NULL))
+             LIMIT 1`,
+          )
+          .bind(now, clientId, requestId, refresh.family_id),
+        ...revokeFamilyStatements(db, refresh.family_id, now),
+      ]);
     else
-      await db
-        .prepare(
-          `UPDATE tokens SET revoked_at = ? WHERE token_hash = ? AND client_id = ?
-             AND revoked_at IS NULL`,
-        )
-        .bind(now, hash, clientId)
-        .run();
+      await db.batch([
+        db
+          .prepare(
+            `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
+             SELECT ?1, principal_id, 'token.revoke', id,
+               json_object('kind', 'access_token', 'client_id', ?2), ?3
+             FROM tokens WHERE token_hash = ?4 AND client_id = ?2 AND revoked_at IS NULL`,
+          )
+          .bind(now, clientId, requestId, hash),
+        db
+          .prepare(
+            `UPDATE tokens SET revoked_at = ? WHERE token_hash = ? AND client_id = ?
+               AND revoked_at IS NULL`,
+          )
+          .bind(now, hash, clientId),
+      ]);
   }
   // The same answer whether or not the token was known (RFC 7009 §2.2).
   return c.body(null, 200, NO_STORE);

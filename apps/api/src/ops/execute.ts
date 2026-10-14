@@ -121,8 +121,9 @@ export async function executeOperation(
     const fresh = await ctx.authState.verifyForWrite();
     if (!fresh.ok)
       return fail(ctx, 401, "invalid_token", "The token is invalid, expired or revoked.");
-    // An owner may have required DPoP since the cached answer (a bound token's proof was checked).
-    if (fresh.record.requiresDpop && fresh.record.dpopJkt === null && fresh.record.type !== "git")
+    // An owner may have required DPoP since the cached answer (a bound token's proof was
+    // checked); a git token is exempt only where git uses it, never here.
+    if (fresh.record.requiresDpop && fresh.record.dpopJkt === null)
       return fail(
         ctx,
         401,

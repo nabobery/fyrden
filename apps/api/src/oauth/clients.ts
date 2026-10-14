@@ -150,7 +150,7 @@ export async function clientById(
   if (!isMetadataClientId(clientId)) return row ? clientOf(row) : undefined;
   const now = clock();
   if (row?.fetched_at && row.fetched_at > now - METADATA_POLICY.cacheMs) return clientOf(row);
-  const fetched = await fetchMetadata(clientId, requestHost).catch(() => undefined);
+  const fetched = await fetchMetadata(env, clientId, requestHost).catch(() => undefined);
   if (!fetched)
     return row?.fetched_at && row.fetched_at > now - METADATA_POLICY.staleMs
       ? clientOf(row)
@@ -166,15 +166,23 @@ export async function clientById(
   return fetched;
 }
 
-/** The client a metadata document describes, if it is valid. */
-async function fetchMetadata(url: string, requestHost: string): Promise<OAuthClient | undefined> {
+/**
+ * The client a metadata document describes, if it is valid. Never fetched
+ * from the deployment itself: the request's host and every host
+ * `FYRDEN_OWN_HOSTS` lists are refused.
+ */
+async function fetchMetadata(
+  env: Env,
+  url: string,
+  requestHost: string,
+): Promise<OAuthClient | undefined> {
   const response = await metadataNetwork.fetch(
     url,
     {
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(METADATA_POLICY.timeoutMs),
     },
-    { ownHosts: ownHostsOf({}, requestHost), resolve: metadataNetwork.resolve },
+    { ownHosts: ownHostsOf(env, requestHost), resolve: metadataNetwork.resolve },
   );
   if (!response.ok) {
     await response.body?.cancel();

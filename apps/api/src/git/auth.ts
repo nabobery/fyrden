@@ -42,7 +42,7 @@ export async function authorizeGit(
   const fail = (response: Response): GitAccess => ({ ok: false, response });
   const challenge = { "WWW-Authenticate": 'Basic realm="Fyrden"' };
 
-  const authn = await authenticate(c, access === "write" ? "write" : "read");
+  const authn = await authenticate(c, access === "write" ? "write" : "read", { git: true });
   if (!authn.ok) {
     if (authn.reason === "rate_limited")
       return fail(
