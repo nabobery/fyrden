@@ -488,6 +488,30 @@ limits), which is how the first passkey is added.
 | Requests | Every change (sign in, sign out, add or remove a passkey) only from this origin's own pages (`Origin`); sign-in attempts rate limited per client address |
 | Audit | `session.start` (with how), `passkey.add`, `passkey.remove` |
 
+## MCP server
+
+`/mcp` serves MCP over stateless Streamable HTTP (protocol revision
+2026-07-28): a tool per API operation, and repository files as resources
+(`fyrden://repos/{owner}/{repo}/files/{+path}`). Each request builds its own
+server; each tool's JSON Schema is converted once per Worker isolate and
+shared after that.
+
+| What | Value |
+|---|---|
+| Tools | 63; `tools/list` answers about 136 KB |
+| Browser requests | Only from the deployment's own hosts (`Origin`, against DNS rebinding); native clients send none |
+| Request body | 8 MiB, as REST |
+| CPU per request | **Measured** on Workers Free (2026-10-14, `wrangler tail`): `tools/list` 5 ms on a warm isolate (45 to 160 ms before tool schemas were converted once per isolate); `whoami` 32 ms and `resources/read` 16 ms (measured before that change) |
+| First request on a new isolate | **Measured** on Workers Free (2026-10-14): 60 to 190 ms of CPU for `tools/list`, paid once per isolate: loading the Worker's code, the MCP SDK building its protocol schemas on first use, and converting every tool's schema. New isolates are most common right after a deploy and when traffic grows |
+
+On Free, whose nominal CPU limit is 10 ms per request
+([platform limit](https://developers.cloudflare.com/workers/platform/limits/#cpu-time)),
+those first requests completed in the measurement, but they run well past the
+nominal limit, so a burst of new MCP clients just after a deploy is the
+likeliest place for a Free deployment to hit it (the request then fails with
+error 1102). Paid's default is 30 s. Not measured yet: the same on Paid,
+and how often Free actually enforces the limit for these requests.
+
 ## Web UI
 
 `fyrden-web` is the one origin people use: it serves its pages, and hands
