@@ -47,7 +47,12 @@ export const listUserTokens = defineOperation({
   principals: ["user"],
   rateLimit: "read",
   idempotency: "none",
-  mcp: false,
+  mcp: {
+    tool: "list_tokens",
+    title: "List your tokens",
+    description: "List your tokens (never their values), newest first.",
+    readOnly: true,
+  },
 });
 
 export const CreatedUserToken = z.object({
@@ -98,7 +103,12 @@ export const revokeUserToken = defineOperation({
   principals: ["user"],
   rateLimit: "write",
   idempotency: "key",
-  mcp: false,
+  mcp: {
+    tool: "revoke_token",
+    title: "Revoke a token",
+    description: "Revoke one of your tokens.",
+    readOnly: false,
+  },
 });
 
 /** Longest a git token minted for its caller lives, in minutes. Proposed. */

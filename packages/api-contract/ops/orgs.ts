@@ -74,7 +74,12 @@ export const updateOrg = defineOperation({
   principals: ["user"],
   rateLimit: "write",
   idempotency: "key",
-  mcp: false,
+  mcp: {
+    tool: "update_org",
+    title: "Update an organization",
+    description: "Change an organization's settings (such as requiring DPoP of its agents).",
+    readOnly: false,
+  },
 });
 
 export const Membership = z.object({

@@ -65,7 +65,13 @@ export const createGrant = defineOperation({
   rateLimit: "write",
   idempotency: "key",
   successStatus: 201,
-  mcp: false,
+  mcp: {
+    tool: "create_grant",
+    title: "Create a delegation grant",
+    description:
+      "Let an agent act for you (or pass a narrower grant down one hop) with scopes, repositories and an expiry.",
+    readOnly: false,
+  },
 });
 
 export const listGrants = defineOperation({
@@ -90,7 +96,12 @@ export const listGrants = defineOperation({
   principals: ["user", "agent"],
   rateLimit: "read",
   idempotency: "none",
-  mcp: false,
+  mcp: {
+    tool: "list_grants",
+    title: "List delegation grants",
+    description: "List the delegation grants you made, hold or passed down, a page at a time.",
+    readOnly: true,
+  },
 });
 
 export const revokeGrant = defineOperation({
@@ -106,5 +117,10 @@ export const revokeGrant = defineOperation({
   principals: ["user", "agent"],
   rateLimit: "write",
   idempotency: "key",
-  mcp: false,
+  mcp: {
+    tool: "revoke_grant",
+    title: "Revoke a delegation grant",
+    description: "Revoke a grant and those passed down from it; tokens under them stop.",
+    readOnly: false,
+  },
 });

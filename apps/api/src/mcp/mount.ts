@@ -51,6 +51,9 @@ function toolResult(result: Awaited<ReturnType<typeof executeOperation>>): CallT
 
 /** A repository file's resource URI: its default branch's version. */
 export const FILE_RESOURCE_TEMPLATE = "fyrden://repos/{owner}/{repo}/files/{+path}";
+/** The same at a branch, tag or commit (one segment: a branch's slashes encoded as %2F). */
+export const FILE_AT_REF_RESOURCE_TEMPLATE =
+  "fyrden://repos/{owner}/{repo}/refs/{ref}/files/{+path}";
 
 const getContentsOp = (registry as readonly OperationDef[]).find(
   (op) => op.id === "repos.contents.get",
@@ -85,6 +88,8 @@ async function readFileResource(
     owner: one("owner"),
     repo: one("repo"),
     path: decodeURIComponent(one("path")),
+    // A branch, tag or commit; the default branch without one.
+    ...(one("ref") && { ref: decodeURIComponent(one("ref")) }),
   });
   if (!result.ok) {
     // Missing and not visible look the same, as over REST.
@@ -208,6 +213,16 @@ function buildServer(ctx: OpContext): McpServer {
       title: "Repository file",
       description:
         "A file (or a directory's entries) on a repository's default branch: fyrden://repos/{owner}/{repo}/files/{path}.",
+    },
+    (uri, variables) => readResource(ctx, uri, variables),
+  );
+  server.registerResource(
+    "repository-file-at-ref",
+    new ResourceTemplate(FILE_AT_REF_RESOURCE_TEMPLATE, { list: undefined }),
+    {
+      title: "Repository file at a ref",
+      description:
+        "A file (or a directory's entries) at a branch, tag or commit: fyrden://repos/{owner}/{repo}/refs/{ref}/files/{path} (a branch's slashes as %2F; a commit's never changes).",
     },
     (uri, variables) => readResource(ctx, uri, variables),
   );

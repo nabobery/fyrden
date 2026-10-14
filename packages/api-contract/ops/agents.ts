@@ -43,7 +43,12 @@ export const createAgent = defineOperation({
   rateLimit: "write",
   idempotency: "key",
   successStatus: 201,
-  mcp: false,
+  mcp: {
+    tool: "create_agent",
+    title: "Create an agent",
+    description: "Create an agent principal owned by you (or an organization you own).",
+    readOnly: false,
+  },
 });
 
 export const listAgents = defineOperation({
@@ -68,7 +73,12 @@ export const listAgents = defineOperation({
   principals: ["user"],
   rateLimit: "read",
   idempotency: "none",
-  mcp: false,
+  mcp: {
+    tool: "list_agents",
+    title: "List agents",
+    description: "List your agents, or an organization's you own, a page at a time.",
+    readOnly: true,
+  },
 });
 
 export const getAgent = defineOperation({
@@ -83,7 +93,12 @@ export const getAgent = defineOperation({
   principals: ["user"],
   rateLimit: "read",
   idempotency: "none",
-  mcp: false,
+  mcp: {
+    tool: "get_agent",
+    title: "Get an agent",
+    description: "Get one of your agents (or an organization's you own).",
+    readOnly: true,
+  },
 });
 
 export const disableAgent = defineOperation({
@@ -99,7 +114,12 @@ export const disableAgent = defineOperation({
   principals: ["user"],
   rateLimit: "write",
   idempotency: "key",
-  mcp: false,
+  mcp: {
+    tool: "disable_agent",
+    title: "Disable an agent",
+    description: "Disable an agent: its tokens and grants stop at once for writes.",
+    readOnly: false,
+  },
 });
 
 export const CreatedAgentToken = z.object({
@@ -164,7 +184,12 @@ export const listAgentTokens = defineOperation({
   principals: ["user"],
   rateLimit: "read",
   idempotency: "none",
-  mcp: false,
+  mcp: {
+    tool: "list_agent_tokens",
+    title: "List an agent's tokens",
+    description: "List an agent's tokens (never their values), newest first.",
+    readOnly: true,
+  },
 });
 
 export const revokeAgentToken = defineOperation({
@@ -180,5 +205,10 @@ export const revokeAgentToken = defineOperation({
   principals: ["user"],
   rateLimit: "write",
   idempotency: "key",
-  mcp: false,
+  mcp: {
+    tool: "revoke_agent_token",
+    title: "Revoke an agent's token",
+    description: "Revoke one of an agent's tokens.",
+    readOnly: false,
+  },
 });

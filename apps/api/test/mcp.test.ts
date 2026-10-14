@@ -9,7 +9,7 @@ import {
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { mcpOriginAllowed, withConvertedJsonSchema } from "../src/mcp/mount.js";
-import { api, user } from "./helpers/api.js";
+import { api, json, user } from "./helpers/api.js";
 import { createRepo } from "./helpers/git-http.js";
 import { principalWithToken } from "./helpers/principals.js";
 import { logs } from "./setup/log-capture.js";
@@ -96,6 +96,39 @@ describe("MCP endpoint", () => {
         outputSchema: want.outputSchema,
       });
     }
+  });
+
+  it("offers what an agent's workflow needs, and mints no credential but a short-lived git token", async () => {
+    const names = new Set(
+      (await result<{ tools: { name: string }[] }>(await rpc("tools/list"))).tools.map(
+        (t) => t.name,
+      ),
+    );
+    for (const need of [
+      "whoami",
+      "create_repo",
+      "create_git_token",
+      "fork_repo",
+      "update_repo",
+      "create_or_update_file",
+      "get_archive",
+      "list_agents",
+      "create_agent",
+      "get_agent",
+      "disable_agent",
+      "list_agent_tokens",
+      "revoke_agent_token",
+      "create_grant",
+      "list_grants",
+      "revoke_grant",
+      "list_tokens",
+      "revoke_token",
+      "update_org",
+    ])
+      expect(names.has(need), need).toBe(true);
+    // Every secret-bearing operation but the git token stays off MCP.
+    const secret = registry.filter((op) => op.secretResponse && op.mcp);
+    expect(secret.map((op) => op.id)).toEqual(["users.git_tokens.create"]);
   });
 
   it("converts each tool's schemas once per isolate, and still validates with them", async () => {
@@ -270,14 +303,42 @@ describe("MCP resources", () => {
     const templates = await result<{ resourceTemplates: { uriTemplate: string }[] }>(
       await rpc("resources/templates/list", {}, as),
     );
-    expect(templates.resourceTemplates.map((t) => t.uriTemplate)).toContain(
+    expect(templates.resourceTemplates.map((t) => t.uriTemplate)).toEqual([
       "fyrden://repos/{owner}/{repo}/files/{+path}",
-    );
+      "fyrden://repos/{owner}/{repo}/refs/{ref}/files/{+path}",
+    ]);
     const uri = `fyrden://repos/${owner.handle}/${name}/files/docs/hello.md`;
     const read = await result<{ contents: { uri: string; text?: string; mimeType: string }[] }>(
       await rpc("resources/read", { uri }, as),
     );
     expect(read.contents).toEqual([{ uri, mimeType: "text/plain", text: "# Hello\n" }]);
+    // At a commit: what the file was then, after the branch moved on.
+    const branch = await json<{ commit: { sha: string } }>(
+      api("GET", `/repos/${owner.handle}/${name}/branches/main`, owner.token),
+    );
+    const first = branch.body.commit.sha;
+    await api("PUT", `/repos/${owner.handle}/${name}/contents/docs/hello.md`, owner.token, {
+      message: "change",
+      content: btoa("# Changed\n"),
+      sha: (
+        await json<{ sha: string }>(
+          api("GET", `/repos/${owner.handle}/${name}/contents/docs/hello.md`, owner.token),
+        )
+      ).body.sha,
+    });
+    const at = `fyrden://repos/${owner.handle}/${name}/refs/${first}/files/docs/hello.md`;
+    const pinned = await result<{ contents: { uri: string; text?: string }[] }>(
+      await rpc("resources/read", { uri: at }, as),
+    );
+    expect(pinned.contents).toEqual([{ uri: at, mimeType: "text/plain", text: "# Hello\n" }]);
+    const current = await result<{ contents: { text?: string }[] }>(
+      await rpc(
+        "resources/read",
+        { uri: `fyrden://repos/${owner.handle}/${name}/refs/main/files/docs/hello.md` },
+        as,
+      ),
+    );
+    expect(current.contents[0]?.text).toBe("# Changed\n");
     // Someone else's: not found, as over REST.
     const stranger = await user();
     const hidden = await (await rpc("resources/read", { uri }, `Bearer ${stranger.token}`)).text();

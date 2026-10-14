@@ -496,17 +496,21 @@ limits), which is how the first passkey is added.
 ## MCP server
 
 `/mcp` serves MCP over stateless Streamable HTTP (protocol revision
-2026-07-28): a tool per API operation, and repository files as resources
-(`fyrden://repos/{owner}/{repo}/files/{+path}`). Each request builds its own
+2026-07-28): a tool per API operation (but those returning a credential, other
+than a short-lived git token), and repository files as resources
+(`fyrden://repos/{owner}/{repo}/files/{+path}` on the default branch,
+`fyrden://repos/{owner}/{repo}/refs/{ref}/files/{+path}` at a branch, tag or
+commit, a branch's slashes as `%2F`; not listed, a client names the file it
+wants). Each request builds its own
 server; each tool's JSON Schema is converted once per Worker isolate and
 shared after that.
 
 | What | Value |
 |---|---|
-| Tools | 63; `tools/list` answers about 136 KB |
+| Tools | 76; `tools/list` answers about 156 KB |
 | Browser requests | Only from the deployment's own hosts (`Origin`, against DNS rebinding): on `workers.dev`, both Fyrden Workers on the request's account subdomain; the hosts in `FYRDEN_OWN_HOSTS`; loopback. Native clients send no `Origin` |
 | Request body | 8 MiB, as REST |
-| CPU per request | **Measured** on Workers Free (2026-10-14, `wrangler tail`): `tools/list` 5 ms on a warm isolate (45 to 160 ms before tool schemas were converted once per isolate); `whoami` 32 ms and `resources/read` 16 ms (measured before that change) |
+| CPU per request | **Measured** on Workers Free (2026-10-14, `wrangler tail`): `tools/list` 5 ms on a warm isolate with 63 tools (45 to 160 ms before tool schemas were converted once per isolate); `whoami` 32 ms and `resources/read` 16 ms (measured before that change) |
 | First request on a new isolate | **Measured** on Workers Free (2026-10-14): 60 to 190 ms of CPU for `tools/list`, paid once per isolate: loading the Worker's code, the MCP SDK building its protocol schemas on first use, and converting every tool's schema. New isolates are most common right after a deploy and when traffic grows |
 
 On Free, whose nominal CPU limit is 10 ms per request
