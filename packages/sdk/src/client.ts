@@ -1,3 +1,4 @@
+import type { DpopKey } from "./dpop.js";
 import { OPERATIONS, type Operations } from "./generated.js";
 
 export type OperationId = keyof Operations;
@@ -48,6 +49,11 @@ export interface ClientOptions {
   readonly baseUrl: string;
   /** The token sent as `Authorization: Bearer`, or a function giving it (refreshed tokens). */
   readonly token?: string | (() => string | Promise<string>);
+  /**
+   * The key a DPoP-bound token is bound to: the token is then sent as
+   * `Authorization: DPoP` with a fresh proof on every request.
+   */
+  readonly dpop?: DpopKey;
   /** Defaults to the global `fetch`. */
   readonly fetch?: typeof fetch;
 }
@@ -101,7 +107,10 @@ export class FyrdenClient {
     const headers: Record<string, string> = { Accept: "application/json" };
     const token =
       typeof this.options.token === "function" ? await this.options.token() : this.options.token;
-    if (token) headers.Authorization = `Bearer ${token}`;
+    if (token && this.options.dpop) {
+      headers.Authorization = `DPoP ${token}`;
+      headers.DPoP = await this.options.dpop.proof(op.method, url, token);
+    } else if (token) headers.Authorization = `Bearer ${token}`;
     let body: string | undefined;
     if (op.method === "GET") {
       for (const [name, value] of Object.entries(fields))
