@@ -4,9 +4,12 @@ import type { DomainEvent, Envelope } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import type { RepoExport } from "../src/do/repo/events.js";
 import { allocateEpoch } from "../src/events/epochs.js";
+import { DEFAULT_ORG_SHARD } from "../src/events/read-model.js";
 import { MAX_REBUILD_PAGE, rebuildReadModels, rebuildRepo } from "../src/events/rebuild.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
+import { advanceDeletion, keepTombstone, markDeletions } from "../src/repos/deletion.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { principalWithToken } from "./helpers/principals.js";
 import { inRepo, oid } from "./helpers/repo-git.js";
@@ -77,7 +80,7 @@ async function deliver(repoId: string) {
 async function rows(ids: string[]) {
   const { results } = await env.ORG_READ.prepare(
     `SELECT repo_id, owner_id, name, visibility, default_branch, pushed_at, created_at, deleted,
-       epoch_gen, version, owner_gen
+       epoch_gen, version, owner_gen, description
      FROM repos WHERE repo_id IN (SELECT value FROM json_each(?)) ORDER BY repo_id`,
   )
     .bind(JSON.stringify(ids))
@@ -117,8 +120,15 @@ describe("read-model rebuild", () => {
       repo.git.context.storage.transactionSync(() => repo.git.refStore.setHead("refs/heads/trunk"));
     });
     for (const id of ids) await deliver(id);
+    // One deleted, to the end (its object erased): its row stays a tombstone.
+    const gone = ids[4] as string;
+    await markDeletions(env, [{ id: gone, ownerHandle: "x", name: "x" }], {
+      actorId: owner.principalId,
+    });
+    expect(await advanceDeletion(env, gone)).toBe("deleted");
     const incremental = await rows(ids);
     expect(incremental).toHaveLength(5);
+    expect(incremental.find((r) => r.repo_id === gone)).toMatchObject({ deleted: 1 });
 
     await forget(ids);
     expect(await rows(ids)).toEqual([]);
@@ -154,11 +164,66 @@ describe("read-model rebuild", () => {
       await expect(rebuildReadModels(env, null, { pageSize })).rejects.toThrow(RangeError);
   });
 
-  it("skips repositories that are not active", async () => {
+  it("skips a repository whose deletion has not yet made its tombstone", async () => {
     const owner = await principalWithToken("user", "pat");
     const id = await createRepo(owner.token);
     await env.DIRECTORY.prepare("UPDATE repos SET state = 'deleting' WHERE id = ?").bind(id).run();
     expect(await rebuildRepo(env, id)).toBe("skipped");
+  });
+
+  it("turns a row a deleted repository left live into its tombstone", async () => {
+    const owner = await principalWithToken("user", "pat");
+    const id = await createRepo(owner.token);
+    await commit(id, 1);
+    await deliver(id);
+    const live = await rows([id]);
+    await markDeletions(env, [{ id, ownerHandle: "x", name: "x" }], { actorId: owner.principalId });
+    expect(await advanceDeletion(env, id)).toBe("deleted");
+    const tombstone = await rows([id]);
+    expect(tombstone).toEqual([expect.objectContaining({ deleted: 1 })]);
+    // As if the tombstone had been lost (a shard restored from before it).
+    await forget([id]);
+    await env.ORG_READ.prepare(
+      `INSERT INTO repos (repo_id, owner_id, name, visibility, default_branch, pushed_at, created_at,
+         deleted, epoch_gen, version, owner_gen, updated_seq, updated_at, description)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, 0, 0, ?11`,
+    )
+      .bind(
+        ...(
+          [
+            "repo_id",
+            "owner_id",
+            "name",
+            "visibility",
+            "default_branch",
+            "pushed_at",
+            "created_at",
+            "epoch_gen",
+            "version",
+            "owner_gen",
+            "description",
+          ] as const
+        ).map((k) =>
+          // Stale, unlike its tombstone: an older name and description.
+          k === "name"
+            ? "old-name"
+            : k === "description"
+              ? "old"
+              : ((live[0] as Record<string, unknown>)[k] ?? null),
+        ),
+      )
+      .run();
+    expect(await rebuildRepo(env, id)).toBe("rebuilt");
+    expect(await rows([id])).toEqual(tombstone);
+    // A purge of an older epoch resuming late keeps nothing over the newer tombstone.
+    const kept = () =>
+      env.DIRECTORY.prepare("SELECT tombstone FROM repo_deletions WHERE repo_id = ?")
+        .bind(id)
+        .first<{ tombstone: string }>();
+    const before = await kept();
+    const stored = JSON.parse(before?.tombstone ?? "{}") as RepoExport;
+    await keepTombstone(env, DEFAULT_ORG_SHARD, { ...stored, epochGen: stored.epochGen - 1 });
+    expect(await kept()).toEqual(before);
   });
 });
 

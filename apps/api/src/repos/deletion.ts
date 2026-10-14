@@ -1,4 +1,7 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { parseRepoRow } from "@fyrden/domain";
+import type { RepoExport } from "../do/repo/events.js";
+import { readModelFor } from "../events/read-model.js";
 import { applyExport } from "../events/rebuild.js";
 import { clock } from "../services.js";
 import {
@@ -23,7 +26,7 @@ import {
  *    keeps the job here: no audit row is lost).
  * 3. `purge`: the tombstone goes into the read model through the
  *    consumer's guarded upsert (the consumer drops events of a repository
- *    that is not active).
+ *    that is not active), kept with the deletion for later rebuilds.
  * 4. `erase`: the object erases its R2 bytes and leaves its fork networks
  *    (forks keep the packs they claim), then deletes its storage.
  * 5. `done`: the repository becomes `deleted`, which frees its name. Its
@@ -34,6 +37,47 @@ import {
  */
 
 export type DeletionStep = "prepare" | "purge" | "erase" | "done";
+
+/**
+ * Keeps a deleted repository's tombstone with its deletion, with the row
+ * the read model ended with (an event's tombstone carries none): a rebuild
+ * puts the same tombstone into an empty read model.
+ */
+export async function keepTombstone(
+  env: Env,
+  shard: string,
+  exported: RepoExport,
+  metrics?: Metrics,
+): Promise<void> {
+  metrics?.count("d1.query", { db: "org", op: "deletion_tombstone_row" });
+  const last = await readModelFor(env, shard)
+    .prepare(
+      `SELECT owner_id AS ownerId, name, visibility, description, default_branch AS defaultBranch,
+         pushed_at AS pushedAt, created_at AS createdAt
+       FROM repos WHERE repo_id = ?`,
+    )
+    .bind(exported.sourceId)
+    .first<Record<string, unknown>>();
+  const row = parseRepoRow(last ?? null) ?? null;
+  const tombstone: RepoExport = {
+    ...exported,
+    entities: exported.entities.map((entity) => ({ ...entity, row })),
+  };
+  metrics?.count("d1.query", { db: "directory", op: "deletion_tombstone" });
+  // Only ever newer (a purge of an older epoch resuming late keeps nothing).
+  await env.DIRECTORY.prepare(
+    `UPDATE repo_deletions SET tombstone = ?1 WHERE repo_id = ?2
+       AND (tombstone IS NULL OR (json_extract(tombstone, '$.epochGen'),
+         json_extract(tombstone, '$.entities[0].version')) <= (?3, ?4))`,
+  )
+    .bind(
+      JSON.stringify(tombstone),
+      exported.sourceId,
+      exported.epochGen,
+      exported.entities[0]?.version ?? 0,
+    )
+    .run();
+}
 
 /** Proposed values. */
 export const DELETION_POLICY = {
@@ -232,6 +276,8 @@ async function runStep(
         if (!exported.entities.every((entity) => entity.deleted))
           throw new Error("the repository was not frozen before its purge");
         await applyExport(env, deletion.org_shard, exported, options);
+        // Kept for rebuilds after the erase: the tombstone with the row it ended with.
+        await keepTombstone(env, deletion.org_shard, exported, metrics);
       }
       return "erase";
     }

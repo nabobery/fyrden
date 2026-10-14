@@ -15,18 +15,31 @@ import { DEFAULT_ORG_SHARD, readModelFor } from "./read-model.js";
 export const REBUILD_PAGE = 50;
 export const MAX_REBUILD_PAGE = 500;
 
-/** Rebuilds one repository's rows; `skipped` when it is not active or has no identity. */
+/**
+ * Rebuilds one repository's rows: an active one's from its object, a
+ * deleted one's tombstone from its deletion (its object may be erased);
+ * `skipped` for one with neither (no identity, or a deletion that has not
+ * made its tombstone yet: it puts it into the read model itself).
+ */
 export async function rebuildRepo(
   env: Env,
   repoId: string,
   options: { now?: () => number; metrics?: Metrics } = {},
 ): Promise<"rebuilt" | "skipped"> {
   options.metrics?.count("d1.query", { db: "directory", op: "rebuild_route" });
-  const listed = await env.DIRECTORY.prepare("SELECT state, org_shard FROM repos WHERE id = ?")
+  const listed = await env.DIRECTORY.prepare(
+    `SELECT r.state, r.org_shard, d.tombstone FROM repos r
+     LEFT JOIN repo_deletions d ON d.repo_id = r.id WHERE r.id = ?`,
+  )
     .bind(repoId)
-    .first<{ state: string; org_shard: string }>();
-  if (listed?.state !== "active") return "skipped";
-  const exported = await env.REPO.getByName(repoId).exportSnapshot();
+    .first<{ state: string; org_shard: string; tombstone: string | null }>();
+  if (!listed) return "skipped";
+  const exported =
+    listed.state === "active"
+      ? await env.REPO.getByName(repoId).exportSnapshot()
+      : listed.tombstone === null
+        ? undefined
+        : (JSON.parse(listed.tombstone) as RepoExport);
   if (!exported) return "skipped";
   await applyExport(env, listed.org_shard, exported, options);
   return "rebuilt";
@@ -69,8 +82,9 @@ export async function applyExport(
 }
 
 /**
- * Rebuilds the next page of a shard's active repositories, in id order,
- * after `cursor`; returns the cursor to continue from, or null when done.
+ * Rebuilds the next page of a shard's repositories (the active ones, and
+ * the deleted ones' tombstones), in id order, after `cursor`; returns the
+ * cursor to continue from, or null when done.
  */
 export async function rebuildReadModels(
   env: Env,
@@ -82,7 +96,9 @@ export async function rebuildReadModels(
     throw new RangeError(`page size must be an integer from 1 to ${MAX_REBUILD_PAGE}`);
   options.metrics?.count("d1.query", { db: "directory", op: "rebuild_page" });
   const { results } = await env.DIRECTORY.prepare(
-    `SELECT id FROM repos WHERE org_shard = ? AND state = 'active' AND id > ?
+    `SELECT id FROM repos WHERE org_shard = ? AND id > ?
+       AND (state = 'active' OR EXISTS (SELECT 1 FROM repo_deletions d
+         WHERE d.repo_id = repos.id AND d.tombstone IS NOT NULL))
      ORDER BY id LIMIT ?`,
   )
     .bind(options.shard ?? DEFAULT_ORG_SHARD, cursor ?? "", pageSize)

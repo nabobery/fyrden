@@ -306,6 +306,9 @@ export function repoStatement(
   if (!entity.deleted) {
     row = parseRepoRow(entity.row);
     if (!row) throw new Error(`malformed repository row in ${eventKey(event.id)}`);
+  } else if (entity.row !== null) {
+    // A tombstone a deletion kept (never an event's) carries the row it ended with.
+    row = parseRepoRow(entity.row);
   }
   return db
     .prepare(
@@ -314,15 +317,16 @@ export function repoStatement(
        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
        WHERE ?9 >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?1)
          AND ?11 >= coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?1), 0)
+       -- An event's tombstone carries no row: the row's fields stay as they were.
        ON CONFLICT (repo_id) DO UPDATE SET
-         owner_id = CASE WHEN excluded.deleted = 1 THEN repos.owner_id ELSE excluded.owner_id END,
-         name = CASE WHEN excluded.deleted = 1 THEN repos.name ELSE excluded.name END,
-         visibility = CASE WHEN excluded.deleted = 1 THEN repos.visibility ELSE excluded.visibility END,
-         default_branch = CASE WHEN excluded.deleted = 1 THEN repos.default_branch
+         owner_id = CASE WHEN ?15 = 1 THEN repos.owner_id ELSE excluded.owner_id END,
+         name = CASE WHEN ?15 = 1 THEN repos.name ELSE excluded.name END,
+         visibility = CASE WHEN ?15 = 1 THEN repos.visibility ELSE excluded.visibility END,
+         default_branch = CASE WHEN ?15 = 1 THEN repos.default_branch
            ELSE excluded.default_branch END,
-         pushed_at = CASE WHEN excluded.deleted = 1 THEN repos.pushed_at ELSE excluded.pushed_at END,
-         created_at = CASE WHEN excluded.deleted = 1 THEN repos.created_at ELSE excluded.created_at END,
-         description = CASE WHEN excluded.deleted = 1 THEN repos.description
+         pushed_at = CASE WHEN ?15 = 1 THEN repos.pushed_at ELSE excluded.pushed_at END,
+         created_at = CASE WHEN ?15 = 1 THEN repos.created_at ELSE excluded.created_at END,
+         description = CASE WHEN ?15 = 1 THEN repos.description
            ELSE excluded.description END,
          deleted = excluded.deleted,
          epoch_gen = excluded.epoch_gen,
@@ -347,5 +351,6 @@ export function repoStatement(
       event.id.sourceSeq,
       now,
       row?.description ?? null,
+      entity.deleted && row === undefined ? 1 : 0,
     );
 }
