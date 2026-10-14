@@ -267,6 +267,8 @@ export interface NewRepoRow {
   readonly parentId: string | null;
   readonly expiresAt: number | null;
   readonly now: number;
+  /** Set for a repository generated from a template, until its first commit is made. */
+  readonly generatingSince?: number | null;
 }
 
 /**
@@ -303,8 +305,8 @@ export function newRepoStatements(
     db
       .prepare(
         `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, parent_id,
-           expires_at, created_at, updated_at)
-         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9
+           expires_at, created_at, updated_at, generating_since)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?11
          WHERE (SELECT count(*) FROM repos WHERE owner_id = ?2 AND state <> 'deleted'
            AND state = 'active') < ?10
            AND NOT EXISTS (SELECT 1 FROM repos WHERE owner_id = ?2 AND name = ?3 COLLATE NOCASE
@@ -321,6 +323,7 @@ export function newRepoStatements(
         row.expiresAt,
         row.now,
         maxRepos,
+        row.generatingSince ?? null,
       ),
     db
       .prepare(`DELETE FROM repo_redirects WHERE owner_id = ? AND name = ? AND ${inserted}`)

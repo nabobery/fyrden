@@ -103,7 +103,7 @@ CREATE TABLE generation (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         template_id TEXT NOT NULL,
         started_at INTEGER NOT NULL
-      ) STRICT;
+      , abandoned_at INTEGER) STRICT;
 CREATE TABLE git_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     network_id TEXT NOT NULL,

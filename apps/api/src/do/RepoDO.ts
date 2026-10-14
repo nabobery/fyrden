@@ -171,6 +171,10 @@ const DELETION_SLICE = {
 } as const;
 
 /** One repository: refs, packs, its events and audit log. Keyed by the immutable repo id. */
+/** What a generation settled as abandoned answers its own late commit. */
+const GENERATION_ABANDONED =
+  "the generation from the template was abandoned; the repository is being deleted";
+
 export class RepoDO extends MigratingDO {
   static readonly schema = repoSchema;
 
@@ -726,13 +730,55 @@ export class RepoDO extends MigratingDO {
     const templateId = this.#generatingFrom();
     if (templateId === undefined)
       return fail(409, "not_generating", "The repository is not being generated from a template.");
+    if (this.#generationAbandoned() !== undefined)
+      return fail(409, "generation_abandoned", GENERATION_ABANDONED);
     const template = await this.env.REPO.getByName(templateId).templateTree();
     if (!template.ok) return template;
+    await this.generationHooks.beforeWrite?.();
     return this.#measured("generateFrom", async () => {
       const made = await writeTemplate(await this.#writeDeps(), input, template.value);
       if (made.ok) this.ctx.storage.sql.exec("DELETE FROM generation");
       return made;
     });
+  }
+
+  /**
+   * Settles a generation its request could not confirm: `committed` when
+   * the repository has refs (its first commit was made: nothing else
+   * writes while it is pending), whether or not its marker was cleared;
+   * `abandoned` while it is pending without them, after which its commit
+   * is refused at the commit point, so the repository can be deleted
+   * without losing a late one; `none` otherwise (no repository here, as
+   * after an erase, or no generation). One synchronous transaction, so it
+   * cannot interleave with that commit.
+   */
+  abandonGeneration(): Promise<"committed" | "abandoned" | "none"> {
+    return this.#measured("abandonGeneration", async () =>
+      this.ctx.storage.transactionSync(() => {
+        const committed =
+          this.#hasGitStorage() && this.git.refStore.readRefsSync().refs.size > 0;
+        if (this.#generatingFrom() === undefined)
+          return committed ? ("committed" as const) : ("none" as const);
+        if (committed) {
+          this.ctx.storage.sql.exec("DELETE FROM generation");
+          return "committed" as const;
+        }
+        this.ctx.storage.sql.exec(
+          "UPDATE generation SET abandoned_at = ? WHERE abandoned_at IS NULL",
+          this.git.context.now(),
+        );
+        return "abandoned" as const;
+      }),
+    );
+  }
+
+  /** Why a commit is refused: the generation it would finish was abandoned. */
+  #generationAbandoned(): string | undefined {
+    return this.ctx.storage.sql
+      .exec<{ abandoned_at: number | null }>("SELECT abandoned_at FROM generation")
+      .toArray()[0]?.abandoned_at != null
+      ? GENERATION_ABANDONED
+      : undefined;
   }
 
   /** The template this repository is still being generated from, if it is. */
@@ -855,7 +901,7 @@ export class RepoDO extends MigratingDO {
       await this.acl.roleOf(principal, "write");
       return this.acl.allows(principal, "write") ? undefined : ACCESS_LOST;
     };
-    this.#pushes.frozen = () => this.events.frozen();
+    this.#pushes.frozen = () => this.events.frozen() ?? this.#generationAbandoned();
     this.#pushes.rules = {
       check: async (input) => {
         // The pusher's effective role pulled fresh; then everything the
@@ -1381,6 +1427,9 @@ export class RepoDO extends MigratingDO {
 
   /** Hooks into detach slices. For tests. */
   detachHooks: DetachHooks = {};
+
+  /** Hooks into a generation from a template. For tests. */
+  generationHooks: { beforeWrite?: () => Promise<void> } = {};
 
   #networkOps: RepoNetwork | undefined;
 

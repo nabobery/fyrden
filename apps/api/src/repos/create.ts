@@ -84,6 +84,7 @@ export async function createRepository(
             parentId: null,
             expiresAt,
             now,
+            generatingSince: request.templateId === undefined ? null : now,
           },
           {
             actorId: request.actorId,

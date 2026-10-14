@@ -2,11 +2,20 @@
 // first commit of a repository generated from it, which shares nothing with
 // the template; a star is a user's mark on a repository it can read.
 
+import {
+  createExecutionContext,
+  runInDurableObject,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, inject, it } from "vitest";
+import { createApp } from "../src/app.js";
+import type { RepoDO } from "../src/do/RepoDO.js";
+import { GENERATION_POLICY, settleStaleGenerations } from "../src/repos/generate.js";
 import { api, json, user, type Who } from "./helpers/api.js";
+import { ORIGIN } from "./helpers/git-http.js";
 import { scopedToken } from "./helpers/principals.js";
 import { postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
@@ -63,6 +72,69 @@ async function readerOf(repoPath: string): Promise<Who> {
   expect(res.status).toBe(200);
   return reader;
 }
+
+/**
+ * `POST {from}/generate` with the repositories' objects behind `wrap`, so a
+ * test can lose an answer or fail a call as a crash would.
+ */
+async function generateThrough(
+  wrap: (stub: DurableObjectStub<RepoDO>, name: string) => DurableObjectStub<RepoDO>,
+  from: string,
+  token: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const REPO = new Proxy(env.REPO, {
+    get(target, property) {
+      if (property === "getByName") return (name: string) => wrap(target.getByName(name), name);
+      const value = (target as unknown as Record<PropertyKey, unknown>)[property];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const ctx = createExecutionContext();
+  const res = await createApp().request(
+    `${ORIGIN}/api${from}/generate`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify(body),
+    },
+    { ...env, REPO },
+    ctx,
+  );
+  await waitOnExecutionContext(ctx);
+  return res;
+}
+
+/** `stub` with `method` replaced. */
+function replacing<K extends keyof RepoDO>(
+  stub: DurableObjectStub<RepoDO>,
+  method: K,
+  replacement: (target: DurableObjectStub<RepoDO>, ...args: unknown[]) => Promise<unknown>,
+): DurableObjectStub<RepoDO> {
+  return new Proxy(stub, {
+    get(target, property) {
+      if (property === method) return (...args: unknown[]) => replacement(target, ...args);
+      const value: unknown = Reflect.get(target, property);
+      return typeof value === "function"
+        ? (...args: unknown[]) => Reflect.apply(value, target, args)
+        : value;
+    },
+  });
+}
+
+const generatingSince = async (ownerHandle: string, name: string) =>
+  (
+    await env.DIRECTORY.prepare(
+      `SELECT r.generating_since FROM repos r JOIN principals p ON p.id = r.owner_id
+       WHERE p.handle = ? AND r.name = ?`,
+    )
+      .bind(ownerHandle, name)
+      .first<{ generating_since: number | null }>()
+  )?.generating_since;
 
 beforeAll(async () => {
   owner = await user();
@@ -169,6 +241,204 @@ describe("templates", () => {
     expect((await api("GET", `/repos/${reader.handle}/${name}`, reader.token)).status).toBe(404);
     // The name is free again.
     expect((await api("POST", "/user/repos", reader.token, { name })).status).toBe(201);
+  });
+
+  it("keep a repository whose first commit was made though its answer was lost", async () => {
+    await api("PATCH", path, owner.token, { is_template: true });
+    const name = uniqueId("gen");
+    const res = await generateThrough(
+      (stub, id) =>
+        id === template.id
+          ? stub
+          : replacing(stub, "generateFrom", async (target, input) => {
+              await target.generateFrom(input as Parameters<RepoDO["generateFrom"]>[0]);
+              throw new Error("the answer was lost");
+            }),
+      path,
+      owner.token,
+      { name },
+    );
+    expect(res.status).toBe(201);
+    const commits = await json<{ commits: unknown[] }>(
+      api("GET", `/repos/${owner.handle}/${name}/commits`, owner.token),
+    );
+    expect(commits.body.commits).toHaveLength(1);
+    expect(await generatingSince(owner.handle, name)).toBeNull();
+  });
+
+  it("settle a generation whose request never finished: deleted once it is overdue", async () => {
+    await api("PATCH", path, owner.token, { is_template: true });
+    const name = uniqueId("gen");
+    // The request dies before the object generates anything, and can settle nothing.
+    const res = await generateThrough(
+      (stub, id) =>
+        id === template.id
+          ? stub
+          : replacing(
+              replacing(stub, "generateFrom", async () => {
+                throw new Error("the Worker went away");
+              }),
+              "abandonGeneration",
+              async () => {
+                throw new Error("the Worker went away");
+              },
+            ),
+      path,
+      owner.token,
+      { name },
+    );
+    expect(res.status).toBe(500);
+    const since = await generatingSince(owner.handle, name);
+    expect(since).toBeTypeOf("number");
+    // Not before it is overdue; then deleted, and its name free again.
+    expect(await settleStaleGenerations(env, { now: (since ?? 0) + 1 })).toBe(0);
+    expect(
+      await settleStaleGenerations(env, { now: (since ?? 0) + GENERATION_POLICY.timeoutMs + 1 }),
+    ).toBe(1);
+    expect((await api("GET", `/repos/${owner.handle}/${name}`, owner.token)).status).toBe(404);
+  });
+
+  it("put an overdue generation whose object fails behind the others", async () => {
+    await api("PATCH", path, owner.token, { is_template: true });
+    const name = uniqueId("gen");
+    expect((await generate(path, owner.token, { name })).status).toBe(201);
+    await env.DIRECTORY.prepare(
+      "UPDATE repos SET generating_since = 1 WHERE name = ? AND owner_id = ?",
+    )
+      .bind(name, owner.principalId)
+      .run();
+    // Its object cannot be reached in this run.
+    const failing = {
+      ...env,
+      REPO: new Proxy(env.REPO, {
+        get(target, property) {
+          if (property === "getByName")
+            return (id: string) =>
+              replacing(target.getByName(id), "abandonGeneration", async () => {
+                throw new Error("unreachable");
+              });
+          const value = (target as unknown as Record<PropertyKey, unknown>)[property];
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }),
+    } as Env;
+    const now = GENERATION_POLICY.timeoutMs + 2;
+    expect(await settleStaleGenerations(failing, { now })).toBe(0);
+    // Retried after another timeout, behind everything due sooner; the repository stays.
+    expect(await generatingSince(owner.handle, name)).toBe(now);
+    expect((await api("GET", `/repos/${owner.handle}/${name}`, owner.token)).status).toBe(200);
+  });
+
+  it("clear an overdue generation that did commit, and keep the repository", async () => {
+    await api("PATCH", path, owner.token, { is_template: true });
+    const name = uniqueId("gen");
+    expect((await generate(path, owner.token, { name })).status).toBe(201);
+    // As if the request had ended before recording that it finished.
+    await env.DIRECTORY.prepare(
+      `UPDATE repos SET generating_since = 1
+       WHERE name = ? AND owner_id = ?`,
+    )
+      .bind(name, owner.principalId)
+      .run();
+    expect(await settleStaleGenerations(env, { now: GENERATION_POLICY.timeoutMs + 2 })).toBe(0);
+    expect(await generatingSince(owner.handle, name)).toBeNull();
+    expect((await api("GET", `/repos/${owner.handle}/${name}`, owner.token)).status).toBe(200);
+  });
+
+  it("refuse the commit of a generation abandoned while it was being written", async () => {
+    await api("PATCH", path, owner.token, { is_template: true });
+    const name = uniqueId("gen");
+    let settled = "";
+    const res = await generateThrough(
+      (stub, id) =>
+        id === template.id
+          ? stub
+          : replacing(stub, "generateFrom", async (target, input) => {
+              // Settled as abandoned after the generation started, before its commit.
+              await runInDurableObject(target, (repo: RepoDO) => {
+                repo.generationHooks = {
+                  beforeWrite: async () => {
+                    settled = await repo.abandonGeneration();
+                  },
+                };
+              });
+              return target.generateFrom(input as Parameters<RepoDO["generateFrom"]>[0]);
+            }),
+      path,
+      owner.token,
+      { name },
+    );
+    expect(settled).toBe("abandoned");
+    expect(res.status).not.toBe(201);
+    expect((await api("GET", `/repos/${owner.handle}/${name}`, owner.token)).status).toBe(404);
+  });
+
+  it("answer an error, never a repository, when the object settles nothing", async () => {
+    await api("PATCH", path, owner.token, { is_template: true });
+    const name = uniqueId("gen");
+    // The repository was deleted meanwhile: its object was erased and holds no generation.
+    const res = await generateThrough(
+      (stub, id) =>
+        id === template.id
+          ? stub
+          : replacing(
+              replacing(stub, "generateFrom", async () => {
+                throw new Error("the answer was lost");
+              }),
+              "abandonGeneration",
+              async () => "none",
+            ),
+      path,
+      owner.token,
+      { name },
+    );
+    expect(res.status).toBe(500);
+    // An object that never held a repository settles nothing.
+    expect(await env.REPO.getByName(newId("rep")).abandonGeneration()).toBe("none");
+  });
+
+  it("settle as committed a generation whose commit was made before its marker was cleared", async () => {
+    await api("PATCH", path, owner.token, { is_template: true });
+    const made = await generate(path, owner.token, { name: uniqueId("gen") });
+    expect(made.status).toBe(201);
+    const stub = env.REPO.getByName(made.body.id);
+    // As if the object had stopped between the commit and clearing its marker.
+    await runInDurableObject(stub, (_: RepoDO, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO generation (id, template_id, started_at) VALUES (1, ?, 0)",
+        template.id,
+      );
+    });
+    expect(await stub.abandonGeneration()).toBe("committed");
+    // Settled again: the same answer, from its refs.
+    expect(await stub.abandonGeneration()).toBe("committed");
+    expect(
+      (
+        await json<{ commits: unknown[] }>(
+          api("GET", `/repos/${owner.handle}/${made.body.name}/commits`, owner.token),
+        )
+      ).body.commits,
+    ).toHaveLength(1);
+  });
+
+  it("refuse a generation's commit once it was abandoned", async () => {
+    const id = newId("rep");
+    const stub = env.REPO.getByName(id);
+    expect(
+      await stub.initGitStorage(newId("net"), "refs/heads/main", undefined, template.id),
+    ).toEqual({ ok: true });
+    expect(await stub.abandonGeneration()).toBe("abandoned");
+    expect(
+      await stub.generateFrom({
+        principal: owner.principalId,
+        tokenId: "tok_x",
+        repoId: id,
+        committer: { name: "a", email: "a@b" },
+        message: "m",
+      }),
+    ).toMatchObject({ ok: false, code: "generation_abandoned" });
+    // Settling again changes nothing.
+    expect(await stub.abandonGeneration()).toBe("abandoned");
   });
 
   it("take no other write while the generation is pending", async () => {

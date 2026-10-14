@@ -545,7 +545,8 @@ push path, as a file write.
 | Storage reads | The browse budget (800 R2 reads); more answers 422 `too_expensive` |
 | History | None: one commit on `main`, `Initial commit`, by the caller |
 | Token | Needs `contents:write` too, without a repository list |
-| A failure | The new repository is deleted again; its name is free once the deletion finishes |
+| A failure | The new repository's object settles it: if its first commit was made (the answer was lost), the repository is kept; otherwise its commit is refused from then on and the repository is deleted, its name free once the deletion finishes |
+| A request that never finished | The cron settles the generation the same way once it is 15 minutes overdue; while the generation is pending, the repository takes no write |
 
 ## Stars
 

@@ -1,3 +1,4 @@
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { generateRepo, Input, Output } from "@fyrden/api-contract";
 import { orgRepoRole, type RepoRole } from "@fyrden/domain";
 import { actingRoleIn, canUseAccount, findAccount } from "../accounts/account.js";
@@ -8,13 +9,27 @@ import { advanceDeletion, markDeletions } from "./deletion.js";
 import { allowedWithRole, authorize, resolveRepo } from "./directory.js";
 import { committerOf } from "./file-writes.js";
 
+/** Proposed. */
+export const GENERATION_POLICY = {
+  /**
+   * How long a generation may stay unconfirmed before the cron settles it
+   * (well past any request's own run time).
+   */
+  timeoutMs: 15 * 60 * 1000,
+  /** Overdue generations one cron run settles. */
+  perCronRun: 20,
+};
+
 /**
  * The `repos.generate` operation: a new repository whose first commit
  * holds the template's default-branch tree. The repository is created
  * empty and taking no write, then its object copies the tree from the
- * template's object and commits it through the push path; if that fails,
- * nothing else can have been written, so the new repository is deleted
- * again and the failure answered.
+ * template's object and commits it through the push path. When that is
+ * not confirmed (refused, or an error that may have come after the commit),
+ * the object settles it: a generation that committed is kept, any other
+ * is abandoned (its commit refused from then on) and the repository
+ * deleted, nothing else having been written to it. One the request could
+ * not settle is settled by the cron once overdue.
  */
 export async function generateRepoOperation(
   ctx: OpContext,
@@ -55,7 +70,9 @@ export async function generateRepoOperation(
     expiresAt: checkedExpiry(input.expires_at),
   });
   metrics.count("do.request", { class: "RepoDO", method: "generateFrom" });
-  const generated = await env.REPO.getByName(created.id)
+  const stub = env.REPO.getByName(created.id);
+  let failure: unknown;
+  const generated = await stub
     .generateFrom({
       principal: auth.principalId,
       tokenId: auth.id,
@@ -63,15 +80,77 @@ export async function generateRepoOperation(
       committer: committerOf(ctx),
       message: "Initial commit",
     })
-    .catch(async (error: unknown) => {
-      await discard(ctx, created);
-      throw error;
+    .catch((error: unknown) => {
+      failure = error;
+      return undefined;
     });
-  if (!generated.ok) {
-    await discard(ctx, created);
-    throw new OperationError(generated.status, generated.code, generated.error);
+  if (generated?.ok) {
+    await generationDone(ctx, created.id);
+    return created;
   }
-  return created;
+  // Not confirmed. An error may have come after the commit was made: the object knows.
+  metrics.count("do.request", { class: "RepoDO", method: "abandonGeneration" });
+  const settled = await stub.abandonGeneration().catch(() => undefined);
+  if (settled === "committed") {
+    await generationDone(ctx, created.id);
+    return created;
+  }
+  if (settled === "abandoned") await discard(ctx, created);
+  if (generated) throw new OperationError(generated.status, generated.code, generated.error);
+  throw failure;
+}
+
+/** Records that a generation's first commit was made (the cron settles it otherwise). */
+async function generationDone(ctx: OpContext, repoId: string): Promise<void> {
+  ctx.metrics.count("d1.query", { db: "directory", op: "repo_generated" });
+  await ctx.env.DIRECTORY.prepare("UPDATE repos SET generating_since = NULL WHERE id = ?")
+    .bind(repoId)
+    .run()
+    .catch((error: unknown) => ctx.log.warn("generation not recorded", { error, repoId }));
+}
+
+/**
+ * Settles generations whose request never confirmed them, once overdue:
+ * one whose first commit was made is kept (and recorded), any other is
+ * abandoned and its repository deleted. Returns how many it deleted. One
+ * whose object cannot be reached goes behind the others (it is overdue
+ * again after the timeout), so it never holds up the rest.
+ */
+export async function settleStaleGenerations(
+  env: Env,
+  options: { now: number; limit?: number; metrics?: Metrics },
+): Promise<number> {
+  options.metrics?.count("d1.query", { db: "directory", op: "repos_generating" });
+  const { results } = await env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT r.id, r.owner_id AS ownerId, p.handle AS ownerHandle, r.name FROM repos r
+       JOIN principals p ON p.id = r.owner_id
+       WHERE r.generating_since IS NOT NULL AND r.generating_since <= ? AND r.state = 'active'
+       ORDER BY r.generating_since LIMIT ?`,
+    )
+    .bind(options.now - GENERATION_POLICY.timeoutMs, options.limit ?? GENERATION_POLICY.perCronRun)
+    .all<{ id: string; ownerId: string; ownerHandle: string; name: string }>();
+  const abandoned: typeof results = [];
+  for (const repo of results) {
+    const settled = await env.REPO.getByName(repo.id)
+      .abandonGeneration()
+      .catch(() => undefined);
+    if (settled === "abandoned") abandoned.push(repo);
+    else
+      await env.DIRECTORY.prepare("UPDATE repos SET generating_since = ? WHERE id = ?")
+        .bind(settled === undefined ? options.now : null, repo.id)
+        .run();
+  }
+  if (abandoned.length === 0) return 0;
+  const marked = await markDeletions(env, abandoned, {
+    actorId: null,
+    ...(options.metrics && { metrics: options.metrics }),
+  });
+  for (const id of marked)
+    await advanceDeletion(env, id, options.metrics ? { metrics: options.metrics } : {}).catch(
+      () => "deleting",
+    );
+  return marked.size;
 }
 
 /** Who will own the new repository, and the role the caller gets on it. */

@@ -8,6 +8,7 @@ import { DEFAULT_ORG_SHARD, readModelFor } from "./events/read-model.js";
 import { reapOAuth } from "./oauth/reaper.js";
 import { consumeEvents, EVENTS_QUEUE } from "./queues/events-consumer.js";
 import { advanceDeletions } from "./repos/deletion.js";
+import { settleStaleGenerations } from "./repos/generate.js";
 import { advanceTransfers } from "./repos/transfer.js";
 import { reapIdempotencyKeys } from "./rest/idempotency.js";
 
@@ -42,11 +43,17 @@ export default {
           now: () => Date.now(),
           metrics,
         }),
-        // Expired repositories first, so their deletions start in the same run;
-        // deletions advance even when reaping fails.
-        reapExpiredRepos(env, { now: Date.now(), metrics }).finally(() =>
-          advanceDeletions(env, { metrics }),
-        ),
+        // Expired repositories and abandoned generations first, so their
+        // deletions start in the same run; deletions advance even when those fail.
+        (async () => {
+          const started = await Promise.allSettled([
+            reapExpiredRepos(env, { now: Date.now(), metrics }),
+            settleStaleGenerations(env, { now: Date.now(), metrics }),
+          ]);
+          await advanceDeletions(env, { metrics });
+          const failed = started.find((r) => r.status === "rejected");
+          if (failed) throw failed.reason;
+        })(),
         reapIdempotencyKeys(env, { now: Date.now(), metrics }),
         advanceTransfers(env, { metrics }),
         reapOAuth(env, { now: Date.now(), metrics }),

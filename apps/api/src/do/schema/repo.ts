@@ -261,4 +261,14 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 12,
+    // A generation settled as abandoned (its request could not confirm it,
+    // and no first commit was made): its commit is refused from then on, so
+    // the repository can be deleted without losing a late one.
+    name: "generation_abandoned",
+    sql: `
+      ALTER TABLE generation ADD COLUMN abandoned_at INTEGER;
+    `,
+  },
 ];
