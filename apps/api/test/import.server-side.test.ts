@@ -16,6 +16,7 @@ import { afterEach, describe, expect, inject, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { ImportNetwork } from "../src/git/import/network.js";
 import { guardedTransport } from "../src/git/import/network.js";
+import { api } from "./helpers/api.js";
 import type { RecordedExchange } from "./helpers/chunked-fixtures.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { fromHex } from "./helpers/git-oracle.js";
@@ -168,6 +169,63 @@ describe("server-side import", () => {
       `POST ${SOURCE}/git-upload-pack`,
       `POST ${SOURCE}/git-upload-pack`,
     ]);
+  });
+
+  it("fails, fetching nothing, when a ruleset refuses the refs it would create", async () => {
+    const target = await pushTarget();
+    const seen: string[] = [];
+    await useNetwork(target, replay(cx.source.exchanges, seen));
+    const [, owner, repo] = target.path.split("/");
+    const made = await api(
+      "POST",
+      `/repos/${owner}/${(repo as string).replace(/\.git$/, "")}/rulesets`,
+      target.owner.token,
+      {
+        name: "closed",
+        enforcement: "active",
+        target: "branch",
+        conditions: { ref_name: { include: ["~ALL"] } },
+        rules: [{ type: "creation" }],
+      },
+    );
+    expect(made.status).toBe(201);
+    expect((await call(target, "POST", { url: `${SOURCE}/` })).status).toBe(201);
+    const record = await untilImported(target);
+    expect(record.state).toBe("failed");
+    expect(record.error).toContain('cannot create this ref (ruleset "closed")');
+    // The refs were listed; no pack was fetched, and nothing was stored.
+    expect(seen).toEqual([
+      `GET ${SOURCE}/info/refs?service=git-upload-pack`,
+      `POST ${SOURCE}/git-upload-pack`,
+    ]);
+    expect(await repoState(target)).toMatchObject({ refs: {}, scratch: 0 });
+  });
+
+  it("checks the default branch rules against the branch the import makes the default", async () => {
+    const target = await pushTarget();
+    const seen: string[] = [];
+    await useNetwork(target, replay(cx.source.exchanges, seen));
+    const [, owner, repo] = target.path.split("/");
+    expect(cx.source.head).not.toBe("refs/heads/main");
+    const made = await api(
+      "POST",
+      `/repos/${owner}/${(repo as string).replace(/\.git$/, "")}/rulesets`,
+      target.owner.token,
+      {
+        name: "default",
+        enforcement: "active",
+        target: "branch",
+        conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } },
+        rules: [{ type: "creation" }],
+      },
+    );
+    expect(made.status).toBe(201);
+    expect((await call(target, "POST", { url: `${SOURCE}/` })).status).toBe(201);
+    const record = await untilImported(target);
+    expect(record.state).toBe("failed");
+    expect(record.error).toContain('cannot create this ref (ruleset "default")');
+    expect(seen).toHaveLength(2);
+    expect(await repoState(target)).toMatchObject({ refs: {}, scratch: 0 });
   });
 
   it.each([

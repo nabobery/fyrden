@@ -157,14 +157,15 @@ export async function receivePack(c: GitContext): Promise<Response> {
   const storeMax = Math.min(maxBytes, reservation.bytes);
 
   // The rulesets' check of the commands, before a byte is stored (only where
-  // a ruleset has such rules: elsewhere the body goes to R2 untouched).
-  if (begun.precheck && !gzip && request.body) {
+  // a ruleset has such rules: elsewhere the body goes to R2 untouched); a
+  // gzip body's commands are read inflated, its bytes stored as they came.
+  if (begun.precheck && request.body) {
     let checked: Awaited<ReturnType<typeof stub.precheckPush>>;
     let body: Awaited<ReturnType<typeof readBodyHead>> | undefined;
     try {
-      body = await readBodyHead(request.body);
+      body = await readBodyHead(request.body, { gzip });
       call("precheckPush");
-      checked = await stub.precheckPush(begun.uploadId, body.head);
+      checked = await stub.precheckPush(begun.uploadId, body.commands);
     } catch (error) {
       await body?.cancel();
       abort(begun.uploadId);

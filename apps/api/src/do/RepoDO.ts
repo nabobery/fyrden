@@ -929,16 +929,22 @@ export class RepoDO extends MigratingDO {
         // check reads, and its stamp, taken together with no await between them.
         const ceilings = await this.#rolesPulled(input.principal, input.grantId);
         const { snapshot, stamp } = this.#ruleSnapshot(input.principal, ceilings);
-        const refusals = await checkPushRules(
-          {
-            git: this.git,
-            signatures: (oids, packs) => this.#signatureFacts(oids, packs),
-            verdicts: (facts) =>
-              verdicts({ env: this.env, metrics: this.git.context.metrics }, facts),
-          },
-          snapshot,
-          { ...input, delegated: input.grantId !== null },
-        );
+        const signatures = this.#signatureReader(input.packs);
+        let refusals: Map<number, string>;
+        try {
+          refusals = await checkPushRules(
+            {
+              git: this.git,
+              signatures: (oids) => signatures.facts(oids),
+              verdicts: (facts) =>
+                verdicts({ env: this.env, metrics: this.git.context.metrics }, facts),
+            },
+            snapshot,
+            { ...input, delegated: input.grantId !== null },
+          );
+        } finally {
+          signatures.release();
+        }
         return {
           stamp,
           restamp: () => this.#ruleSnapshot(input.principal, ceilings).stamp,
@@ -993,19 +999,20 @@ export class RepoDO extends MigratingDO {
   }
 
   /**
-   * The signature facts of `oids`, read from the live packs and a push's
-   * own `packs` (within one request's read budget; a commit that could not
-   * be read is left out).
+   * Reads the signature facts of commits from the live packs and a push's
+   * own `packs`: one reader for a whole check, opened on its first use,
+   * within one request's read budget (once it is spent, a commit not read
+   * yet is left out, so refused). The caller releases it.
    */
-  async #signatureFacts(
-    oids: readonly Oid[],
-    packs: readonly PackId[],
-  ): Promise<Map<string, SignedFact>> {
-    const facts = new Map<string, SignedFact>();
-    this.#blocks ??= createClockBlockCache();
-    let reader: Awaited<ReturnType<typeof openLiveReader>>;
-    try {
-      reader = await openLiveReader(
+  #signatureReader(packs: readonly PackId[]): {
+    facts: (oids: readonly Oid[]) => Promise<Map<string, SignedFact>>;
+    release: () => void;
+  } {
+    let opened: Promise<Awaited<ReturnType<typeof openLiveReader>>> | undefined;
+    let spent = false;
+    const open = () => {
+      this.#blocks ??= createClockBlockCache();
+      opened ??= openLiveReader(
         { git: this.git, memoryBlocks: this.#blocks },
         {
           deltaBaseCacheBytes: 4 * 1024 * 1024,
@@ -1014,24 +1021,31 @@ export class RepoDO extends MigratingDO {
           extraPacks: packs,
         },
       );
-    } catch (error) {
-      if (error instanceof ReadBudgetError) return facts;
-      throw error;
-    }
-    if (!reader) return facts;
-    try {
-      await reader.prefetch(oids);
-      for (const oid of oids) {
-        const object = await reader.readObject(oid);
-        if (object?.type === "commit") facts.set(oidToHex(oid), await factOf(object.bytes));
-      }
-    } catch (error) {
-      // Out of reads: what was read counts; the rest is unreadable, so refused.
-      if (!(error instanceof ReadBudgetError)) throw error;
-    } finally {
-      reader.release();
-    }
-    return facts;
+      return opened;
+    };
+    return {
+      facts: async (oids) => {
+        const facts = new Map<string, SignedFact>();
+        if (spent) return facts;
+        try {
+          const reader = await open();
+          if (!reader) return facts;
+          await reader.prefetch(oids);
+          for (const oid of oids) {
+            const object = await reader.readObject(oid);
+            if (object?.type === "commit") facts.set(oidToHex(oid), await factOf(object.bytes));
+          }
+        } catch (error) {
+          // Out of reads: what was read counts; the rest is unreadable, so refused.
+          if (!(error instanceof ReadBudgetError)) throw error;
+          spent = true;
+        }
+        return facts;
+      },
+      release: () => {
+        void opened?.then((reader) => reader?.release()).catch(() => {});
+      },
+    };
   }
 
   /** Opens a push: the upload and its pack rows, before any byte is stored. Returns the body's R2 key. */
@@ -1157,6 +1171,8 @@ export class RepoDO extends MigratingDO {
     }[],
     /** The delegation grant the write is made under (an agent acts for `principal`); null for none. */
     grantId: string | null,
+    /** A default branch the write sets as it commits (an import's). */
+    head?: string,
   ): Promise<string | undefined> {
     if (!hasPrecheckRules(this.rulesetStore)) return undefined;
     const ceilings = await this.#rolesPulled(principal, grantId);
@@ -1170,6 +1186,7 @@ export class RepoDO extends MigratingDO {
         kind: u.old === null ? "create" : u.new === null ? "delete" : "update",
       })),
       delegated,
+      head,
     );
     return refusals.size === 0 ? undefined : [...refusals.values()].join("; ");
   }
@@ -1309,6 +1326,8 @@ export class RepoDO extends MigratingDO {
       () => this.importNetwork,
       (principalId) => this.acl.roleOf(principalId, "write"),
       () => this.events.account()?.ownerGen,
+      (principal, updates, grantId, head) =>
+        this.#precheckUpdates(principal, updates, grantId, head),
     );
     return this.#importer;
   }

@@ -6,7 +6,7 @@ import {
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { RepoRole } from "@fyrden/domain";
 import { FetchClientError, ProtocolError, SmartHttpClient } from "@fyrden/git-core";
-import { buildCommandHead, readPushReport } from "../chunked/head.js";
+import { buildCommandHead, type RefUpdateSpec, readPushReport } from "../chunked/head.js";
 import { reauthorizeByToken } from "../push/reauthorize-token.js";
 import type { RepoPush } from "../push/repo-push.js";
 import { BUCKET_NAME, headKey, packKey } from "../push/scratch.js";
@@ -46,6 +46,8 @@ export interface ImportRecord {
   readonly ownHosts: readonly string[];
   readonly principal: string;
   readonly tokenId: string;
+  /** The delegation grant the import is made under; null or absent for none. */
+  readonly grantId?: string | null;
   readonly repoId: string;
   /** The request that started the import, for the commit's audit row. */
   readonly requestId?: string | null;
@@ -101,6 +103,14 @@ export class RepoImports {
     private readonly writerRole: (principalId: string) => Promise<RepoRole | null>,
     /** The repository's owner generation (bumped by a transfer); undefined without an identity. */
     private readonly ownerGen: () => number | undefined,
+    /** The rulesets' refusal of the ref updates, before anything is fetched or stored. */
+    private readonly precheck: (
+      principal: string,
+      updates: readonly RefUpdateSpec[],
+      grantId: string | null,
+      /** The default branch the import sets as it commits. */
+      head: string | undefined,
+    ) => Promise<string | undefined>,
   ) {}
 
   async record(): Promise<ImportRecord | undefined> {
@@ -130,6 +140,7 @@ export class RepoImports {
       ownHosts: [...input.ownHosts],
       principal: input.principal,
       tokenId: input.tokenId,
+      ...(input.grantId && { grantId: input.grantId }),
       repoId: input.repoId,
       ...(input.requestId && { requestId: input.requestId }),
       limits: input.limits,
@@ -252,6 +263,14 @@ export class RepoImports {
       await this.push.abort(uploadId);
       return this.#save({ ...listed, state: "committed" });
     }
+    // Refs a ruleset refuses: the import fails before anything is fetched or stored.
+    const refused = await this.precheck(
+      record.principal,
+      selection.updates,
+      record.grantId ?? null,
+      selection.head,
+    );
+    if (refused !== undefined) throw new ImportError(refused);
 
     const networkId = this.git.networkId();
     const head = buildCommandHead(selection.updates);

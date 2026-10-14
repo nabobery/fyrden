@@ -105,6 +105,8 @@ function actorOf(snapshot: RuleSnapshot, principal: string, delegated: boolean):
 /**
  * The rulesets' refusals of ref updates before anything is stored: only
  * the rules on names and kinds of change (and who makes them), by index.
+ * `head`: a default branch the change sets as it commits (an import's),
+ * which `~DEFAULT_BRANCH` names too, as at the commit.
  */
 export function precheckPushRules(
   snapshot: RuleSnapshot,
@@ -115,12 +117,13 @@ export function precheckPushRules(
     readonly kind: CheckedCommand["kind"];
   }[],
   delegated = false,
+  head?: string,
 ): Map<number, string> {
   const refusals = new Map<number, string>();
   const rulesets = snapshot.rulesets.filter((r) => r.enforcement === "active");
   if (rulesets.length === 0 || commands.length === 0) return refusals;
   const actor = actorOf(snapshot, principal, delegated);
-  const branches = defaultBranches(snapshot.head, undefined);
+  const branches = defaultBranches(snapshot.head, head);
   for (const cmd of commands) {
     const found = blocking(
       rulesets,
@@ -159,6 +162,8 @@ export async function checkPushRules(
   if (rulesets.length === 0 || input.commands.length === 0) return refusals;
   const actor = actorOf(snapshot, input.principal, input.delegated ?? false);
   const branches = defaultBranches(snapshot.head, input.head);
+  // Refs often share new commits: each is read and judged once per push.
+  const signed = sharedSignatures(deps);
   for (const cmd of input.commands) {
     const needsSignatures =
       cmd.kind !== "delete" &&
@@ -169,7 +174,7 @@ export async function checkPushRules(
       );
     let unverifiedCommit: { sha: string; reason: string } | undefined;
     if (needsSignatures) {
-      const found = await firstUnverified(deps, input, cmd);
+      const found = await firstUnverified(signed, input, cmd);
       if (typeof found === "string") {
         refusals.set(cmd.index, found);
         continue;
@@ -191,6 +196,44 @@ export async function checkPushRules(
     if (messages.length > 0) refusals.set(cmd.index, refusalOf(messages));
   }
   return refusals;
+}
+
+/**
+ * `deps` remembering, across a push's ref updates, each commit's signature
+ * fact and each fact's verdict (a commit that could not be read is asked
+ * for again).
+ */
+export function sharedSignatures(deps: PushRulesDeps): PushRulesDeps {
+  const facts = new Map<string, SignedFact>();
+  const judged = new Map<string, { verified: boolean; reason: string }>();
+  const keyOf = (f: SignedFact) => JSON.stringify([f.reason, f.key, f.committerEmail]);
+  return {
+    git: deps.git,
+    async signatures(oids, packs) {
+      const unread = oids.filter((oid) => !facts.has(oidToHex(oid)));
+      if (unread.length > 0)
+        for (const [hex, fact] of await deps.signatures(unread, packs)) facts.set(hex, fact);
+      return new Map(
+        oids.flatMap((oid) => {
+          const fact = facts.get(oidToHex(oid));
+          return fact ? [[oidToHex(oid), fact] as const] : [];
+        }),
+      );
+    },
+    async verdicts(asked) {
+      const unjudged = [...new Map(asked.map((f) => [keyOf(f), f])).entries()].filter(
+        ([key]) => !judged.has(key),
+      );
+      if (unjudged.length > 0) {
+        const results = await deps.verdicts(unjudged.map(([, f]) => f));
+        for (const [i, [key]] of unjudged.entries()) {
+          const result = results[i];
+          if (result) judged.set(key, result);
+        }
+      }
+      return asked.map((f) => judged.get(keyOf(f)) ?? { verified: false, reason: "unverified" });
+    },
+  };
 }
 
 /**

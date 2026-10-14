@@ -3,18 +3,26 @@
 // ruleset in the refusal.
 
 import { env } from "cloudflare:workers";
+import { gzipSync } from "node:zlib";
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import { createFakeDataset } from "@fyrden/adapters-cloudflare/obs/testing";
 import type { Ruleset } from "@fyrden/domain";
-import { oidFromHex } from "@fyrden/git-core";
+import { type Oid, oidFromHex, oidToHex } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import { checkPushRules, MAX_REFUSAL_BYTES, refusalOf } from "../src/do/repo/push-rules.js";
+import {
+  checkPushRules,
+  MAX_REFUSAL_BYTES,
+  refusalOf,
+  sharedSignatures,
+} from "../src/do/repo/push-rules.js";
 import { ACCESS_LOST } from "../src/git/push/reauthorize.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { principalWithToken, scopedToken } from "./helpers/principals.js";
 import { holdAfterRunPush, type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
+import { inRepo } from "./helpers/repo-git.js";
 
 const fx = inject("pushFixtures");
 
@@ -345,6 +353,40 @@ describe("rulesets", () => {
     );
   });
 
+  it("read the signatures of a push's commits once, however many refs share them", async () => {
+    await ruleset({
+      name: "signed",
+      conditions: { ref_name: { include: ["~ALL"] } },
+      rules: [{ type: "required_signatures" }],
+    });
+    // The repository object's index reads (R2) for a push of `count` refs to one tip.
+    const indexReads = async (count: number) => {
+      const object = createFakeDataset();
+      await inRepo(env.REPO.getByName(repo.id), (r) => {
+        r.metricsDataset = object.dataset;
+      });
+      const pushed = await postPush(
+        await target(owner),
+        pushBody(
+          Array.from({ length: count }, (_, i) => ({
+            old: ZERO,
+            new: fx.c3,
+            ref: `refs/heads/signed-${count}-${i}`,
+          })),
+          { pack: fx.packC3ThinOnC2 },
+        ),
+      );
+      expect(pushed.report.filter((l) => l.startsWith("ok"))).toEqual([]);
+      expect(pushed.report.filter((l) => /is unsigned/.test(l))).toHaveLength(count);
+      return object.points
+        .filter((p) => p.name === "r2.class_b" && p.blobs.includes("get_idx"))
+        .reduce((sum, p) => sum + p.value, 0);
+    };
+    const one = await indexReads(1);
+    // One reader for the whole check: its indexes are read once, not once per ref.
+    expect(await indexReads(60)).toBe(one);
+  });
+
   it("refuse before anything is stored: a push's body, an upload session, a file write", async () => {
     await ruleset({ name: "frozen", rules: [{ type: "update" }, { type: "deletion" }] });
     // The Worker's R2 writes, watched: the refused push stores no body.
@@ -390,6 +432,72 @@ describe("rulesets", () => {
     expect(puts).toHaveLength(1);
   });
 
+  it("refuse before anything is stored a gzip push and one with a long command section", async () => {
+    await ruleset({
+      name: "closed",
+      conditions: { ref_name: { include: ["~ALL"] } },
+      rules: [{ type: "creation" }, { type: "update" }],
+    });
+    const puts: string[] = [];
+    const GIT = new Proxy(env.GIT, {
+      get(bucket, property) {
+        if (property === "put")
+          return (key: string, ...rest: unknown[]) => {
+            puts.push(key);
+            return (bucket.put as (...a: unknown[]) => unknown)(key, ...rest);
+          };
+        const value = Reflect.get(bucket, property);
+        return typeof value === "function" ? value.bind(bucket) : value;
+      },
+    });
+    // As JGit sends every push: gzip.
+    const gzipped = await postPush(
+      await target(owner),
+      gzipSync(
+        pushBody([{ old: fx.c2, new: fx.c3, ref: "refs/heads/main" }], { pack: fx.packC3ThinOnC2 }),
+      ),
+      { bindings: { GIT }, headers: { "Content-Encoding": "gzip" } },
+    );
+    expect(gzipped.report).toContain(
+      'ng refs/heads/main cannot update this ref (ruleset "closed")\n',
+    );
+    // A larger one: commands past 4 KiB, then 2 MiB that do not compress.
+    const commands = pushBody(
+      Array.from({ length: 100 }, (_, i) => ({
+        old: ZERO,
+        new: fx.c3,
+        ref: `refs/heads/gz-${String(i).padStart(3, "0")}-${"y".repeat(60)}`,
+      })),
+      { pack: fx.packC3ThinOnC2 },
+    );
+    const body = new Uint8Array(commands.length + 2 * 1024 * 1024);
+    body.set(commands);
+    for (let at = commands.length; at < body.length; at += 65_536)
+      crypto.getRandomValues(body.subarray(at, Math.min(at + 65_536, body.length)));
+    const large = await postPush(await target(owner), gzipSync(body), {
+      bindings: { GIT },
+      headers: { "Content-Encoding": "gzip" },
+    });
+    expect(large.report.filter((l) => l.startsWith("ok"))).toEqual([]);
+    expect(large.report.some((l) => l.includes('cannot create this ref (ruleset "closed")'))).toBe(
+      true,
+    );
+    // A command section longer than the first 64 KiB of the body.
+    const many = Array.from({ length: 800 }, (_, i) => ({
+      old: ZERO,
+      new: fx.c3,
+      ref: `refs/heads/topic-${String(i).padStart(4, "0")}-${"x".repeat(40)}`,
+    }));
+    const long = await postPush(await target(owner), pushBody(many, { pack: fx.packC3ThinOnC2 }), {
+      bindings: { GIT },
+    });
+    expect(long.report.filter((l) => l.startsWith("ok"))).toEqual([]);
+    expect(long.report.some((l) => l.includes('cannot create this ref (ruleset "closed")'))).toBe(
+      true,
+    );
+    expect(puts).toEqual([]);
+  });
+
   it("refuse required signatures on tag rulesets", async () => {
     const tag = await ruleset({
       target: "tag",
@@ -401,6 +509,39 @@ describe("rulesets", () => {
 });
 
 describe("rule checks", () => {
+  it("ask for each commit's signature and each signature's verdict once a push", async () => {
+    const asked: string[][] = [];
+    const judged: string[][] = [];
+    const fact = (key: string) => ({ reason: "signed" as const, key, committerEmail: "a@b" });
+    const shared = sharedSignatures({
+      git: {} as RepoGitStorage,
+      signatures: async (oids) => {
+        const hexes = oids.map((oid) => oidToHex(oid));
+        asked.push(hexes);
+        // The last commit cannot be read.
+        return new Map(hexes.filter((h) => h !== "3".repeat(40)).map((h) => [h, fact(h[0] ?? "")]));
+      },
+      verdicts: async (facts) => {
+        judged.push(facts.map((f) => f.key ?? ""));
+        return facts.map((f) => ({ verified: f.key === "1", reason: "valid" }));
+      },
+    });
+    const [a, b, c] = ["1", "2", "3"].map((d) => oidFromHex(d.repeat(40))) as [Oid, Oid, Oid];
+    expect([...(await shared.signatures([a, b], [])).keys()]).toHaveLength(2);
+    const second = await shared.signatures([b, c], []);
+    expect([...second.keys()]).toEqual(["2".repeat(40)]);
+    await shared.signatures([c], []);
+    // Commits read are not asked for again; one that could not be read is.
+    expect(asked).toEqual([["1".repeat(40), "2".repeat(40)], ["3".repeat(40)], ["3".repeat(40)]]);
+    expect(await shared.verdicts([fact("1"), fact("2"), fact("1")])).toEqual([
+      { verified: true, reason: "valid" },
+      { verified: false, reason: "valid" },
+      { verified: true, reason: "valid" },
+    ]);
+    await shared.verdicts([fact("2")]);
+    expect(judged).toEqual([["1", "2"]]);
+  });
+
   const agentsUsePrs: Ruleset = {
     id: 1,
     name: "agents use PRs",
