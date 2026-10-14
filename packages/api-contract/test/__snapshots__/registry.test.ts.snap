@@ -996,6 +996,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "minimum": -9007199254740991,
                             "type": "integer",
                           },
+                          "grant_id": {
+                            "description": "For a git token an agent minted acting for you: the grant it acts under.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
                           "id": {
                             "description": "Token id (tok_ prefix).",
                             "type": "string",
@@ -1052,6 +1059,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "expires_at",
                           "last_used_at",
                           "revoked",
+                          "grant_id",
                         ],
                         "type": "object",
                       },
@@ -10932,6 +10940,102 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
     },
+    "/user/git-tokens": {
+      "post": {
+        "description": "Mints a git token (for clone, fetch and push with stock git) for the caller, as the caller: the same principal, and for an agent acting for a user the same grant and act chain, so revoking the grant stops it. Its scopes are git's within the caller's (\`contents:write\`, or \`contents:read\`), it lives at most an hour and never past the caller's token, and it is returned once.",
+        "operationId": "users.git_tokens.create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "expires_in_minutes": {
+                    "default": 60,
+                    "description": "Minutes it lives, 1-60.",
+                    "maximum": 60,
+                    "minimum": 1,
+                    "type": "integer",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "expires_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "id": {
+                      "type": "string",
+                    },
+                    "scopes": {
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "token": {
+                      "description": "The token. Shown once and never stored.",
+                      "type": "string",
+                    },
+                    "type": {
+                      "enum": [
+                        "pat",
+                        "git",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "token",
+                    "type",
+                    "scopes",
+                    "expires_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create a short-lived git token",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/user/quota": {
       "get": {
         "description": "The authenticated user's quota: how many repositories it may have and how many bytes their pushes may store, and how much of each is used. A deleted repository's bytes are free again once its deletion finishes.",
@@ -12184,6 +12288,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "minimum": -9007199254740991,
                             "type": "integer",
                           },
+                          "grant_id": {
+                            "description": "For a git token an agent minted acting for you: the grant it acts under.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
                           "id": {
                             "description": "Token id (tok_ prefix).",
                             "type": "string",
@@ -12240,6 +12351,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "expires_at",
                           "last_used_at",
                           "revoked",
+                          "grant_id",
                         ],
                         "type": "object",
                       },

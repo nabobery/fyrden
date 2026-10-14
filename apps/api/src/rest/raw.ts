@@ -2,7 +2,7 @@ import type { Context, Hono } from "hono";
 import { repoFor } from "../git/chunked/operations.js";
 import { problem } from "../http/problem.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
-import { hasPermission, type OpContext, OperationError } from "../ops/execute.js";
+import { hasPermission, type OpContext, OperationError, rateLimitKey } from "../ops/execute.js";
 import type { RepoEntry } from "../repos/directory.js";
 import { API_PREFIX, opContext } from "./mount.js";
 
@@ -25,7 +25,7 @@ export async function readAccess(
   const ctx = opContext(c);
   const { owner, repo } = c.req.param() as { owner: string; repo: string };
   const ref = c.req.param("ref") ?? c.req.query("ref");
-  if (!(await c.env.RATE_LIMIT_READ.limit({ key: ctx.auth.id })).success)
+  if (!(await c.env.RATE_LIMIT_READ.limit({ key: rateLimitKey(ctx.auth) })).success)
     return problem(c, 429, "rate_limited", "Too many requests for this token.", {
       "Retry-After": "60",
     });

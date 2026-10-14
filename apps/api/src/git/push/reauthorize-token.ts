@@ -79,10 +79,13 @@ export async function reauthorizeByToken(
   const row = await session
     .prepare(
       `SELECT t.principal_id, p.type AS principal_type, p.owner_id AS agent_owner_id,
-              o.disabled_at AS agent_owner_disabled_at, t.scopes, t.repo_ids, t.revoked_at,
+              o.disabled_at AS agent_owner_disabled_at, t.scopes, t.repo_ids,
+              coalesce(t.revoked_at, s.revoked_at) AS revoked_at,
               p.disabled_at, t.grant_id, t.act_chain, r.owner_id, r.state AS repo_state
        FROM tokens t JOIN principals p ON p.id = t.principal_id
        LEFT JOIN principals o ON o.id = p.owner_id
+       -- A token minted from another stops with it.
+       LEFT JOIN tokens s ON s.id = t.source_id
        LEFT JOIN repos r ON r.id = ?
        WHERE t.id = ?`,
     )

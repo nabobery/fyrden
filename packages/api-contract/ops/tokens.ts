@@ -15,6 +15,10 @@ export const UserToken = z.object({
   expires_at: z.number().int().describe("Unix time in milliseconds."),
   last_used_at: z.number().int().nullable(),
   revoked: z.boolean(),
+  grant_id: z
+    .string()
+    .nullable()
+    .describe("For a git token an agent minted acting for you: the grant it acts under."),
 });
 
 export const TokenId = z
@@ -95,4 +99,42 @@ export const revokeUserToken = defineOperation({
   rateLimit: "write",
   idempotency: "key",
   mcp: false,
+});
+
+/** Longest a git token minted for its caller lives, in minutes. Proposed. */
+export const MAX_GIT_TOKEN_MINUTES = 60;
+
+export const createGitToken = defineOperation({
+  id: "users.git_tokens.create",
+  method: "POST",
+  path: "/user/git-tokens",
+  summary: "Create a short-lived git token",
+  description:
+    "Mints a git token (for clone, fetch and push with stock git) for the caller, as the caller: the same principal, and for an agent acting for a user the same grant and act chain, so revoking the grant stops it. Its scopes are git's within the caller's (`contents:write`, or `contents:read`), it lives at most an hour and never past the caller's token, and it is returned once.",
+  input: z.object({
+    expires_in_minutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_GIT_TOKEN_MINUTES)
+      .default(MAX_GIT_TOKEN_MINUTES)
+      .describe(`Minutes it lives, 1-${MAX_GIT_TOKEN_MINUTES}.`),
+  }),
+  output: CreatedUserToken,
+  permission: "contents:read",
+  principals: ["user", "agent"],
+  rateLimit: "write",
+  idempotency: "key",
+  successStatus: 201,
+  secretResponse: true,
+  // An MCP tool, unlike other tokens: an agent needs one to push with git,
+  // and this one is short-lived and limited to git's scopes.
+  mcp: {
+    tool: "create_git_token",
+    title: "Create a short-lived git token",
+    description:
+      "Get a git token (at most an hour) to clone, fetch and push with stock git, as you. Use it as git's password with any user name.",
+    readOnly: false,
+    idempotent: false,
+  },
 });

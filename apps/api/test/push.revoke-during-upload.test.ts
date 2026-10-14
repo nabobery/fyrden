@@ -9,7 +9,8 @@ import { hashToken } from "@fyrden/domain";
 import { oidToHex } from "@fyrden/git-core";
 import { afterEach, beforeEach, describe, expect, inject, it, vi } from "vitest";
 import { ACCESS_LOST, TOKEN_REVOKED } from "../src/git/push/reauthorize.js";
-import { principalWithToken } from "./helpers/principals.js";
+import { api } from "./helpers/api.js";
+import { principalWithToken, scopedToken } from "./helpers/principals.js";
 import { holdAfterRunPush, type PushTarget, postPush, pushTarget } from "./helpers/push.js";
 import { pushBody, reportLines, ZERO } from "./helpers/push-fixtures.js";
 import { inRepo } from "./helpers/repo-git.js";
@@ -87,6 +88,20 @@ describe("push: re-authorization at the commit point", () => {
     expect(report).toEqual(["unpack ok\n", `ng ${MAIN} ${TOKEN_REVOKED}\n`, "0000"]);
     expect(progress).toContain(`error: ${TOKEN_REVOKED}\n`);
     expect(await state(target)).toEqual({ refs: [], uploads: ["rejected"], pending: 0, live: 0 });
+  });
+
+  it("aborts the push when the token its git token was minted from is revoked during indexing", async () => {
+    const target = await pushTarget();
+    const source = await scopedToken(target.owner.principalId, [], "pat");
+    const minted = await api("POST", "/user/git-tokens", source, {});
+    expect(minted.status).toBe(201);
+    const git = {
+      ...target,
+      owner: { ...target.owner, token: (await minted.json<{ token: string }>()).token },
+    };
+    const { report } = await pushWith(git, () => setToken(source, "revoked_at", Date.now()));
+    expect(report).toEqual(["unpack ok\n", `ng ${MAIN} ${TOKEN_REVOKED}\n`, "0000"]);
+    expect((await state(target)).refs).toEqual([]);
   });
 
   it("aborts the push when write access is lost before the commit", async () => {

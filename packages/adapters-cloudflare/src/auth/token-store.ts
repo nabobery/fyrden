@@ -52,6 +52,12 @@ export interface TokenRecord {
    * tokens: such a token is taken only when DPoP-bound.
    */
   requiresDpop: boolean;
+  /**
+   * The token it was minted from by its holder (a git token from
+   * `POST /user/git-tokens`): it stops with that one, and shares its rate
+   * limits. Absent or null otherwise.
+   */
+  sourceId?: string | null;
 }
 
 export type VerifyFailure =
@@ -119,6 +125,13 @@ export interface MintInput {
   audience?: string | null;
   /** The key thumbprint a DPoP-bound token is bound to. */
   dpopJkt?: string | null;
+  /** The token it is minted from by its holder: revoking that one revokes it. */
+  sourceId?: string | null;
+}
+
+/** A token would expire before it is issued: the token minting it expired meanwhile. */
+export class TokenExpiredError extends Error {
+  override name = "TokenExpiredError";
 }
 
 export interface AuditContext {
@@ -163,6 +176,7 @@ interface TokenRow {
   act_chain: string | null;
   audience: string | null;
   dpop_jkt: string | null;
+  source_id: string | null;
 }
 
 /** One grant of a delegated token's chain, with its agent and the agent's owner. */
@@ -228,6 +242,7 @@ function toRecord(
     audience: row.audience,
     dpopJkt: row.dpop_jkt,
     requiresDpop: delegation ? delegation.requiresDpop : row.owner_require_dpop === 1,
+    sourceId: row.source_id,
   };
 }
 
@@ -325,15 +340,15 @@ export class D1TokenStore {
     const id = this.deps.newId("tok");
     const now = this.deps.clock();
     const expiresAt = Math.min(now + input.ttlMs, input.notAfter ?? Number.POSITIVE_INFINITY);
-    if (expiresAt <= now) throw new RangeError("the token would expire before it is issued");
+    if (expiresAt <= now) throw new TokenExpiredError("the token would expire before it is issued");
     this.countQuery("token_mint", 2);
     const { delegation } = input;
     await this.db.batch([
       this.db
         .prepare(
           `INSERT INTO tokens (id, token_hash, type, principal_id, scopes, repo_ids, expires_at,
-             created_at, grant_id, act_chain, audience, dpop_jkt)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             created_at, grant_id, act_chain, audience, dpop_jkt, source_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           id,
@@ -348,6 +363,7 @@ export class D1TokenStore {
           delegation ? JSON.stringify(delegation.act) : null,
           input.audience ?? null,
           input.dpopJkt ?? null,
+          input.sourceId ?? null,
         ),
       auditStatement(this.db, now, input.audit, "token.mint", id, {
         type: input.type,
@@ -380,10 +396,13 @@ export class D1TokenStore {
         `SELECT t.id, t.type, t.principal_id, p.type AS principal_type, p.handle, p.is_instance_admin,
                 p.disabled_at, p.owner_id, o.disabled_at AS owner_disabled_at,
                 o.require_dpop AS owner_require_dpop, t.scopes,
-                t.repo_ids, t.expires_at, t.last_used_at, t.revoked_at, t.grant_id, t.act_chain,
-                t.audience, t.dpop_jkt
+                t.repo_ids, t.expires_at, t.last_used_at,
+                coalesce(t.revoked_at, s.revoked_at) AS revoked_at, t.grant_id, t.act_chain,
+                t.audience, t.dpop_jkt, t.source_id
          FROM tokens t JOIN principals p ON p.id = t.principal_id
          LEFT JOIN principals o ON o.id = p.owner_id
+         -- A token minted from another stops with it.
+         LEFT JOIN tokens s ON s.id = t.source_id
          WHERE t.token_hash = ?`,
       )
       .bind(hash)

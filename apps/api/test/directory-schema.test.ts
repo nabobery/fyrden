@@ -46,6 +46,13 @@ describe("D1 directory schema", () => {
     ]);
   });
 
+  it("records the token a token was minted from, none for the tokens before", async () => {
+    const { results } = await env.DIRECTORY.prepare(
+      "SELECT name, \"notnull\" AS required FROM pragma_table_info('tokens') WHERE name = 'source_id'",
+    ).all<{ name: string; required: number }>();
+    expect(results).toEqual([{ name: "source_id", required: 0 }]);
+  });
+
   it("keeps handles unique regardless of case", async () => {
     await insertPrincipal("usr_A1", "user", "Alice");
     await expect(insertPrincipal("org_A2", "org", "alice")).rejects.toThrow(/UNIQUE/);

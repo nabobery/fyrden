@@ -1,5 +1,10 @@
-import { parseTokenRestrictions } from "@fyrden/adapters-cloudflare/auth";
+import {
+  type MintInput,
+  parseTokenRestrictions,
+  TokenExpiredError,
+} from "@fyrden/adapters-cloudflare/auth";
 import type {
+  createGitToken,
   createUserToken,
   Input,
   listUserTokens,
@@ -24,6 +29,7 @@ type TokenRow = {
   expires_at: number;
   last_used_at: number | null;
   revoked_at: number | null;
+  grant_id: string | null;
 };
 
 /** The `users.tokens.list` operation: newest first. */
@@ -35,9 +41,9 @@ export function listUserTokensOperation(
 }
 
 /**
- * The personal access and git tokens `principalId` acts with as itself
- * (not delegated ones), newest first: a user's own, or an agent's for its
- * owner. Never the token values.
+ * The personal access and git tokens of `principalId`, newest first: a
+ * user's own and the git tokens agents acting for it minted under its
+ * grants, or an agent's own for its owner. Never the token values.
  */
 export async function listTokensOf(
   ctx: OpContext,
@@ -48,8 +54,11 @@ export async function listTokensOf(
   ctx.metrics.count("d1.query", { db: "directory", op: "user_tokens_list" });
   const { results } = await ctx.env.DIRECTORY.withSession("first-primary")
     .prepare(
-      `SELECT id, type, scopes, repo_ids, created_at, expires_at, last_used_at, revoked_at
-       FROM tokens WHERE principal_id = ?1 AND type IN ('pat', 'git') AND grant_id IS NULL
+      `SELECT id, type, scopes, repo_ids, created_at, expires_at, last_used_at, revoked_at,
+         grant_id
+       FROM tokens WHERE principal_id = ?1
+         -- Its own, and git tokens an agent acting for it minted under a grant.
+         AND (type = 'pat' AND grant_id IS NULL OR type = 'git')
          AND (created_at < ?2 OR (created_at = ?2 AND id < ?3))
        ORDER BY created_at DESC, id DESC LIMIT ?4`,
     )
@@ -69,6 +78,7 @@ export async function listTokensOf(
         expires_at: row.expires_at,
         last_used_at: row.last_used_at,
         revoked: row.revoked_at !== null,
+        grant_id: row.grant_id,
       };
     }),
     next_cursor:
@@ -88,7 +98,7 @@ export async function createUserTokenOperation(
   const scopes = input.scopes.length === 0 ? own : input.scopes;
   if (!scopes.every((scope) => isPermission(scope) && scopesAllow(own, scope)))
     throw new OperationError(403, "scope_exceeds_token", "The scopes exceed your token's.");
-  const minted = await tokenStore(ctx.env, { metrics: ctx.metrics }).mint({
+  const minted = await mintOrExpired(ctx, {
     principalId: ctx.auth.principalId,
     type: input.type,
     scopes,
@@ -105,6 +115,66 @@ export async function createUserTokenOperation(
     id: minted.id,
     token: minted.token,
     type: input.type,
+    scopes,
+    expires_at: minted.expiresAt,
+  };
+}
+
+/** Mints a token; one whose minting token expired meanwhile answers as an expired token. */
+async function mintOrExpired(
+  ctx: OpContext,
+  input: MintInput,
+): Promise<{ token: string; id: string; expiresAt: number }> {
+  try {
+    return await tokenStore(ctx.env, { metrics: ctx.metrics }).mint(input);
+  } catch (error) {
+    if (error instanceof TokenExpiredError)
+      throw new OperationError(401, "token_expired", "Your token expired.");
+    throw error;
+  }
+}
+
+/** The `users.git_tokens.create` operation. */
+export async function createGitTokenOperation(
+  ctx: OpContext,
+  input: Input<typeof createGitToken>,
+): Promise<Output<typeof createGitToken>> {
+  const own = ctx.auth.scopes;
+  // Git's scopes within the caller's: pushing if it may write, else fetching.
+  const scopes = scopesAllow(own, "contents:write")
+    ? ["contents:write"]
+    : scopesAllow(own, "contents:read")
+      ? ["contents:read"]
+      : null;
+  if (!scopes)
+    throw new OperationError(403, "scope_exceeds_token", "Your token cannot read contents.");
+  // One step from a token its holder chose: a git token mints no other.
+  if (ctx.auth.type === "git")
+    throw new OperationError(403, "forbidden", "A git token cannot mint another token.");
+  const delegated = ctx.auth.grantId !== null;
+  const minted = await mintOrExpired(ctx, {
+    principalId: ctx.auth.principalId,
+    type: "git",
+    scopes,
+    repoIds: ctx.auth.repoIds,
+    ttlMs: input.expires_in_minutes * 60_000,
+    ...(ctx.auth.type !== "ses" && { notAfter: ctx.auth.expiresAt }),
+    // The grant and the agents acting stay: revoking the grant stops it.
+    ...(delegated && {
+      delegation: { grantId: ctx.auth.grantId as string, act: ctx.auth.act },
+    }),
+    // So does revoking the token minting it (a session ends on its own).
+    ...(ctx.auth.type !== "ses" && { sourceId: ctx.auth.id }),
+    audit: {
+      actorId: delegated ? (ctx.auth.act[0] as string) : ctx.auth.principalId,
+      ...(delegated && { act: ctx.auth.act }),
+      ...(ctx.requestId !== undefined && { requestId: ctx.requestId }),
+    },
+  });
+  return {
+    id: minted.id,
+    token: minted.token,
+    type: "git",
     scopes,
     expires_at: minted.expiresAt,
   };

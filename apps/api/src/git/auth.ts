@@ -1,6 +1,7 @@
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import { authenticate } from "../middleware/auth.js";
 import { audienceAllows } from "../oauth/resources.js";
+import { rateLimitKey } from "../ops/execute.js";
 import {
   authorize,
   GIT_PERMISSION,
@@ -70,7 +71,7 @@ export async function authorizeGit(
   }
 
   const limiter = access === "write" ? c.env.RATE_LIMIT_WRITE : c.env.RATE_LIMIT_READ;
-  if (!(await limiter.limit({ key: auth.id })).success) {
+  if (!(await limiter.limit({ key: rateLimitKey(auth) })).success) {
     return fail(gitText(c, 429, "Too many requests for this token.", { "Retry-After": "60" }));
   }
 

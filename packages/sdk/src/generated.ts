@@ -141,6 +141,8 @@ export type UsersTokensListOutput = {
     expires_at: number;
     last_used_at: number | null;
     revoked: boolean;
+    /** For a git token an agent minted acting for you: the grant it acts under. */
+    grant_id: string | null;
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -175,6 +177,23 @@ export type UsersTokensRevokeInput = {
 export type UsersTokensRevokeOutput = {
   id: string;
   revoked: true;
+};
+
+/** Input of `users.git_tokens.create`: Create a short-lived git token. */
+export type UsersGitTokensCreateInput = {
+  /** Minutes it lives, 1-60. */
+  expires_in_minutes?: number;
+};
+
+/** Output of `users.git_tokens.create`. */
+export type UsersGitTokensCreateOutput = {
+  id: string;
+  /** The token. Shown once and never stored. */
+  token: string;
+  type: "pat" | "git";
+  scopes: string[];
+  /** Unix time in milliseconds. */
+  expires_at: number;
 };
 
 /** Input of `admin.users.create`: Create a user. */
@@ -357,6 +376,8 @@ export type AgentsTokensListOutput = {
     expires_at: number;
     last_used_at: number | null;
     revoked: boolean;
+    /** For a git token an agent minted acting for you: the grant it acts under. */
+    grant_id: string | null;
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -2537,6 +2558,7 @@ export const OPERATIONS = {
   "users.tokens.list": { method: "GET", path: "/user/tokens", pathParams: [], idempotent: false, items: "tokens" },
   "users.tokens.create": { method: "POST", path: "/user/tokens", pathParams: [], idempotent: true },
   "users.tokens.revoke": { method: "DELETE", path: "/user/tokens/{token_id}", pathParams: ["token_id"], idempotent: true },
+  "users.git_tokens.create": { method: "POST", path: "/user/git-tokens", pathParams: [], idempotent: true },
   "admin.users.create": { method: "POST", path: "/admin/users", pathParams: [], idempotent: true },
   "admin.tokens.create": { method: "POST", path: "/admin/users/{user_id}/tokens", pathParams: ["user_id"], idempotent: true },
   "agents.create": { method: "POST", path: "/agents", pathParams: [], idempotent: true },
@@ -2628,6 +2650,8 @@ export interface Operations {
   "users.tokens.create": { input: UsersTokensCreateInput; output: UsersTokensCreateOutput };
   /** Revoke a token. Revokes one of your tokens: it stops working at once for writes (within 30 seconds for reads). */
   "users.tokens.revoke": { input: UsersTokensRevokeInput; output: UsersTokensRevokeOutput };
+  /** Create a short-lived git token. Mints a git token (for clone, fetch and push with stock git) for the caller, as the caller: the same principal, and for an agent acting for a user the same grant and act chain, so revoking the grant stops it. Its scopes are git's within the caller's (`contents:write`, or `contents:read`), it lives at most an hour and never past the caller's token, and it is returned once. */
+  "users.git_tokens.create": { input: UsersGitTokensCreateInput; output: UsersGitTokensCreateOutput };
   /** Create a user. Creates a user account. Instance administrators only. */
   "admin.users.create": { input: AdminUsersCreateInput; output: AdminUsersCreateOutput };
   /** Create a token for a user. Mints a personal access token (`pat`) or git token (`git`) for a user and returns it once. Instance administrators only. */

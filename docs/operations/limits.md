@@ -447,11 +447,12 @@ acting, the current one first, and audit rows carry it.
 | Passing down | An agent holding a user's grant may pass a narrower one (scopes, repositories, expiry) to another agent of its owner; one hop at most (depth 2) |
 | Delegated token | Type `oat`, up to 1 hour, and never past any grant of its chain or the agent's own token; scopes and repositories within the grant and the agent's token; for the REST API unless `resource` asks for the MCP server |
 | Revocation | Revoking a grant revokes the grants passed down from it; tokens under them, an agent's token its owner revokes (`DELETE /agents/{agent}/tokens/{token_id}`; `GET /agents/{agent}/tokens` lists them), and an agent's tokens once it (or its owner) is disabled, stop at once for writes and within 30 seconds for reads |
-| Delegated tokens may not | Make or revoke grants, mint tokens, change who has access (collaborators, team repositories), or call user-only operations (create repositories, transfer, stars, signing keys) |
+| Delegated tokens may not | Make or revoke grants, mint tokens (but a git token for themselves), change who has access (collaborators, team repositories), or call user-only operations (create repositories, transfer, stars, signing keys) |
 | An agent's own token | Never wider than the token that minted it (scopes and repositories) |
 | Token endpoint | Bodies up to 16 KiB; rate limited per client address |
 | Rulesets | Rules for `agent` actors apply to an agent acting for a user |
-| Not yet | Grants from organizations, and git tokens under a grant |
+| Git tokens for the caller | `POST /user/git-tokens` (MCP `create_git_token`): a `git` token for stock git, as the caller (a user, an agent, or an agent acting under a grant, keeping that grant and chain: revoking the grant stops it); `contents:write`, or `contents:read`, within the caller's scopes; 1 hour at most (`expires_in_minutes`), never past the caller's token. The only token minted over MCP |
+| Not yet | Grants from organizations |
 
 ## OAuth authorization server
 

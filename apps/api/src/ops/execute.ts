@@ -52,7 +52,7 @@ export type OpResult =
 export class OperationError extends Error {
   override name = "OperationError";
   constructor(
-    readonly status: 400 | 403 | 404 | 409 | 422,
+    readonly status: 400 | 401 | 403 | 404 | 409 | 422,
     readonly code: string,
     detail: string,
   ) {
@@ -77,6 +77,11 @@ function fail(
       ...(missingPermission !== undefined && { missingPermission }),
     }),
   };
+}
+
+/** Whose budget a request spends: a token's own, or the token it was minted from (minting more resets nothing). */
+export function rateLimitKey(auth: Pick<TokenRecord, "id" | "sourceId">): string {
+  return auth.sourceId ?? auth.id;
 }
 
 /**
@@ -106,10 +111,10 @@ export async function executeOperation(
   /** A REST write's `Idempotency-Key`, checked once the request may run at all. */
   options: { readonly idempotencyKey?: string } = {},
 ): Promise<OpResult> {
-  // Limited by token id, which a re-verification cannot change; checked
+  // Limited by token (or its source) id, which a re-verification cannot change; checked
   // first so a flood of writes cannot drive D1 primary lookups.
   const limiter = op.rateLimit === "read" ? ctx.env.RATE_LIMIT_READ : ctx.env.RATE_LIMIT_WRITE;
-  if (!(await limiter.limit({ key: ctx.auth.id })).success) {
+  if (!(await limiter.limit({ key: rateLimitKey(ctx.auth) })).success) {
     return fail(ctx, 429, "rate_limited", "Too many requests for this token.");
   }
 

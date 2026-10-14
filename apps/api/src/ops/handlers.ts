@@ -46,6 +46,7 @@ import {
   listSshSigningKeysOperation,
 } from "../accounts/signing-keys.js";
 import {
+  createGitTokenOperation,
   createUserTokenOperation,
   listUserTokensOperation,
   revokeUserTokenOperation,
@@ -136,6 +137,7 @@ export const handlers: Handlers = {
 
   "users.tokens.list": listUserTokensOperation,
   "users.tokens.create": createUserTokenOperation,
+  "users.git_tokens.create": createGitTokenOperation,
   "users.tokens.revoke": revokeUserTokenOperation,
   "orgs.update": updateOrgOperation,
   "agents.create": createAgentOperation,

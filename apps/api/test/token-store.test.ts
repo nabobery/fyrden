@@ -3,6 +3,7 @@ import {
   D1TokenStore,
   LAST_USED_INTERVAL_MS,
   TokenCache,
+  TokenExpiredError,
   type TokenRecord,
   TouchLedger,
 } from "@fyrden/adapters-cloudflare/auth";
@@ -145,6 +146,41 @@ describe("D1TokenStore", () => {
       reason: "expired",
       expiredRecord: expect.objectContaining({ id }),
     });
+  });
+
+  it("refuses, as expired, a token whose minting token expired first; and stops one with its source", async () => {
+    const { store } = setup();
+    const source = await store.mint({
+      principalId: "usr_owner",
+      type: "pat",
+      scopes: [],
+      ttlMs: HOUR,
+      audit,
+    });
+    await expect(
+      store.mint({
+        principalId: "usr_owner",
+        type: "git",
+        scopes: [],
+        ttlMs: HOUR,
+        notAfter: 1,
+        audit,
+      }),
+    ).rejects.toBeInstanceOf(TokenExpiredError);
+    const derived = await store.mint({
+      principalId: "usr_owner",
+      type: "git",
+      scopes: [],
+      ttlMs: HOUR,
+      sourceId: source.id,
+      audit,
+    });
+    expect(await store.verify(derived.token, "write")).toMatchObject({
+      ok: true,
+      record: { sourceId: source.id },
+    });
+    await store.revoke(source.id, audit);
+    expect(await store.verify(derived.token, "write")).toEqual({ ok: false, reason: "revoked" });
   });
 
   it("reports what an expired token holds now on the primary", async () => {
