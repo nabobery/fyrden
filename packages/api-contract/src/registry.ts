@@ -16,6 +16,8 @@ import {
   disableAgent,
   getAgent,
   listAgents,
+  listAgentTokens,
+  revokeAgentToken,
 } from "../ops/agents.js";
 import { getArchive } from "../ops/archives.js";
 import {
@@ -83,6 +85,8 @@ export const registry = defineRegistry([
   getAgent,
   disableAgent,
   createAgentToken,
+  listAgentTokens,
+  revokeAgentToken,
   createGrant,
   listGrants,
   revokeGrant,

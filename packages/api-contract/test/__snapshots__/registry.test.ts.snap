@@ -929,6 +929,167 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
       },
     },
     "/agents/{agent}/tokens": {
+      "get": {
+        "description": "The tokens an agent acts with as itself (personal access and git tokens), newest first; revoked and expired ones too. Never the token values.",
+        "operationId": "agents.tokens.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "description": "The agent's handle: 1-39 letters, digits and single inner hyphens.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "tokens": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "expires_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "id": {
+                            "description": "Token id (tok_ prefix).",
+                            "type": "string",
+                          },
+                          "last_used_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "repositories": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "type": "string",
+                                },
+                                "type": "array",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Repository ids it is limited to; null for every one its holder can reach.",
+                          },
+                          "revoked": {
+                            "type": "boolean",
+                          },
+                          "scopes": {
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "type": {
+                            "enum": [
+                              "pat",
+                              "git",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "type",
+                          "scopes",
+                          "repositories",
+                          "created_at",
+                          "expires_at",
+                          "last_used_at",
+                          "revoked",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "tokens",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List an agent's tokens",
+        "x-fyrden-permission": "agents:read",
+        "x-fyrden-principals": [
+          "user",
+        ],
+      },
       "post": {
         "description": "Mints a token the agent acts with as itself: a personal access token (\`pat\`, also the subject of a token exchange) or a git token (\`git\`), never wider than your token (its scopes and repositories). Returned once.",
         "operationId": "agents.tokens.create",
@@ -1069,6 +1230,81 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Create a token for an agent",
+        "x-fyrden-permission": "agents:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/agents/{agent}/tokens/{token_id}": {
+      "delete": {
+        "description": "Revokes one of an agent's tokens: it stops working at once for writes (within 30 seconds for reads); the agent's other tokens keep working.",
+        "operationId": "agents.tokens.revoke",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "description": "The agent's handle: 1-39 letters, digits and single inner hyphens.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "token_id",
+            "required": true,
+            "schema": {
+              "description": "The token's id.",
+              "pattern": "^tok_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                    },
+                    "revoked": {
+                      "const": true,
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "revoked",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Revoke an agent's token",
         "x-fyrden-permission": "agents:write",
         "x-fyrden-principals": [
           "user",
@@ -11974,7 +12210,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "type": "null",
                               },
                             ],
-                            "description": "Repository ids it is limited to; null for every one the user can reach.",
+                            "description": "Repository ids it is limited to; null for every one its holder can reach.",
                           },
                           "revoked": {
                             "type": "boolean",

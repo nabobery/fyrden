@@ -10,14 +10,14 @@ export const UserToken = z.object({
   repositories: z
     .array(z.string())
     .nullable()
-    .describe("Repository ids it is limited to; null for every one the user can reach."),
+    .describe("Repository ids it is limited to; null for every one its holder can reach."),
   created_at: z.number().int().describe("Unix time in milliseconds."),
   expires_at: z.number().int().describe("Unix time in milliseconds."),
   last_used_at: z.number().int().nullable(),
   revoked: z.boolean(),
 });
 
-const TokenId = z
+export const TokenId = z
   .string()
   .regex(/^tok_[0-9A-HJKMNP-TV-Z]{26}$/)
   .describe("The token's id.");

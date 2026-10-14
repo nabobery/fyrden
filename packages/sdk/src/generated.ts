@@ -133,7 +133,7 @@ export type UsersTokensListOutput = {
     id: string;
     type: "pat" | "git";
     scopes: string[];
-    /** Repository ids it is limited to; null for every one the user can reach. */
+    /** Repository ids it is limited to; null for every one its holder can reach. */
     repositories: string[] | null;
     /** Unix time in milliseconds. */
     created_at: number;
@@ -330,6 +330,50 @@ export type AgentsTokensCreateOutput = {
   scopes: string[];
   /** Unix time in milliseconds. */
   expires_at: number;
+};
+
+/** Input of `agents.tokens.list`: List an agent's tokens. */
+export type AgentsTokensListInput = {
+  /** The agent's handle: 1-39 letters, digits and single inner hyphens. */
+  agent: string;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `agents.tokens.list`. */
+export type AgentsTokensListOutput = {
+  tokens: ({
+    /** Token id (tok_ prefix). */
+    id: string;
+    type: "pat" | "git";
+    scopes: string[];
+    /** Repository ids it is limited to; null for every one its holder can reach. */
+    repositories: string[] | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    expires_at: number;
+    last_used_at: number | null;
+    revoked: boolean;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `agents.tokens.revoke`: Revoke an agent's token. */
+export type AgentsTokensRevokeInput = {
+  /** The agent's handle: 1-39 letters, digits and single inner hyphens. */
+  agent: string;
+  /** The token's id. */
+  token_id: string;
+};
+
+/** Output of `agents.tokens.revoke`. */
+export type AgentsTokensRevokeOutput = {
+  id: string;
+  revoked: true;
 };
 
 /** Input of `grants.create`: Create a delegation grant. */
@@ -2498,6 +2542,8 @@ export const OPERATIONS = {
   "agents.get": { method: "GET", path: "/agents/{agent}", pathParams: ["agent"], idempotent: false },
   "agents.disable": { method: "DELETE", path: "/agents/{agent}", pathParams: ["agent"], idempotent: true },
   "agents.tokens.create": { method: "POST", path: "/agents/{agent}/tokens", pathParams: ["agent"], idempotent: true },
+  "agents.tokens.list": { method: "GET", path: "/agents/{agent}/tokens", pathParams: ["agent"], idempotent: false, items: "tokens" },
+  "agents.tokens.revoke": { method: "DELETE", path: "/agents/{agent}/tokens/{token_id}", pathParams: ["agent","token_id"], idempotent: true },
   "grants.create": { method: "POST", path: "/grants", pathParams: [], idempotent: true },
   "grants.list": { method: "GET", path: "/grants", pathParams: [], idempotent: false, items: "grants" },
   "grants.revoke": { method: "DELETE", path: "/grants/{grant_id}", pathParams: ["grant_id"], idempotent: true },
@@ -2594,6 +2640,10 @@ export interface Operations {
   "agents.disable": { input: AgentsDisableInput; output: AgentsDisableOutput };
   /** Create a token for an agent. Mints a token the agent acts with as itself: a personal access token (`pat`, also the subject of a token exchange) or a git token (`git`), never wider than your token (its scopes and repositories). Returned once. */
   "agents.tokens.create": { input: AgentsTokensCreateInput; output: AgentsTokensCreateOutput };
+  /** List an agent's tokens. The tokens an agent acts with as itself (personal access and git tokens), newest first; revoked and expired ones too. Never the token values. */
+  "agents.tokens.list": { input: AgentsTokensListInput; output: AgentsTokensListOutput };
+  /** Revoke an agent's token. Revokes one of an agent's tokens: it stops working at once for writes (within 30 seconds for reads); the agent's other tokens keep working. */
+  "agents.tokens.revoke": { input: AgentsTokensRevokeInput; output: AgentsTokensRevokeOutput };
   /** Create a delegation grant. Lets an agent act for you, limited to `scopes`, `repositories` and an expiry: the agent exchanges its own token for a delegated one (`POST /oauth/token`, RFC 8693). An agent holding a grant may pass a narrower one (`parent`) to another agent of its owner, one hop down at most. Revoking a grant revokes the tokens issued under it and its sub-grants. */
   "grants.create": { input: GrantsCreateInput; output: GrantsCreateOutput };
   /** List delegation grants. The grants you made (a user), or that you hold or passed down (an agent), newest first; revoked ones too. */

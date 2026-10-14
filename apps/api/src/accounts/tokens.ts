@@ -27,9 +27,22 @@ type TokenRow = {
 };
 
 /** The `users.tokens.list` operation: newest first. */
-export async function listUserTokensOperation(
+export function listUserTokensOperation(
   ctx: OpContext,
   input: Input<typeof listUserTokens>,
+): Promise<Output<typeof listUserTokens>> {
+  return listTokensOf(ctx, ctx.auth.principalId, input);
+}
+
+/**
+ * The personal access and git tokens `principalId` acts with as itself
+ * (not delegated ones), newest first: a user's own, or an agent's for its
+ * owner. Never the token values.
+ */
+export async function listTokensOf(
+  ctx: OpContext,
+  principalId: string,
+  input: { readonly per_page: number; readonly cursor?: string | undefined },
 ): Promise<Output<typeof listUserTokens>> {
   const before = decodeSeekCursor(input.cursor, "tok") ?? { at: Number.MAX_SAFE_INTEGER, id: "" };
   ctx.metrics.count("d1.query", { db: "directory", op: "user_tokens_list" });
@@ -40,7 +53,7 @@ export async function listUserTokensOperation(
          AND (created_at < ?2 OR (created_at = ?2 AND id < ?3))
        ORDER BY created_at DESC, id DESC LIMIT ?4`,
     )
-    .bind(ctx.auth.principalId, before.at, before.id, input.per_page + 1)
+    .bind(principalId, before.at, before.id, input.per_page + 1)
     .all<TokenRow>();
   const page = results.slice(0, input.per_page);
   const last = page.at(-1);
@@ -98,22 +111,34 @@ export async function createUserTokenOperation(
 }
 
 /** The `users.tokens.revoke` operation: revoking again answers the same. */
-export async function revokeUserTokenOperation(
+export function revokeUserTokenOperation(
   ctx: OpContext,
   input: Input<typeof revokeUserToken>,
+): Promise<Output<typeof revokeUserToken>> {
+  return revokeTokenOf(ctx, ctx.auth.principalId, input.token_id);
+}
+
+/**
+ * Revokes one of `principalId`'s own tokens (personal access or git), as
+ * the caller: at once for writes, audited. A token of anyone else is not
+ * found; revoking again answers the same.
+ */
+export async function revokeTokenOf(
+  ctx: OpContext,
+  principalId: string,
+  tokenId: string,
 ): Promise<Output<typeof revokeUserToken>> {
   const row = await ctx.env.DIRECTORY.withSession("first-primary")
     .prepare(
       "SELECT revoked_at FROM tokens WHERE id = ? AND principal_id = ? AND type IN ('pat', 'git')",
     )
-    .bind(input.token_id, ctx.auth.principalId)
+    .bind(tokenId, principalId)
     .first<{ revoked_at: number | null }>();
-  if (!row)
-    throw new OperationError(404, "token_not_found", `You have no token ${input.token_id}.`);
+  if (!row) throw new OperationError(404, "token_not_found", `There is no token ${tokenId}.`);
   if (row.revoked_at === null)
-    await tokenStore(ctx.env, { metrics: ctx.metrics }).revoke(input.token_id, {
+    await tokenStore(ctx.env, { metrics: ctx.metrics }).revoke(tokenId, {
       actorId: ctx.auth.principalId,
       ...(ctx.requestId !== undefined && { requestId: ctx.requestId }),
     });
-  return { id: input.token_id, revoked: true };
+  return { id: tokenId, revoked: true };
 }

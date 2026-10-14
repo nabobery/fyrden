@@ -5,13 +5,16 @@ import type {
   getAgent,
   Input,
   listAgents,
+  listAgentTokens,
   Output,
+  revokeAgentToken,
 } from "@fyrden/api-contract";
 import { isPermission, scopesAllow } from "@fyrden/domain";
 import { decodeSeekCursor, encodeSeekCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock, newId, tokenStore } from "../services.js";
 import { type Account, canUseAccount, orgFor } from "./account.js";
+import { listTokensOf, revokeTokenOf } from "./tokens.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -223,4 +226,22 @@ export async function createAgentTokenOperation(
     scopes,
     expires_at: minted.expiresAt,
   };
+}
+
+/** The `agents.tokens.list` operation: for the agent's owner (an organization's owners). */
+export async function listAgentTokensOperation(
+  ctx: OpContext,
+  input: Input<typeof listAgentTokens>,
+): Promise<Output<typeof listAgentTokens>> {
+  const agent = await agentFor(ctx, input.agent, "agents:read");
+  return listTokensOf(ctx, agent.id, input);
+}
+
+/** The `agents.tokens.revoke` operation: one token, so a leaked one ends without disabling the agent. */
+export async function revokeAgentTokenOperation(
+  ctx: OpContext,
+  input: Input<typeof revokeAgentToken>,
+): Promise<Output<typeof revokeAgentToken>> {
+  const agent = await agentFor(ctx, input.agent, "agents:write");
+  return revokeTokenOf(ctx, agent.id, input.token_id);
 }

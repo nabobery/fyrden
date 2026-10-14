@@ -94,6 +94,97 @@ describe("agents", () => {
     expect((await api("POST", "/grants", agent.token, {})).status).toBe(401);
   });
 
+  it("have their tokens listed and revoked one at a time by their owner", async () => {
+    const owner = await user();
+    const agent = await agentOf(owner);
+    const second = await json<{ id: string; token: string }>(
+      api("POST", `/agents/${agent.handle}/tokens`, owner.token, { type: "git" }),
+    );
+    const listed = await json<{ tokens: { id: string; type: string; revoked: boolean }[] }>(
+      api("GET", `/agents/${agent.handle}/tokens`, owner.token),
+    );
+    expect(listed.status).toBe(200);
+    expect(listed.body.tokens).toHaveLength(2);
+    expect(listed.body.tokens.map((t) => t.type).sort()).toEqual(["git", "pat"]);
+    // Someone else: not found, for listing and revoking alike.
+    const other = await user();
+    expect((await api("GET", `/agents/${agent.handle}/tokens`, other.token)).status).toBe(404);
+    expect(
+      (await api("DELETE", `/agents/${agent.handle}/tokens/${second.body.id}`, other.token)).status,
+    ).toBe(404);
+    // Another agent's token through this agent: not found either.
+    const another = await agentOf(owner);
+    const anothers = await json<{ tokens: { id: string }[] }>(
+      api("GET", `/agents/${another.handle}/tokens`, owner.token),
+    );
+    const foreign = anothers.body.tokens[0]?.id ?? "";
+    expect(
+      (await api("DELETE", `/agents/${agent.handle}/tokens/${foreign}`, owner.token)).status,
+    ).toBe(404);
+    // The leaked one stops on its next write; the other keeps working.
+    const pat = listed.body.tokens.find((t) => t.type === "pat")?.id ?? "";
+    expect(
+      await json(api("DELETE", `/agents/${agent.handle}/tokens/${pat}`, owner.token)),
+    ).toMatchObject({ status: 200, body: { id: pat, revoked: true } });
+    expect((await api("POST", "/grants", agent.token, {})).status).toBe(401);
+    // The same agent's other token still authenticates for a write.
+    expect((await api("POST", "/grants", second.body.token, {})).status).not.toBe(401);
+    const after = await json<{ tokens: { id: string; revoked: boolean }[] }>(
+      api("GET", `/agents/${agent.handle}/tokens`, owner.token),
+    );
+    expect(after.body.tokens.find((t) => t.id === pat)?.revoked).toBe(true);
+    expect(after.body.tokens.find((t) => t.id === second.body.id)?.revoked).toBe(false);
+    // Audited, with who revoked it.
+    const audit = await env.DIRECTORY.prepare(
+      "SELECT actor_id FROM audit_log WHERE action = 'token.revoke' AND target_id = ?",
+    )
+      .bind(pat)
+      .first<{ actor_id: string }>();
+    expect(audit?.actor_id).toBe(owner.principalId);
+  });
+
+  it("have their tokens managed only by their owner's full rights, never by an agent", async () => {
+    const owner = await user();
+    const agent = await agentOf(owner);
+    const path = `/agents/${agent.handle}/tokens`;
+    const [tokenId] = (
+      await json<{ tokens: { id: string }[] }>(api("GET", path, owner.token))
+    ).body.tokens.map((t) => t.id);
+    // Read access lists, not revokes.
+    const reader = await scopedToken(owner.principalId, ["agents:read"]);
+    expect((await api("GET", path, reader)).status).toBe(200);
+    expect((await api("DELETE", `${path}/${tokenId}`, reader)).status).toBe(403);
+    // An agent manages no tokens, as itself or acting for its owner.
+    expect((await api("GET", path, agent.token)).status).toBe(403);
+    const granted = await grant(owner, { agent: agent.handle, scopes: ["agents:read"] });
+    const acting = await delegated(agent.token, granted.body.id);
+    expect((await api("GET", path, acting.body.access_token)).status).toBe(403);
+    // A user's own token through an agent's path: not found.
+    const mine = await json<{ id: string }>(
+      api("POST", "/user/tokens", owner.token, { scopes: ["metadata:read"] }),
+    );
+    expect(await json(api("DELETE", `${path}/${mine.body.id}`, owner.token))).toMatchObject({
+      status: 404,
+      body: { code: "token_not_found" },
+    });
+    // An organization's agent: its owners, not its members.
+    const login = uniqueId("org").slice(0, 39);
+    await api("POST", "/admin/organizations", admin.token, { login, admin: owner.handle });
+    const member = await user();
+    expect(
+      await json(api("PUT", `/orgs/${login}/memberships/${member.handle}`, owner.token, {})),
+    ).toMatchObject({ status: 200, body: { role: "member" } });
+    const orgAgent = await agentOf(owner, login);
+    const orgPath = `/agents/${orgAgent.handle}/tokens`;
+    expect((await api("GET", orgPath, owner.token)).status).toBe(200);
+    expect((await api("GET", orgPath, member.token)).status).toBe(404);
+    const [orgTokenId] = (
+      await json<{ tokens: { id: string }[] }>(api("GET", orgPath, owner.token))
+    ).body.tokens.map((t) => t.id);
+    expect((await api("DELETE", `${orgPath}/${orgTokenId}`, member.token)).status).toBe(404);
+    expect((await api("DELETE", `${orgPath}/${orgTokenId}`, owner.token)).status).toBe(200);
+  });
+
   it("act with their own roles, never exceeding their owner's", async () => {
     const owner = await user();
     const repo = await repoOf(owner);

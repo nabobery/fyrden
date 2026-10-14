@@ -7,6 +7,8 @@ import {
   disableAgentOperation,
   getAgentOperation,
   listAgentsOperation,
+  listAgentTokensOperation,
+  revokeAgentTokenOperation,
 } from "../accounts/agents.js";
 import {
   createGrantOperation,
@@ -141,6 +143,8 @@ export const handlers: Handlers = {
   "agents.get": getAgentOperation,
   "agents.disable": disableAgentOperation,
   "agents.tokens.create": createAgentTokenOperation,
+  "agents.tokens.list": listAgentTokensOperation,
+  "agents.tokens.revoke": revokeAgentTokenOperation,
   "grants.create": createGrantOperation,
   "grants.list": listGrantsOperation,
   "grants.revoke": revokeGrantOperation,

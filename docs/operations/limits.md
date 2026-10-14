@@ -444,7 +444,7 @@ acting, the current one first, and audit rows carry it.
 | A grant | Scopes (at least one), optionally repositories, an expiry of up to 365 days; never wider, nor longer-lived, than the token making it |
 | Passing down | An agent holding a user's grant may pass a narrower one (scopes, repositories, expiry) to another agent of its owner; one hop at most (depth 2) |
 | Delegated token | Type `oat`, up to 1 hour, and never past any grant of its chain or the agent's own token; scopes and repositories within the grant and the agent's token; for the REST API unless `resource` asks for the MCP server |
-| Revocation | Revoking a grant revokes the grants passed down from it; tokens under them, and an agent's tokens once it (or its owner) is disabled, stop at once for writes and within 30 seconds for reads |
+| Revocation | Revoking a grant revokes the grants passed down from it; tokens under them, an agent's token its owner revokes (`DELETE /agents/{agent}/tokens/{token_id}`; `GET /agents/{agent}/tokens` lists them), and an agent's tokens once it (or its owner) is disabled, stop at once for writes and within 30 seconds for reads |
 | Delegated tokens may not | Make or revoke grants, mint tokens, change who has access (collaborators, team repositories), or call user-only operations (create repositories, transfer, stars, signing keys) |
 | An agent's own token | Never wider than the token that minted it (scopes and repositories) |
 | Token endpoint | Bodies up to 16 KiB; rate limited per client address |

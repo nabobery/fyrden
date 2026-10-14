@@ -2,6 +2,7 @@ import { HANDLE_PATTERN, PERMISSION_NAMES } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { MAX_TOKEN_DAYS } from "./admin.js";
+import { TokenId, UserToken } from "./tokens.js";
 
 export const Agent = z.object({
   id: z.string().describe("Agent id (agt_ prefix)."),
@@ -137,5 +138,47 @@ export const createAgentToken = defineOperation({
   successStatus: 201,
   secretResponse: true,
   // Not an MCP tool: a minted credential would land in a model's context.
+  mcp: false,
+});
+
+export const listAgentTokens = defineOperation({
+  id: "agents.tokens.list",
+  method: "GET",
+  path: "/agents/{agent}/tokens",
+  summary: "List an agent's tokens",
+  description:
+    "The tokens an agent acts with as itself (personal access and git tokens), newest first; revoked and expired ones too. Never the token values.",
+  input: z.object({
+    agent: AgentHandle,
+    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+    cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
+  }),
+  output: z.object({
+    tokens: z.array(UserToken),
+    next_cursor: z
+      .string()
+      .nullable()
+      .describe("Pass as `cursor` for the next page; null on the last page."),
+  }),
+  permission: "agents:read",
+  principals: ["user"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: false,
+});
+
+export const revokeAgentToken = defineOperation({
+  id: "agents.tokens.revoke",
+  method: "DELETE",
+  path: "/agents/{agent}/tokens/{token_id}",
+  summary: "Revoke an agent's token",
+  description:
+    "Revokes one of an agent's tokens: it stops working at once for writes (within 30 seconds for reads); the agent's other tokens keep working.",
+  input: z.object({ agent: AgentHandle, token_id: TokenId }),
+  output: z.object({ id: z.string(), revoked: z.literal(true) }),
+  permission: "agents:write",
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
   mcp: false,
 });
