@@ -164,6 +164,8 @@ export const updateRuleset = defineOperation({
     title: "Update a ruleset",
     description: "Replace a ruleset of a repository you administer.",
     readOnly: false,
+    // Each replacement makes a new version (a push being checked then retries).
+    idempotent: false,
   },
 });
 

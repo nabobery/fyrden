@@ -125,3 +125,24 @@ describe("generated artifacts", () => {
     }
   });
 });
+
+describe("MCP tool annotations", () => {
+  it("call a tool idempotent only when calling it again changes nothing more", () => {
+    const hints = Object.fromEntries(
+      mcpTools(registry).map((t) => [t.operationId, t.annotations.idempotentHint]),
+    );
+    // A create makes another resource each time (an MCP call carries no idempotency key).
+    expect(hints["repos.create"]).toBe(false);
+    expect(hints["repos.fork"]).toBe(false);
+    // A file write is a PUT, but each call makes another commit.
+    expect(hints["repos.contents.put"]).toBe(false);
+    // Each replacement of a ruleset makes another version.
+    expect(hints["repos.rulesets.update"]).toBe(false);
+    // Setting or removing a thing, and reading, change nothing more when repeated.
+    expect(hints["repos.delete"]).toBe(true);
+    expect(hints["repos.get"]).toBe(true);
+    for (const op of registry)
+      if (op.mcp !== false && op.method === "POST" && !op.mcp.readOnly)
+        expect(hints[op.id], op.id).toBe(false);
+  });
+});

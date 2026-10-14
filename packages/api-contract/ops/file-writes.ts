@@ -65,6 +65,8 @@ export const putContents = defineOperation({
     title: "Create or update a file",
     description: "Write one file as a commit on a branch.",
     readOnly: false,
+    // Each call makes another commit, even with the same content.
+    idempotent: false,
   },
 });
 

@@ -52,7 +52,19 @@ export interface OperationDef<
   successStatus?: 200 | 201;
   /** The response carries a secret, so idempotent replays omit it. */
   secretResponse?: boolean;
-  mcp: false | { tool: string; title: string; description: string; readOnly: boolean };
+  mcp:
+    | false
+    | {
+        tool: string;
+        title: string;
+        description: string;
+        readOnly: boolean;
+        /**
+         * Whether calling it again with the same arguments changes nothing
+         * more; by default when it reads, sets (PUT) or removes (DELETE).
+         */
+        idempotent?: boolean;
+      };
 }
 
 export type Input<D extends OperationDef> = z.infer<D["input"]>;
