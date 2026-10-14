@@ -6,6 +6,7 @@ import type { RewriteState } from "../git/maintenance/rewrite.js";
 import { packCapPolicy } from "../git/maintenance/tail-merge-plan.js";
 import { advanceDeletion } from "../repos/deletion.js";
 import {
+  agentRepoQuotaError,
   defaultBranchOf,
   forgetResolved,
   heldBack,
@@ -68,6 +69,12 @@ export interface ForkRequest {
   readonly maxRepos: number;
   readonly requestId?: string;
   readonly metrics?: Metrics;
+  /** Who forks it, when not the owner itself: an agent acting for it (its audit row names the chain). */
+  readonly actorId?: string;
+  readonly act?: readonly string[];
+  readonly grantId?: string;
+  /** The agent forking it for its owner, and that agent's limit, checked again as it is published. */
+  readonly createdBy?: NewRepoRow["createdBy"];
 }
 
 export interface ForkOptions {
@@ -134,7 +141,7 @@ export async function forkRepository(
         name: request.name,
         visibility: parent.visibility,
         epochGen,
-        actor: request.ownerId,
+        actor: request.actorId ?? request.ownerId,
       },
     );
 
@@ -170,6 +177,8 @@ export async function forkRepository(
 
     await fork.finishFork(exported.refs, {
       principal: request.ownerId,
+      ...(request.act && { actChain: request.act }),
+      ...(request.grantId && { grantId: request.grantId }),
       requestId: request.requestId ?? null,
       via: "api",
     });
@@ -197,6 +206,7 @@ export async function forkRepository(
     parentId: parent.id,
     expiresAt: request.expiresAt ?? null,
     now,
+    createdBy: request.createdBy ?? null,
   };
   request.metrics?.count("d1.query", { db: "directory", op: "repo_create" }, 6);
   const refused = heldBack(
@@ -205,20 +215,26 @@ export async function forkRepository(
         env.DIRECTORY,
         row,
         {
-          actorId: request.ownerId,
+          actorId: request.actorId ?? request.ownerId,
           ...(request.requestId ? { requestId: request.requestId } : {}),
           action: "repo.fork",
           details: { name: request.name, parent_id: parent.id, network_id: networkId },
+          ...(request.act && { act: request.act }),
         },
         request.maxRepos,
       ),
       ...discardStatements(env.DIRECTORY, row),
     ]),
+    request.createdBy?.maxRepos,
   );
   if (refused) {
     await advanceDeletion(env, forkId, request.metrics ? { metrics: request.metrics } : {}).catch(
       () => "deleting",
     );
+    if (refused === "agent_quota_exceeded") {
+      const { message } = agentRepoQuotaError(request.createdBy?.maxRepos ?? 0);
+      return { ok: false, status: 403, code: "quota_exceeded", error: message };
+    }
     return refused === "name_taken"
       ? { ok: false, status: 409, code: "name_taken", error: nameTaken(request.name) }
       : {

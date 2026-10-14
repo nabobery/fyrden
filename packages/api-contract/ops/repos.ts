@@ -51,11 +51,11 @@ export const createRepo = defineOperation({
   path: "/user/repos",
   summary: "Create a repository",
   description:
-    "Creates an empty private repository owned by the authenticated user. Clone and push it at `/<owner>/<name>.git`.",
+    "Creates an empty private repository owned by the authenticated user. Clone and push it at `/<owner>/<name>.git`. An agent acting for a user under a grant (with `repos:create`) creates it in the user's account; it expires after 7 days unless `expires_at` says otherwise, and each agent has a limit of active repositories of its own. An agent's own token creates none.",
   input: z.object({ name: RepoName, expires_at: ExpiresAt.optional() }),
   output: Repo,
   permission: "repos:create",
-  principals: ["user"],
+  principals: ["user", "agent"],
   rateLimit: "write",
   idempotency: "key",
   successStatus: 201,
@@ -284,7 +284,7 @@ export const forkRepo = defineOperation({
   path: "/repos/{owner}/{repo}/forks",
   summary: "Fork a repository",
   description:
-    "Creates a fork of a repository the caller can read, owned by the caller, in the same fork network: it starts with the parent's branches, tags and default branch, and shares the parent's stored objects, so no data is copied. The fork can be cloned as soon as this returns. Answers 409 `network_busy` while the network's storage is being collected; retry after a few seconds.",
+    "Creates a fork of a repository the caller can read, owned by the caller, in the same fork network: it starts with the parent's branches, tags and default branch, and shares the parent's stored objects, so no data is copied. The fork can be cloned as soon as this returns. An agent forks as it creates repositories (acting for a user under a grant, expiring unless `expires_at` says otherwise, within its own limit). Answers 409 `network_busy` while the network's storage is being collected; retry after a few seconds.",
   input: z.object({
     owner: z.string().regex(HANDLE_PATTERN).describe("The parent's owner handle."),
     repo: RepoName.describe("The parent repository's name."),
@@ -293,7 +293,7 @@ export const forkRepo = defineOperation({
   }),
   output: Repo,
   permission: "repos:create",
-  principals: ["user"],
+  principals: ["user", "agent"],
   rateLimit: "write",
   idempotency: "key",
   successStatus: 201,

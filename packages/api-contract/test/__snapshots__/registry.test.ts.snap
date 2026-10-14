@@ -7330,7 +7330,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "post": {
-        "description": "Creates a fork of a repository the caller can read, owned by the caller, in the same fork network: it starts with the parent's branches, tags and default branch, and shares the parent's stored objects, so no data is copied. The fork can be cloned as soon as this returns. Answers 409 \`network_busy\` while the network's storage is being collected; retry after a few seconds.",
+        "description": "Creates a fork of a repository the caller can read, owned by the caller, in the same fork network: it starts with the parent's branches, tags and default branch, and shares the parent's stored objects, so no data is copied. The fork can be cloned as soon as this returns. An agent forks as it creates repositories (acting for a user under a grant, expiring unless \`expires_at\` says otherwise, within its own limit). Answers 409 \`network_busy\` while the network's storage is being collected; retry after a few seconds.",
         "operationId": "repos.fork",
         "parameters": [
           {
@@ -7499,6 +7499,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-fyrden-permission": "repos:create",
         "x-fyrden-principals": [
           "user",
+          "agent",
         ],
         "x-idempotency": "Idempotency-Key header",
       },
@@ -11292,7 +11293,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "post": {
-        "description": "Creates an empty private repository owned by the authenticated user. Clone and push it at \`/<owner>/<name>.git\`.",
+        "description": "Creates an empty private repository owned by the authenticated user. Clone and push it at \`/<owner>/<name>.git\`. An agent acting for a user under a grant (with \`repos:create\`) creates it in the user's account; it expires after 7 days unless \`expires_at\` says otherwise, and each agent has a limit of active repositories of its own. An agent's own token creates none.",
         "operationId": "repos.create",
         "requestBody": {
           "content": {
@@ -11441,6 +11442,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-fyrden-permission": "repos:create",
         "x-fyrden-principals": [
           "user",
+          "agent",
         ],
         "x-idempotency": "Idempotency-Key header",
       },

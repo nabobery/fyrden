@@ -1,16 +1,20 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
-import type { getRepo, Output } from "@fyrden/api-contract";
+import type { createRepo, getRepo, Input, Output } from "@fyrden/api-contract";
 import { expiryProblem } from "@fyrden/domain";
+import { actingRoleIn, canUseAccount } from "../accounts/account.js";
 import { accountLimits } from "../accounts/quotas.js";
 import { allocateEpoch } from "../events/epochs.js";
 import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
-import { OperationError } from "../ops/execute.js";
+import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock, newId } from "../services.js";
+import { agentRepoLimits } from "./agent-limits.js";
 import {
+  agentRepoQuotaError,
   checkNewRepo,
   forgetResolved,
   heldBack,
   INITIAL_BRANCH,
+  type NewRepoRow,
   nameTakenError,
   newRepoStatements,
   repoQuotaError,
@@ -46,12 +50,16 @@ export async function createRepository(
     readonly templateId?: string;
     /** When it is deleted (Unix ms, checked by `checkedExpiry`); null to keep it. */
     readonly expiresAt?: number | null;
+    /** The agents acting for the owner, the current one first (its audit row names them). */
+    readonly act?: readonly string[];
+    /** The agent creating it for its owner, and that agent's limit. */
+    readonly createdBy?: NewRepoRow["createdBy"];
   },
 ): Promise<Output<typeof getRepo>> {
   const { metrics } = request;
   const expiresAt = request.expiresAt ?? null;
   const { maxRepos } = await accountLimits(env, owner.id, metrics);
-  await checkNewRepo(env, owner, name, maxRepos, metrics);
+  await checkNewRepo(env, owner, name, maxRepos, metrics, request.createdBy);
 
   const id = newId("rep");
   const networkId = newId("net");
@@ -85,16 +93,19 @@ export async function createRepository(
             expiresAt,
             now,
             generatingSince: request.templateId === undefined ? null : now,
+            createdBy: request.createdBy ?? null,
           },
           {
             actorId: request.actorId,
             ...(request.requestId ? { requestId: request.requestId } : {}),
             action: "repo.create",
             details: { name, owner_id: owner.id },
+            ...(request.act && { act: request.act }),
           },
           maxRepos,
         ),
       ),
+      request.createdBy?.maxRepos,
     );
   } catch (error) {
     // Lost a race with another create of the same name.
@@ -105,6 +116,8 @@ export async function createRepository(
   // Lost a race with another create of the name or of the last repository the
   // quota allows; the new object stays unreachable and empty.
   if (refused === "name_taken") throw nameTakenError(owner.handle, name);
+  if (refused === "agent_quota_exceeded")
+    throw agentRepoQuotaError(request.createdBy?.maxRepos ?? 0);
   if (refused) throw repoQuotaError(owner.handle, maxRepos);
   // The name may have redirected to another repository here.
   forgetResolved(owner.handle, name);
@@ -124,4 +137,76 @@ export async function createRepository(
     },
     { defaultBranch: INITIAL_BRANCH, description: null, stars: 0 },
   );
+}
+
+/** Who makes a new repository of the caller's own, and on what terms (see `ownNewRepo`). */
+export interface OwnNewRepo {
+  readonly owner: { readonly id: string; readonly handle: string };
+  readonly actorId: string;
+  readonly act?: readonly string[];
+  readonly grantId?: string;
+  readonly expiresAt: number | null;
+  readonly createdBy?: NewRepoRow["createdBy"];
+}
+
+/**
+ * A new repository of the caller's own (made or forked): the caller's. An
+ * agent makes one only acting for a user under a grant: in the user's
+ * account, within the rights of every acting agent's owner, expiring after
+ * the agents' default unless it says when, and within its own limit.
+ */
+export async function ownNewRepo(
+  ctx: OpContext,
+  expiresAt: number | undefined,
+): Promise<OwnNewRepo> {
+  const { env, auth, metrics } = ctx;
+  const owner = { id: auth.principalId, handle: auth.principalHandle ?? "" };
+  if (auth.principalType !== "agent")
+    return { owner, actorId: auth.principalId, expiresAt: checkedExpiry(expiresAt) };
+  const agentId = auth.act[0];
+  if (auth.grantId === null || agentId === undefined)
+    throw new OperationError(
+      403,
+      "forbidden",
+      "An agent creates repositories acting for a user, under a delegation grant (exchange its token at /oauth/token).",
+    );
+  // Its token could never reach the new repository.
+  if (auth.repoIds !== null)
+    throw new OperationError(
+      403,
+      "forbidden",
+      "A token limited to repositories cannot create repositories (it could not reach the new one).",
+    );
+  const role = await actingRoleIn(env, { ...owner, type: "user" }, auth, metrics);
+  if (!canUseAccount(auth, role, "repos:create"))
+    throw new OperationError(
+      403,
+      "forbidden",
+      `You may not create repositories for ${owner.handle}.`,
+    );
+  const limits = agentRepoLimits(env);
+  return {
+    owner,
+    actorId: agentId,
+    act: auth.act,
+    grantId: auth.grantId,
+    expiresAt: expiresAt === undefined ? clock() + limits.ttlMs : checkedExpiry(expiresAt),
+    createdBy: { agentId, maxRepos: limits.maxRepos },
+  };
+}
+
+/** The `repos.create` operation: a repository of the caller's own (see `ownNewRepo`). */
+export async function createOwnRepoOperation(
+  ctx: OpContext,
+  input: Input<typeof createRepo>,
+): Promise<Output<typeof createRepo>> {
+  const made = await ownNewRepo(ctx, input.expires_at);
+  return createRepository(ctx.env, made.owner, input.name, {
+    actorId: made.actorId,
+    ...(ctx.requestId !== undefined && { requestId: ctx.requestId }),
+    metrics: ctx.metrics,
+    expiresAt: made.expiresAt,
+    ...(made.act && { act: made.act }),
+    ...(made.createdBy && { createdBy: made.createdBy }),
+  });
 }

@@ -406,6 +406,7 @@ them and their use.
 | A push that commits nothing | What it reserved or held is free again |
 | Holds | A reservation lasts the push's longest wait plus 15 minutes (a chunked upload's session plus an hour), a commit's hold 30 minutes; a lapsed one counts nothing. A commit whose confirmation is lost goes uncounted rather than counted twice |
 | Forks | A fork that loses the last slot to a concurrent create is deleted again |
+| An agent's repositories | Besides the account's quota, an agent acting for a user may have created at most 100 active repositories (`QUOTA_AGENT_MAX_REPOS`); past it, 403 `quota_exceeded`, held against concurrent creates |
 
 ## Repository transfer
 
@@ -447,7 +448,8 @@ acting, the current one first, and audit rows carry it.
 | Passing down | An agent holding a user's grant may pass a narrower one (scopes, repositories, expiry) to another agent of its owner; one hop at most (depth 2) |
 | Delegated token | Type `oat`, up to 1 hour, and never past any grant of its chain or the agent's own token; scopes and repositories within the grant and the agent's token; for the REST API unless `resource` asks for the MCP server |
 | Revocation | Revoking a grant revokes the grants passed down from it; tokens under them, an agent's token its owner revokes (`DELETE /agents/{agent}/tokens/{token_id}`; `GET /agents/{agent}/tokens` lists them), and an agent's tokens once it (or its owner) is disabled, stop at once for writes and within 30 seconds for reads |
-| Delegated tokens may not | Make or revoke grants, mint tokens (but a git token for themselves), change who has access (collaborators, team repositories), or call user-only operations (create repositories, transfer, stars, signing keys) |
+| Delegated tokens may not | Make or revoke grants, mint tokens (but a git token for themselves), change who has access (collaborators, team repositories), or call user-only operations (transfer, stars, signing keys) |
+| Repositories an agent creates | Acting for a user under a grant with `repos:create` (create and fork): the user's, within every acting agent's owner's rights; each expires after 7 days (`AGENT_REPO_TTL_DAYS`) unless `expires_at` says when (at most a year: an agent may move it, only the user may clear it), and counts against the agent's own limit (see Quotas). An agent's own token, or a token limited to repositories (by its grant or the agent's token; it could not reach the new one), creates none |
 | An agent's own token | Never wider than the token that minted it (scopes and repositories) |
 | Token endpoint | Bodies up to 16 KiB; rate limited per client address |
 | Rulesets | Rules for `agent` actors apply to an agent acting for a user |
@@ -648,6 +650,8 @@ and the default applies.
 | `GIT_IMPORT_MAX_MS` | 600,000 (10 min) | 1,000 | Longest an import's fetch may take |
 | `QUOTA_MAX_REPOS` | 1,000 | 0 | Active repositories an account may have, unless an administrator set its own |
 | `QUOTA_MAX_STORAGE_BYTES` | 1,073,741,824 (1 GiB) | 0 | Bytes an account's pushes may store, unless an administrator set its own |
+| `QUOTA_AGENT_MAX_REPOS` | 100 | 0 | Active repositories one agent may have created acting for users |
+| `AGENT_REPO_TTL_DAYS` | 7 | 1 | Days until a repository an agent creates expires, unless it gives an expiry |
 
 `fyrden-api` also needs the secret `BOOTSTRAP_SECRET`, which `fyrden deploy`
 sets. The `fyrden` CLI reads `FYRDEN_TOKEN` (the token for `fyrden push`),

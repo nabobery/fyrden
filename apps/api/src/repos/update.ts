@@ -34,6 +34,13 @@ export async function updateRepoOperation(
 ): Promise<Output<typeof updateRepo>> {
   const { env, auth, metrics } = ctx;
   const entry = await repoFor(ctx, input.owner, input.repo, "administration:write");
+  // An agent's scratch repositories expire: it may move the date, its user may clear it.
+  if (input.expires_at === null && auth.principalType === "agent")
+    throw new OperationError(
+      403,
+      "forbidden",
+      "An agent may change when a repository expires, not clear it; its user may.",
+    );
   // Checked first, so an invalid expiry changes nothing.
   const expiresAt =
     input.expires_at === undefined || input.expires_at === null

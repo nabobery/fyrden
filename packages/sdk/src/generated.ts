@@ -2680,7 +2680,7 @@ export interface Operations {
   "admin.orgs.create": { input: AdminOrgsCreateInput; output: AdminOrgsCreateOutput };
   /** Update an organization's settings. Changes an organization's settings: whether its agents' API tokens must be DPoP-bound (`require_dpop`). Owners only. */
   "orgs.update": { input: OrgsUpdateInput; output: OrgsUpdateOutput };
-  /** Create a repository. Creates an empty private repository owned by the authenticated user. Clone and push it at `/<owner>/<name>.git`. */
+  /** Create a repository. Creates an empty private repository owned by the authenticated user. Clone and push it at `/<owner>/<name>.git`. An agent acting for a user under a grant (with `repos:create`) creates it in the user's account; it expires after 7 days unless `expires_at` says otherwise, and each agent has a limit of active repositories of its own. An agent's own token creates none. */
   "repos.create": { input: ReposCreateInput; output: ReposCreateOutput };
   /** List your repositories. Lists the repositories the authenticated principal owns and its token can see, by name (ignoring case). A repository created a moment ago is listed; its `default_branch` can lag behind a change by a few seconds (use `GET /repos/{owner}/{repo}` for the current one). */
   "repos.list": { input: ReposListInput; output: ReposListOutput };
@@ -2694,7 +2694,7 @@ export interface Operations {
   "repos.delete_many": { input: ReposDeleteManyInput; output: ReposDeleteManyOutput };
   /** Transfer a repository. Moves a repository you administer to another account: yourself or an organization you may create repositories in, under its name or `new_name`. Its collaborators, rulesets, stars and history go with it; the old account's team grants stay behind. The old path keeps working as a redirect. While it moves (usually under a second), it takes no push or change. Answers 409 `name_taken` or 403 `quota_exceeded` when the new account cannot take it. */
   "repos.transfer": { input: ReposTransferInput; output: ReposTransferOutput };
-  /** Fork a repository. Creates a fork of a repository the caller can read, owned by the caller, in the same fork network: it starts with the parent's branches, tags and default branch, and shares the parent's stored objects, so no data is copied. The fork can be cloned as soon as this returns. Answers 409 `network_busy` while the network's storage is being collected; retry after a few seconds. */
+  /** Fork a repository. Creates a fork of a repository the caller can read, owned by the caller, in the same fork network: it starts with the parent's branches, tags and default branch, and shares the parent's stored objects, so no data is copied. The fork can be cloned as soon as this returns. An agent forks as it creates repositories (acting for a user under a grant, expiring unless `expires_at` says otherwise, within its own limit). Answers 409 `network_busy` while the network's storage is being collected; retry after a few seconds. */
   "repos.fork": { input: ReposForkInput; output: ReposForkOutput };
   /** List forks. Lists the forks of a repository that the caller owns, oldest first. Forks owned by other accounts are not listed. */
   "repos.forks.list": { input: ReposForksListInput; output: ReposForksListOutput };

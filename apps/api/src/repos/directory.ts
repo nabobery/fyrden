@@ -269,6 +269,8 @@ export interface NewRepoRow {
   readonly now: number;
   /** Set for a repository generated from a template, until its first commit is made. */
   readonly generatingSince?: number | null;
+  /** The agent creating it acting for its owner, and that agent's limit of active repositories. */
+  readonly createdBy?: { readonly agentId: string; readonly maxRepos: number } | null;
 }
 
 /**
@@ -288,29 +290,36 @@ export function newRepoStatements(
     readonly requestId?: string;
     readonly action: string;
     readonly details: Record<string, unknown>;
+    /** The agents acting, the current one first. */
+    readonly act?: readonly string[];
   },
   maxRepos: number,
 ): D1PreparedStatement[] {
   const inserted = "EXISTS (SELECT 1 FROM repos WHERE id = ?)";
+  const agent = row.createdBy ?? null;
   return [
-    // What the insert below sees: the name taken, the active repositories.
+    // What the insert below sees: the name taken, the active repositories (the agent's too).
     db
       .prepare(
         `SELECT EXISTS (SELECT 1 FROM repos WHERE owner_id = ?1 AND name = ?2 COLLATE NOCASE
                   AND state <> 'deleted') AS taken,
                 (SELECT count(*) FROM repos WHERE owner_id = ?1 AND state <> 'deleted'
-                  AND state = 'active') AS repos`,
+                  AND state = 'active') AS repos,
+                (SELECT count(*) FROM repos WHERE created_by = ?3 AND state = 'active')
+                  AS agent_repos`,
       )
-      .bind(row.ownerId, row.name),
+      .bind(row.ownerId, row.name, agent?.agentId ?? null),
     db
       .prepare(
         `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, parent_id,
-           expires_at, created_at, updated_at, generating_since)
-         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?11
+           expires_at, created_at, updated_at, generating_since, created_by)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?11, ?12
          WHERE (SELECT count(*) FROM repos WHERE owner_id = ?2 AND state <> 'deleted'
            AND state = 'active') < ?10
            AND NOT EXISTS (SELECT 1 FROM repos WHERE owner_id = ?2 AND name = ?3 COLLATE NOCASE
-             AND state <> 'deleted')`,
+             AND state <> 'deleted')
+           AND (?12 IS NULL
+             OR (SELECT count(*) FROM repos WHERE created_by = ?12 AND state = 'active') < ?13)`,
       )
       .bind(
         row.id,
@@ -324,14 +333,16 @@ export function newRepoStatements(
         row.now,
         maxRepos,
         row.generatingSince ?? null,
+        agent?.agentId ?? null,
+        agent?.maxRepos ?? 0,
       ),
     db
       .prepare(`DELETE FROM repo_redirects WHERE owner_id = ? AND name = ? AND ${inserted}`)
       .bind(row.ownerId, row.name, row.id),
     db
       .prepare(
-        `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
-         SELECT ?, ?, ?, ?, ?, ? WHERE ${inserted}`,
+        `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id, act_chain)
+         SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${inserted}`,
       )
       .bind(
         row.now,
@@ -340,6 +351,7 @@ export function newRepoStatements(
         row.id,
         JSON.stringify(audit.details),
         audit.requestId ?? null,
+        actChain(audit.act),
         row.id,
       ),
   ];
@@ -351,10 +363,15 @@ export function newRepoStatements(
  */
 export function heldBack(
   results: readonly D1Result[],
-): "name_taken" | "quota_exceeded" | undefined {
+  /** The creating agent's limit, when an agent creates it. */
+  agentMaxRepos?: number,
+): "name_taken" | "quota_exceeded" | "agent_quota_exceeded" | undefined {
   if ((results[1]?.meta.changes ?? 0) > 0) return undefined;
-  const seen = results[0]?.results[0] as { taken: number } | undefined;
-  return seen?.taken ? "name_taken" : "quota_exceeded";
+  const seen = results[0]?.results[0] as { taken: number; agent_repos: number } | undefined;
+  if (seen?.taken) return "name_taken";
+  return agentMaxRepos !== undefined && (seen?.agent_repos ?? 0) >= agentMaxRepos
+    ? "agent_quota_exceeded"
+    : "quota_exceeded";
 }
 
 /**
@@ -369,6 +386,7 @@ export async function checkNewRepo(
   name: string,
   maxRepos: number,
   metrics?: Metrics,
+  createdBy?: NewRepoRow["createdBy"],
 ): Promise<void> {
   metrics?.count("d1.query", { db: "directory", op: "repo_name_check" });
   const row = await env.DIRECTORY.withSession("first-primary")
@@ -376,12 +394,16 @@ export async function checkNewRepo(
       `SELECT EXISTS (SELECT 1 FROM repos WHERE owner_id = ?1 AND name = ?2 COLLATE NOCASE
                 AND state <> 'deleted') AS taken,
               (SELECT count(*) FROM repos WHERE owner_id = ?1 AND state <> 'deleted'
-                AND state = 'active') AS repos`,
+                AND state = 'active') AS repos,
+              (SELECT count(*) FROM repos WHERE created_by = ?3 AND state = 'active')
+                AS agent_repos`,
     )
-    .bind(owner.id, name)
-    .first<{ taken: number; repos: number }>();
+    .bind(owner.id, name, createdBy?.agentId ?? null)
+    .first<{ taken: number; repos: number; agent_repos: number }>();
   if (row?.taken) throw nameTakenError(owner.handle, name);
   if ((row?.repos ?? 0) >= maxRepos) throw repoQuotaError(owner.handle, maxRepos);
+  if (createdBy && (row?.agent_repos ?? 0) >= createdBy.maxRepos)
+    throw agentRepoQuotaError(createdBy.maxRepos);
 }
 
 export const nameTakenError = (handle: string, name: string) =>
@@ -392,6 +414,13 @@ export const repoQuotaError = (handle: string, maxRepos: number) =>
     403,
     "quota_exceeded",
     `${handle} has ${maxRepos} repositories, as many as its quota allows; delete one first.`,
+  );
+
+export const agentRepoQuotaError = (maxRepos: number) =>
+  new OperationError(
+    403,
+    "quota_exceeded",
+    `This agent has created ${maxRepos} repositories, as many as its limit allows; delete one first.`,
   );
 
 /** This isolate stops resolving `repoId` from its cache, under any name (its deletion started). */

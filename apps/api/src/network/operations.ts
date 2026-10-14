@@ -3,7 +3,7 @@ import { accountLimits } from "../accounts/quotas.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeSeekCursor, encodeSeekCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
-import { checkedExpiry } from "../repos/create.js";
+import { ownNewRepo } from "../repos/create.js";
 import { checkNewRepo, defaultBranchOf, listOwnedForks, ownListable } from "../repos/directory.js";
 import { readModelDetails } from "../repos/listing.js";
 import { repoOutput, starCounts } from "../repos/output.js";
@@ -16,18 +16,23 @@ export async function forkRepoOperation(
 ): Promise<Output<typeof forkRepo>> {
   const parent = await repoFor(ctx, input.owner, input.repo, "contents:read");
   const name = input.name ?? parent.name;
-  const owner = { id: ctx.auth.principalId, handle: ctx.auth.principalHandle ?? "" };
+  const made = await ownNewRepo(ctx, input.expires_at);
+  const { owner } = made;
   const { maxRepos } = await accountLimits(ctx.env, owner.id, ctx.metrics);
-  await checkNewRepo(ctx.env, owner, name, maxRepos, ctx.metrics);
+  await checkNewRepo(ctx.env, owner, name, maxRepos, ctx.metrics, made.createdBy);
   const result = await forkRepository(ctx.env, {
     parent,
-    ownerId: ctx.auth.principalId,
-    ownerHandle: ctx.auth.principalHandle ?? "",
+    ownerId: owner.id,
+    ownerHandle: owner.handle,
     name,
-    expiresAt: checkedExpiry(input.expires_at),
+    expiresAt: made.expiresAt,
     maxRepos,
     requestId: ctx.requestId,
     metrics: ctx.metrics,
+    actorId: made.actorId,
+    ...(made.act && { act: made.act }),
+    ...(made.grantId && { grantId: made.grantId }),
+    ...(made.createdBy && { createdBy: made.createdBy }),
   });
   if (!result.ok) throw new OperationError(result.status, result.code, result.error);
   return repoOutput(result.repo, {
