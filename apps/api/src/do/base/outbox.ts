@@ -10,7 +10,10 @@ import { type DomainEvent, type Envelope, type EventId, eventKey } from "@fyrden
  * carries it, and a batch resent after a failed delete carries the same ids.
  */
 
-/** Proposed values (design: one message under 64 KB, a 128 KB message limit). */
+/**
+ * Proposed values: one message stays under 64 KB, half the Queues message
+ * limit of 128 KB (https://developers.cloudflare.com/queues/platform/limits/).
+ */
 export interface OutboxPolicy {
   /** Events in one message at most. */
   readonly maxEvents: number;

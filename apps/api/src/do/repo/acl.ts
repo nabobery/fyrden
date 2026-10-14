@@ -2,7 +2,7 @@ import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { atLeast, ownsUserAccount, type RepoRole } from "@fyrden/domain";
 import type { AclSnapshot } from "../OrgDO.js";
 
-/** Proposed values (design §4.4). */
+/** Proposed values. */
 export const ACL_POLICY = {
   /** A write is decided from a snapshot pulled at most this long ago. */
   writeWindowMs: 60_000,
@@ -48,7 +48,7 @@ const below = (e1: number, v1: number, e2: number, v2: number) => e1 < e2 || (e1
 
 /**
  * A repository's access decisions, from a stored snapshot of its account's
- * ACL (design §4.4). A write needs a snapshot pulled within the write
+ * ACL. A write needs a snapshot pulled within the write
  * window, a read one within the read TTL; past that it is pulled again, and
  * when the pull fails the decision is a denial (fail closed). The stored
  * floor is the newest `(epoch, version)` seen from a pull or an
