@@ -343,6 +343,7 @@ keeps it a week.
 | File content in one archive | 1 GiB; more fails with `archive_failed` (clone instead) |
 | One file | 24 MiB |
 | Zip entries | 65,535 (no ZIP64); use tar.gz past that |
+| Directory depth | A path's directories, with their names, fit in 1 MiB of build state (about 2,500 levels of 255-byte names); deeper fails with `archive_failed` |
 | Building | 8 MiB encoded or 5,000 entries per slice, at most 300 slices (a commit with very many small files fails: clone it); a request builds for up to 5 seconds, then answers 202 with `Retry-After: 5` until it is ready |
 | Kept | 7 days, then deleted when the repository next builds one (not while a download that started in the last hour may still read it); deleted with the repository |
 | Dates | tar holds dates up to 2242, zip 1980 to 2107; later or earlier commit dates are written as the nearest one |

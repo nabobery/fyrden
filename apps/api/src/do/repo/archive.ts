@@ -71,6 +71,11 @@ export interface ArchivePolicy {
   readonly maxSegments: number;
   /** A zip's central directory at most, read whole when the zip is finished. */
   readonly maxZipDirectoryBytes: number;
+  /**
+   * A build's cursor at most, kept in one row (SQLite's limit is 2 MB):
+   * directories that nest deeper fail the build.
+   */
+  readonly maxCursorBytes: number;
   /** How long a built archive is kept. */
   readonly retentionMs: number;
   /** Expired archives one request clears at most. */
@@ -90,6 +95,7 @@ export const ARCHIVE_POLICY: ArchivePolicy = {
   heldTreeBytes: 8 * 1024 * 1024,
   maxSegments: 300,
   maxZipDirectoryBytes: 16 * 1024 * 1024,
+  maxCursorBytes: 1024 * 1024,
   retentionMs: 7 * 24 * 60 * 60 * 1000,
   pruneBatch: 3,
   leaseMs: 60 * 60 * 1000,
@@ -123,8 +129,12 @@ interface Frame {
   readonly tree: string;
   /** Where the next entry starts in the tree's body. */
   offset: number;
-  /** The path of the tree's entries so far, prefix included, as base64 of its bytes. */
-  readonly path: string;
+  /**
+   * The tree's directory name and a slash (the top one's: the prefix), as
+   * base64 of its bytes: its entries' path is the stack's names in order, so
+   * a cursor grows with a path's length, not with its square.
+   */
+  readonly name: string;
 }
 
 interface Cursor {
@@ -291,7 +301,7 @@ export class RepoArchives {
       mtime: input.mtime,
       networkId,
       prefix: toBase64(prefix),
-      stack: [{ tree: oidToHex(tree), offset: 0, path: toBase64(concat(prefix, SLASH)) }],
+      stack: [{ tree: oidToHex(tree), offset: 0, name: toBase64(concat(prefix, SLASH)) }],
       seq: 0,
       written: 0,
       content: 0,
@@ -337,6 +347,7 @@ export class RepoArchives {
     if (!reader) throw new Error("the repository has commits but no packs");
     const zlib = createWorkersZlib();
     const stack = cursor.stack.map((f) => ({ ...f }));
+    const names = stack.map((f) => fromBase64(f.name));
     const parts: Uint8Array[] = [];
     const records: ZipRecord[] = [];
     let offset = cursor.format === "zip" ? cursor.written : 0;
@@ -346,6 +357,8 @@ export class RepoArchives {
     /** Work done: bytes encoded and tree bytes inflated. */
     let work = 0;
     let done = 0;
+    /** Directories finished: progress too, though they write nothing. */
+    let left = 0;
     const emit = (entry: ArchiveEntry) => {
       let bytes: Uint8Array;
       if (cursor.format === "zip") {
@@ -425,7 +438,7 @@ export class RepoArchives {
           }
           await reader.prefetch(ahead);
         }
-        const base = fromBase64(frame.path);
+        const base = concatAll(names);
         for (const e of treeEntries(body, frame.offset)) {
           if (full()) break walk;
           const path = concat(base, e.name);
@@ -433,7 +446,9 @@ export class RepoArchives {
           if (kind === "dir") {
             emit({ path, kind, data: new Uint8Array(0) });
             frame.offset = e.end;
-            stack.push({ tree: oidToHex(e.oid), offset: 0, path: toBase64(concat(path, SLASH)) });
+            const name = concat(e.name, SLASH);
+            stack.push({ tree: oidToHex(e.oid), offset: 0, name: toBase64(name) });
+            names.push(name);
             continue walk;
           }
           if (kind === "submodule") emit({ path, kind, data: new Uint8Array(0) });
@@ -459,14 +474,17 @@ export class RepoArchives {
         }
         // The tree is done.
         stack.pop();
+        names.pop();
         letGo(frame.tree);
+        left++;
       }
     } catch (error) {
       if (error instanceof GitObjectError)
         throw new ArchiveRefused("A tree of the commit cannot be read.");
-      // Out of reads: what is done so far makes this slice's segment; with
-      // nothing done, the slice runs again in a later invocation.
-      if (!(error instanceof ReadBudgetError) || done === 0) throw error;
+      // Out of reads: what is done so far makes this slice's segment (climbing
+      // out of deep directories, it may hold no entry); with nothing done,
+      // the slice runs again in a later invocation.
+      if (!(error instanceof ReadBudgetError) || (done === 0 && left === 0)) throw error;
     } finally {
       reader.release();
     }
@@ -474,6 +492,14 @@ export class RepoArchives {
     const finished = stack.length === 0;
     if (!finished && cursor.seq + 1 >= policy.maxSegments)
       throw new ArchiveRefused("The commit has too many files to archive here; clone it instead.");
+    // The cursor is kept in one row: a stack too deep for it ends the build here.
+    if (
+      !finished &&
+      encoder.encode(JSON.stringify({ ...cursor, stack })).length > policy.maxCursorBytes
+    )
+      throw new ArchiveRefused(
+        "The commit's directories nest too deeply to archive here; clone it instead.",
+      );
     if (finished && cursor.format === "zip")
       parts.push(
         zipEnd([...this.#records(cursor.runId, cursor.entries), ...records], offset, cursor.mtime),

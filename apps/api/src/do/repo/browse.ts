@@ -15,8 +15,8 @@ import {
   oidToHex,
   type PathEntryLookup,
   parseCommit,
-  parseTree,
   reachableCommits,
+  treeEntries,
   WalkLimitError,
 } from "@fyrden/git-core";
 import { HEX_OID } from "../../git/cache/object-access.js";
@@ -644,17 +644,20 @@ function pathEntry(reader: ObjectReader, segments: readonly Uint8Array[]): PathE
   const lookup = async (tree: Oid, depth: number): Promise<string | null> => {
     const object = await reader.readObject(tree);
     if (object?.type !== "tree") return null;
-    let entries: ReturnType<typeof parseTree>["value"];
+    // Scanned in place: a wide tree's entries are not collected to find one.
+    const name = segments[depth] as Uint8Array;
+    let entry: { mode: number; oid: Oid } | undefined;
     try {
-      entries = parseTree(object.bytes).value;
+      for (const e of treeEntries(object.bytes)) {
+        if (e.name.length === name.length && e.name.every((b, i) => b === name[i])) {
+          entry = { mode: e.mode, oid: e.oid.slice() as Oid };
+          break;
+        }
+      }
     } catch (error) {
       if (error instanceof GitObjectError) return null;
       throw error;
     }
-    const name = segments[depth] as Uint8Array;
-    const entry = entries.find(
-      (e) => e.name.length === name.length && e.name.every((b, i) => b === name[i]),
-    );
     if (!entry) return null;
     if (depth === segments.length - 1) return `${entry.mode.toString(8)} ${oidToHex(entry.oid)}`;
     return isTreeMode(entry.mode) ? at(entry.oid, depth + 1) : null;
