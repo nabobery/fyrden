@@ -2,7 +2,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { oidFromHex } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { ACL_POLICY } from "../src/do/repo/acl.js";
 import { allocateEpoch } from "../src/events/epochs.js";
@@ -180,13 +180,28 @@ describe("ACL snapshots", () => {
       const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
-      (globalThis as { releasePull?: () => void }).releasePull = release;
+      const shared = globalThis as { releasePull?: () => void; pullStarted?: boolean };
+      shared.releasePull = release;
+      shared.pullStarted = false;
       repo.pullAcl = async () => {
+        shared.pullStarted = true;
         await gate;
         return before;
       };
     });
     const decision = stub.roleOf(member.principalId, "read");
+    // Only once the pull is out: a decision that starts after the move pulls a
+    // current snapshot, which this fake would not return.
+    await vi.waitFor(
+      async () => {
+        const started = await inRepo(
+          stub,
+          () => (globalThis as { pullStarted?: boolean }).pullStarted,
+        );
+        if (!started) throw new Error("the pull has not started");
+      },
+      { timeout: 5_000 },
+    );
     // Transferred away and back while the pull was out: the same account, another ownership.
     await runInDurableObject(stub, (_: RepoDO, state) => {
       state.storage.sql.exec("UPDATE repo_meta SET owner_gen = owner_gen + 2 WHERE id = 1");
