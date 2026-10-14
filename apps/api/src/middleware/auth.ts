@@ -80,6 +80,7 @@ export async function authenticate(
     c.get("log").child({
       principalId: result.record.principalId,
       principalType: result.record.principalType,
+      ...(result.record.act.length > 0 && { act: result.record.act }),
     }),
   );
   return {

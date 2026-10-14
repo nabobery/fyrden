@@ -146,7 +146,8 @@ describe("rulesets", () => {
       actor_types: ["agent"],
       rules: [{ type: "pull_request" }],
     });
-    const agent = await principalWithToken("agent", "pat");
+    // Its owner's, so the owner's rights do not cap it below its own.
+    const agent = await principalWithToken("agent", "pat", { owner: owner.principalId });
     const handle = agent.principalId.toLowerCase().replace("_", "-");
     // Agents are not collaborators through the API yet: granted in the account's object.
     const reader = await user();

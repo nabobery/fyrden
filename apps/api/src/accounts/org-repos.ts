@@ -4,7 +4,7 @@ import { BASE_ROLE } from "../do/OrgDO.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { checkedExpiry, createRepository } from "../repos/create.js";
 import { listAccountRepos } from "../repos/listing.js";
-import { accountRoleOf, findAccount, orgFor } from "./account.js";
+import { actingRoleIn, findAccount, orgFor } from "./account.js";
 
 /** The `orgs.repos.create` operation: a member creates a repository the organization owns. */
 export async function createOrgRepoOperation(
@@ -30,8 +30,7 @@ export async function listOrgReposOperation(
 ): Promise<Output<typeof listOrgRepos>> {
   const { env, auth, metrics } = ctx;
   const org = await findAccount(env, input.org, { metrics });
-  const accountRole =
-    org?.type === "org" ? await accountRoleOf(env, org, auth.principalId, metrics) : null;
+  const accountRole = org?.type === "org" ? await actingRoleIn(env, org, auth, metrics) : null;
   if (org?.type !== "org" || accountRole === null)
     throw new OperationError(404, "org_not_found", `No organization ${input.org} was found.`);
   return listAccountRepos(

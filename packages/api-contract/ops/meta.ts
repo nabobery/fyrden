@@ -3,15 +3,26 @@ import { z } from "zod";
 import { AUTHENTICATED, defineOperation } from "../src/op.js";
 
 export const Whoami = z.object({
-  id: z.string().describe("Principal id (usr_, org_, agt_ or ins_ prefix)."),
+  id: z
+    .string()
+    .describe("Principal id (usr_, org_, agt_ or ins_ prefix): whose rights the token uses."),
   type: z.enum(PRINCIPAL_TYPES),
   handle: z.string().nullable(),
   is_instance_admin: z.boolean(),
+  act: z
+    .array(z.object({ id: z.string(), handle: z.string().nullable() }))
+    .describe(
+      "For a delegated token, the agents acting for this principal, the current one first (an RFC 8693 `act` chain); empty otherwise.",
+    ),
   token: z.object({
     id: z.string(),
     type: z.string(),
     scopes: z.array(z.string()),
     expires_at: z.number().int().describe("Unix time in milliseconds."),
+    grant_id: z
+      .string()
+      .nullable()
+      .describe("The delegation grant a delegated token was issued under; null otherwise."),
   }),
 });
 
@@ -20,7 +31,8 @@ export const whoami = defineOperation({
   method: "GET",
   path: "/user",
   summary: "Get the authenticated principal",
-  description: "Returns the principal and token that authenticated this request.",
+  description:
+    "Returns the principal and token that authenticated this request, and for a delegated token the agents acting for the principal.",
   input: z.object({}),
   output: Whoami,
   permission: AUTHENTICATED,

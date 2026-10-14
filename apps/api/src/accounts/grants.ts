@@ -37,11 +37,19 @@ const NAME_OF = Object.fromEntries(
 const fullName = (repo: RepoEntry) => `${repo.ownerHandle}/${repo.name}`;
 
 /**
- * Refuses a grant change while a transfer moves the repository (the
- * accounts hand its grants over then; a change in between would be lost or
- * undone), or once it belongs to another owner than the one found.
+ * Refuses a grant change made by an agent acting for a user (it may not
+ * widen who has access for the user), while a transfer moves the
+ * repository (the accounts hand its grants over then; a change in between
+ * would be lost or undone), or once it belongs to another owner than the
+ * one found.
  */
 async function checkOwnership(ctx: OpContext, repo: RepoEntry): Promise<void> {
+  if (ctx.auth.act.length > 0)
+    throw new OperationError(
+      403,
+      "delegated_token",
+      "A token issued under a delegation grant cannot change who has access.",
+    );
   const change = await ownershipChange(ctx.env, repo.id, repo.ownerId, ctx.metrics);
   if (change === "transferring")
     throw new OperationError(

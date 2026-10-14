@@ -1,6 +1,6 @@
 import type { generateRepo, Input, Output } from "@fyrden/api-contract";
 import { orgRepoRole, type RepoRole } from "@fyrden/domain";
-import { accountRoleOf, canUseAccount, findAccount } from "../accounts/account.js";
+import { actingRoleIn, canUseAccount, findAccount } from "../accounts/account.js";
 import { BASE_ROLE } from "../do/OrgDO.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { checkedExpiry, createRepository } from "./create.js";
@@ -84,8 +84,7 @@ async function ownerFor(
   if (handle === undefined || handle.toLowerCase() === self.toLowerCase())
     return { id: auth.principalId, handle: self, role: "admin" };
   const org = await findAccount(env, handle, { metrics });
-  const role =
-    org?.type === "org" ? await accountRoleOf(env, org, auth.principalId, metrics) : null;
+  const role = org?.type === "org" ? await actingRoleIn(env, org, auth, metrics) : null;
   if (org?.type !== "org" || role === null)
     throw new OperationError(404, "org_not_found", `No organization ${handle} was found.`);
   if (!canUseAccount(auth, role, "repos:create"))

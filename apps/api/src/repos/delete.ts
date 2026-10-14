@@ -2,7 +2,7 @@ import type { deleteRepo, deleteRepos, Input, Output } from "@fyrden/api-contrac
 import { repoFor } from "../git/chunked/operations.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { advanceDeletion, DELETION_POLICY, markDeletions } from "./deletion.js";
-import { canAccessOwn, findOwnedRepos, forgetResolved, ownershipChange } from "./directory.js";
+import { findOwnedRepos, forgetResolved, ownAccessible, ownershipChange } from "./directory.js";
 
 /** The `repos.delete` operation: marks the deletion, then advances it as far as it can. */
 export async function deleteRepoOperation(
@@ -13,6 +13,7 @@ export async function deleteRepoOperation(
   const entry = await repoFor(ctx, input.owner, input.repo, "administration:write");
   const marked = await markDeletions(env, [entry], {
     actorId: auth.principalId,
+    act: auth.act,
     requestId: ctx.requestId,
     metrics,
   });
@@ -52,12 +53,14 @@ export async function deleteReposOperation(
   const names = [...new Map(input.names.map((name) => [name.toLowerCase(), name])).values()];
   const found = await findOwnedRepos(env, auth.principalId, names, metrics);
   const byName = new Map(
-    found
-      .filter((entry) => canAccessOwn(auth, entry, "administration:write"))
-      .map((entry) => [entry.name.toLowerCase(), entry]),
+    (await ownAccessible(env, auth, found, "administration:write", metrics)).map((entry) => [
+      entry.name.toLowerCase(),
+      entry,
+    ]),
   );
   const marked = await markDeletions(env, [...byName.values()], {
     actorId: auth.principalId,
+    act: auth.act,
     requestId: ctx.requestId,
     metrics,
   });

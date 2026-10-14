@@ -4,7 +4,7 @@ import { repoFor } from "../git/chunked/operations.js";
 import { decodeSeekCursor, encodeSeekCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { checkedExpiry } from "../repos/create.js";
-import { checkNewRepo, defaultBranchOf, listOwnedForks } from "../repos/directory.js";
+import { checkNewRepo, defaultBranchOf, listOwnedForks, ownListable } from "../repos/directory.js";
 import { readModelDetails } from "../repos/listing.js";
 import { repoOutput, starCounts } from "../repos/output.js";
 import { forkRepository } from "./fork.js";
@@ -50,6 +50,8 @@ export async function listForksOperation(
   input: Input<typeof listForks>,
 ): Promise<Output<typeof listForks>> {
   const parent = await repoFor(ctx, input.owner, input.repo, "metadata:read");
+  // An agent of another owner sees only what its owner's role allows (in the query, so neither
+  // a page nor its cursor names one it may not see).
   const rows = await listOwnedForks(
     ctx.env,
     parent.id,
@@ -57,11 +59,12 @@ export async function listForksOperation(
     {
       after: decodeSeekCursor(input.cursor),
       limit: input.per_page + 1,
-      onlyIds: ctx.auth.repoIds,
+      onlyIds: await ownListable(ctx.env, ctx.auth, ctx.metrics),
     },
     ctx.metrics,
   );
   const page = rows.slice(0, input.per_page);
+  const last = page.at(-1);
   const details = await readModelDetails(
     ctx.env,
     page.map((entry) => entry.id),
@@ -72,7 +75,6 @@ export async function listForksOperation(
     page.map((entry) => entry.id),
     ctx.metrics,
   );
-  const last = page.at(-1);
   return {
     repos: page.map((entry) =>
       repoOutput(entry, {

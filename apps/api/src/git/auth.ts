@@ -10,7 +10,7 @@ import {
 import { type GitContext, gitText } from "./http.js";
 
 /** Token types a git client may use: git tokens and personal access tokens. */
-const GIT_TOKEN_TYPES: ReadonlySet<string> = new Set(["git", "pat"]);
+export const GIT_TOKEN_TYPES: ReadonlySet<string> = new Set(["git", "pat"]);
 
 export const REPO_NOT_FOUND = "Repository not found.";
 
@@ -35,6 +35,8 @@ export async function authorizeGit(
   owner: string,
   name: string,
   access: RepoAccess,
+  /** Token types taken; git's own (smart HTTP) take git tokens and personal access tokens only. */
+  tokenTypes: ReadonlySet<string> = GIT_TOKEN_TYPES,
 ): Promise<GitAccess> {
   const fail = (response: Response): GitAccess => ({ ok: false, response });
   const challenge = { "WWW-Authenticate": 'Basic realm="Fyrden"' };
@@ -52,7 +54,7 @@ export async function authorizeGit(
     return fail(gitText(c, 401, "Invalid username or token.", challenge));
   }
   const auth = authn.state.record;
-  if (!GIT_TOKEN_TYPES.has(auth.type)) {
+  if (!tokenTypes.has(auth.type)) {
     return fail(
       gitText(
         c,

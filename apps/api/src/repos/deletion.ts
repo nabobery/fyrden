@@ -1,7 +1,13 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { applyExport } from "../events/rebuild.js";
 import { clock } from "../services.js";
-import { forgetRepo, forgetResolved, NOT_TRANSFERRING, type RepoEntry } from "./directory.js";
+import {
+  actChain,
+  forgetRepo,
+  forgetResolved,
+  NOT_TRANSFERRING,
+  type RepoEntry,
+} from "./directory.js";
 
 /*
  * Deleting a repository: a resumable job whose state lives in the
@@ -58,6 +64,8 @@ export async function markDeletions(
   options: {
     /** Who deletes them; null for the instance itself (an expiry). */
     actorId: string | null;
+    /** The agents acting for `actorId` (a delegated token's act chain), for the audit rows. */
+    act?: readonly string[];
     requestId?: string;
     /**
      * An expiry: only repositories that have expired by this time (Unix
@@ -84,12 +92,20 @@ export async function markDeletions(
   const results = await db.batch<{ id: string }>([
     db
       .prepare(
-        `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
-         SELECT ?2, ?3, CASE WHEN ?5 IS NULL THEN 'repo.delete' ELSE 'repo.expire' END,
+        `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
+         SELECT ?2, ?3, ?7, CASE WHEN ?5 IS NULL THEN 'repo.delete' ELSE 'repo.expire' END,
            id, json_object('name', name), ?4 FROM repos
          WHERE ${inIds} AND ${eligible}`,
       )
-      .bind(ids, now, options.actorId, options.requestId ?? null, expiry, owners),
+      .bind(
+        ids,
+        now,
+        options.actorId,
+        options.requestId ?? null,
+        expiry,
+        owners,
+        actChain(options.act),
+      ),
     db
       .prepare(
         `UPDATE repos SET state = 'deleting', updated_at = ?2

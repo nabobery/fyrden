@@ -24,6 +24,7 @@ describe("D1 directory schema", () => {
     expect(results.map((r) => r.name)).toEqual([
       "audit_log",
       "audit_segments",
+      "grants",
       "idempotency_keys",
       "memberships",
       "principals",

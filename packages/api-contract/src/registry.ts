@@ -10,6 +10,13 @@ import {
   setTeamRepo,
 } from "../ops/access.js";
 import { createToken, createUser } from "../ops/admin.js";
+import {
+  createAgent,
+  createAgentToken,
+  disableAgent,
+  getAgent,
+  listAgents,
+} from "../ops/agents.js";
 import { getArchive } from "../ops/archives.js";
 import {
   compareCommits,
@@ -21,6 +28,7 @@ import {
 } from "../ops/browse.js";
 import { getContents, getReadme, getRootContents, getTree } from "../ops/contents.js";
 import { createFileCommit, deleteContents, putContents } from "../ops/file-writes.js";
+import { createGrant, listGrants, revokeGrant } from "../ops/grants.js";
 import { createImport, getImport } from "../ops/imports.js";
 import { listSigningKeys, whoami } from "../ops/meta.js";
 import { createOrg, listMembers, removeMembership, setMembership } from "../ops/orgs.js";
@@ -66,6 +74,14 @@ export const registry = defineRegistry([
   deleteSshSigningKey,
   createUser,
   createToken,
+  createAgent,
+  listAgents,
+  getAgent,
+  disableAgent,
+  createAgentToken,
+  createGrant,
+  listGrants,
+  revokeGrant,
   createOrg,
   createRepo,
   listRepos,

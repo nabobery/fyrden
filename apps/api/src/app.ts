@@ -8,6 +8,7 @@ import { problem } from "./http/problem.js";
 import { mountMcp } from "./mcp/mount.js";
 import type { AuthVariables } from "./middleware/auth.js";
 import { obs } from "./middleware/obs.js";
+import { oauthRouter } from "./oauth/token.js";
 import { mountArchives } from "./rest/archive.js";
 import { mountRest } from "./rest/mount.js";
 import { mountRaw } from "./rest/raw.js";
@@ -39,6 +40,7 @@ export function createApp() {
   });
 
   app.route("/v0/admin/bootstrap", bootstrap);
+  app.route("/oauth", oauthRouter);
   mountRest(app);
   mountRaw(app);
   mountArchives(app);

@@ -31,9 +31,10 @@ export async function readModelDetails(
  * One page of an account's repositories that `auth` may see, where its
  * role is the same on all of them (`role`: the owner of a user account, or
  * an organization role turned into a repository role). Only repositories
- * the token may see are read (its repository list is in the query), so
- * neither a page nor its cursor reveals another one's name; one more than a
- * page tells whether another page follows.
+ * the token may see are read (its repository list, or `onlyIds` when
+ * given, is in the query), so neither a page nor its cursor reveals
+ * another one's name; one more than a page tells whether another page
+ * follows.
  */
 export async function listAccountRepos(
   env: Env,
@@ -41,12 +42,13 @@ export async function listAccountRepos(
   account: { readonly id: string; readonly role: RepoRole | null },
   page: { readonly perPage: number; readonly cursor: string | undefined },
   metrics: Metrics,
+  onlyIds: readonly string[] | null = auth.repoIds,
 ): Promise<Output<typeof listRepos>> {
   const after = decodeCursor(page.cursor, isValidRepoName);
   const scanned = await listOwnedRepos(
     env,
     account.id,
-    { after, limit: page.perPage + 1, onlyIds: auth.repoIds },
+    { after, limit: page.perPage + 1, onlyIds },
     metrics,
   );
   const visible = scanned

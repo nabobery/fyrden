@@ -99,6 +99,7 @@ async function write(
       ...input,
       principal: ctx.auth.principalId,
       tokenId: ctx.auth.id,
+      grantId: ctx.auth.grantId,
       repoId: entry.id,
       committer: committerOf(ctx),
     }),

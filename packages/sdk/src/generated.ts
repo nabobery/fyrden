@@ -5,17 +5,24 @@ export type MetaWhoamiInput = Record<string, never>;
 
 /** Output of `meta.whoami`. */
 export type MetaWhoamiOutput = {
-  /** Principal id (usr_, org_, agt_ or ins_ prefix). */
+  /** Principal id (usr_, org_, agt_ or ins_ prefix): whose rights the token uses. */
   id: string;
   type: "user" | "org" | "agent" | "installation";
   handle: string | null;
   is_instance_admin: boolean;
+  /** For a delegated token, the agents acting for this principal, the current one first (an RFC 8693 `act` chain); empty otherwise. */
+  act: ({
+    id: string;
+    handle: string | null;
+  })[];
   token: {
     id: string;
     type: string;
     scopes: string[];
     /** Unix time in milliseconds. */
     expires_at: number;
+    /** The delegation grant a delegated token was issued under; null otherwise. */
+    grant_id: string | null;
   };
 };
 
@@ -132,7 +139,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
   expires_in_days?: number;
 };
 
@@ -147,6 +154,232 @@ export type AdminTokensCreateOutput = {
   scopes: string[];
   /** Unix time in milliseconds. */
   expires_at: number;
+};
+
+/** Input of `agents.create`: Create an agent. */
+export type AgentsCreateInput = {
+  /** 1-39 letters, digits and single inner hyphens; unique among all handles, ignoring case. */
+  handle: string;
+  display_name?: string;
+  /** An organization you own to own the agent; you when absent. */
+  org?: string;
+};
+
+/** Output of `agents.create`. */
+export type AgentsCreateOutput = {
+  /** Agent id (agt_ prefix). */
+  id: string;
+  handle: string;
+  display_name: string | null;
+  /** The handle of the user or organization that owns the agent. */
+  owner: string;
+  owner_id: string;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** A disabled agent's tokens and grants stop working. */
+  disabled: boolean;
+};
+
+/** Input of `agents.list`: List agents. */
+export type AgentsListInput = {
+  org?: string;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `agents.list`. */
+export type AgentsListOutput = {
+  agents: ({
+    /** Agent id (agt_ prefix). */
+    id: string;
+    handle: string;
+    display_name: string | null;
+    /** The handle of the user or organization that owns the agent. */
+    owner: string;
+    owner_id: string;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** A disabled agent's tokens and grants stop working. */
+    disabled: boolean;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `agents.get`: Get an agent. */
+export type AgentsGetInput = {
+  /** The agent's handle: 1-39 letters, digits and single inner hyphens. */
+  agent: string;
+};
+
+/** Output of `agents.get`. */
+export type AgentsGetOutput = {
+  /** Agent id (agt_ prefix). */
+  id: string;
+  handle: string;
+  display_name: string | null;
+  /** The handle of the user or organization that owns the agent. */
+  owner: string;
+  owner_id: string;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** A disabled agent's tokens and grants stop working. */
+  disabled: boolean;
+};
+
+/** Input of `agents.disable`: Disable an agent. */
+export type AgentsDisableInput = {
+  /** The agent's handle: 1-39 letters, digits and single inner hyphens. */
+  agent: string;
+};
+
+/** Output of `agents.disable`. */
+export type AgentsDisableOutput = {
+  /** Agent id (agt_ prefix). */
+  id: string;
+  handle: string;
+  display_name: string | null;
+  /** The handle of the user or organization that owns the agent. */
+  owner: string;
+  owner_id: string;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** A disabled agent's tokens and grants stop working. */
+  disabled: boolean;
+};
+
+/** Input of `agents.tokens.create`: Create a token for an agent. */
+export type AgentsTokensCreateInput = {
+  /** The agent's handle: 1-39 letters, digits and single inner hyphens. */
+  agent: string;
+  type?: "pat" | "git";
+  /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  expires_in_days?: number;
+};
+
+/** Output of `agents.tokens.create`. */
+export type AgentsTokensCreateOutput = {
+  /** Token id (tok_ prefix). */
+  id: string;
+  /** The token. Shown once and never stored. */
+  token: string;
+  type: "pat" | "git";
+  agent_id: string;
+  scopes: string[];
+  /** Unix time in milliseconds. */
+  expires_at: number;
+};
+
+/** Input of `grants.create`: Create a delegation grant. */
+export type GrantsCreateInput = {
+  /** The agent's handle. */
+  agent: string;
+  /** Permissions the agent may use for you (and what they imply). */
+  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
+  repositories?: string[];
+  expires_in_days?: number;
+  /** For an agent: the grant it holds and passes a narrower one of to another agent. */
+  parent?: string;
+};
+
+/** Output of `grants.create`. */
+export type GrantsCreateOutput = {
+  /** Grant id (grt_ prefix). */
+  id: string;
+  /** The handle of the user the agent acts for. */
+  grantor: string;
+  grantor_id: string;
+  /** The handle of the agent the grant lets act. */
+  agent: string;
+  agent_id: string;
+  /** The grant this one was passed down from (to a sub-agent); null for a user's own. */
+  parent_id: string | null;
+  /** The user's grant at the top of the chain. */
+  root_id: string;
+  /** 1 for a user's grant, 2 for a sub-agent's. */
+  depth: number;
+  scopes: string[];
+  /** Repository ids the grant is limited to; null for every one the user can reach. */
+  repositories: string[] | null;
+  /** Unix time in milliseconds. */
+  expires_at: number;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  revoked_at: number | null;
+};
+
+/** Input of `grants.list`: List delegation grants. */
+export type GrantsListInput = {
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `grants.list`. */
+export type GrantsListOutput = {
+  grants: ({
+    /** Grant id (grt_ prefix). */
+    id: string;
+    /** The handle of the user the agent acts for. */
+    grantor: string;
+    grantor_id: string;
+    /** The handle of the agent the grant lets act. */
+    agent: string;
+    agent_id: string;
+    /** The grant this one was passed down from (to a sub-agent); null for a user's own. */
+    parent_id: string | null;
+    /** The user's grant at the top of the chain. */
+    root_id: string;
+    /** 1 for a user's grant, 2 for a sub-agent's. */
+    depth: number;
+    scopes: string[];
+    /** Repository ids the grant is limited to; null for every one the user can reach. */
+    repositories: string[] | null;
+    /** Unix time in milliseconds. */
+    expires_at: number;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    revoked_at: number | null;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `grants.revoke`: Revoke a delegation grant. */
+export type GrantsRevokeInput = {
+  /** The grant's id. */
+  grant_id: string;
+};
+
+/** Output of `grants.revoke`. */
+export type GrantsRevokeOutput = {
+  /** Grant id (grt_ prefix). */
+  id: string;
+  /** The handle of the user the agent acts for. */
+  grantor: string;
+  grantor_id: string;
+  /** The handle of the agent the grant lets act. */
+  agent: string;
+  agent_id: string;
+  /** The grant this one was passed down from (to a sub-agent); null for a user's own. */
+  parent_id: string | null;
+  /** The user's grant at the top of the chain. */
+  root_id: string;
+  /** 1 for a user's grant, 2 for a sub-agent's. */
+  depth: number;
+  scopes: string[];
+  /** Repository ids the grant is limited to; null for every one the user can reach. */
+  repositories: string[] | null;
+  /** Unix time in milliseconds. */
+  expires_at: number;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  revoked_at: number | null;
 };
 
 /** Input of `admin.orgs.create`: Create an organization. */
@@ -2184,6 +2417,14 @@ export const OPERATIONS = {
   "users.ssh_signing_keys.delete": { method: "DELETE", path: "/user/ssh_signing_keys/{key_id}", pathParams: ["key_id"], idempotent: true },
   "admin.users.create": { method: "POST", path: "/admin/users", pathParams: [], idempotent: true },
   "admin.tokens.create": { method: "POST", path: "/admin/users/{user_id}/tokens", pathParams: ["user_id"], idempotent: true },
+  "agents.create": { method: "POST", path: "/agents", pathParams: [], idempotent: true },
+  "agents.list": { method: "GET", path: "/agents", pathParams: [], idempotent: false, items: "agents" },
+  "agents.get": { method: "GET", path: "/agents/{agent}", pathParams: ["agent"], idempotent: false },
+  "agents.disable": { method: "DELETE", path: "/agents/{agent}", pathParams: ["agent"], idempotent: true },
+  "agents.tokens.create": { method: "POST", path: "/agents/{agent}/tokens", pathParams: ["agent"], idempotent: true },
+  "grants.create": { method: "POST", path: "/grants", pathParams: [], idempotent: true },
+  "grants.list": { method: "GET", path: "/grants", pathParams: [], idempotent: false, items: "grants" },
+  "grants.revoke": { method: "DELETE", path: "/grants/{grant_id}", pathParams: ["grant_id"], idempotent: true },
   "admin.orgs.create": { method: "POST", path: "/admin/organizations", pathParams: [], idempotent: true },
   "repos.create": { method: "POST", path: "/user/repos", pathParams: [], idempotent: true },
   "repos.list": { method: "GET", path: "/user/repos", pathParams: [], idempotent: false, items: "repos" },
@@ -2244,7 +2485,7 @@ export const OPERATIONS = {
 
 /** Each operation's input and output. */
 export interface Operations {
-  /** Get the authenticated principal. Returns the principal and token that authenticated this request. */
+  /** Get the authenticated principal. Returns the principal and token that authenticated this request, and for a delegated token the agents acting for the principal. */
   "meta.whoami": { input: MetaWhoamiInput; output: MetaWhoamiOutput };
   /** List the platform's signing keys. The public keys Fyrden signs the commits it makes with (file writes, generated repositories), as SSH public key lines: the current one, and retired ones commits may still carry. Check such a commit with `git verify-commit` (`gpg.format = ssh`) and these keys in an allowed-signers file. */
   "meta.signing_keys.list": { input: MetaSigningKeysListInput; output: MetaSigningKeysListOutput };
@@ -2260,6 +2501,22 @@ export interface Operations {
   "admin.users.create": { input: AdminUsersCreateInput; output: AdminUsersCreateOutput };
   /** Create a token for a user. Mints a personal access token (`pat`) or git token (`git`) for a user and returns it once. Instance administrators only. */
   "admin.tokens.create": { input: AdminTokensCreateInput; output: AdminTokensCreateOutput };
+  /** Create an agent. Creates an agent principal owned by you, or by an organization you own (`org`). An agent acts with its own tokens and collaborator roles, or for a user under a delegation grant; either way it never exceeds its owner. */
+  "agents.create": { input: AgentsCreateInput; output: AgentsCreateOutput };
+  /** List agents. Your agents, or those of an organization you own (`org`), oldest first. */
+  "agents.list": { input: AgentsListInput; output: AgentsListOutput };
+  /** Get an agent. An agent you own, or one an organization you own owns. */
+  "agents.get": { input: AgentsGetInput; output: AgentsGetOutput };
+  /** Disable an agent. Disables an agent: its tokens, the tokens issued for it under delegation grants, and its grants stop working at once for writes (within 30 seconds for reads). Its handle stays taken. */
+  "agents.disable": { input: AgentsDisableInput; output: AgentsDisableOutput };
+  /** Create a token for an agent. Mints a token the agent acts with as itself: a personal access token (`pat`, also the subject of a token exchange) or a git token (`git`), never wider than your token (its scopes and repositories). Returned once. */
+  "agents.tokens.create": { input: AgentsTokensCreateInput; output: AgentsTokensCreateOutput };
+  /** Create a delegation grant. Lets an agent act for you, limited to `scopes`, `repositories` and an expiry: the agent exchanges its own token for a delegated one (`POST /oauth/token`, RFC 8693). An agent holding a grant may pass a narrower one (`parent`) to another agent of its owner, one hop down at most. Revoking a grant revokes the tokens issued under it and its sub-grants. */
+  "grants.create": { input: GrantsCreateInput; output: GrantsCreateOutput };
+  /** List delegation grants. The grants you made (a user), or that you hold or passed down (an agent), newest first; revoked ones too. */
+  "grants.list": { input: GrantsListInput; output: GrantsListOutput };
+  /** Revoke a delegation grant. Revokes a grant and the grants passed down from it: every token issued under them stops working at once for writes (within 30 seconds for reads). Its user, or the agent that passed it down, may revoke it. */
+  "grants.revoke": { input: GrantsRevokeInput; output: GrantsRevokeOutput };
   /** Create an organization. Creates an organization with a user as its first owner. Instance administrators only. */
   "admin.orgs.create": { input: AdminOrgsCreateInput; output: AdminOrgsCreateOutput };
   /** Create a repository. Creates an empty private repository owned by the authenticated user. Clone and push it at `/<owner>/<name>.git`. */

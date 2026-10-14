@@ -1,8 +1,11 @@
 import { problem } from "../../http/problem.js";
-import { authorizeGit } from "../auth.js";
+import { authorizeGit, GIT_TOKEN_TYPES } from "../auth.js";
 import { type GitContext, repoParams } from "../http.js";
 import { BUCKET_NAME } from "../push/scratch.js";
 import { MAX_PARTS } from "./tuning.js";
+
+/** A part comes from the client that began the session: with git's tokens, or an API access token. */
+const PART_TOKEN_TYPES: ReadonlySet<string> = new Set([...GIT_TOKEN_TYPES, "oat"]);
 
 const UPLOAD_ID = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 /** Seconds a client waits before sending a part another request is uploading. Proposed. */
@@ -18,7 +21,7 @@ function declaredLength(request: Request): number | undefined {
 /**
  * `PUT <repo>/uploads/<upload_id>/parts/<n>`: one part of a chunked upload,
  * authenticated like a push (a git token or personal access token with
- * write access). The request body goes to R2 as multipart part `n` as it
+ * write access, or the API access token that began the session). The request body goes to R2 as multipart part `n` as it
  * arrives: the Worker runs no code per chunk (streaming a request body into
  * `uploadPart` cost no measurable Worker CPU, measured on Workers Free,
  * 2026-10-10). The repository object checks the part's number and exact
@@ -32,7 +35,7 @@ function declaredLength(request: Request): number | undefined {
  */
 export async function uploadPart(c: GitContext): Promise<Response> {
   const { owner, name } = repoParams(c);
-  const access = await authorizeGit(c, owner, name, "write");
+  const access = await authorizeGit(c, owner, name, "write", PART_TOKEN_TYPES);
   if (!access.ok) return access.response;
 
   const uploadId = c.req.param("upload_id") ?? "";

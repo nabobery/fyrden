@@ -89,10 +89,15 @@ export function refusalOf(messages: readonly string[]): string {
   return `${new TextDecoder().decode(bytes.subarray(0, MAX_REFUSAL_BYTES - 3)).replace(/�+$/, "")}...`;
 }
 
-function actorOf(snapshot: RuleSnapshot, principal: string): RuleActor {
+/**
+ * Who the rules see: the principal, or for a write under a delegation
+ * grant (`delegated`), the agent acting for it (rules such as "agents must
+ * use pull requests" apply to the agent, never to the user).
+ */
+function actorOf(snapshot: RuleSnapshot, principal: string, delegated: boolean): RuleActor {
   return {
     // An id of no known type matches no ruleset's actor types but its own.
-    principalType: principalTypeOf(principal) ?? "installation",
+    principalType: delegated ? "agent" : (principalTypeOf(principal) ?? "installation"),
     role: snapshot.role,
   };
 }
@@ -109,11 +114,12 @@ export function precheckPushRules(
     readonly name: string;
     readonly kind: CheckedCommand["kind"];
   }[],
+  delegated = false,
 ): Map<number, string> {
   const refusals = new Map<number, string>();
   const rulesets = snapshot.rulesets.filter((r) => r.enforcement === "active");
   if (rulesets.length === 0 || commands.length === 0) return refusals;
-  const actor = actorOf(snapshot, principal);
+  const actor = actorOf(snapshot, principal, delegated);
   const branches = defaultBranches(snapshot.head, undefined);
   for (const cmd of commands) {
     const found = blocking(
@@ -140,6 +146,8 @@ export async function checkPushRules(
   snapshot: RuleSnapshot,
   input: {
     readonly principal: string;
+    /** Written under a delegation grant: an agent acts for `principal`. */
+    readonly delegated?: boolean;
     readonly uploadId: string;
     readonly packs: readonly PackId[];
     readonly head: string | undefined;
@@ -149,7 +157,7 @@ export async function checkPushRules(
   const refusals = new Map<number, string>();
   const rulesets = snapshot.rulesets.filter((r) => r.enforcement !== "disabled");
   if (rulesets.length === 0 || input.commands.length === 0) return refusals;
-  const actor = actorOf(snapshot, input.principal);
+  const actor = actorOf(snapshot, input.principal, input.delegated ?? false);
   const branches = defaultBranches(snapshot.head, input.head);
   for (const cmd of input.commands) {
     const needsSignatures =

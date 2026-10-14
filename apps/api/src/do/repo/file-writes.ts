@@ -84,6 +84,8 @@ export interface FileWriteChange {
 export interface FileWriteInput {
   readonly principal: string;
   readonly tokenId: string;
+  /** The delegation grant the write is made under (an agent acting for `principal`); null for none. */
+  readonly grantId?: string | null;
   readonly repoId: string;
   readonly committer: { readonly name: string; readonly email: string };
   readonly author?: { readonly name: string; readonly email: string };
@@ -116,6 +118,7 @@ export interface FileWriteDeps {
   readonly precheck?: (
     principal: string,
     updates: readonly { ref: string; old: string | null; new: string | null }[],
+    grantId: string | null,
   ) => Promise<string | undefined>;
 }
 
@@ -144,9 +147,11 @@ export async function writeFiles(
     return fail(409, "head_moved", `The branch ${branch} is no longer at the expected head.`);
   const baseTree = head ? git.commitGraph.readSync([head], "verified")[0]?.tree : null;
   if (baseTree === undefined) throw new Error(`branch ${branch} points at an unknown commit`);
-  const refused = await deps.precheck?.(input.principal, [
-    { ref, old: head ? oidToHex(head) : null, new: ZERO_ID },
-  ]);
+  const refused = await deps.precheck?.(
+    input.principal,
+    [{ ref, old: head ? oidToHex(head) : null, new: ZERO_ID }],
+    input.grantId ?? null,
+  );
   if (refused) return fail(409, "ruleset_violation", refused);
 
   const now = Math.floor((deps.now ?? Date.now)() / 1000);
@@ -409,7 +414,10 @@ async function blobAt(
 }
 
 /** Who makes a write, and where: what the push path checks at its commit point. */
-export type WriterOf<T extends FileWriteInput> = Pick<T, "principal" | "tokenId" | "repoId">;
+export type WriterOf<T extends FileWriteInput> = Pick<
+  T,
+  "principal" | "tokenId" | "grantId" | "repoId"
+>;
 
 /** A write stored as a push's body: its upload and scratch objects. */
 export interface StoredUpload {
@@ -433,7 +441,11 @@ export async function storeUpload(
   },
 ): Promise<Browsed<StoredUpload>> {
   const { git, push, metrics } = deps;
-  const begun = push.begin({ principal: input.principal, tokenId: input.tokenId });
+  const begun = push.begin({
+    principal: input.principal,
+    tokenId: input.tokenId,
+    grantId: input.grantId ?? null,
+  });
   if (!begun.ok) return fail(404, "repo_not_found", begun.error);
   const networkId = git.networkId();
   const upload = {

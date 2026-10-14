@@ -18,6 +18,9 @@ export function tokenRecord(principalId: string, repoIds: string[] | null = null
     repoIds,
     expiresAt: Date.now() + 60 * 60 * 1000,
     lastUsedAt: null,
+    act: [],
+    grantId: null,
+    ceilingIds: [],
   };
 }
 

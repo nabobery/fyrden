@@ -35,8 +35,9 @@ export async function findAccount(
 }
 
 /**
- * `principalId`'s role in `account`: a user owns its own account; in an
- * organization, the role its object records (the source of truth).
+ * `principalId`'s role in `account`: an account owns itself (a user its own
+ * namespace); in an organization, the role its object records (the source
+ * of truth).
  */
 export async function accountRoleOf(
   env: Env,
@@ -44,9 +45,29 @@ export async function accountRoleOf(
   principalId: string,
   metrics?: Metrics,
 ): Promise<OrgRole | null> {
-  if (account.type === "user") return account.id === principalId ? "owner" : null;
+  if (account.id === principalId) return "owner";
+  if (account.type === "user") return null;
   metrics?.count("do.request", { class: "OrgDO", method: "accountRole" });
   return env.ORG.getByName(account.id).accountRole(principalId);
+}
+
+/**
+ * The role a token acts with in `account`: its principal's, capped by each
+ * acting agent's owner's (an agent never exceeds its owner).
+ */
+export async function actingRoleIn(
+  env: Env,
+  account: Account,
+  auth: Pick<TokenRecord, "principalId" | "ceilingIds">,
+  metrics?: Metrics,
+): Promise<OrgRole | null> {
+  let role = await accountRoleOf(env, account, auth.principalId, metrics);
+  for (const owner of new Set(auth.ceilingIds)) {
+    if (role === null) break;
+    const ceiling = await accountRoleOf(env, account, owner, metrics);
+    role = ceiling === null ? null : role === "owner" && ceiling === "owner" ? "owner" : "member";
+  }
+  return role;
 }
 
 /** Whether a token may use the account permission `permission` with role `role` in the account. */
@@ -74,10 +95,7 @@ export async function orgFor(
   permission: Permission,
 ): Promise<Account> {
   const org = await findAccount(ctx.env, handle, { metrics: ctx.metrics });
-  const role =
-    org?.type === "org"
-      ? await accountRoleOf(ctx.env, org, ctx.auth.principalId, ctx.metrics)
-      : null;
+  const role = org?.type === "org" ? await actingRoleIn(ctx.env, org, ctx.auth, ctx.metrics) : null;
   if (org?.type !== "org" || role === null)
     throw new OperationError(404, "org_not_found", `No organization ${handle} was found.`);
   if (!canUseAccount(ctx.auth, role, permission))

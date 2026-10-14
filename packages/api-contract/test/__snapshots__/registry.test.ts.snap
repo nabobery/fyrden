@@ -395,6 +395,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "starring:write",
                         "ssh_signing_keys:read",
                         "ssh_signing_keys:write",
+                        "agents:read",
+                        "agents:write",
+                        "grants:read",
+                        "grants:write",
                         "metadata:read",
                         "contents:read",
                         "contents:write",
@@ -493,6 +497,1110 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-fyrden-permission": "instance:admin",
         "x-fyrden-principals": [
           "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/agents": {
+      "get": {
+        "description": "Your agents, or those of an organization you own (\`org\`), oldest first.",
+        "operationId": "agents.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "org",
+            "required": false,
+            "schema": {
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agents": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "disabled": {
+                            "description": "A disabled agent's tokens and grants stop working.",
+                            "type": "boolean",
+                          },
+                          "display_name": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "handle": {
+                            "type": "string",
+                          },
+                          "id": {
+                            "description": "Agent id (agt_ prefix).",
+                            "type": "string",
+                          },
+                          "owner": {
+                            "description": "The handle of the user or organization that owns the agent.",
+                            "type": "string",
+                          },
+                          "owner_id": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "handle",
+                          "display_name",
+                          "owner",
+                          "owner_id",
+                          "created_at",
+                          "disabled",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                  },
+                  "required": [
+                    "agents",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List agents",
+        "x-fyrden-permission": "agents:read",
+        "x-fyrden-principals": [
+          "user",
+        ],
+      },
+      "post": {
+        "description": "Creates an agent principal owned by you, or by an organization you own (\`org\`). An agent acts with its own tokens and collaborator roles, or for a user under a delegation grant; either way it never exceeds its owner.",
+        "operationId": "agents.create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "display_name": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "handle": {
+                    "description": "1-39 letters, digits and single inner hyphens; unique among all handles, ignoring case.",
+                    "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+                    "type": "string",
+                  },
+                  "org": {
+                    "description": "An organization you own to own the agent; you when absent.",
+                    "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "handle",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "disabled": {
+                      "description": "A disabled agent's tokens and grants stop working.",
+                      "type": "boolean",
+                    },
+                    "display_name": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "handle": {
+                      "type": "string",
+                    },
+                    "id": {
+                      "description": "Agent id (agt_ prefix).",
+                      "type": "string",
+                    },
+                    "owner": {
+                      "description": "The handle of the user or organization that owns the agent.",
+                      "type": "string",
+                    },
+                    "owner_id": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "handle",
+                    "display_name",
+                    "owner",
+                    "owner_id",
+                    "created_at",
+                    "disabled",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create an agent",
+        "x-fyrden-permission": "agents:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/agents/{agent}": {
+      "delete": {
+        "description": "Disables an agent: its tokens, the tokens issued for it under delegation grants, and its grants stop working at once for writes (within 30 seconds for reads). Its handle stays taken.",
+        "operationId": "agents.disable",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "description": "The agent's handle: 1-39 letters, digits and single inner hyphens.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "disabled": {
+                      "description": "A disabled agent's tokens and grants stop working.",
+                      "type": "boolean",
+                    },
+                    "display_name": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "handle": {
+                      "type": "string",
+                    },
+                    "id": {
+                      "description": "Agent id (agt_ prefix).",
+                      "type": "string",
+                    },
+                    "owner": {
+                      "description": "The handle of the user or organization that owns the agent.",
+                      "type": "string",
+                    },
+                    "owner_id": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "handle",
+                    "display_name",
+                    "owner",
+                    "owner_id",
+                    "created_at",
+                    "disabled",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Disable an agent",
+        "x-fyrden-permission": "agents:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "An agent you own, or one an organization you own owns.",
+        "operationId": "agents.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "description": "The agent's handle: 1-39 letters, digits and single inner hyphens.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "disabled": {
+                      "description": "A disabled agent's tokens and grants stop working.",
+                      "type": "boolean",
+                    },
+                    "display_name": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "handle": {
+                      "type": "string",
+                    },
+                    "id": {
+                      "description": "Agent id (agt_ prefix).",
+                      "type": "string",
+                    },
+                    "owner": {
+                      "description": "The handle of the user or organization that owns the agent.",
+                      "type": "string",
+                    },
+                    "owner_id": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "handle",
+                    "display_name",
+                    "owner",
+                    "owner_id",
+                    "created_at",
+                    "disabled",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get an agent",
+        "x-fyrden-permission": "agents:read",
+        "x-fyrden-principals": [
+          "user",
+        ],
+      },
+    },
+    "/agents/{agent}/tokens": {
+      "post": {
+        "description": "Mints a token the agent acts with as itself: a personal access token (\`pat\`, also the subject of a token exchange) or a git token (\`git\`), never wider than your token (its scopes and repositories). Returned once.",
+        "operationId": "agents.tokens.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "description": "The agent's handle: 1-39 letters, digits and single inner hyphens.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "expires_in_days": {
+                    "default": 30,
+                    "maximum": 365,
+                    "minimum": 1,
+                    "type": "integer",
+                  },
+                  "scopes": {
+                    "default": [],
+                    "description": "Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's).",
+                    "items": {
+                      "enum": [
+                        "instance:admin",
+                        "repos:create",
+                        "members:read",
+                        "members:write",
+                        "starring:read",
+                        "starring:write",
+                        "ssh_signing_keys:read",
+                        "ssh_signing_keys:write",
+                        "agents:read",
+                        "agents:write",
+                        "grants:read",
+                        "grants:write",
+                        "metadata:read",
+                        "contents:read",
+                        "contents:write",
+                        "administration:write",
+                      ],
+                      "type": "string",
+                    },
+                    "maxItems": 32,
+                    "type": "array",
+                  },
+                  "type": {
+                    "default": "pat",
+                    "enum": [
+                      "pat",
+                      "git",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agent_id": {
+                      "type": "string",
+                    },
+                    "expires_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "id": {
+                      "description": "Token id (tok_ prefix).",
+                      "type": "string",
+                    },
+                    "scopes": {
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "token": {
+                      "description": "The token. Shown once and never stored.",
+                      "type": "string",
+                    },
+                    "type": {
+                      "enum": [
+                        "pat",
+                        "git",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "token",
+                    "type",
+                    "agent_id",
+                    "scopes",
+                    "expires_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create a token for an agent",
+        "x-fyrden-permission": "agents:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/grants": {
+      "get": {
+        "description": "The grants you made (a user), or that you hold or passed down (an agent), newest first; revoked ones too.",
+        "operationId": "grants.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "grants": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agent": {
+                            "description": "The handle of the agent the grant lets act.",
+                            "type": "string",
+                          },
+                          "agent_id": {
+                            "type": "string",
+                          },
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "depth": {
+                            "description": "1 for a user's grant, 2 for a sub-agent's.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "expires_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "grantor": {
+                            "description": "The handle of the user the agent acts for.",
+                            "type": "string",
+                          },
+                          "grantor_id": {
+                            "type": "string",
+                          },
+                          "id": {
+                            "description": "Grant id (grt_ prefix).",
+                            "type": "string",
+                          },
+                          "parent_id": {
+                            "description": "The grant this one was passed down from (to a sub-agent); null for a user's own.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "repositories": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "type": "string",
+                                },
+                                "type": "array",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Repository ids the grant is limited to; null for every one the user can reach.",
+                          },
+                          "revoked_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "root_id": {
+                            "description": "The user's grant at the top of the chain.",
+                            "type": "string",
+                          },
+                          "scopes": {
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "grantor",
+                          "grantor_id",
+                          "agent",
+                          "agent_id",
+                          "parent_id",
+                          "root_id",
+                          "depth",
+                          "scopes",
+                          "repositories",
+                          "expires_at",
+                          "created_at",
+                          "revoked_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                  },
+                  "required": [
+                    "grants",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List delegation grants",
+        "x-fyrden-permission": "grants:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Lets an agent act for you, limited to \`scopes\`, \`repositories\` and an expiry: the agent exchanges its own token for a delegated one (\`POST /oauth/token\`, RFC 8693). An agent holding a grant may pass a narrower one (\`parent\`) to another agent of its owner, one hop down at most. Revoking a grant revokes the tokens issued under it and its sub-grants.",
+        "operationId": "grants.create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "agent": {
+                    "description": "The agent's handle.",
+                    "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+                    "type": "string",
+                  },
+                  "expires_in_days": {
+                    "default": 30,
+                    "maximum": 365,
+                    "minimum": 1,
+                    "type": "integer",
+                  },
+                  "parent": {
+                    "description": "For an agent: the grant it holds and passes a narrower one of to another agent.",
+                    "pattern": "^grt_[0-9A-HJKMNP-TV-Z]{26}$",
+                    "type": "string",
+                  },
+                  "repositories": {
+                    "description": "\`owner/name\` of each repository it is limited to; every one you can reach when absent.",
+                    "items": {
+                      "pattern": "^[^/\\s]+\\/[^/\\s]+$",
+                      "type": "string",
+                    },
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                  "scopes": {
+                    "description": "Permissions the agent may use for you (and what they imply).",
+                    "items": {
+                      "enum": [
+                        "instance:admin",
+                        "repos:create",
+                        "members:read",
+                        "members:write",
+                        "starring:read",
+                        "starring:write",
+                        "ssh_signing_keys:read",
+                        "ssh_signing_keys:write",
+                        "agents:read",
+                        "agents:write",
+                        "grants:read",
+                        "grants:write",
+                        "metadata:read",
+                        "contents:read",
+                        "contents:write",
+                        "administration:write",
+                      ],
+                      "type": "string",
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                },
+                "required": [
+                  "agent",
+                  "scopes",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agent": {
+                      "description": "The handle of the agent the grant lets act.",
+                      "type": "string",
+                    },
+                    "agent_id": {
+                      "type": "string",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "depth": {
+                      "description": "1 for a user's grant, 2 for a sub-agent's.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "expires_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "grantor": {
+                      "description": "The handle of the user the agent acts for.",
+                      "type": "string",
+                    },
+                    "grantor_id": {
+                      "type": "string",
+                    },
+                    "id": {
+                      "description": "Grant id (grt_ prefix).",
+                      "type": "string",
+                    },
+                    "parent_id": {
+                      "description": "The grant this one was passed down from (to a sub-agent); null for a user's own.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "repositories": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Repository ids the grant is limited to; null for every one the user can reach.",
+                    },
+                    "revoked_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "root_id": {
+                      "description": "The user's grant at the top of the chain.",
+                      "type": "string",
+                    },
+                    "scopes": {
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "grantor",
+                    "grantor_id",
+                    "agent",
+                    "agent_id",
+                    "parent_id",
+                    "root_id",
+                    "depth",
+                    "scopes",
+                    "repositories",
+                    "expires_at",
+                    "created_at",
+                    "revoked_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create a delegation grant",
+        "x-fyrden-permission": "grants:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/grants/{grant_id}": {
+      "delete": {
+        "description": "Revokes a grant and the grants passed down from it: every token issued under them stops working at once for writes (within 30 seconds for reads). Its user, or the agent that passed it down, may revoke it.",
+        "operationId": "grants.revoke",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "description": "The grant's id.",
+              "pattern": "^grt_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agent": {
+                      "description": "The handle of the agent the grant lets act.",
+                      "type": "string",
+                    },
+                    "agent_id": {
+                      "type": "string",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "depth": {
+                      "description": "1 for a user's grant, 2 for a sub-agent's.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "expires_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "grantor": {
+                      "description": "The handle of the user the agent acts for.",
+                      "type": "string",
+                    },
+                    "grantor_id": {
+                      "type": "string",
+                    },
+                    "id": {
+                      "description": "Grant id (grt_ prefix).",
+                      "type": "string",
+                    },
+                    "parent_id": {
+                      "description": "The grant this one was passed down from (to a sub-agent); null for a user's own.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "repositories": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "type": "string",
+                          },
+                          "type": "array",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Repository ids the grant is limited to; null for every one the user can reach.",
+                    },
+                    "revoked_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "root_id": {
+                      "description": "The user's grant at the top of the chain.",
+                      "type": "string",
+                    },
+                    "scopes": {
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "grantor",
+                    "grantor_id",
+                    "agent",
+                    "agent_id",
+                    "parent_id",
+                    "root_id",
+                    "depth",
+                    "scopes",
+                    "repositories",
+                    "expires_at",
+                    "created_at",
+                    "revoked_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Revoke a delegation grant",
+        "x-fyrden-permission": "grants:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
         ],
         "x-idempotency": "Idempotency-Key header",
       },
@@ -9366,7 +10474,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/user": {
       "get": {
-        "description": "Returns the principal and token that authenticated this request.",
+        "description": "Returns the principal and token that authenticated this request, and for a delegated token the agents acting for the principal.",
         "operationId": "meta.whoami",
         "responses": {
           "200": {
@@ -9375,6 +10483,29 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                 "schema": {
                   "additionalProperties": false,
                   "properties": {
+                    "act": {
+                      "description": "For a delegated token, the agents acting for this principal, the current one first (an RFC 8693 \`act\` chain); empty otherwise.",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "handle": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "id": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "handle",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
                     "handle": {
                       "type": [
                         "string",
@@ -9382,7 +10513,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                     },
                     "id": {
-                      "description": "Principal id (usr_, org_, agt_ or ins_ prefix).",
+                      "description": "Principal id (usr_, org_, agt_ or ins_ prefix): whose rights the token uses.",
                       "type": "string",
                     },
                     "is_instance_admin": {
@@ -9396,6 +10527,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "maximum": 9007199254740991,
                           "minimum": -9007199254740991,
                           "type": "integer",
+                        },
+                        "grant_id": {
+                          "description": "The delegation grant a delegated token was issued under; null otherwise.",
+                          "type": [
+                            "string",
+                            "null",
+                          ],
                         },
                         "id": {
                           "type": "string",
@@ -9415,6 +10553,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "type",
                         "scopes",
                         "expires_at",
+                        "grant_id",
                       ],
                       "type": "object",
                     },
@@ -9433,6 +10572,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "type",
                     "handle",
                     "is_instance_admin",
+                    "act",
                     "token",
                   ],
                   "type": "object",

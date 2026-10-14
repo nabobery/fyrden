@@ -428,6 +428,29 @@ the cron finishes any it does not.
 | Read model | Events from before the transfer are refused once it lands (a new owner generation) |
 | Transfers one cron run finishes | 10 |
 
+## Agents and delegation
+
+Agents are principals owned by a user or an organization (`POST /agents`).
+An agent acts with its own tokens (`POST /agents/{agent}/tokens`) and its
+own collaborator roles, or for a user under a delegation grant
+(`POST /grants`): it exchanges its own token for a delegated one at
+`POST /oauth/token` (RFC 8693 token exchange, `grant_id` names the grant).
+A delegated token's principal is the user; its act chain names the agents
+acting, the current one first, and audit rows carry it.
+
+| What | Value |
+|---|---|
+| An agent's rights | Its own (or the user's, under a grant), capped by its owner's: an organization's agent reaches only the organization's repositories |
+| A grant | Scopes (at least one), optionally repositories, an expiry of up to 365 days; never wider, nor longer-lived, than the token making it |
+| Passing down | An agent holding a user's grant may pass a narrower one (scopes, repositories, expiry) to another agent of its owner; one hop at most (depth 2) |
+| Delegated token | Type `oat`, up to 1 hour, and never past any grant of its chain or the agent's own token; scopes and repositories within the grant and the agent's token |
+| Revocation | Revoking a grant revokes the grants passed down from it; tokens under them, and an agent's tokens once it (or its owner) is disabled, stop at once for writes and within 30 seconds for reads |
+| Delegated tokens may not | Make or revoke grants, mint tokens, change who has access (collaborators, team repositories), or call user-only operations (create repositories, transfer, stars, signing keys) |
+| An agent's own token | Never wider than the token that minted it (scopes and repositories) |
+| Token endpoint | Bodies up to 16 KiB; rate limited per client address |
+| Rulesets | Rules for `agent` actors apply to an agent acting for a user |
+| Not yet | Grants from organizations, and git tokens under a grant |
+
 ## Templates
 
 `POST /repos/{template_owner}/{template_repo}/generate` makes a repository

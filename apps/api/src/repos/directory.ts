@@ -7,6 +7,7 @@ import {
   isValidHandle,
   ownsUserAccount,
   PERMISSIONS,
+  principalTypeOf,
   type RepoPermission,
   type RepoRole,
 } from "@fyrden/domain";
@@ -400,6 +401,10 @@ export function forgetResolved(ownerHandle: string, name: string): void {
   found.delete(cacheKey(ownerHandle, name));
 }
 
+/** An audit row's act chain: JSON, or null when no agent acts. */
+export const actChain = (act: readonly string[] | undefined): string | null =>
+  act && act.length > 0 ? JSON.stringify(act) : null;
+
 /** In a statement on `repos`: no transfer is moving the repository (renames, settings and deletions wait). */
 export const NOT_TRANSFERRING = `NOT EXISTS (SELECT 1 FROM repo_transfers
   WHERE repo_transfers.repo_id = repos.id AND repo_transfers.step NOT IN ('done', 'failed'))`;
@@ -422,7 +427,14 @@ export async function renameRepo(
   env: Env,
   repo: Pick<RepoEntry, "id" | "ownerId" | "ownerHandle" | "name">,
   name: string,
-  options: { actorId: string; requestId?: string; alias?: string; metrics?: Metrics },
+  options: {
+    actorId: string;
+    /** The agents acting for `actorId` (a delegated token's act chain), for the audit row. */
+    act?: readonly string[];
+    requestId?: string;
+    alias?: string;
+    metrics?: Metrics;
+  },
 ): Promise<{ value: string; gen: number } | "name_taken" | "transferring" | undefined> {
   const db = env.DIRECTORY;
   const now = clock();
@@ -457,12 +469,20 @@ export async function renameRepo(
         .bind(repo.id, name, now, repo.ownerId),
       db
         .prepare(
-          `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
-           SELECT ?3, ?4, 'repo.rename', id, json_object('from', name, 'to', ?2), ?5 FROM repos
+          `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
+           SELECT ?3, ?4, ?7, 'repo.rename', id, json_object('from', name, 'to', ?2), ?5 FROM repos
            WHERE id = ?1 AND ${active(6)}
            RETURNING json_extract(details, '$.from') AS old_name`,
         )
-        .bind(repo.id, name, now, options.actorId, options.requestId ?? null, repo.ownerId),
+        .bind(
+          repo.id,
+          name,
+          now,
+          options.actorId,
+          options.requestId ?? null,
+          repo.ownerId,
+          actChain(options.act),
+        ),
       db
         .prepare(
           `UPDATE repos SET name = ?2, name_gen = name_gen + 1, updated_at = ?3
@@ -518,7 +538,13 @@ export async function updateDirectorySettings(
   env: Env,
   repo: Pick<RepoEntry, "id" | "ownerId" | "ownerHandle" | "name">,
   change: { readonly isTemplate?: boolean; readonly expiresAt?: number | null },
-  options: { actorId: string; requestId?: string; metrics?: Metrics },
+  options: {
+    actorId: string;
+    /** The agents acting for `actorId` (a delegated token's act chain), for the audit row. */
+    act?: readonly string[];
+    requestId?: string;
+    metrics?: Metrics;
+  },
 ): Promise<Pick<RepoEntry, "isTemplate" | "expiresAt"> | "transferring" | undefined> {
   const db = env.DIRECTORY;
   const now = clock();
@@ -538,8 +564,8 @@ export async function updateDirectorySettings(
     db.prepare(TRANSFERRING).bind(repo.id),
     db
       .prepare(
-        `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
-         SELECT ?5, ?6, 'repo.settings', id,
+        `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
+         SELECT ?5, ?6, ?9, 'repo.settings', id,
            json_object('is_template', ${next}, 'expires_at', ${nextExpiry}), ?7 FROM repos
          WHERE id = ?1 AND ${active}
            AND (is_template <> ${next} OR expires_at IS NOT ${nextExpiry})`,
@@ -553,6 +579,7 @@ export async function updateDirectorySettings(
         options.actorId,
         options.requestId ?? null,
         repo.ownerId,
+        actChain(options.act),
       ),
     db
       .prepare(
@@ -577,7 +604,8 @@ export const GIT_PERMISSION = {
   write: "contents:write",
 } as const satisfies Record<RepoAccess, RepoPermission>;
 
-type Caller = Pick<TokenRecord, "principalId" | "principalType" | "scopes" | "repoIds">;
+type Caller = Pick<TokenRecord, "principalId" | "principalType" | "scopes" | "repoIds"> &
+  Partial<Pick<TokenRecord, "ceilingIds">>;
 
 /** The decision for `role` on the repository, with the token's own limits (type, scopes, repository list). */
 export function allowedWithRole(
@@ -608,20 +636,71 @@ export function canAccessOwn(
 ): boolean {
   return (
     ownsUserAccount(auth.principalId, repo.ownerId) &&
+    // An agent acting is capped by its owner: only the user's own agents act on its own outright.
+    (auth.ceilingIds ?? []).every((owner) => owner === auth.principalId) &&
     allowedWithRole(auth, repo, permission, "admin")
   );
 }
 
 /**
+ * Which of the principal's own repositories `entries` a token may use
+ * `permission` on: for the user itself and its own agents, at once
+ * (`canAccessOwn`); for an agent of another owner acting for the user,
+ * each one as `authorize` decides (the owner's role caps it).
+ */
+export async function ownAccessible<T extends Pick<RepoEntry, "id" | "ownerId">>(
+  env: Env,
+  auth: Caller,
+  entries: readonly T[],
+  permission: RepoPermission,
+  metrics?: Metrics,
+): Promise<T[]> {
+  if ((auth.ceilingIds ?? []).every((owner) => owner === auth.principalId))
+    return entries.filter((entry) => canAccessOwn(auth, entry, permission));
+  const allowed = await Promise.all(
+    entries.map((entry) => authorize(env, auth, entry, permission, metrics)),
+  );
+  return entries.filter((_, i) => allowed[i]);
+}
+
+/**
+ * The repositories of the principal's own (user) account a listing may
+ * show to `auth`: its token's repository list, narrowed, for an agent of
+ * another owner acting for the user, to those every such owner
+ * collaborates on (in a user's account, the only roles another principal
+ * holds; an organization holds none there). In the query, so neither a
+ * page nor its cursor names one it may not see.
+ */
+export async function ownListable(
+  env: Env,
+  auth: Caller,
+  metrics?: Metrics,
+): Promise<readonly string[] | null> {
+  let ids: readonly string[] | null = auth.repoIds;
+  for (const owner of new Set(auth.ceilingIds ?? [])) {
+    if (owner === auth.principalId) continue;
+    metrics?.count("do.request", { class: "OrgDO", method: "collaboratorRepos" });
+    const theirs: string[] =
+      principalTypeOf(owner) === "user"
+        ? await env.ORG.getByName(auth.principalId).collaboratorRepos(owner, "read")
+        : [];
+    ids = ids === null ? theirs : ids.filter((id) => theirs.includes(id));
+  }
+  return ids;
+}
+
+/**
  * Whether a token may use `permission` on a repository: the token's own
- * limits, then the principal's role there. The owner of a user's account
- * administers it outright; anyone else's role, and everyone's on an
- * organization's repository, comes from the repository object's ACL
- * snapshot (a write from one pulled within its window; fail closed). The
- * owner is taken from `repo` only when it was read from the directory's
- * primary just now (a transfer may have replaced a cached one); else the
- * repository object, which knows its owner, decides. Every repository is
- * private for now: there is no anonymous or public read.
+ * limits, then the principal's role there, then, for an agent acting
+ * (with its own token, or for a user under a delegation grant), each
+ * agent's owner's role: an agent never exceeds its owner. The owner of a
+ * user's account administers it outright; anyone else's role, and
+ * everyone's on an organization's repository, comes from the repository
+ * object's ACL snapshot (a write from one pulled within its window; fail
+ * closed). The owner is taken from `repo` only when it was read from the
+ * directory's primary just now (a transfer may have replaced a cached
+ * one); else the repository object, which knows its owner, decides. Every
+ * repository is private for now: there is no anonymous or public read.
  */
 export async function authorize(
   env: Env,
@@ -632,18 +711,22 @@ export async function authorize(
 ): Promise<boolean> {
   // The token's limits need no call: no role widens them.
   if (!allowedWithRole(auth, repo, permission, "admin")) return false;
-  // Only from an answer that names the owner for sure; else the repository object decides.
-  if (currentOwner.has(repo) && ownsUserAccount(auth.principalId, repo.ownerId)) return true;
   const purpose = PERMISSIONS[permission].writes ? "write" : "read";
-  metrics?.count("do.request", { class: "RepoDO", method: "roleOf" });
-  let role: RepoRole | null;
-  try {
-    role = await env.REPO.getByName(repo.id).roleOf(auth.principalId, purpose, repo.ownerId);
-  } catch {
-    // The repository object could not answer: deny (fail closed).
-    role = null;
-  }
-  return allowedWithRole(auth, repo, permission, role);
+  const roleOf = async (principalId: string): Promise<RepoRole | null> => {
+    // Only from an answer that names the owner for sure; else the repository object decides.
+    if (currentOwner.has(repo) && principalId === repo.ownerId) return "admin";
+    metrics?.count("do.request", { class: "RepoDO", method: "roleOf" });
+    try {
+      return await env.REPO.getByName(repo.id).roleOf(principalId, purpose, repo.ownerId);
+    } catch {
+      // The repository object could not answer: deny (fail closed).
+      return null;
+    }
+  };
+  if (!allowedWithRole(auth, repo, permission, await roleOf(auth.principalId))) return false;
+  for (const owner of new Set(auth.ceilingIds ?? []))
+    if (!allowedWithRole(auth, repo, permission, await roleOf(owner))) return false;
+  return true;
 }
 
 /** Every repository starts with HEAD at this branch; the branch exists after the first push. */

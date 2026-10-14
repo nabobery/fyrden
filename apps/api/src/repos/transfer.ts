@@ -1,6 +1,6 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { Input, Output, transferRepo } from "@fyrden/api-contract";
-import { accountRoleOf, canUseAccount, findAccount } from "../accounts/account.js";
+import { actingRoleIn, canUseAccount, findAccount } from "../accounts/account.js";
 import { recordedAccount } from "../accounts/grants.js";
 import { accountLimits } from "../accounts/quotas.js";
 import { readModelFor } from "../events/read-model.js";
@@ -132,8 +132,7 @@ async function targetOf(ctx: OpContext, handle: string): Promise<{ id: string; h
   const self = auth.principalHandle ?? "";
   if (handle.toLowerCase() === self.toLowerCase()) return { id: auth.principalId, handle: self };
   const org = await findAccount(env, handle, { metrics });
-  const role =
-    org?.type === "org" ? await accountRoleOf(env, org, auth.principalId, metrics) : null;
+  const role = org?.type === "org" ? await actingRoleIn(env, org, auth, metrics) : null;
   if (org?.type !== "org" || role === null)
     throw new OperationError(404, "org_not_found", `No organization ${handle} was found.`);
   if (!canUseAccount(auth, role, "repos:create"))

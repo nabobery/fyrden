@@ -658,6 +658,22 @@ export class OrgDO extends MigratingDO {
     );
   }
 
+  /**
+   * The repositories of the account `principalId` collaborates on with
+   * `min` or stronger (in a user's account, the only roles another
+   * principal can hold).
+   */
+  collaboratorRepos(principalId: string, min: RepoRole): string[] {
+    return this.ctx.storage.sql
+      .exec<{ repo_id: string; role: RepoRole }>(
+        "SELECT repo_id, role FROM collaborators WHERE principal_id = ?",
+        principalId,
+      )
+      .toArray()
+      .filter((row) => atLeast(row.role, min))
+      .map((row) => row.repo_id);
+  }
+
   /** The collaborators of `repoId` after handle `after` (ignoring case), at most `limit`. */
   collaborators(repoId: string, after: string, limit: number): CollaboratorRow[] {
     return this.ctx.storage.sql

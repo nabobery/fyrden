@@ -161,18 +161,24 @@ export class RepoPush {
    * index (`packs` are the push's own, not live yet; `head`, a default
    * branch the push sets as it commits, as an import's), and a stamp of
    * what they were checked against (the rulesets' version, HEAD, the
-   * pusher's role); the commit is refused when `stamp` differs then.
+   * pusher's effective role), which `restamp` takes again: the commit is
+   * refused when it differs then.
    */
   rules:
     | {
         readonly check: (input: {
           readonly principal: string;
+          /** The delegation grant the push is made under; null for none. */
+          readonly grantId: string | null;
           readonly uploadId: string;
           readonly packs: readonly PackId[];
           readonly head: string | undefined;
           readonly commands: readonly CheckedCommand[];
-        }) => Promise<{ stamp: string; refusals: ReadonlyMap<number, string> }>;
-        readonly stamp: (principal: string) => string;
+        }) => Promise<{
+          stamp: string;
+          restamp: () => string;
+          refusals: ReadonlyMap<number, string>;
+        }>;
       }
     | undefined;
 
@@ -433,7 +439,7 @@ export class RepoPush {
 
     const committed: CommittedTransaction[] = [];
     const merged: TailMergeOutcome[] = [];
-    let rulesStamp: string | undefined;
+    let rulesStamp: { readonly stamp: string; readonly restamp: () => string } | undefined;
     const rules = this.rules;
     const outcome = await this.git.locks.withLock(
       LOCK_REF_COMMIT,
@@ -458,12 +464,13 @@ export class RepoPush {
             checkCommands: async (commands: readonly CheckedCommand[]) => {
               const checked = await rules.check({
                 principal: upload.principal,
+                grantId: upload.grantId,
                 uploadId,
                 packs: indexed?.ok ? indexed.packs : [],
                 head: meta.head,
                 commands,
               });
-              rulesStamp = checked.stamp;
+              rulesStamp = checked;
               return checked.refusals;
             },
           }),
@@ -477,7 +484,7 @@ export class RepoPush {
             // In the commit's transaction: the rulesets checked are still the current ones.
             () =>
               this.frozen?.() ??
-              (rules && rulesStamp !== undefined && rules.stamp(upload.principal) !== rulesStamp
+              (rulesStamp !== undefined && rulesStamp.restamp() !== rulesStamp.stamp
                 ? RULESETS_CHANGED
                 : undefined),
           ),

@@ -49,6 +49,7 @@ export async function updateRepoOperation(
     }
     const renamed = await renameRepo(env, entry, input.name, {
       actorId: auth.principalId,
+      act: auth.act,
       requestId: ctx.requestId,
       alias: input.repo,
       metrics,
@@ -73,7 +74,7 @@ export async function updateRepoOperation(
     name,
     ...(input.description !== undefined && { description: input.description || null }),
     ...(input.default_branch !== undefined && { defaultBranch: input.default_branch }),
-    actor: { principal: auth.principalId, tokenId: auth.id, via: "api" },
+    actor: { principal: auth.principalId, tokenId: auth.id, grantId: auth.grantId, via: "api" },
   });
   if (!result.ok && result.code === "repo_transferring") throw transferring();
   if (!result.ok && (result.code === "repo_deleted" || result.code === "access_lost"))
@@ -96,7 +97,7 @@ export async function updateRepoOperation(
         ...(input.is_template !== undefined && { isTemplate: input.is_template }),
         ...(expiresAt !== undefined && { expiresAt }),
       },
-      { actorId: auth.principalId, requestId: ctx.requestId, metrics },
+      { actorId: auth.principalId, act: auth.act, requestId: ctx.requestId, metrics },
     );
     if (updated === "transferring") throw transferring();
     if (updated === undefined)

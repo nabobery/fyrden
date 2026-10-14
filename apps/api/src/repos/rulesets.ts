@@ -60,6 +60,7 @@ async function change(
   const result = await ctx.env.REPO.getByName(entry.id).changeRuleset(request, {
     principal: ctx.auth.principalId,
     tokenId: ctx.auth.id,
+    grantId: ctx.auth.grantId,
     via: "api",
   });
   if (result.ok) return result.record;

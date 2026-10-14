@@ -85,6 +85,7 @@ export async function createUploadSession(
     await ctx.env.REPO.getByName(repo.id).beginChunked({
       principal: ctx.auth.principalId,
       tokenId: ctx.auth.id,
+      grantId: ctx.auth.grantId,
       size: input.size,
       partBytes: tuning.partBytes,
       updates: input.ref_updates,

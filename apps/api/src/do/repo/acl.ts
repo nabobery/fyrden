@@ -68,7 +68,7 @@ export class RepoAcl {
   /**
    * `principalId`'s role on the repository, or null (also when no usable
    * snapshot exists). An object without an identity has no account to ask:
-   * only the owner `directoryOwner` names (a user) administers it.
+   * only the owner `directoryOwner` names administers it.
    */
   async roleOf(
     principalId: string,
@@ -76,10 +76,11 @@ export class RepoAcl {
     directoryOwner?: string,
   ): Promise<RepoRole | null> {
     const account = this.deps.account();
+    // An object without an identity: only the owner the directory named administers it.
     if (!account)
-      return directoryOwner !== undefined && ownsUserAccount(principalId, directoryOwner)
-        ? "admin"
-        : null;
+      return directoryOwner !== undefined && principalId === directoryOwner ? "admin" : null;
+    // The account itself (an agent's owner, capping it) administers its repositories.
+    if (principalId === account.accountId) return "admin";
     if (ownsUserAccount(principalId, account.ownerId)) return "admin";
     const row = await this.#snapshot(account, purpose);
     return row ? (this.#roles(row).get(principalId) ?? null) : null;
@@ -95,7 +96,8 @@ export class RepoAcl {
   allows(principalId: string, min: RepoRole): boolean {
     const account = this.deps.account();
     if (!account) return true;
-    if (ownsUserAccount(principalId, account.ownerId)) return true;
+    if (ownsUserAccount(principalId, account.ownerId) || principalId === account.accountId)
+      return true;
     const row = this.#usable(account.accountId, ACL_POLICY.writeWindowMs);
     return row !== undefined && atLeast(this.#roles(row).get(principalId) ?? null, min);
   }

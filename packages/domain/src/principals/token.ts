@@ -7,7 +7,11 @@
  * SHA-256 of a token is ever stored.
  */
 
-export const TOKEN_TYPES = ["git", "pat", "ist", "run", "job"] as const;
+/**
+ * `oat`: an access token issued by the authorization server (a token
+ * exchange's delegated token, an OAuth client's).
+ */
+export const TOKEN_TYPES = ["git", "pat", "ist", "run", "job", "oat"] as const;
 export type TokenType = (typeof TOKEN_TYPES)[number];
 
 export type ParsedToken =

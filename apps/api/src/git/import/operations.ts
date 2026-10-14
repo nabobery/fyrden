@@ -42,6 +42,7 @@ export async function startImport(
   const begun = await ctx.env.REPO.getByName(repo.id).beginImport({
     principal: ctx.auth.principalId,
     tokenId: ctx.auth.id,
+    grantId: ctx.auth.grantId,
     repoId: repo.id,
     url: check.url,
     ownHosts,

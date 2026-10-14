@@ -1,4 +1,18 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { principalTypeOf } from "@fyrden/domain";
+import {
+  createAgentOperation,
+  createAgentTokenOperation,
+  disableAgentOperation,
+  getAgentOperation,
+  listAgentsOperation,
+} from "../accounts/agents.js";
+import {
+  createGrantOperation,
+  listGrantsOperation,
+  revokeGrantOperation,
+} from "../accounts/delegation.js";
 import {
   createTeamOperation,
   listCollaboratorsOperation,
@@ -51,7 +65,7 @@ import {
 } from "../repos/browse.js";
 import { checkedExpiry, createRepository } from "../repos/create.js";
 import { deleteRepoOperation, deleteReposOperation } from "../repos/delete.js";
-import { authorize, defaultBranchOf, resolveRepo } from "../repos/directory.js";
+import { authorize, defaultBranchOf, ownListable, resolveRepo } from "../repos/directory.js";
 import {
   createFileCommitOperation,
   deleteContentsOperation,
@@ -79,14 +93,47 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // D1 reports a unique-index violation in the error message.
 const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
 
+/** The agents of an act chain, in its order, with their handles. */
+async function actChainOf(
+  env: Env,
+  act: readonly string[],
+  metrics: Metrics,
+): Promise<{ id: string; handle: string | null }[]> {
+  if (act.length === 0) return [];
+  metrics.count("d1.query", { db: "directory", op: "act_handles" });
+  const { results } = await env.DIRECTORY.prepare(
+    "SELECT id, handle FROM principals WHERE id IN (SELECT value FROM json_each(?))",
+  )
+    .bind(JSON.stringify(act))
+    .all<{ id: string; handle: string | null }>();
+  return act.map((id) => ({ id, handle: results.find((r) => r.id === id)?.handle ?? null }));
+}
+
 export const handlers: Handlers = {
-  "meta.whoami": async ({ auth }) => ({
+  "meta.whoami": async ({ env, auth, metrics }) => ({
     id: auth.principalId,
-    type: auth.principalType,
+    // A delegated token's principal is the user acted for; its type is the agent's.
+    type: auth.act.length > 0 ? (principalTypeOf(auth.principalId) ?? "user") : auth.principalType,
     handle: auth.principalHandle,
     is_instance_admin: auth.isInstanceAdmin,
-    token: { id: auth.id, type: auth.type, scopes: auth.scopes, expires_at: auth.expiresAt },
+    act: await actChainOf(env, auth.act, metrics),
+    token: {
+      id: auth.id,
+      type: auth.type,
+      scopes: auth.scopes,
+      expires_at: auth.expiresAt,
+      grant_id: auth.grantId,
+    },
   }),
+
+  "agents.create": createAgentOperation,
+  "agents.list": listAgentsOperation,
+  "agents.get": getAgentOperation,
+  "agents.disable": disableAgentOperation,
+  "agents.tokens.create": createAgentTokenOperation,
+  "grants.create": createGrantOperation,
+  "grants.list": listGrantsOperation,
+  "grants.revoke": revokeGrantOperation,
 
   "meta.signing_keys.list": async ({ env }) => ({
     keys: (await platformKeys(env)).map((k) => ({
@@ -165,13 +212,15 @@ export const handlers: Handlers = {
     }),
 
   // A user's own repositories: it administers them all.
-  "repos.list": ({ env, auth, metrics }, { per_page, cursor }) =>
+  "repos.list": async ({ env, auth, metrics }, { per_page, cursor }) =>
     listAccountRepos(
       env,
       auth,
       { id: auth.principalId, role: "admin" },
       { perPage: per_page, cursor },
       metrics,
+      // An agent of another owner acting for the user sees only what its owner's role allows.
+      await ownListable(env, auth, metrics),
     ),
 
   "repos.get": async ({ env, auth, metrics }, { owner, repo }) => {

@@ -1,4 +1,5 @@
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
+import { readGrantLinks } from "@fyrden/adapters-cloudflare/auth";
 import {
   isNetworkId,
   type JobHandler,
@@ -18,7 +19,7 @@ import {
   measureInvocation,
   type RequestMeta,
 } from "@fyrden/adapters-cloudflare/obs";
-import { type Envelope, REPO_ROLES, type RepoRole } from "@fyrden/domain";
+import { type Envelope, principalTypeOf, REPO_ROLES, type RepoRole } from "@fyrden/domain";
 import {
   type BlockCache,
   bytesBody,
@@ -430,13 +431,16 @@ export class RepoDO extends MigratingDO {
       // before this call; access may have been revoked since. Pulled for a
       // write, then checked with no await before the change.
       const principal = input.actor?.principal;
-      if (principal) await this.acl.roleOf(principal, "write");
+      // With the owners capping an agent acting (they may have lost access meanwhile too).
+      const ceilings = principal
+        ? await this.#rolesPulled(principal, input.actor?.grantId ?? null)
+        : [];
       // Its deletion started after the caller found it.
       if (this.events.isDeleted()) return { ok: false as const, code: "repo_deleted" as const };
       // The directory refuses a rename while a transfer moves it: no name to record.
       if (this.events.isTransferring())
         return { ok: false as const, code: "repo_transferring" as const };
-      if (principal && !this.acl.allows(principal, "admin")) {
+      if (principal && ![principal, ...ceilings].every((p) => this.acl.allows(p, "admin"))) {
         // The directory's name is recorded even so: a rename already happened there.
         if (input.name) this.events.update({ name: input.name, actor: input.actor });
         this.#armOutbox();
@@ -506,12 +510,13 @@ export class RepoDO extends MigratingDO {
   > {
     return this.#measured("changeRuleset", async () => {
       await this.checkEpoch();
-      await this.acl.roleOf(actor.principal, "write");
+      // With the owners capping an agent acting (they may have lost access meanwhile too).
+      const ceilings = await this.#rolesPulled(actor.principal, actor.grantId ?? null);
       if (this.#closed || this.events.isDeleted())
         return { ok: false as const, code: "repo_deleted" as const };
       if (this.events.isTransferring())
         return { ok: false as const, code: "repo_transferring" as const };
-      if (!this.acl.allows(actor.principal, "admin"))
+      if (![actor.principal, ...ceilings].every((p) => this.acl.allows(p, "admin")))
         return { ok: false as const, code: "access_lost" as const };
       const store = this.rulesetStore;
       const done =
@@ -685,7 +690,7 @@ export class RepoDO extends MigratingDO {
       metrics: this.git.context.metrics,
       writerRole: (principalId) => this.acl.roleOf(principalId, "write"),
       ...(signer && { signer }),
-      precheck: (principal, updates) => this.#precheckUpdates(principal, updates),
+      precheck: (principal, updates, grantId) => this.#precheckUpdates(principal, updates, grantId),
     };
   }
 
@@ -852,12 +857,11 @@ export class RepoDO extends MigratingDO {
     };
     this.#pushes.frozen = () => this.events.frozen();
     this.#pushes.rules = {
-      stamp: (principal) => this.#ruleSnapshot(principal).stamp,
       check: async (input) => {
-        // The pusher's role pulled fresh; then everything the check reads,
-        // and its stamp, taken together with no await between them.
-        await this.acl.roleOf(input.principal, "write");
-        const { snapshot, stamp } = this.#ruleSnapshot(input.principal);
+        // The pusher's effective role pulled fresh; then everything the
+        // check reads, and its stamp, taken together with no await between them.
+        const ceilings = await this.#rolesPulled(input.principal, input.grantId);
+        const { snapshot, stamp } = this.#ruleSnapshot(input.principal, ceilings);
         const refusals = await checkPushRules(
           {
             git: this.git,
@@ -866,9 +870,13 @@ export class RepoDO extends MigratingDO {
               verdicts({ env: this.env, metrics: this.git.context.metrics }, facts),
           },
           snapshot,
-          input,
+          { ...input, delegated: input.grantId !== null },
         );
-        return { stamp, refusals };
+        return {
+          stamp,
+          restamp: () => this.#ruleSnapshot(input.principal, ceilings).stamp,
+          refusals,
+        };
       },
     };
     const account = () => {
@@ -985,11 +993,12 @@ export class RepoDO extends MigratingDO {
       return { ok: true };
     }
     const live = liveCommands(plan);
-    await this.acl.roleOf(upload.principal, "write");
+    const ceilings = await this.#rolesPulled(upload.principal, upload.grantId);
     const refusals = precheckPushRules(
-      this.#ruleSnapshot(upload.principal).snapshot,
+      this.#ruleSnapshot(upload.principal, ceilings).snapshot,
       upload.principal,
       live.map((cmd) => ({ index: cmd.index, name: cmd.name as string, kind: cmd.kind })),
+      upload.grantId !== null,
     );
     const messages: string[] = [];
     for (const cmd of live) {
@@ -1017,14 +1026,51 @@ export class RepoDO extends MigratingDO {
   }
 
   /**
-   * What a push's rules read, taken at once: the rulesets (with their
-   * version), HEAD and the pusher's role, and a stamp of them that the
-   * commit's transaction compares.
+   * Owners whose roles cap a write's: the agents' owners of its delegation
+   * grant's chain, or an agent's own owner; none for a user's own token.
+   * From the directory's primary (a grant or an owner may change at any time).
    */
-  #ruleSnapshot(principal: string): { snapshot: RuleSnapshot; stamp: string } {
+  async #ceilingsOf(principal: string, grantId: string | null): Promise<string[]> {
+    const db = this.env.DIRECTORY.withSession("first-primary");
+    const metrics = this.git.context.metrics;
+    if (grantId !== null) {
+      metrics.count("d1.query", { db: "directory", op: "token_grants" });
+      return [...new Set((await readGrantLinks(db, grantId)).map((l) => l.owner_id))];
+    }
+    if (principalTypeOf(principal) !== "agent") return [];
+    metrics.count("d1.query", { db: "directory", op: "agent_owner" });
+    const row = await db
+      .prepare("SELECT owner_id FROM principals WHERE id = ?")
+      .bind(principal)
+      .first<{ owner_id: string | null }>();
+    return row?.owner_id ? [row.owner_id] : [];
+  }
+
+  /** A write's ceilings, with the principal's and their roles pulled fresh (one snapshot serves all). */
+  async #rolesPulled(principal: string, grantId: string | null): Promise<string[]> {
+    const ceilings = await this.#ceilingsOf(principal, grantId);
+    for (const id of [principal, ...ceilings]) await this.acl.roleOf(id, "write");
+    return ceilings;
+  }
+
+  /**
+   * What a push's rules read, taken at once: the rulesets (with their
+   * version), HEAD and the pusher's effective role (the weakest of its own
+   * and its `ceilings`', so an agent's bypass is never its owner's above),
+   * and a stamp of them that the commit's transaction compares.
+   */
+  #ruleSnapshot(
+    principal: string,
+    ceilings: readonly string[] = [],
+  ): { snapshot: RuleSnapshot; stamp: string } {
     const { version, rulesets } = this.rulesetStore.current();
     const head = this.git.refStore.head();
-    const role = this.#ruleRoleNow(principal);
+    let role = this.#ruleRoleNow(principal);
+    for (const id of ceilings) {
+      const cap = this.#ruleRoleNow(id);
+      if (cap === null || (role !== null && REPO_ROLES.indexOf(cap) < REPO_ROLES.indexOf(role)))
+        role = cap;
+    }
     return {
       snapshot: { rulesets: rulesets.map((r) => r.ruleset), head, role },
       stamp: JSON.stringify([version, head, role]),
@@ -1039,17 +1085,21 @@ export class RepoDO extends MigratingDO {
       readonly old: string | null;
       readonly new: string | null;
     }[],
+    /** The delegation grant the write is made under (an agent acts for `principal`); null for none. */
+    grantId: string | null,
   ): Promise<string | undefined> {
     if (!hasPrecheckRules(this.rulesetStore)) return undefined;
-    await this.acl.roleOf(principal, "write");
+    const ceilings = await this.#rolesPulled(principal, grantId);
+    const delegated = grantId !== null;
     const refusals = precheckPushRules(
-      this.#ruleSnapshot(principal).snapshot,
+      this.#ruleSnapshot(principal, ceilings).snapshot,
       principal,
       updates.map((u, index) => ({
         index,
         name: u.ref,
         kind: u.old === null ? "create" : u.new === null ? "delete" : "update",
       })),
+      delegated,
     );
     return refusals.size === 0 ? undefined : [...refusals.values()].join("; ");
   }
@@ -1108,7 +1158,11 @@ export class RepoDO extends MigratingDO {
       const closed = this.#writeRefusal();
       if (closed) return { ok: false, ...closed } as const;
       // A session commits all its updates or none: one refused update refuses it.
-      const refused = await this.#precheckUpdates(input.principal, input.updates);
+      const refused = await this.#precheckUpdates(
+        input.principal,
+        input.updates,
+        input.grantId ?? null,
+      );
       if (refused)
         return { ok: false, status: 409, code: "ruleset_violation", error: refused } as const;
       return this.#chunked().begin(input);

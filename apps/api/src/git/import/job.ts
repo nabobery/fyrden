@@ -63,6 +63,8 @@ export interface ImportRecord {
 export interface BeginImport {
   readonly principal: string;
   readonly tokenId: string;
+  /** The delegation grant the write is made under (an agent acting for `principal`); null for none. */
+  readonly grantId?: string | null;
   readonly repoId: string;
   readonly url: string;
   readonly ownHosts: readonly string[];
@@ -109,7 +111,11 @@ export class RepoImports {
       return { ok: false, code: "import_running", error: "An import is already running." };
     if (this.git.refStore.readRefsSync().refs.size > 0)
       return { ok: false, code: "repo_not_empty", error: "Import needs an empty repository." };
-    const begun = this.push.begin({ principal: input.principal, tokenId: input.tokenId });
+    const begun = this.push.begin({
+      principal: input.principal,
+      tokenId: input.tokenId,
+      grantId: input.grantId ?? null,
+    });
     if (!begun.ok) return { ok: false, code: "import_refused", error: begun.error };
     const now = this.git.context.now();
     const ownerGen = this.ownerGen();
