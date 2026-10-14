@@ -260,6 +260,9 @@ importers:
       '@cloudflare/vitest-plugin':
         specifier: 'catalog:'
         version: 1.4.0(@types/node@24.19.1)(vitest@5.0.3)
+      '@fyrden/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@fyrden/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -469,6 +472,12 @@ importers:
 
   packages/sdk:
     devDependencies:
+      '@fyrden/api-contract':
+        specifier: workspace:*
+        version: link:../api-contract
+      '@types/node':
+        specifier: 24.19.1
+        version: 24.19.1
       '@vitest/coverage-istanbul':
         specifier: 'catalog:'
         version: 5.0.3(vitest@5.0.3)
@@ -478,6 +487,9 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 5.0.3(@types/node@24.19.1)(@vitest/coverage-istanbul@5.0.3)(msw@3.0.2(@types/node@24.19.1)(supports-color@10.2.2)(typescript@7.0.2)(vite@8.3.4(@types/node@24.19.1)(esbuild@0.28.2)))(vite@8.3.4(@types/node@24.19.1)(esbuild@0.28.2))
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
 
   packages/search:
     devDependencies:

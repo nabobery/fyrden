@@ -5,6 +5,7 @@
     "includes": [
       "**",
       "!**/worker-configuration.d.ts",
+      "!packages/sdk/src/generated.ts",
       "!**/.react-router",
       "!**/coverage",
       "!**/dist"

@@ -14,7 +14,6 @@ import {
   encodePushResponse,
   finalizePush,
   type IndexOutcome,
-  type Oid,
   type PackId,
   ProtocolError,
   PushIndexer,
