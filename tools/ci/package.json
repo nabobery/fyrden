@@ -11,7 +11,8 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run -c vitest.e2e.config.ts",
     "test:interop": "vitest run -c vitest.interop.config.ts",
-    "test:conformance": "vitest run -c vitest.conformance.config.ts"
+    "test:conformance": "vitest run -c vitest.conformance.config.ts",
+    "test:schemathesis": "vitest run -c vitest.schemathesis.config.ts"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",

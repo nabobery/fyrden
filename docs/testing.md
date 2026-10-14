@@ -12,6 +12,7 @@
 | Smoke | a deployed instance | Node | `node tools/ci/src/smoke.ts <api-url> <web-url>` |
 | Git interoperability | `tools/ci/interop`: real git (and JGit) against `fyrden-api` under `wrangler dev` | Node driving git and workerd | `pnpm --filter @fyrden/ci-tools test:interop` |
 | MCP conformance | `tools/ci/conformance`: the MCP conformance suite (pinned version, the 2026-07-28 requirement set) against `fyrden-api` under `wrangler dev`, with a per-check baseline of known failures, and the authorization server metadata scenario | Node driving the suite (needs network for `npx`) | `pnpm --filter @fyrden/ci-tools test:conformance` |
+| REST API fuzzing | `tools/ci/schemathesis`: Schemathesis (pinned version) generates requests for every operation in the OpenAPI document (coverage, fuzzing and stateful phases) against `fyrden-api` under `wrangler dev`, with seeded data to point at; any server error or undocumented response fails | Node driving Schemathesis through `uvx` (needs uv and network) | `pnpm --filter @fyrden/ci-tools test:schemathesis` |
 | Parser fuzzing | `packages/git-core/fuzz` | Node (Vitest), time-boxed | `pnpm --filter @fyrden/git-core fuzz` |
 | Mutation testing | `packages/git-core`, one `src/` directory per run | Stryker | `FYRDEN_MUTATION_SCOPE=<scope> pnpm --filter @fyrden/git-core mutation` |
 
@@ -227,6 +228,22 @@ own fixture tools, resources and prompts, and features Fyrden does not offer
 failure, or a listed check that starts passing, fails the run; update the
 baseline in the same change. The authorization code grant scenario needs a
 person to sign in and consent, so it is not run here.
+
+## REST API fuzzing
+
+`tools/ci/schemathesis/rest.test.ts` runs Schemathesis against a local
+`fyrden-api`, from the API's own `/api/openapi.json`. Before the run it
+bootstraps a user and creates what path parameters point at: a repository
+with a README, an organization with a team, and an agent. Operations that
+would remove those targets (deleting or transferring the repository, deleting
+the agent) get disposable ones of their own. Two checks apply:
+`not_a_server_error` and `response_schema_conformance`; a 4xx the document
+describes passes. The local rate limits are raised for the run (a copy of
+`wrangler.jsonc` beside the original, removed afterwards), because at the
+real limits most generated requests are refused with 429 before they reach an
+operation; the test reads the run's HAR report and fails if any request was
+rate limited. A failure prints the run's seed: rerun Schemathesis with
+`--seed` to reproduce it.
 
 ## Fuzzing
 

@@ -4,5 +4,5 @@
     "types": ["node"],
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "test", "e2e", "interop", "conformance"]
+  "include": ["src", "test", "e2e", "interop", "conformance", "schemathesis"]
 }
