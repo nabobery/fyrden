@@ -3977,6 +3977,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "string",
                           },
                           "protected": {
+                            "description": "Whether an active ruleset protects the branch (whoever asks; a bypass does not change it).",
                             "type": "boolean",
                           },
                         },
@@ -4220,6 +4221,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "string",
                     },
                     "protected": {
+                      "description": "Whether an active ruleset protects the branch (whoever asks; a bypass does not change it).",
                       "type": "boolean",
                     },
                   },

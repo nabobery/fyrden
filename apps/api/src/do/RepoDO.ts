@@ -19,7 +19,13 @@ import {
   measureInvocation,
   type RequestMeta,
 } from "@fyrden/adapters-cloudflare/obs";
-import { type Envelope, principalTypeOf, REPO_ROLES, type RepoRole } from "@fyrden/domain";
+import {
+  type Envelope,
+  principalTypeOf,
+  protectsBranch,
+  REPO_ROLES,
+  type RepoRole,
+} from "@fyrden/domain";
 import {
   type BlockCache,
   bytesBody,
@@ -495,6 +501,14 @@ export class RepoDO extends MigratingDO {
   /** The rulesets and their version (anyone who may read the repository; the Worker checked it). */
   rulesets(): { version: number; rulesets: RulesetRecord[] } {
     return this.rulesetStore.current();
+  }
+
+  /** Which of the branches `names` (short names) active rulesets protect, whoever asks. */
+  protectedBranches(names: readonly string[]): boolean[] {
+    const rulesets = this.rulesetStore.current().rulesets.map((r) => r.ruleset);
+    const head = this.git.refStore.head();
+    const defaultBranch = head?.startsWith("refs/heads/") ? head.slice("refs/heads/".length) : null;
+    return names.map((name) => protectsBranch(rulesets, name, defaultBranch));
   }
 
   /**

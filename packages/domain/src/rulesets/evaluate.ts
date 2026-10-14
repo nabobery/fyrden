@@ -51,6 +51,27 @@ export function applicableRules(
   return out;
 }
 
+/**
+ * Whether active rulesets protect branch `name` (the short name): one that
+ * targets branches, has a rule and covers the branch. Who asks plays no
+ * part (a bypass or an actor type changes whom it stops, not whether the
+ * branch is protected); one only evaluated, or disabled, protects nothing.
+ */
+export function protectsBranch(
+  rulesets: readonly Ruleset[],
+  name: string,
+  defaultBranch: string | null,
+): boolean {
+  const ref = `refs/heads/${name}`;
+  return rulesets.some((ruleset) => {
+    if (ruleset.enforcement !== "active" || ruleset.target !== "branch") return false;
+    if (ruleset.rules.length === 0) return false;
+    const { include, exclude } = ruleset.conditions.ref_name;
+    const matches = (p: string) => refPatternMatches(p, ref, "branch", defaultBranch);
+    return include.some(matches) && !exclude.some(matches);
+  });
+}
+
 function bypasses(ruleset: Ruleset, actor: RuleActor): boolean {
   return ruleset.bypass_actors.some(
     (b) => b.actor_type === "RepositoryRole" && atLeast(actor.role, b.actor_id),

@@ -233,6 +233,35 @@ describe("rulesets", () => {
     expect(await refs()).toEqual(before);
   });
 
+  it("show the branches they protect as protected, whoever asks", async () => {
+    const branches = async () =>
+      (
+        await json<{ branches: { name: string; protected: boolean }[] }>(
+          api("GET", `${path}/branches`, owner.token),
+        )
+      ).body.branches;
+    expect((await branches()).some((b) => b.protected)).toBe(false);
+    // Only reported, not enforced: still not protected.
+    await ruleset({ name: "watch", enforcement: "evaluate", rules: [{ type: "deletion" }] });
+    expect((await branches()).some((b) => b.protected)).toBe(false);
+    await ruleset({
+      name: "keep",
+      conditions: { ref_name: { include: ["refs/heads/stable"] } },
+      rules: [{ type: "deletion" }],
+      bypass_actors: [{ actor_type: "RepositoryRole", actor_id: "admin", bypass_mode: "always" }],
+    });
+    // stable only; an administrator who bypasses it sees it protected too.
+    expect(Object.fromEntries((await branches()).map((b) => [b.name, b.protected]))).toEqual({
+      main: false,
+      stable: true,
+    });
+    const detail = async (branch: string) =>
+      (await json<{ protected: boolean }>(api("GET", `${path}/branches/${branch}`, owner.token)))
+        .body.protected;
+    expect(await detail("stable")).toBe(true);
+    expect(await detail("main")).toBe(false);
+  });
+
   it("fail a whole atomic push when one ref is refused", async () => {
     await ruleset({
       name: "no tags",

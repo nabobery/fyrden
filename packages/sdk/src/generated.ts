@@ -1238,6 +1238,7 @@ export type ReposBranchesListOutput = {
       /** A full commit SHA (40 hex digits). */
       sha: string;
     };
+    /** Whether an active ruleset protects the branch (whoever asks; a bypass does not change it). */
     protected: boolean;
   }[];
   /** Pass as `cursor` for the next page; null on the last page. */
@@ -1293,6 +1294,7 @@ export type ReposBranchesGetOutput = {
       sha: string;
     }[];
   };
+  /** Whether an active ruleset protects the branch (whoever asks; a bypass does not change it). */
   protected: boolean;
 };
 

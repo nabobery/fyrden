@@ -55,8 +55,10 @@ export async function listBranchesOperation(
   const rows = await stub.browseBranches(after, input.per_page + 1);
   const page = rows.slice(0, input.per_page);
   const last = page.at(-1);
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "protectedBranches" });
+  const protection = await stub.protectedBranches(page.map((b) => b.name));
   return {
-    branches: page.map((b) => ({ ...b, protected: false })),
+    branches: page.map((b, i) => ({ ...b, protected: protection[i] ?? false })),
     next_cursor: rows.length > input.per_page && last ? encodeCursor(last.name) : null,
   };
 }
@@ -71,7 +73,13 @@ export async function getBranchOperation(
   const branch = value(await stub.browseBranch(input.branch));
   ctx.metrics.count("do.request", { class: "RepoDO", method: "browseCommit" });
   const commit = value(await stub.browseCommit(branch.commit.sha));
-  return { name: branch.name, commit: await resolveOne(ctx, commit), protected: false };
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "protectedBranches" });
+  const [isProtected] = await stub.protectedBranches([branch.name]);
+  return {
+    name: branch.name,
+    commit: await resolveOne(ctx, commit),
+    protected: isProtected ?? false,
+  };
 }
 
 /** The `repos.tags.list` operation. */

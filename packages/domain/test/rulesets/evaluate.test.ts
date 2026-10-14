@@ -1,5 +1,6 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { type RuleActor, ruleViolations } from "../../src/rulesets/evaluate.js";
+import { protectsBranch, type RuleActor, ruleViolations } from "../../src/rulesets/evaluate.js";
 import { type Ruleset, refPatternMatches } from "../../src/rulesets/ruleset.js";
 
 const ruleset = (over: Partial<Ruleset>): Ruleset => ({
@@ -34,7 +35,111 @@ describe("ref patterns", () => {
   });
 });
 
+describe("branch protection", () => {
+  it("is whether an active branch ruleset with a rule covers the branch, whoever asks", () => {
+    const deletion = { type: "deletion" as const };
+    const on = (over: Partial<Ruleset>) =>
+      protectsBranch([ruleset({ rules: [deletion], ...over })], "main", "main");
+    expect(on({})).toBe(true);
+    // A bypass or an actor type changes who it stops, not that the branch is protected.
+    expect(
+      on({
+        bypass_actors: [{ actor_type: "RepositoryRole", actor_id: "admin", bypass_mode: "always" }],
+      }),
+    ).toBe(true);
+    expect(on({ actor_types: ["agent"] })).toBe(true);
+    // Not enforced, or nothing to enforce, or another branch or a tag ruleset: not protected.
+    expect(on({ enforcement: "evaluate" })).toBe(false);
+    expect(on({ enforcement: "disabled" })).toBe(false);
+    expect(protectsBranch([ruleset({ rules: [] })], "main", "main")).toBe(false);
+    expect(protectsBranch([ruleset({ rules: [deletion] })], "dev", "main")).toBe(false);
+    expect(
+      protectsBranch(
+        [
+          ruleset({
+            target: "tag",
+            rules: [deletion],
+            conditions: { ref_name: { include: ["~ALL"], exclude: [] } },
+          }),
+        ],
+        "main",
+        "main",
+      ),
+    ).toBe(false);
+    // Excluded by name.
+    expect(
+      protectsBranch(
+        [
+          ruleset({
+            rules: [deletion],
+            conditions: { ref_name: { include: ["~ALL"], exclude: ["refs/heads/main"] } },
+          }),
+        ],
+        "main",
+        "main",
+      ),
+    ).toBe(false);
+    expect(protectsBranch([], "main", "main")).toBe(false);
+  });
+});
+
 describe("glob matching", () => {
+  it("answers as the plain set-of-positions match does, for any pattern and ref", async () => {
+    const { globMatches } = await import("../../src/rulesets/ruleset.js");
+    // The matcher before its shortcuts: every position, every token.
+    const reference = (pattern: string, ref: string): boolean => {
+      const n = ref.length;
+      let reach = new Uint8Array(n + 1);
+      reach[0] = 1;
+      for (let i = 0; i < pattern.length; i++) {
+        const c = pattern[i] as string;
+        const next = new Uint8Array(n + 1);
+        if (c === "*") {
+          const crosses = pattern[i + 1] === "*";
+          if (crosses) i++;
+          let open = false;
+          for (let at = 0; at <= n; at++) {
+            if (reach[at]) open = true;
+            if (open) next[at] = 1;
+            if (!crosses && ref[at] === "/") open = false;
+          }
+        } else {
+          for (let at = 0; at < n; at++)
+            if (reach[at] && (c === "?" ? ref[at] !== "/" : ref[at] === c)) next[at + 1] = 1;
+        }
+        reach = next;
+      }
+      return reach[n] === 1;
+    };
+    const text = (chars: string[], max: number) =>
+      fc.array(fc.constantFrom(...chars), { maxLength: max }).map((a) => a.join(""));
+    fc.assert(
+      fc.property(text(["a", "b", "/", "*", "?"], 12), text(["a", "b", "/"], 14), (p, r) => {
+        expect(globMatches(p, r)).toBe(reference(p, r));
+      }),
+      { numRuns: 5_000 },
+    );
+  });
+
+  it("stops as soon as a pattern can no longer match: every pattern against a page of branches", async () => {
+    const { globMatches } = await import("../../src/rulesets/ruleset.js");
+    // The most a repository may hold (50 rulesets of 50 patterns), against 100 long branch names.
+    const patterns = Array.from({ length: 2_500 }, (_, i) =>
+      i % 2 === 0 ? `refs/heads/f${i}/${"x".repeat(200)}*` : `refs/heads/f${i}/${"x".repeat(200)}`,
+    );
+    const refs = Array.from({ length: 100 }, (_, i) => `refs/heads/${"b".repeat(226)}${i}`);
+    const started = Date.now();
+    let matched = 0;
+    for (const ref of refs)
+      for (const pattern of patterns) if (globMatches(pattern, ref)) matched++;
+    expect(matched).toBe(0);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    // Still exact where it matters.
+    expect(globMatches(`refs/heads/${"b".repeat(5)}`, `refs/heads/${"b".repeat(5)}`)).toBe(true);
+    expect(globMatches("refs/heads/b*", `refs/heads/${"b".repeat(240)}`)).toBe(true);
+    expect(globMatches("refs/heads/*/x", "refs/heads/a/x")).toBe(true);
+  });
+
   it("never backtracks: a pattern built to explode answers at once", async () => {
     const { globMatches } = await import("../../src/rulesets/ruleset.js");
     const pattern = `refs/heads/${"*a".repeat(12)}b`;

@@ -84,27 +84,47 @@ export function refPatternMatches(
  * ref's, whatever the pattern.
  */
 export function globMatches(pattern: string, ref: string): boolean {
+  // Without a wildcard it is one comparison.
+  if (!pattern.includes("*") && !pattern.includes("?")) return pattern === ref;
   const n = ref.length;
   let reach = new Uint8Array(n + 1);
   reach[0] = 1;
+  // The reached positions lie within [lo, hi]; none left means no match,
+  // so a pattern that cannot match stops at its first difference.
+  let lo = 0;
+  let hi = 0;
   for (let i = 0; i < pattern.length; i++) {
     const c = pattern[i] as string;
     const next = new Uint8Array(n + 1);
+    let nextLo = n + 1;
+    let nextHi = -1;
     if (c === "*") {
       const crosses = pattern[i + 1] === "*";
       if (crosses) i++;
       // From each reached position, any run (of non-`/`, for a single `*`).
       let open = false;
-      for (let at = 0; at <= n; at++) {
+      for (let at = lo; at <= n; at++) {
         if (reach[at]) open = true;
-        if (open) next[at] = 1;
+        if (open) {
+          next[at] = 1;
+          if (at < nextLo) nextLo = at;
+          nextHi = at;
+        }
         if (!crosses && ref[at] === "/") open = false;
+        if (!open && at > hi) break;
       }
     } else {
-      for (let at = 0; at < n; at++)
-        if (reach[at] && (c === "?" ? ref[at] !== "/" : ref[at] === c)) next[at + 1] = 1;
+      for (let at = lo; at <= hi && at < n; at++)
+        if (reach[at] && (c === "?" ? ref[at] !== "/" : ref[at] === c)) {
+          next[at + 1] = 1;
+          if (at + 1 < nextLo) nextLo = at + 1;
+          nextHi = at + 1;
+        }
     }
+    if (nextHi < 0) return false;
     reach = next;
+    lo = nextLo;
+    hi = nextHi;
   }
   return reach[n] === 1;
 }

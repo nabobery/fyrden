@@ -57,7 +57,12 @@ export const CommitObject = z.object({
 });
 
 const RefCommit = z.object({ sha: Sha });
-const Branch = z.object({ name: z.string(), commit: RefCommit, protected: z.boolean() });
+const Protected = z
+  .boolean()
+  .describe(
+    "Whether an active ruleset protects the branch (whoever asks; a bypass does not change it).",
+  );
+const Branch = z.object({ name: z.string(), commit: RefCommit, protected: Protected });
 
 export const listBranches = defineOperation({
   id: "repos.branches.list",
@@ -86,7 +91,7 @@ export const getBranch = defineOperation({
   summary: "Get a branch",
   description: "A branch and its latest commit. Branch names may contain slashes.",
   input: z.object({ owner: Owner, repo: Repo, branch: z.string().min(1).max(1024) }),
-  output: z.object({ name: z.string(), commit: CommitObject, protected: z.boolean() }),
+  output: z.object({ name: z.string(), commit: CommitObject, protected: Protected }),
   permission: "contents:read",
   principals: ["user", "agent"],
   rateLimit: "read",
