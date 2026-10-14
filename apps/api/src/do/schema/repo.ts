@@ -242,4 +242,23 @@ export const repoSchema: readonly DoMigration[] = [
 
     `,
   },
+  {
+    version: 11,
+    // The transfer moving the repository (its id and the account it goes
+    // to), set with `write_frozen` while it moves; transfers that ended
+    // (landed, in owner generation `owner_gen`, or called off), so a step
+    // run again or late is recognized and changes nothing.
+    name: "repo_transfer",
+    sql: `
+      ALTER TABLE repo_meta ADD COLUMN transfer_id TEXT;
+      ALTER TABLE repo_meta ADD COLUMN transfer_to TEXT;
+
+      CREATE TABLE ended_transfers (
+        transfer_id TEXT PRIMARY KEY,
+        landed INTEGER NOT NULL CHECK (landed IN (0, 1)),
+        owner_gen INTEGER NOT NULL,
+        ended_at INTEGER NOT NULL
+      ) STRICT;
+    `,
+  },
 ];

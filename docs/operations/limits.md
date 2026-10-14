@@ -405,6 +405,29 @@ them and their use.
 | Holds | A reservation lasts the push's longest wait plus 15 minutes (a chunked upload's session plus an hour), a commit's hold 30 minutes; a lapsed one counts nothing. A commit whose confirmation is lost goes uncounted rather than counted twice |
 | Forks | A fork that loses the last slot to a concurrent create is deleted again |
 
+## Repository transfer
+
+`POST /repos/{owner}/{repo}/transfer` moves a repository to the caller or to
+an organization it may create repositories in. It runs as a resumable job:
+the repository stops taking changes, the directory moves its owner and name,
+the old account hands over its collaborators and storage, and the
+repository's object takes its new owner. The request usually sees it land;
+the cron finishes any it does not.
+
+| What | Value |
+|---|---|
+| Moves with it | History, refs, rulesets, stars, forks' parent link, collaborators, storage usage |
+| Stays behind | The old organization's team grants |
+| The old path | Redirects to the new one (for the API, clone, fetch and push), until the old account uses the name again |
+| While it moves | Pushes, file writes, renames, settings, rulesets and deletion are refused (409 `repo_transferring`, or "being transferred" to git); reads go on |
+| Refused | 409 `name_taken`, 403 `quota_exceeded` (repositories or storage), 422 `same_owner`, 409 `transfer_in_progress` (another transfer or a deletion is under way, or the owner changed since the request was authorized), 409 `repo_generating` (still being generated from a template), 422 `too_many_collaborators` (the new account's members and the repository's collaborators would exceed one access list's 10,000 entries); a refused transfer leaves the repository as it was |
+| Storage of an upload committing as it moves | Not counted (its confirmation reaches the old account, which no longer counts the repository) |
+| Admission checks | The new account's repository count is enforced when the directory moves the repository; its storage quota and access-list size are checked when the transfer starts and before it moves, not reserved: concurrent transfers (or members added meanwhile) can take an account past them, as an upload in flight can |
+| One runner at a time | A runner holds a transfer for 60 seconds; one that dies frees it after that |
+| Caches | Other Workers may resolve the old path to the old owner for up to 30 seconds; access is decided by the repository, which knows its owner, and changes authorized for the old owner are refused |
+| Read model | Events from before the transfer are refused once it lands (a new owner generation) |
+| Transfers one cron run finishes | 10 |
+
 ## Templates
 
 `POST /repos/{template_owner}/{template_repo}/generate` makes a repository

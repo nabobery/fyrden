@@ -1,7 +1,7 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { applyExport } from "../events/rebuild.js";
 import { clock } from "../services.js";
-import { forgetRepo, forgetResolved, type RepoEntry } from "./directory.js";
+import { forgetRepo, forgetResolved, NOT_TRANSFERRING, type RepoEntry } from "./directory.js";
 
 /*
  * Deleting a repository: a resumable job whose state lives in the
@@ -47,11 +47,14 @@ type Deletion = { step: DeletionStep; requested_by: string | null; org_shard: st
 
 /**
  * Starts deleting `repos` (active repositories) in one directory batch.
- * Returns the ids this call marked; one already being deleted is not.
+ * Returns the ids this call marked; one already being deleted is not, nor
+ * one a transfer is moving, nor one whose owner is no longer the `ownerId`
+ * given (the owner its caller was authorized for).
  */
 export async function markDeletions(
   env: Env,
-  repos: readonly Pick<RepoEntry, "id" | "ownerHandle" | "name">[],
+  repos: readonly (Pick<RepoEntry, "id" | "ownerHandle" | "name"> &
+    Partial<Pick<RepoEntry, "ownerId">>)[],
   options: {
     /** Who deletes them; null for the instance itself (an expiry). */
     actorId: string | null;
@@ -69,12 +72,15 @@ export async function markDeletions(
   const db = env.DIRECTORY;
   const now = clock();
   const ids = JSON.stringify(repos.map((r) => r.id));
+  const owners = JSON.stringify(Object.fromEntries(repos.map((r) => [r.id, r.ownerId ?? null])));
   const inIds = "id IN (SELECT value FROM json_each(?1))";
-  // ?5 is the expiry cutoff, or null for any active repository.
-  const eligible =
-    "state = 'active' AND (?5 IS NULL OR (expires_at IS NOT NULL AND expires_at <= ?5))";
+  // ?6: each repository's owner when it was authorized (null: any).
+  const ownedAsAuthorized = "coalesce(json_extract(?6, '$.' || id) = owner_id, 1)";
+  // ?5 is the expiry cutoff, or null for any active repository; none a transfer is moving.
+  const eligible = `state = 'active' AND (?5 IS NULL OR (expires_at IS NOT NULL AND expires_at <= ?5))
+    AND ${NOT_TRANSFERRING} AND ${ownedAsAuthorized}`;
   const expiry = options.expiredBy ?? null;
-  options.metrics?.count("d1.query", { db: "directory", op: "repo_delete" }, 5);
+  options.metrics?.count("d1.query", { db: "directory", op: "repo_delete" }, 6);
   const results = await db.batch<{ id: string }>([
     db
       .prepare(
@@ -83,13 +89,13 @@ export async function markDeletions(
            id, json_object('name', name), ?4 FROM repos
          WHERE ${inIds} AND ${eligible}`,
       )
-      .bind(ids, now, options.actorId, options.requestId ?? null, expiry),
+      .bind(ids, now, options.actorId, options.requestId ?? null, expiry, owners),
     db
       .prepare(
         `UPDATE repos SET state = 'deleting', updated_at = ?2
          WHERE ${inIds} AND ${eligible} RETURNING id`,
       )
-      .bind(ids, now, null, null, expiry),
+      .bind(ids, now, null, null, expiry, owners),
     db
       .prepare(
         `INSERT INTO repo_deletions (repo_id, step, attempts, updated_at, requested_by)
@@ -109,11 +115,14 @@ export async function markDeletions(
          AND EXISTS (SELECT 1 FROM repos WHERE id = stars.repo_id AND state = 'deleting')`,
       )
       .bind(ids),
+    db.prepare(`SELECT id FROM repos WHERE ${inIds} AND state <> 'active'`).bind(ids),
   ]);
   const marked = new Set((results[1]?.results ?? []).map((row) => row.id));
-  // An expiry leaves what it did not mark alone; a deletion forgets even one already under way.
+  const going = new Set((results[5]?.results ?? []).map((row) => row.id));
+  // An expiry leaves what it did not mark alone; a deletion forgets even one already under way
+  // (not one a transfer kept).
   for (const repo of repos) {
-    if (options.expiredBy !== undefined && !marked.has(repo.id)) continue;
+    if (!(options.expiredBy === undefined ? going : marked).has(repo.id)) continue;
     forgetResolved(repo.ownerHandle, repo.name);
     forgetRepo(repo.id);
   }

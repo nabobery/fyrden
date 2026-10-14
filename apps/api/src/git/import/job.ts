@@ -53,6 +53,8 @@ export interface ImportRecord {
   readonly refs: readonly string[];
   readonly skipped: readonly { readonly ref: string; readonly reason: string }[];
   readonly head?: string;
+  /** The repository's owner generation when the import began (a transfer since bumps it). */
+  readonly ownerGen?: number;
   readonly error?: string;
   readonly startedAt: number;
   readonly updatedAt: number;
@@ -91,6 +93,8 @@ export class RepoImports {
     private readonly network: () => ImportNetwork,
     /** A principal's role for a write, from the repository's ACL snapshot. */
     private readonly writerRole: (principalId: string) => Promise<RepoRole | null>,
+    /** The repository's owner generation (bumped by a transfer); undefined without an identity. */
+    private readonly ownerGen: () => number | undefined,
   ) {}
 
   async record(): Promise<ImportRecord | undefined> {
@@ -108,6 +112,7 @@ export class RepoImports {
     const begun = this.push.begin({ principal: input.principal, tokenId: input.tokenId });
     if (!begun.ok) return { ok: false, code: "import_refused", error: begun.error };
     const now = this.git.context.now();
+    const ownerGen = this.ownerGen();
     const record: ImportRecord = {
       v: 1,
       uploadId: begun.uploadId,
@@ -121,6 +126,7 @@ export class RepoImports {
       bytes: 0,
       refs: [],
       skipped: [],
+      ...(ownerGen !== undefined && { ownerGen }),
       startedAt: now,
       updatedAt: now,
     };
@@ -282,6 +288,7 @@ export class RepoImports {
   }
 
   async #commit(record: ImportRecord): Promise<ImportRecord> {
+    const ownerGen = record.ownerGen ?? this.ownerGen();
     const decision = await reauthorizeByToken(this.env.DIRECTORY, record, this.writerRole);
     const report = readPushReport(
       await this.push.finalize(record.uploadId, decision, {
@@ -291,9 +298,13 @@ export class RepoImports {
       }),
     );
     if (!report.ok) return this.#save({ ...record, state: "failed", error: report.error });
-    // The new default branch and its snapshot event commit together.
+    // The new default branch and its snapshot event commit together; not once the repository
+    // was transferred after the import began (its new owner decides), also on a resumed job.
     const { head } = record;
-    if (head) this.git.context.storage.transactionSync(() => this.git.refStore.setHead(head));
+    if (head)
+      this.git.context.storage.transactionSync(() => {
+        if (this.ownerGen() === ownerGen) this.git.refStore.setHead(head);
+      });
     return this.#save({ ...record, state: "committed" });
   }
 

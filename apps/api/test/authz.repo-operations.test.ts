@@ -51,6 +51,15 @@ const CASES: Record<
   "repos.trees.get": { input: {}, expected: { status: 404, code: "ref_not_found" } },
   "repos.archives.get": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.forks.list": { input: {}, expected: { status: 200 } },
+  // To its own owner: refused after authorization, with its own code.
+  "repos.transfer": {
+    input: {
+      get new_owner() {
+        return handle;
+      },
+    },
+    expected: { status: 422, code: "same_owner" },
+  },
   // No ruleset 1 exists: named ones are not found; a new one is made.
   "repos.rulesets.list": { input: {}, expected: { status: 200 } },
   "repos.rulesets.get": { input: {}, expected: { status: 404, code: "ruleset_not_found" } },

@@ -339,6 +339,37 @@ export const generateRepo = defineOperation({
   },
 });
 
+export const transferRepo = defineOperation({
+  id: "repos.transfer",
+  method: "POST",
+  path: "/repos/{owner}/{repo}/transfer",
+  summary: "Transfer a repository",
+  description:
+    "Moves a repository you administer to another account: yourself or an organization you may create repositories in, under its name or `new_name`. Its collaborators, rulesets, stars and history go with it; the old account's team grants stay behind. The old path keeps working as a redirect. While it moves (usually under a second), it takes no push or change. Answers 409 `name_taken` or 403 `quota_exceeded` when the new account cannot take it.",
+  input: z.object({
+    owner: z.string().regex(HANDLE_PATTERN).describe("The owner's handle."),
+    repo: RepoName.describe("The repository's name."),
+    new_owner: z.string().regex(HANDLE_PATTERN).describe("The account it moves to."),
+    new_name: RepoName.optional().describe("Its name there. Default: its current name."),
+  }),
+  output: z.object({
+    state: z
+      .enum(["transferred", "transferring"])
+      .describe("`transferring`: it is still moving; it lands within a few minutes."),
+    repo: Repo,
+  }),
+  permission: "administration:write",
+  principals: ["user"],
+  rateLimit: "expensive",
+  idempotency: "key",
+  mcp: {
+    tool: "transfer_repo",
+    title: "Transfer a repository",
+    description: "Move a repository you administer to yourself or to an organization.",
+    readOnly: false,
+  },
+});
+
 export const createOrgRepo = defineOperation({
   id: "orgs.repos.create",
   method: "POST",

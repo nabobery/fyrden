@@ -8272,6 +8272,200 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
     },
+    "/repos/{owner}/{repo}/transfer": {
+      "post": {
+        "description": "Moves a repository you administer to another account: yourself or an organization you may create repositories in, under its name or \`new_name\`. Its collaborators, rulesets, stars and history go with it; the old account's team grants stay behind. The old path keeps working as a redirect. While it moves (usually under a second), it takes no push or change. Answers 409 \`name_taken\` or 403 \`quota_exceeded\` when the new account cannot take it.",
+        "operationId": "repos.transfer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "new_name": {
+                    "description": "Its name there. Default: its current name.",
+                    "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+                    "type": "string",
+                  },
+                  "new_owner": {
+                    "description": "The account it moves to.",
+                    "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "new_owner",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "repo": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "created_at": {
+                          "description": "Unix time in milliseconds.",
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "default_branch": {
+                          "type": "string",
+                        },
+                        "description": {
+                          "type": [
+                            "string",
+                            "null",
+                          ],
+                        },
+                        "expires_at": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                          "description": "When it is deleted (Unix time in milliseconds); null to keep it.",
+                        },
+                        "fork": {
+                          "description": "Whether the repository was forked from another.",
+                          "type": "boolean",
+                        },
+                        "full_name": {
+                          "description": "owner/name",
+                          "type": "string",
+                        },
+                        "id": {
+                          "description": "Immutable repository id (rep_ prefix).",
+                          "type": "string",
+                        },
+                        "is_template": {
+                          "description": "Whether new repositories can be generated from it (\`/generate\`).",
+                          "type": "boolean",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "owner": {
+                          "description": "The owner's handle.",
+                          "type": "string",
+                        },
+                        "parent_id": {
+                          "description": "The id of the repository it was forked from.",
+                          "type": [
+                            "string",
+                            "null",
+                          ],
+                        },
+                        "stargazers_count": {
+                          "description": "How many users starred it.",
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "visibility": {
+                          "enum": [
+                            "public",
+                            "internal",
+                            "private",
+                          ],
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                        "owner",
+                        "name",
+                        "full_name",
+                        "visibility",
+                        "description",
+                        "default_branch",
+                        "fork",
+                        "is_template",
+                        "stargazers_count",
+                        "expires_at",
+                        "parent_id",
+                        "created_at",
+                      ],
+                      "type": "object",
+                    },
+                    "state": {
+                      "description": "\`transferring\`: it is still moving; it lands within a few minutes.",
+                      "enum": [
+                        "transferred",
+                        "transferring",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "state",
+                    "repo",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Transfer a repository",
+        "x-fyrden-permission": "administration:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}/uploads": {
       "post": {
         "description": "Starts an upload session for a pack too large for one push request: declare the pack's size and the ref updates it carries, upload the parts, then complete. Needs write access to the repository. \`fyrden push --chunked\` does all of this.",

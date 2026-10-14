@@ -112,7 +112,9 @@ export async function invalidateAccountRepos(
   const { results } = listed;
   metrics?.count("do.request", { class: "RepoDO", method: "invalidateAcl" }, results.length);
   await Promise.allSettled(
-    results.map(({ id }) => env.REPO.getByName(id).invalidateAcl(acl.epochGen, acl.version)),
+    results.map(({ id }) =>
+      env.REPO.getByName(id).invalidateAcl(accountId, acl.epochGen, acl.version),
+    ),
   );
 }
 
@@ -150,7 +152,9 @@ export function invalidateChange(
   const ids = change.repos.slice(0, INVALIDATE_MAX);
   metrics?.count("do.request", { class: "RepoDO", method: "invalidateAcl" }, ids.length);
   return Promise.allSettled(
-    ids.map((id) => env.REPO.getByName(id).invalidateAcl(change.epochGen, change.version)),
+    ids.map((id) =>
+      env.REPO.getByName(id).invalidateAcl(accountId, change.epochGen, change.version),
+    ),
   ).then(() => undefined);
 }
 

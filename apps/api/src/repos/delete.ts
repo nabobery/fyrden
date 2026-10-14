@@ -1,8 +1,8 @@
 import type { deleteRepo, deleteRepos, Input, Output } from "@fyrden/api-contract";
 import { repoFor } from "../git/chunked/operations.js";
-import type { OpContext } from "../ops/execute.js";
+import { type OpContext, OperationError } from "../ops/execute.js";
 import { advanceDeletion, DELETION_POLICY, markDeletions } from "./deletion.js";
-import { canAccessOwn, findOwnedRepos, forgetResolved } from "./directory.js";
+import { canAccessOwn, findOwnedRepos, forgetResolved, ownershipChange } from "./directory.js";
 
 /** The `repos.delete` operation: marks the deletion, then advances it as far as it can. */
 export async function deleteRepoOperation(
@@ -11,11 +11,26 @@ export async function deleteRepoOperation(
 ): Promise<Output<typeof deleteRepo>> {
   const { env, auth, metrics } = ctx;
   const entry = await repoFor(ctx, input.owner, input.repo, "administration:write");
-  await markDeletions(env, [entry], {
+  const marked = await markDeletions(env, [entry], {
     actorId: auth.principalId,
     requestId: ctx.requestId,
     metrics,
   });
+  const changed = marked.has(entry.id)
+    ? undefined
+    : await ownershipChange(env, entry.id, entry.ownerId, metrics);
+  if (changed === "transferring")
+    throw new OperationError(
+      409,
+      "repo_transferring",
+      "The repository is being transferred; delete it once it lands.",
+    );
+  if (changed === "moved")
+    throw new OperationError(
+      404,
+      "repo_not_found",
+      `No repository ${input.owner}/${input.repo} was found.`,
+    );
   // The name the caller used may be one a redirect held.
   forgetResolved(entry.ownerHandle, input.repo);
   return {

@@ -347,6 +347,48 @@ export type ReposDeleteManyOutput = {
   })[];
 };
 
+/** Input of `repos.transfer`: Transfer a repository. */
+export type ReposTransferInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The account it moves to. */
+  new_owner: string;
+  /** Its name there. Default: its current name. */
+  new_name?: string;
+};
+
+/** Output of `repos.transfer`. */
+export type ReposTransferOutput = {
+  /** `transferring`: it is still moving; it lands within a few minutes. */
+  state: "transferred" | "transferring";
+  repo: {
+    /** Immutable repository id (rep_ prefix). */
+    id: string;
+    /** The owner's handle. */
+    owner: string;
+    name: string;
+    /** owner/name */
+    full_name: string;
+    visibility: "public" | "internal" | "private";
+    description: string | null;
+    default_branch: string;
+    /** Whether the repository was forked from another. */
+    fork: boolean;
+    /** Whether new repositories can be generated from it (`/generate`). */
+    is_template: boolean;
+    /** How many users starred it. */
+    stargazers_count: number;
+    /** When it is deleted (Unix time in milliseconds); null to keep it. */
+    expires_at: number | null;
+    /** The id of the repository it was forked from. */
+    parent_id: string | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+  };
+};
+
 /** Input of `repos.fork`: Fork a repository. */
 export type ReposForkInput = {
   /** The parent's owner handle. */
@@ -2149,6 +2191,7 @@ export const OPERATIONS = {
   "repos.update": { method: "PATCH", path: "/repos/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "repos.delete": { method: "DELETE", path: "/repos/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "repos.delete_many": { method: "POST", path: "/user/repos/delete", pathParams: [], idempotent: true },
+  "repos.transfer": { method: "POST", path: "/repos/{owner}/{repo}/transfer", pathParams: ["owner","repo"], idempotent: true },
   "repos.fork": { method: "POST", path: "/repos/{owner}/{repo}/forks", pathParams: ["owner","repo"], idempotent: true },
   "repos.forks.list": { method: "GET", path: "/repos/{owner}/{repo}/forks", pathParams: ["owner","repo"], idempotent: false, items: "repos" },
   "repos.generate": { method: "POST", path: "/repos/{template_owner}/{template_repo}/generate", pathParams: ["template_owner","template_repo"], idempotent: true },
@@ -2231,6 +2274,8 @@ export interface Operations {
   "repos.delete": { input: ReposDeleteInput; output: ReposDeleteOutput };
   /** Delete several of your repositories. Deletes up to 100 repositories you own, by name, as `DELETE /repos/{owner}/{repo}` does for one. Each name answers `deleting`, `deleted` or `not_found` (no such repository, or the token cannot administer it). Deletions this request does not finish continue in the background. */
   "repos.delete_many": { input: ReposDeleteManyInput; output: ReposDeleteManyOutput };
+  /** Transfer a repository. Moves a repository you administer to another account: yourself or an organization you may create repositories in, under its name or `new_name`. Its collaborators, rulesets, stars and history go with it; the old account's team grants stay behind. The old path keeps working as a redirect. While it moves (usually under a second), it takes no push or change. Answers 409 `name_taken` or 403 `quota_exceeded` when the new account cannot take it. */
+  "repos.transfer": { input: ReposTransferInput; output: ReposTransferOutput };
   /** Fork a repository. Creates a fork of a repository the caller can read, owned by the caller, in the same fork network: it starts with the parent's branches, tags and default branch, and shares the parent's stored objects, so no data is copied. The fork can be cloned as soon as this returns. Answers 409 `network_busy` while the network's storage is being collected; retry after a few seconds. */
   "repos.fork": { input: ReposForkInput; output: ReposForkOutput };
   /** List forks. Lists the forks of a repository that the caller owns, oldest first. Forks owned by other accounts are not listed. */

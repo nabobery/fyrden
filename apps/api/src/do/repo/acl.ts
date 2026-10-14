@@ -16,6 +16,8 @@ export type AclPurpose = "read" | "write";
 export interface RepoAccount {
   readonly accountId: string;
   readonly ownerId: string;
+  /** Bumped by every transfer: a pull started before one answers for another ownership. */
+  readonly ownerGen: number;
 }
 
 export interface RepoAclDeps {
@@ -38,6 +40,9 @@ type Row = {
   floor_version: number;
 };
 
+const sameOwnership = (a: RepoAccount | undefined, b: RepoAccount | undefined) =>
+  a !== undefined && b !== undefined && a.accountId === b.accountId && a.ownerGen === b.ownerGen;
+
 /** `(epoch, version)` pairs compare as a restore generation, then a version within it. */
 const below = (e1: number, v1: number, e2: number, v2: number) => e1 < e2 || (e1 === e2 && v1 < v2);
 
@@ -53,18 +58,30 @@ const below = (e1: number, v1: number, e2: number, v2: number) => e1 < e2 || (e1
  * repositories without one.
  */
 export class RepoAcl {
-  #pulling: Promise<Row> | undefined;
+  /** The pull in flight, and the ownership (account, owner generation) it pulls for. */
+  #pulling: { account: RepoAccount; row: Promise<Row> } | undefined;
   /** The parsed roles of the stored snapshot, reused while it is the same one. */
   #parsed: { key: string; roles: Map<string, RepoRole> } | undefined;
 
   constructor(private readonly deps: RepoAclDeps) {}
 
-  /** `principalId`'s role on the repository, or null (also when no usable snapshot exists). */
-  async roleOf(principalId: string, purpose: AclPurpose): Promise<RepoRole | null> {
+  /**
+   * `principalId`'s role on the repository, or null (also when no usable
+   * snapshot exists). An object without an identity has no account to ask:
+   * only the owner `directoryOwner` names (a user) administers it.
+   */
+  async roleOf(
+    principalId: string,
+    purpose: AclPurpose,
+    directoryOwner?: string,
+  ): Promise<RepoRole | null> {
     const account = this.deps.account();
-    if (!account) return null;
+    if (!account)
+      return directoryOwner !== undefined && ownsUserAccount(principalId, directoryOwner)
+        ? "admin"
+        : null;
     if (ownsUserAccount(principalId, account.ownerId)) return "admin";
-    const row = await this.#snapshot(account.accountId, purpose);
+    const row = await this.#snapshot(account, purpose);
     return row ? (this.#roles(row).get(principalId) ?? null) : null;
   }
 
@@ -84,22 +101,37 @@ export class RepoAcl {
   }
 
   /**
-   * The account committed ACL `(epochGen, version)`: no snapshot below it is
-   * used, or accepted from a pull, again.
+   * The repository moved to another account: the old account's snapshot
+   * and version floor mean nothing there; the next decision pulls afresh.
    */
-  invalidate(epochGen: number, version: number): void {
-    const row = this.#row();
+  reset(): void {
+    this.deps.storage.sql.exec("DELETE FROM acl_snapshot");
+  }
+
+  /**
+   * Account `accountId` committed ACL `(epochGen, version)`: no snapshot
+   * below it is used, or accepted from a pull, again. A notice from an
+   * account the repository no longer belongs to changes nothing.
+   */
+  invalidate(accountId: string, epochGen: number, version: number): void {
+    if (this.deps.account()?.accountId !== accountId) return;
+    const row = this.#row(accountId);
     if (row && !below(row.floor_epoch, row.floor_version, epochGen, version)) return;
+    // Another account's snapshot and floor go with it.
     this.deps.storage.sql.exec(
-      `INSERT INTO acl_snapshot (id, floor_epoch, floor_version) VALUES (1, ?, ?)
+      `INSERT INTO acl_snapshot (id, account_id, floor_epoch, floor_version) VALUES (1, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET floor_epoch = excluded.floor_epoch,
-         floor_version = excluded.floor_version`,
+         floor_version = excluded.floor_version,
+         pulled_at = CASE WHEN account_id = excluded.account_id THEN pulled_at ELSE 0 END,
+         account_id = excluded.account_id`,
+      accountId,
       epochGen,
       version,
     );
   }
 
-  async #snapshot(accountId: string, purpose: AclPurpose): Promise<Row | undefined> {
+  async #snapshot(account: RepoAccount, purpose: AclPurpose): Promise<Row | undefined> {
+    const { accountId } = account;
     const limit = purpose === "write" ? ACL_POLICY.writeWindowMs : ACL_POLICY.readTtlMs;
     const usable = this.#usable(accountId, limit);
     if (usable) {
@@ -107,11 +139,18 @@ export class RepoAcl {
       return usable;
     }
     try {
-      // Concurrent decisions share one pull.
-      this.#pulling ??= this.#pull(accountId).finally(() => {
-        this.#pulling = undefined;
-      });
-      await this.#pulling;
+      // Concurrent decisions share one pull (for the same ownership).
+      let pulling = this.#pulling;
+      if (!pulling || !sameOwnership(pulling.account, account)) {
+        const started: NonNullable<typeof pulling> = {
+          account,
+          row: this.#pull(account).finally(() => {
+            if (this.#pulling === started) this.#pulling = undefined;
+          }),
+        };
+        this.#pulling = pulling = started;
+      }
+      await pulling.row;
       // Read again: an invalidation may have raised the floor meanwhile.
       const fresh = this.#usable(accountId, limit);
       if (!fresh) throw new Error("the pulled snapshot is no longer usable");
@@ -123,15 +162,19 @@ export class RepoAcl {
     }
   }
 
-  async #pull(accountId: string): Promise<Row> {
+  async #pull(account: RepoAccount): Promise<Row> {
+    const { accountId } = account;
     // Its age counts from before the call: a slow answer is no fresher.
     const startedAt = this.deps.now();
     const snapshot = await this.deps.pull(accountId);
     // An account not recorded yet answers an empty snapshot (version 0).
     if (snapshot.version > 0 && snapshot.accountId !== accountId)
       throw new Error("the snapshot is another account's");
+    // The repository was transferred meanwhile (even back): this answer is for another ownership.
+    if (!sameOwnership(this.deps.account(), account))
+      throw new Error("the repository's ownership changed during the pull");
     // Read after the await: an invalidation or another pull may have raised the floor.
-    const row = this.#row();
+    const row = this.#row(accountId);
     if (row && below(snapshot.epochGen, snapshot.version, row.floor_epoch, row.floor_version))
       throw new Error("the snapshot is older than one already seen");
     const stored: Row = {
@@ -165,18 +208,20 @@ export class RepoAcl {
 
   /** The stored snapshot, if it is the account's, not below the floor, and younger than `limitMs`. */
   #usable(accountId: string, limitMs: number): Row | undefined {
-    const row = this.#row();
-    if (!row || row.pulled_at === 0 || row.account_id !== accountId) return undefined;
+    const row = this.#row(accountId);
+    if (!row || row.pulled_at === 0) return undefined;
     if (below(row.epoch_gen, row.version, row.floor_epoch, row.floor_version)) return undefined;
     if (this.deps.now() - row.pulled_at >= limitMs) return undefined;
     return row;
   }
 
-  #row(): Row | undefined {
+  /** The stored snapshot and floor, if they are `accountId`'s (another account's mean nothing). */
+  #row(accountId: string): Row | undefined {
     return this.deps.storage.sql
       .exec<Row>(
         `SELECT account_id, epoch_gen, version, pulled_at, roles, floor_epoch, floor_version
-         FROM acl_snapshot WHERE id = 1`,
+         FROM acl_snapshot WHERE id = 1 AND account_id = ?`,
+        accountId,
       )
       .toArray()[0];
   }

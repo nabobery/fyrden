@@ -1,0 +1,483 @@
+// Repository transfers: a repository moves to another account with its
+// history, collaborators and storage; the old account's team grants stay
+// behind, the old path redirects, and nothing changes it while it moves.
+
+import { runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:workers";
+import { uniqueId } from "@fyrden/testing";
+import { beforeAll, describe, expect, inject, it } from "vitest";
+import type { RepoDO } from "../src/do/RepoDO.js";
+import { markDeletions } from "../src/repos/deletion.js";
+import { authorize, renameRepo, resolveRepo } from "../src/repos/directory.js";
+import { advanceTransfer } from "../src/repos/transfer.js";
+import { api, json, user, type Who } from "./helpers/api.js";
+import { scopedToken } from "./helpers/principals.js";
+import { postPush } from "./helpers/push.js";
+import { pushBody, ZERO } from "./helpers/push-fixtures.js";
+
+const fx = inject("pushFixtures");
+
+let admin: Who;
+
+beforeAll(async () => {
+  admin = await user(true);
+});
+
+type Repo = { id: string; name: string; owner: string };
+
+async function newOrg(owner: Who): Promise<string> {
+  const login = uniqueId("org").slice(0, 39);
+  const res = await api("POST", "/admin/organizations", admin.token, {
+    login,
+    admin: owner.handle,
+  });
+  expect(res.status).toBe(201);
+  return login;
+}
+
+async function pushedRepo(owner: Who, path: string): Promise<Repo> {
+  const repo = (await json<Repo>(api("POST", path, owner.token, { name: uniqueId("t") }))).body;
+  const reply = await postPush(
+    {
+      repo: { id: repo.id, name: repo.name, stub: env.REPO.getByName(repo.id) },
+      owner: {
+        principalId: owner.principalId,
+        token: await scopedToken(owner.principalId, [], "git"),
+      },
+      path: `/${repo.owner}/${repo.name}.git`,
+    },
+    pushBody([{ old: ZERO, new: fx.c2, ref: "refs/heads/main" }], { pack: fx.packC2 }),
+  );
+  expect(reply.report).toContain("ok refs/heads/main\n");
+  return repo;
+}
+
+const transfer = (who: Who, repo: Repo, body: Record<string, unknown>) =>
+  json<{ state: string; repo: Repo; code?: string }>(
+    api("POST", `/repos/${repo.owner}/${repo.name}/transfer`, who.token, body),
+  );
+
+const quota = async (path: string, token: string) =>
+  (await json<{ storage_bytes: number }>(api("GET", path, token))).body.storage_bytes;
+
+describe("repository transfers", () => {
+  it("move a user's repository to an organization, with its history, collaborators and storage", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const reader = await user();
+    await api(
+      "PUT",
+      `/repos/${owner.handle}/${repo.name}/collaborators/${reader.handle}`,
+      owner.token,
+      {
+        permission: "pull",
+      },
+    );
+    const used = await quota("/user/quota", owner.token);
+    expect(used).toBeGreaterThan(0);
+    const org = await newOrg(owner);
+    const moved = await transfer(owner, repo, { new_owner: org });
+    expect(moved).toMatchObject({
+      status: 200,
+      body: { state: "transferred", repo: { id: repo.id, owner: org, name: repo.name } },
+    });
+    // The new path; the old one redirects; the collaborator still reads.
+    const at = `/repos/${org}/${repo.name}`;
+    const branches = await json<{ branches: { commit: { sha: string } }[] }>(
+      api("GET", `${at}/branches`, owner.token),
+    );
+    expect(branches.body.branches.map((b) => b.commit.sha)).toEqual([fx.c2]);
+    expect(
+      (await json<Repo>(api("GET", `/repos/${owner.handle}/${repo.name}`, owner.token))).body,
+    ).toMatchObject({
+      id: repo.id,
+      owner: org,
+    });
+    expect((await api("GET", `${at}/branches`, reader.token)).status).toBe(200);
+    // Its storage is the organization's now.
+    expect(await quota("/user/quota", owner.token)).toBe(0);
+    expect(await quota(`/orgs/${org}/quota`, owner.token)).toBe(used);
+    // The read model takes no event of the old owner generation.
+    const fence = await env.ORG_READ.prepare(
+      "SELECT owner_gen FROM source_owner WHERE source_id = ?",
+    )
+      .bind(repo.id)
+      .first<{ owner_gen: number }>();
+    expect(fence?.owner_gen).toBe(2);
+    // Pushes go on at the new path.
+    const pushed = await postPush(
+      {
+        repo: { id: repo.id, name: repo.name, stub: env.REPO.getByName(repo.id) },
+        owner: {
+          principalId: owner.principalId,
+          token: await scopedToken(owner.principalId, [], "git"),
+        },
+        path: `/${org}/${repo.name}.git`,
+      },
+      pushBody([{ old: fx.c2, new: fx.c3, ref: "refs/heads/main" }], { pack: fx.packC3ThinOnC2 }),
+    );
+    expect(pushed.report).toContain("ok refs/heads/main\n");
+  });
+
+  it("leave the old organization's team grants behind, keeping collaborators", async () => {
+    const owner = await user();
+    const org = await newOrg(owner);
+    const repo = await pushedRepo(owner, `/orgs/${org}/repos`);
+    const member = await user();
+    await api("PUT", `/orgs/${org}/memberships/${member.handle}`, owner.token, {});
+    const team = (
+      await json<{ slug: string }>(
+        api("POST", `/orgs/${org}/teams`, owner.token, { name: uniqueId("team") }),
+      )
+    ).body.slug;
+    await api("PUT", `/orgs/${org}/teams/${team}/memberships/${member.handle}`, owner.token, {});
+    await api("PUT", `/orgs/${org}/teams/${team}/repos/${org}/${repo.name}`, owner.token, {
+      permission: "push",
+    });
+    const outside = await user();
+    await api("PUT", `/repos/${org}/${repo.name}/collaborators/${outside.handle}`, owner.token, {
+      permission: "pull",
+    });
+    expect((await api("GET", `/repos/${org}/${repo.name}`, member.token)).status).toBe(200);
+    const moved = await transfer(owner, repo, {
+      new_owner: owner.handle,
+      new_name: uniqueId("mine"),
+    });
+    expect(moved.body.state).toBe("transferred");
+    const at = `/repos/${owner.handle}/${moved.body.repo.name}`;
+    expect((await api("GET", at, member.token)).status).toBe(404);
+    expect((await api("GET", at, outside.token)).status).toBe(200);
+  });
+
+  it("are refused when the new account cannot take the repository, which then takes changes again", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const org = await newOrg(owner);
+    expect((await api("POST", `/orgs/${org}/repos`, owner.token, { name: repo.name })).status).toBe(
+      201,
+    );
+    expect(await transfer(owner, repo, { new_owner: org })).toMatchObject({
+      status: 409,
+      body: { code: "name_taken" },
+    });
+    expect(await transfer(owner, repo, { new_owner: owner.handle })).toMatchObject({
+      status: 422,
+      body: { code: "same_owner" },
+    });
+    const stranger = await user();
+    expect(await transfer(stranger, repo, { new_owner: stranger.handle })).toMatchObject({
+      status: 404,
+    });
+    const write = await api(
+      "PUT",
+      `/repos/${owner.handle}/${repo.name}/contents/still-mine.txt`,
+      owner.token,
+      {
+        message: "still mine",
+        content: btoa("a"),
+      },
+    );
+    expect(write.status).toBe(200);
+  });
+
+  it("take no push while the repository moves, and resume from any step", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const org = await newOrg(owner);
+    const orgId = await idOf(org);
+    // A transfer started, frozen, and interrupted after its first step.
+    const transferId = await pendingTransfer(repo, owner.principalId, orgId, "directory");
+    expect(
+      await env.REPO.getByName(repo.id).freezeForTransfer({
+        transferId,
+        from: owner.principalId,
+        to: orgId,
+      }),
+    ).toEqual({ ok: true });
+    const refused = await postPush(
+      {
+        repo: { id: repo.id, name: repo.name, stub: env.REPO.getByName(repo.id) },
+        owner: {
+          principalId: owner.principalId,
+          token: await scopedToken(owner.principalId, [], "git"),
+        },
+        path: `/${owner.handle}/${repo.name}.git`,
+      },
+      pushBody([{ old: fx.c2, new: fx.c3, ref: "refs/heads/main" }], { pack: fx.packC3ThinOnC2 }),
+    );
+    expect(new TextDecoder().decode(refused.bytes)).toContain("being transferred");
+    // Nothing else changes it meanwhile, in the directory or the object.
+    const path = `/repos/${owner.handle}/${repo.name}`;
+    for (const [method, at, body] of [
+      ["PATCH", path, { name: uniqueId("renamed") }],
+      ["PATCH", path, { is_template: true }],
+      ["PATCH", path, { description: "moving" }],
+      [
+        "POST",
+        `${path}/rulesets`,
+        {
+          name: "r",
+          enforcement: "active",
+          conditions: { ref_name: { include: ["~ALL"] } },
+          rules: [{ type: "deletion" }],
+        },
+      ],
+      ["DELETE", path, undefined],
+      ["PUT", `${path}/collaborators/${owner.handle}`, { permission: "pull" }],
+    ] as const) {
+      const res = await json<{ code: string }>(api(method, at, owner.token, body));
+      expect(res, `${method} ${JSON.stringify(body)}`).toMatchObject({
+        status: 409,
+        body: { code: "repo_transferring" },
+      });
+    }
+    // Nor does a second transfer start.
+    expect(await transfer(owner, repo, { new_owner: org })).toMatchObject({
+      status: 409,
+      body: { code: "transfer_in_progress" },
+    });
+    // The cron's share finishes it; running a finished step again changes nothing.
+    expect(await advanceTransfer(env, repo.id)).toEqual({ state: "transferred", error: null });
+    for (const step of ["directory", "grants", "fence", "repo"]) {
+      await env.DIRECTORY.prepare("UPDATE repo_transfers SET step = ? WHERE repo_id = ?")
+        .bind(step, repo.id)
+        .run();
+      expect(await advanceTransfer(env, repo.id)).toEqual({ state: "transferred", error: null });
+    }
+    const audits = await env.DIRECTORY.prepare(
+      "SELECT count(*) AS n FROM audit_log WHERE target_id = ? AND action = 'repo.transfer'",
+    )
+      .bind(repo.id)
+      .first<{ n: number }>();
+    expect(audits?.n).toBe(1);
+    expect(
+      (await json<Repo>(api("GET", `/repos/${org}/${repo.name}`, owner.token))).body.owner,
+    ).toBe(org);
+    // Its storage was counted once, at the organization.
+    expect(await quota(`/orgs/${org}/quota`, owner.token)).toBeGreaterThan(0);
+    expect(await quota("/user/quota", owner.token)).toBe(0);
+    // A late runner of the finished transfer freezes nothing.
+    expect(
+      await env.REPO.getByName(repo.id).freezeForTransfer({
+        transferId,
+        from: orgId,
+        to: owner.principalId,
+      }),
+    ).toEqual({ ok: true });
+    expect(await frozen(repo.id)).toBe(false);
+  });
+
+  it("are advanced by one runner at a time", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const orgId = await idOf(await newOrg(owner));
+    await pendingTransfer(repo, owner.principalId, orgId, "freeze");
+    await env.DIRECTORY.prepare("UPDATE repo_transfers SET lease_id = 'other', lease_until = ?")
+      .bind(Date.now() + 60_000)
+      .run();
+    expect(await advanceTransfer(env, repo.id)).toEqual({ state: "transferring", error: null });
+    expect(await frozen(repo.id)).toBe(false);
+    // Its lease run out (the runner died), another takes it over.
+    await env.DIRECTORY.prepare("UPDATE repo_transfers SET lease_until = 0 WHERE repo_id = ?")
+      .bind(repo.id)
+      .run();
+    expect(await advanceTransfer(env, repo.id)).toEqual({ state: "transferred", error: null });
+  });
+
+  it("finish calling a transfer off when interrupted, and refuse a late freeze of it", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const orgId = await idOf(await newOrg(owner));
+    const transferId = await pendingTransfer(repo, owner.principalId, orgId, "cancelling");
+    const stub = env.REPO.getByName(repo.id);
+    expect(
+      await stub.freezeForTransfer({ transferId, from: owner.principalId, to: orgId }),
+    ).toEqual({ ok: true });
+    expect(await advanceTransfer(env, repo.id)).toMatchObject({ state: "failed" });
+    expect(await frozen(repo.id)).toBe(false);
+    expect(
+      await stub.freezeForTransfer({ transferId, from: owner.principalId, to: orgId }),
+    ).toEqual({ ok: false, code: "ended" });
+    expect(await frozen(repo.id)).toBe(false);
+    const write = await api(
+      "PUT",
+      `/repos/${owner.handle}/${repo.name}/contents/after.txt`,
+      owner.token,
+      { message: "after", content: btoa("a") },
+    );
+    expect(write.status).toBe(200);
+  });
+
+  it("refuse to start while the repository is being deleted, and leave a moved repository's storage behind", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const org = await newOrg(owner);
+    const orgId = await idOf(org);
+    // A late confirmation for the old account after the move is not counted there.
+    const moved = await transfer(owner, repo, { new_owner: org });
+    expect(moved.body.state).toBe("transferred");
+    await env.ORG.getByName(owner.principalId).confirmStorage({
+      uploadId: uniqueId("upload"),
+      repoId: repo.id,
+      bytes: 50,
+    });
+    expect(await quota("/user/quota", owner.token)).toBe(0);
+    // An ACL notice from the old account changes nothing for the new one.
+    await env.REPO.getByName(repo.id).invalidateAcl(owner.principalId, 9, 9_999);
+    expect(await env.REPO.getByName(repo.id).roleOf(owner.principalId, "write")).toBe("admin");
+    // Deleting, it cannot be transferred.
+    expect((await api("DELETE", `/repos/${org}/${repo.name}`, owner.token)).status).toBeLessThan(
+      300,
+    );
+    expect(
+      await transfer(owner, { ...repo, owner: org }, { new_owner: owner.handle }),
+    ).toMatchObject({ status: 404 });
+    expect(orgId).toBeTruthy();
+  });
+});
+
+describe("after a transfer, requests authorized for the old owner", () => {
+  it("rename and delete nothing, and its former user owner is decided by the repository", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const orgAdmin = await user();
+    const org = await newOrg(orgAdmin);
+    await api("PUT", `/orgs/${org}/memberships/${owner.handle}`, orgAdmin.token, {});
+    // Read before the move, as a slow request (or another isolate's cache) would have it.
+    const before = await resolveRepo(env, owner.handle, repo.name, { consistency: "primary" });
+    if (!before) throw new Error("not found");
+    const stale = { ...before };
+    expect((await transfer(owner, repo, { new_owner: org })).body.state).toBe("transferred");
+    expect(
+      await renameRepo(env, stale, uniqueId("late"), { actorId: owner.principalId }),
+    ).toBeUndefined();
+    expect(await markDeletions(env, [stale], { actorId: owner.principalId })).toEqual(new Set());
+    // Removed from the organization, the former owner reads nothing through the old entry.
+    await api("DELETE", `/orgs/${org}/memberships/${owner.handle}`, orgAdmin.token);
+    const auth = {
+      principalId: owner.principalId,
+      principalType: "user" as const,
+      scopes: [] as string[],
+      repoIds: null,
+    };
+    expect(await authorize(env, auth, stale, "contents:read")).toBe(false);
+    expect(
+      (await json<Repo>(api("GET", `/repos/${org}/${repo.name}`, orgAdmin.token))).body.name,
+    ).toBe(repo.name);
+  });
+
+  it("grant nothing in the old account, which handed over what it had when it let go", async () => {
+    const owner = await user();
+    const org = await newOrg(owner);
+    const repo = await pushedRepo(owner, `/orgs/${org}/repos`);
+    const orgId = await idOf(org);
+    const reader = await user();
+    await api("PUT", `/repos/${org}/${repo.name}/collaborators/${reader.handle}`, owner.token, {
+      permission: "pull",
+    });
+    const account = env.ORG.getByName(orgId);
+    const handedOver = await account.releaseRepo("trf_x", repo.id);
+    expect(handedOver.collaborators.map((c) => c.principalId)).toEqual([reader.principalId]);
+    // Again: the same answer, though nothing is left here.
+    expect((await account.releaseRepo("trf_x", repo.id)).collaborators).toEqual(
+      handedOver.collaborators,
+    );
+    const late = await account.setCollaborator(
+      { principalId: owner.principalId },
+      repo.id,
+      { id: reader.principalId, handle: reader.handle },
+      "admin",
+    );
+    expect(late).toMatchObject({ ok: false });
+  });
+
+  it("are refused while the repository is still being generated, or when its access list would overflow", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const org = await newOrg(owner);
+    const orgId = await idOf(org);
+    const stub = env.REPO.getByName(repo.id);
+    await runInDurableObject(stub, (_: RepoDO, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO generation (id, template_id, started_at) VALUES (1, 'rep_x', 1)",
+      );
+    });
+    expect(await transfer(owner, repo, { new_owner: org })).toMatchObject({
+      status: 409,
+      body: { code: "repo_generating" },
+    });
+    expect(await frozen(repo.id)).toBe(false);
+    await runInDurableObject(stub, (_: RepoDO, state) => {
+      state.storage.sql.exec("DELETE FROM generation");
+    });
+    // An organization whose members fill a repository's access list takes no outside collaborator.
+    await runInDurableObject(env.ORG.getByName(orgId), (_: unknown, state) => {
+      for (let i = 0; i < 9_999; i++)
+        state.storage.sql.exec(
+          "INSERT INTO members (principal_id, handle, role, added_at) VALUES (?, ?, 'member', 1)",
+          `usr_filler${i}`,
+          `filler${i}`,
+        );
+    });
+    const outside = await user();
+    await api(
+      "PUT",
+      `/repos/${owner.handle}/${repo.name}/collaborators/${outside.handle}`,
+      owner.token,
+      {
+        permission: "pull",
+      },
+    );
+    expect(await transfer(owner, repo, { new_owner: org })).toMatchObject({
+      status: 422,
+      body: { code: "too_many_collaborators" },
+    });
+  });
+});
+
+it("count a receiving user once in its access list, before its account is recorded", async () => {
+  const receiver = uniqueId("usr");
+  const others = Array.from({ length: 9_999 }, (_, i) => ({ principalId: `usr_other${i}` }));
+  const account = env.ORG.getByName(receiver);
+  expect(await account.canAdopt(receiver, [...others, { principalId: receiver }])).toBe(true);
+  expect(await account.canAdopt(receiver, [...others, { principalId: "usr_one_more" }])).toBe(
+    false,
+  );
+});
+
+async function idOf(handle: string): Promise<string> {
+  return (
+    await env.DIRECTORY.prepare("SELECT id FROM principals WHERE handle = ?")
+      .bind(handle)
+      .first<{ id: string }>()
+  )?.id as string;
+}
+
+/** A transfer job of `repo` to `to`, interrupted at `step`; returns its id. */
+async function pendingTransfer(
+  repo: Repo,
+  from: string,
+  to: string,
+  step: string,
+): Promise<string> {
+  const transferId = uniqueId("trf");
+  await env.DIRECTORY.prepare(
+    `INSERT INTO repo_transfers (repo_id, transfer_id, from_owner, from_name, to_owner, to_name,
+       step, requested_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1)`,
+  )
+    .bind(repo.id, transferId, from, repo.name, to, repo.name, step, from)
+    .run();
+  return transferId;
+}
+
+/** Whether the repository's object takes no change now. */
+function frozen(repoId: string): Promise<boolean> {
+  return runInDurableObject(
+    env.REPO.getByName(repoId),
+    (_: RepoDO, state) =>
+      state.storage.sql
+        .exec<{ write_frozen: number }>("SELECT write_frozen FROM repo_meta WHERE id = 1")
+        .one().write_frozen === 1,
+  );
+}

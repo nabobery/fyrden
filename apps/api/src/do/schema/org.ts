@@ -19,6 +19,10 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * - `quota_limits`, `quota_usage`, `quota_holds`, `quota_confirmed` (v3):
  *   the account's quotas, the storage its repositories' committed uploads
  *   use, and what uploads not committed yet hold.
+ * - `transfer_ops`, `released_repos` (v4): the transfer steps this account
+ *   did (each once, with what a release handed over), and repositories
+ *   that left it for another account, so a late grant, storage charge or
+ *   confirmation is not taken here.
  * - `pending_audit`: audit rows of access changes, written in the change's
  *   transaction and delivered to the directory's `audit_log` (then
  *   deleted); the alarm retries what could not be delivered.
@@ -141,6 +145,26 @@ export const orgSchema: readonly DoMigration[] = [
         confirmed_at INTEGER NOT NULL
       ) STRICT;
       CREATE INDEX quota_confirmed_at ON quota_confirmed (confirmed_at);
+    `,
+  },
+  {
+    version: 4,
+    name: "transfers",
+    sql: `
+      CREATE TABLE transfer_ops (
+        transfer_id TEXT NOT NULL,
+        op TEXT NOT NULL CHECK (op IN ('adopt', 'release')),
+        -- What a release handed over (collaborators, storage usage), answered again on a retry.
+        handed_over TEXT CHECK (handed_over IS NULL OR json_valid(handed_over)),
+        done_at INTEGER NOT NULL,
+        PRIMARY KEY (transfer_id, op)
+      ) STRICT;
+
+      CREATE TABLE released_repos (
+        repo_id TEXT PRIMARY KEY,
+        transfer_id TEXT NOT NULL,
+        released_at INTEGER NOT NULL
+      ) STRICT;
     `,
   },
 ];

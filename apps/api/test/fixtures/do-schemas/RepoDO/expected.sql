@@ -88,6 +88,12 @@ CREATE TABLE commits (
     level INTEGER NOT NULL,
     signature TEXT
   ) STRICT, WITHOUT ROWID;
+CREATE TABLE ended_transfers (
+        transfer_id TEXT PRIMARY KEY,
+        landed INTEGER NOT NULL CHECK (landed IN (0, 1)),
+        owner_gen INTEGER NOT NULL,
+        ended_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE event_payloads (
         event_key TEXT PRIMARY KEY,
         payload TEXT NOT NULL CHECK (json_valid(payload)),
@@ -220,7 +226,7 @@ CREATE TABLE repo_meta (
         write_frozen INTEGER NOT NULL DEFAULT 0 CHECK (write_frozen IN (0, 1)),
         created_at INTEGER NOT NULL
       , epoch_uuid TEXT, source_seq INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, owner_id TEXT, name TEXT, visibility TEXT
-        CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER) STRICT;
+        CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT) STRICT;
 CREATE TABLE ruleset_version (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         version INTEGER NOT NULL

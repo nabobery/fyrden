@@ -116,6 +116,7 @@ import {
 import { type EraseOutcome, eraseRepository, recordNetwork } from "./repo/erase.js";
 import {
   REPO_DELETED,
+  REPO_TRANSFERRING,
   RepoEvents,
   type RepoExport,
   type RepoIdentity,
@@ -381,14 +382,24 @@ export class RepoDO extends MigratingDO {
   /**
    * `principalId`'s role on the repository for a read or a write (its ACL
    * snapshot, pulled again past its window; null when none is usable).
+   * `directoryOwner` (the owner the directory named) counts only for an
+   * object without an identity, which no transfer can have moved.
    */
-  roleOf(principalId: string, purpose: AclPurpose): Promise<RepoRole | null> {
-    return this.#measured("roleOf", () => this.acl.roleOf(principalId, purpose));
+  roleOf(
+    principalId: string,
+    purpose: AclPurpose,
+    directoryOwner?: string,
+  ): Promise<RepoRole | null> {
+    return this.#measured("roleOf", () => this.acl.roleOf(principalId, purpose, directoryOwner));
   }
 
-  /** The account committed ACL `(epochGen, version)`: an older snapshot is not used again. */
-  invalidateAcl(epochGen: number, version: number): void {
-    this.acl.invalidate(epochGen, version);
+  /**
+   * Account `accountId` committed ACL `(epochGen, version)`: an older
+   * snapshot is not used again (a notice from an account the repository
+   * left changes nothing).
+   */
+  invalidateAcl(accountId: string, epochGen: number, version: number): void {
+    this.acl.invalidate(accountId, epochGen, version);
   }
 
   /** Whether the branch `name` (without `refs/heads/`) exists. */
@@ -408,7 +419,10 @@ export class RepoDO extends MigratingDO {
     actor: RefActor | null;
   }): Promise<
     | { ok: true; details: RepoDetails }
-    | { ok: false; code: "branch_not_found" | "repo_deleted" | "access_lost" }
+    | {
+        ok: false;
+        code: "branch_not_found" | "repo_deleted" | "repo_transferring" | "access_lost";
+      }
   > {
     return this.#measured("updateSettings", async () => {
       await this.checkEpoch();
@@ -419,6 +433,9 @@ export class RepoDO extends MigratingDO {
       if (principal) await this.acl.roleOf(principal, "write");
       // Its deletion started after the caller found it.
       if (this.events.isDeleted()) return { ok: false as const, code: "repo_deleted" as const };
+      // The directory refuses a rename while a transfer moves it: no name to record.
+      if (this.events.isTransferring())
+        return { ok: false as const, code: "repo_transferring" as const };
       if (principal && !this.acl.allows(principal, "admin")) {
         // The directory's name is recorded even so: a rename already happened there.
         if (input.name) this.events.update({ name: input.name, actor: input.actor });
@@ -476,13 +493,24 @@ export class RepoDO extends MigratingDO {
     actor: RefActor,
   ): Promise<
     | { ok: true; record: RulesetRecord | null }
-    | { ok: false; code: "repo_deleted" | "access_lost" | "not_found" | "name_taken" | "too_many" }
+    | {
+        ok: false;
+        code:
+          | "repo_deleted"
+          | "repo_transferring"
+          | "access_lost"
+          | "not_found"
+          | "name_taken"
+          | "too_many";
+      }
   > {
     return this.#measured("changeRuleset", async () => {
       await this.checkEpoch();
       await this.acl.roleOf(actor.principal, "write");
       if (this.#closed || this.events.isDeleted())
         return { ok: false as const, code: "repo_deleted" as const };
+      if (this.events.isTransferring())
+        return { ok: false as const, code: "repo_transferring" as const };
       if (!this.acl.allows(actor.principal, "admin"))
         return { ok: false as const, code: "access_lost" as const };
       const store = this.rulesetStore;
@@ -497,6 +525,79 @@ export class RepoDO extends MigratingDO {
       if (typeof done === "string") return { ok: false as const, code: done };
       this.#ensureAuditArchive();
       return { ok: true as const, record: done };
+    });
+  }
+
+  /**
+   * A transfer's first step: no change is taken from here on (pushes,
+   * writes, settings, rulesets) until it lands or is called off. Refused
+   * unless the repository still belongs to `from`.
+   */
+  freezeForTransfer(transfer: {
+    readonly transferId: string;
+    readonly from: string;
+    readonly to: string;
+  }): Promise<
+    | { ok: true }
+    | {
+        ok: false;
+        code:
+          | "repo_deleted"
+          | "other_transfer"
+          | "not_owner"
+          | "no_identity"
+          | "ended"
+          | "generating";
+      }
+  > {
+    return this.#measured("freezeForTransfer", async () => {
+      await this.checkEpoch();
+      // Not while its generation from a template may still finish or fail (and delete it).
+      if (this.#generatingFrom() !== undefined && !this.events.isTransferring())
+        return { ok: false as const, code: "generating" as const };
+      const frozen = this.events.freezeForTransfer(transfer);
+      if (frozen === "frozen" || frozen === "landed") return { ok: true as const };
+      return {
+        ok: false as const,
+        code: frozen === "deleted" ? ("repo_deleted" as const) : frozen,
+      };
+    });
+  }
+
+  /** Transfer `transferId` called off: the repository takes changes again. */
+  unfreezeTransfer(transferId: string): void {
+    this.events.unfreezeTransfer(transferId);
+  }
+
+  /** The owner generation transfer `transferId` lands the repository in (for the read model's fence). */
+  transferGeneration(transferId: string): number {
+    return this.events.transferGeneration(transferId);
+  }
+
+  /**
+   * A transfer's last step here: the repository belongs to `to` under its
+   * new name, in a new owner generation; its ACL snapshot is pulled from
+   * the new account. Returns the owner generation.
+   */
+  completeTransfer(
+    to: {
+      readonly transferId: string;
+      readonly ownerId: string;
+      readonly name: string;
+      readonly nameGen: number;
+    },
+    actor: string | null,
+  ): Promise<number> {
+    return this.#measured("completeTransfer", async () => {
+      await this.checkEpoch();
+      const { ownerGen, changed } = this.events.completeTransfer(to, actor);
+      // Only when it moved: the old account's snapshot and floor mean nothing now.
+      if (changed) {
+        this.acl.reset();
+        this.#armOutbox();
+        this.#ensureAuditArchive();
+      }
+      return ownerGen;
     });
   }
 
@@ -594,15 +695,14 @@ export class RepoDO extends MigratingDO {
    * checked again at the commit point.
    */
   writeFiles(input: FileWriteInput): Promise<Browsed<FileWriteResult>> {
-    if (this.#closed || this.#refusesAdmission())
-      return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
+    const refused = this.#writeRefusal();
+    if (refused) return Promise.resolve(fail(refused.status, refused.code, refused.error));
     return this.#measured("writeFiles", async () => writeFiles(await this.#writeDeps(), input));
   }
 
   /** The trees and files of the default branch, for a repository generated from this one. */
   templateTree(): Promise<Browsed<TemplateTree>> {
-    if (this.#closed || this.#refusesAdmission())
-      return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
+    if (this.#refusesReads()) return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
     return this.#browse("templateTree", (b) => templateTree(b));
   }
 
@@ -655,8 +755,7 @@ export class RepoDO extends MigratingDO {
     readonly format: ArchiveFormat;
     readonly prefix: string;
   }): Promise<Browsed<ArchiveStatus>> {
-    if (this.#closed || this.#refusesAdmission())
-      return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
+    if (this.#refusesReads()) return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
     return this.#browse("archive", async (b) => {
       const at = await b.resolveTree(input.ref);
       if (!at.ok) return at;
@@ -751,6 +850,7 @@ export class RepoDO extends MigratingDO {
       await this.acl.roleOf(principal, "write");
       return this.acl.allows(principal, "write") ? undefined : ACCESS_LOST;
     };
+    this.#pushes.frozen = () => this.events.frozen();
     this.#pushes.rules = {
       stamp: (principal) => this.#ruleSnapshot(principal).stamp,
       check: async (input) => {
@@ -858,7 +958,8 @@ export class RepoDO extends MigratingDO {
 
   /** Opens a push: the upload and its pack rows, before any byte is stored. Returns the body's R2 key. */
   beginPush(input: BeginPushInput): BeginPushResult {
-    if (this.#refusesAdmission()) return { ok: false, error: REPO_DELETED };
+    const refused = this.#writeRefusal();
+    if (refused) return { ok: false, error: refused.error };
     const begun = this.#push().begin(input);
     return begun.ok && hasPrecheckRules(this.rulesetStore) ? { ...begun, precheck: true } : begun;
   }
@@ -1004,8 +1105,8 @@ export class RepoDO extends MigratingDO {
         error: REPO_DELETED,
       });
     return this.#measured("beginChunked", async () => {
-      if (this.#refusesAdmission())
-        return { ok: false, status: 404, code: "repo_not_found", error: REPO_DELETED } as const;
+      const closed = this.#writeRefusal();
+      if (closed) return { ok: false, ...closed } as const;
       // A session commits all its updates or none: one refused update refuses it.
       const refused = await this.#precheckUpdates(input.principal, input.updates);
       if (refused)
@@ -1083,6 +1184,7 @@ export class RepoDO extends MigratingDO {
       this.#log(),
       () => this.importNetwork,
       (principalId) => this.acl.roleOf(principalId, "write"),
+      () => this.events.account()?.ownerGen,
     );
     return this.#importer;
   }
@@ -1094,8 +1196,12 @@ export class RepoDO extends MigratingDO {
     if (this.#closed)
       return Promise.resolve({ ok: false, code: "repo_not_found", error: REPO_DELETED });
     return this.#measured("beginImport", () =>
-      this.#refusesAdmission()
-        ? { ok: false as const, code: "repo_not_found", error: REPO_DELETED }
+      this.#writeRefusal()
+        ? {
+            ok: false as const,
+            code: this.#writeRefusal()?.code ?? "repo_not_found",
+            error: this.#writeRefusal()?.error ?? REPO_DELETED,
+          }
         : this.#imports().begin(input),
     );
   }
@@ -1383,17 +1489,23 @@ export class RepoDO extends MigratingDO {
   }
 
   /**
-   * No new upload, import or write: the repository is being deleted, its
-   * storage is gone (erased), or it is still being generated from a template.
+   * Why no upload, import or write is taken now: 404 when the repository is
+   * gone or going (or still being generated from a template), 409 while a
+   * transfer moves it.
    */
-  #refusesAdmission(): boolean {
-    // Storage first: once erased, its tables are gone.
-    return (
-      this.#closed ||
-      !this.#hasGitStorage() ||
-      this.events.isDeleted() ||
-      this.#generatingFrom() !== undefined
-    );
+  #writeRefusal(): { status: 404 | 409; code: string; error: string } | undefined {
+    if (this.#closed || !this.#hasGitStorage() || this.events.isDeleted())
+      return { status: 404, code: "repo_not_found", error: REPO_DELETED };
+    if (this.events.isTransferring())
+      return { status: 409, code: "repo_transferring", error: REPO_TRANSFERRING };
+    if (this.#generatingFrom() !== undefined)
+      return { status: 404, code: "repo_not_found", error: REPO_DELETED };
+    return undefined;
+  }
+
+  /** No read: the repository is gone or going (a transfer does not stop reads). */
+  #refusesReads(): boolean {
+    return this.#closed || !this.#hasGitStorage() || this.events.isDeleted();
   }
 
   #hasGitStorage(): boolean {

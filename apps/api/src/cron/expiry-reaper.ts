@@ -13,7 +13,8 @@ export const EXPIRY_POLICY = {
 /**
  * Starts deleting active repositories whose expiry has passed, oldest
  * expiry first. Returns how many it marked. Marking twice is harmless: a
- * repository already being deleted is not marked again.
+ * repository already being deleted is not marked again. One a transfer is
+ * moving waits for it (and is not chosen, so it holds up no other).
  */
 export async function reapExpiredRepos(
   env: Env,
@@ -25,6 +26,8 @@ export async function reapExpiredRepos(
       `SELECT r.id, p.handle AS ownerHandle, r.name FROM repos r
        JOIN principals p ON p.id = r.owner_id
        WHERE r.expires_at IS NOT NULL AND r.expires_at <= ? AND r.state = 'active'
+         AND NOT EXISTS (SELECT 1 FROM repo_transfers t
+           WHERE t.repo_id = r.id AND t.step NOT IN ('done', 'failed'))
        ORDER BY r.expires_at LIMIT ?`,
     )
     .bind(options.now, options.limit ?? EXPIRY_POLICY.perCronRun)

@@ -7,6 +7,7 @@ import { env } from "cloudflare:workers";
 import { MAX_REPO_TTL_MS } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, it } from "vitest";
+import { reapExpiredRepos } from "../src/cron/expiry-reaper.js";
 import worker from "../src/index.js";
 import { markDeletions } from "../src/repos/deletion.js";
 import { api, json, user, type Who } from "./helpers/api.js";
@@ -115,6 +116,33 @@ describe("repository expiry", () => {
       .bind(soon.id)
       .first<{ n: number }>();
     expect(audits?.n).toBe(1);
+  });
+
+  it("passes over a repository a transfer is moving, which holds up no other", async () => {
+    const moving = (await create({ expires_at: Date.now() + HOUR })).body;
+    const next = (await create({ expires_at: Date.now() + HOUR })).body;
+    // The two oldest expiries; the first is being transferred.
+    for (const [id, at] of [
+      [moving.id, 1],
+      [next.id, 2],
+    ] as const)
+      await env.DIRECTORY.prepare("UPDATE repos SET expires_at = ? WHERE id = ?")
+        .bind(at, id)
+        .run();
+    await env.DIRECTORY.prepare(
+      `INSERT INTO repo_transfers (repo_id, transfer_id, from_owner, from_name, to_owner, to_name,
+         step, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'freeze', 1, 1)`,
+    )
+      .bind(moving.id, uniqueId("trf"), owner.principalId, moving.name, owner.principalId, "x")
+      .run();
+    expect(await reapExpiredRepos(env, { now: Date.now(), limit: 1 })).toBe(1);
+    const states = await env.DIRECTORY.prepare(
+      "SELECT id, state FROM repos WHERE id IN (?, ?) ORDER BY expires_at",
+    )
+      .bind(moving.id, next.id)
+      .all<{ id: string; state: string }>();
+    expect(states.results.map((r) => r.state)).toEqual(["active", "deleting"]);
   });
 
   it("keeps a repository whose expiry was cleared or extended after the cron found it", async () => {

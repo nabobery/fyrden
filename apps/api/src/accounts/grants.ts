@@ -1,3 +1,4 @@
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type {
   createTeam,
   Input,
@@ -16,7 +17,7 @@ import { allocateEpoch } from "../events/epochs.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
-import { type RepoEntry, resolveRepo } from "../repos/directory.js";
+import { ownershipChange, type RepoEntry, resolveRepo } from "../repos/directory.js";
 import { applied, invalidateChange, orgFor, userFor } from "./account.js";
 
 type PermissionName = "pull" | "triage" | "push" | "maintain" | "admin";
@@ -36,18 +37,44 @@ const NAME_OF = Object.fromEntries(
 const fullName = (repo: RepoEntry) => `${repo.ownerHandle}/${repo.name}`;
 
 /**
+ * Refuses a grant change while a transfer moves the repository (the
+ * accounts hand its grants over then; a change in between would be lost or
+ * undone), or once it belongs to another owner than the one found.
+ */
+async function checkOwnership(ctx: OpContext, repo: RepoEntry): Promise<void> {
+  const change = await ownershipChange(ctx.env, repo.id, repo.ownerId, ctx.metrics);
+  if (change === "transferring")
+    throw new OperationError(
+      409,
+      "repo_transferring",
+      "The repository is being transferred; change its access once it lands.",
+    );
+  if (change === "moved")
+    throw new OperationError(404, "repo_not_found", `No repository ${fullName(repo)} was found.`);
+}
+
+/**
  * The repository's account object, recorded if it is a user's that nothing
  * needed before (an organization's is recorded when it is created).
  */
-async function accountOf(ctx: OpContext, repo: RepoEntry) {
-  const stub = ctx.env.ORG.getByName(repo.ownerId);
-  ctx.metrics.count("do.request", { class: "OrgDO", method: "isRecorded" });
+function accountOf(ctx: OpContext, repo: RepoEntry) {
+  return recordedAccount(ctx.env, { id: repo.ownerId, handle: repo.ownerHandle }, ctx.metrics);
+}
+
+/** An account's object, recorded first if it is a user's that nothing needed before. */
+export async function recordedAccount(
+  env: Env,
+  account: { readonly id: string; readonly handle: string },
+  metrics?: Metrics,
+) {
+  const stub = env.ORG.getByName(account.id);
+  metrics?.count("do.request", { class: "OrgDO", method: "isRecorded" });
   if (!(await stub.isRecorded())) {
-    const epochGen = await allocateEpoch(ctx.env.DIRECTORY, repo.ownerId, ctx.metrics);
+    const epochGen = await allocateEpoch(env.DIRECTORY, account.id, metrics);
     const init = await stub.init({
-      accountId: repo.ownerId,
+      accountId: account.id,
       kind: "user",
-      owner: { id: repo.ownerId, handle: repo.ownerHandle },
+      owner: { id: account.id, handle: account.handle },
       epochGen,
     });
     if (!init.ok) throw new Error(`recording the account failed: ${init.error}`);
@@ -62,6 +89,7 @@ export async function setCollaboratorOperation(
 ): Promise<Output<typeof setCollaborator>> {
   const repo = await repoFor(ctx, input.owner, input.repo, "administration:write");
   const user = await userFor(ctx, input.username);
+  await checkOwnership(ctx, repo);
   const stub = await accountOf(ctx, repo);
   ctx.metrics.count("do.request", { class: "OrgDO", method: "setCollaborator" });
   const change = applied(
@@ -84,6 +112,7 @@ export async function removeCollaboratorOperation(
 ): Promise<Output<typeof removeCollaborator>> {
   const repo = await repoFor(ctx, input.owner, input.repo, "administration:write");
   const user = await userFor(ctx, input.username, true);
+  await checkOwnership(ctx, repo);
   const stub = await accountOf(ctx, repo);
   ctx.metrics.count("do.request", { class: "OrgDO", method: "removeCollaborator" });
   const change = applied(
@@ -236,6 +265,7 @@ export async function setTeamRepoOperation(
 ): Promise<Output<typeof setTeamRepo>> {
   const org = await orgFor(ctx, input.org, "members:write");
   const repo = await orgRepo(ctx, org.id, input.owner, input.repo);
+  await checkOwnership(ctx, repo);
   const stub = ctx.env.ORG.getByName(org.id);
   ctx.metrics.count("do.request", { class: "OrgDO", method: "setTeamRepo" });
   const change = applied(
@@ -258,6 +288,7 @@ export async function removeTeamRepoOperation(
 ): Promise<Output<typeof removeTeamRepo>> {
   const org = await orgFor(ctx, input.org, "members:write");
   const repo = await orgRepo(ctx, org.id, input.owner, input.repo);
+  await checkOwnership(ctx, repo);
   const stub = ctx.env.ORG.getByName(org.id);
   ctx.metrics.count("do.request", { class: "OrgDO", method: "removeTeamRepo" });
   const change = applied(

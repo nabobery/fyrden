@@ -68,6 +68,7 @@ import {
   updateRulesetOperation,
 } from "../repos/rulesets.js";
 import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "../repos/stars.js";
+import { transferRepoOperation } from "../repos/transfer.js";
 import { updateRepoOperation } from "../repos/update.js";
 import { clock, newId, tokenStore } from "../services.js";
 import { platformKeys } from "../signing/platform-key.js";
@@ -215,6 +216,7 @@ export const handlers: Handlers = {
   "repos.fork": forkRepoOperation,
   "repos.forks.list": listForksOperation,
   "repos.generate": generateRepoOperation,
+  "repos.transfer": transferRepoOperation,
 
   // Rulesets live in the repository's object (repos/rulesets).
   "repos.rulesets.list": listRulesetsOperation,

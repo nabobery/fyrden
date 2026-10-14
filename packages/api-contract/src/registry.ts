@@ -36,6 +36,7 @@ import {
   listForks,
   listOrgRepos,
   listRepos,
+  transferRepo,
   updateRepo,
 } from "../ops/repos.js";
 import {
@@ -72,6 +73,7 @@ export const registry = defineRegistry([
   updateRepo,
   deleteRepo,
   deleteRepos,
+  transferRepo,
   forkRepo,
   listForks,
   generateRepo,

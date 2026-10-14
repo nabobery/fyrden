@@ -70,6 +70,12 @@ async function change(
       throw new OperationError(422, "name_taken", "The repository has a ruleset with that name.");
     case "too_many":
       throw new OperationError(422, "too_many_rulesets", "A repository has 50 rulesets at most.");
+    case "repo_transferring":
+      throw new OperationError(
+        409,
+        "repo_transferring",
+        "The repository is being transferred; its rulesets change once it lands.",
+      );
     default:
       throw new OperationError(
         404,

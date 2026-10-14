@@ -56,13 +56,20 @@ export type RepoRow = {
 };
 
 // Found repositories, per isolate, for 30 s (the token cache's bound): a
-// renamed repository can be reported by its old name for that long. A
-// transfer (not built yet) must take effect within that bound.
+// renamed or transferred repository can be reported by its old name and
+// owner for that long (access is not decided from a cached owner).
 const found = new TokenCache<RepoEntry>(clock);
 
 // Repositories this isolate marked for deletion, for as long as a cached
 // entry for them can live: any name it was cached under misses at once.
 const deleted = new TokenCache<true>(clock);
+
+/**
+ * Entries read from the directory's primary just now: their owner is the
+ * repository's owner, not one a transfer replaced (a cached or replica
+ * answer, or a copy of an entry, may name a former owner).
+ */
+const currentOwner = new WeakSet<Pick<RepoEntry, "ownerId">>();
 
 const cacheKey = (owner: string, name: string) => `${owner.toLowerCase()}/${name.toLowerCase()}`;
 
@@ -89,7 +96,8 @@ export async function resolveRepo(
   }
   const lookup = async (session: D1DatabaseSession) => {
     options.metrics?.count("d1.query", { db: "directory", op: "repo_resolve" });
-    // Two index seeks: the repository with the name, else a redirect's.
+    // Two index seeks: the repository with the name, else a redirect's
+    // (a rename's, or a transfer's to the repository's owner now).
     // `state <> 'deleted'` lets the partial (owner_id, name) index serve it.
     return session
       .prepare(
@@ -99,10 +107,10 @@ export async function resolveRepo(
            AND r.name = ?2 COLLATE NOCASE AND r.state <> 'deleted' AND r.state = 'active'
          UNION ALL
          SELECT ${REPO_COLUMNS}, 1
-         FROM principals p JOIN repo_redirects d ON d.owner_id = p.id
-           JOIN repos r ON r.id = d.repo_id AND r.owner_id = d.owner_id
-         WHERE p.handle = ?1 COLLATE NOCASE AND p.disabled_at IS NULL
-           AND d.name = ?2 AND r.state = 'active'
+         FROM principals o JOIN repo_redirects d ON d.owner_id = o.id
+           JOIN repos r ON r.id = d.repo_id JOIN principals p ON p.id = r.owner_id
+         WHERE o.handle = ?1 COLLATE NOCASE AND o.disabled_at IS NULL
+           AND d.name = ?2 AND r.state = 'active' AND p.disabled_at IS NULL
          ORDER BY redirected LIMIT 1`,
       )
       .bind(owner, name)
@@ -110,11 +118,14 @@ export async function resolveRepo(
   };
   const checkedAt = clock();
   let row = primary ? null : await lookup(env.DIRECTORY.withSession());
+  const fromPrimary = !row;
   row ??= await lookup(env.DIRECTORY.withSession("first-primary"));
   // A replica may not know yet of a deletion this isolate started.
   if (!row || deleted.get(row.id)) return undefined;
   const entry = entryOf(row);
-  found.set(key, entry, checkedAt);
+  // The cache keeps a copy: only this answer, read from the primary, names its owner for sure.
+  found.set(key, { ...entry }, checkedAt);
+  if (fromPrimary) currentOwner.add(entry);
   return entry;
 }
 
@@ -389,12 +400,21 @@ export function forgetResolved(ownerHandle: string, name: string): void {
   found.delete(cacheKey(ownerHandle, name));
 }
 
+/** In a statement on `repos`: no transfer is moving the repository (renames, settings and deletions wait). */
+export const NOT_TRANSFERRING = `NOT EXISTS (SELECT 1 FROM repo_transfers
+  WHERE repo_transfers.repo_id = repos.id AND repo_transfers.step NOT IN ('done', 'failed'))`;
+
+const TRANSFERRING = `SELECT EXISTS (SELECT 1 FROM repo_transfers
+  WHERE repo_id = ?1 AND step NOT IN ('done', 'failed')) AS transferring`;
+
 /**
  * Renames an active repository in the directory, in one batch: its old
  * name becomes a redirect to it, a redirect holding the new name goes, and
  * the rename is audited. Returns the name and the rename count to record
  * in the repository object, `"name_taken"` when another repository of the
- * owner has the name, or undefined when the repository is not active. This
+ * owner has the name, `"transferring"` while a transfer moves it, or
+ * undefined when the repository is not active or no longer belongs to
+ * `repo.ownerId` (the owner the caller was authorized for). This
  * isolate forgets the old and new names, and `alias` (the name the caller
  * used, maybe one a redirect holds), at once; others within the cache's bound.
  */
@@ -403,18 +423,26 @@ export async function renameRepo(
   repo: Pick<RepoEntry, "id" | "ownerId" | "ownerHandle" | "name">,
   name: string,
   options: { actorId: string; requestId?: string; alias?: string; metrics?: Metrics },
-): Promise<{ value: string; gen: number } | "name_taken" | undefined> {
+): Promise<{ value: string; gen: number } | "name_taken" | "transferring" | undefined> {
   const db = env.DIRECTORY;
   const now = clock();
-  options.metrics?.count("d1.query", { db: "directory", op: "repo_rename" }, 4);
-  let results: D1Result<{ name: string; name_gen: number; old_name: string }>[];
+  options.metrics?.count("d1.query", { db: "directory", op: "repo_rename" }, 5);
+  // Only while it belongs to the owner the caller was authorized for (parameter `?n`).
+  const active = (n: number) => `state = 'active' AND ${NOT_TRANSFERRING} AND owner_id = ?${n}`;
+  let results: D1Result<{
+    name: string;
+    name_gen: number;
+    old_name: string;
+    transferring: number;
+  }>[];
   try {
-    results = await db.batch<{ name: string; name_gen: number; old_name: string }>([
+    results = await db.batch([
+      db.prepare(TRANSFERRING).bind(repo.id),
       // Only for an active repository: a failed rename keeps another one's redirect.
       db
         .prepare(
           `DELETE FROM repo_redirects WHERE owner_id = ?2 AND name = ?3
-           AND EXISTS (SELECT 1 FROM repos WHERE id = ?1 AND state = 'active')`,
+           AND EXISTS (SELECT 1 FROM repos WHERE id = ?1 AND ${active(2)})`,
         )
         .bind(repo.id, repo.ownerId, name),
       // The old name, read in the batch: a concurrent rename cannot make it stale.
@@ -422,51 +450,76 @@ export async function renameRepo(
         .prepare(
           `INSERT INTO repo_redirects (owner_id, name, repo_id, created_at)
            SELECT owner_id, name, id, ?3 FROM repos
-           WHERE id = ?1 AND state = 'active' AND name <> ?2 COLLATE NOCASE
+           WHERE id = ?1 AND ${active(4)} AND name <> ?2 COLLATE NOCASE
            ON CONFLICT (owner_id, name) DO UPDATE SET repo_id = excluded.repo_id,
              created_at = excluded.created_at`,
         )
-        .bind(repo.id, name, now),
+        .bind(repo.id, name, now, repo.ownerId),
       db
         .prepare(
           `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
            SELECT ?3, ?4, 'repo.rename', id, json_object('from', name, 'to', ?2), ?5 FROM repos
-           WHERE id = ?1 AND state = 'active'
+           WHERE id = ?1 AND ${active(6)}
            RETURNING json_extract(details, '$.from') AS old_name`,
         )
-        .bind(repo.id, name, now, options.actorId, options.requestId ?? null),
+        .bind(repo.id, name, now, options.actorId, options.requestId ?? null, repo.ownerId),
       db
         .prepare(
           `UPDATE repos SET name = ?2, name_gen = name_gen + 1, updated_at = ?3
-           WHERE id = ?1 AND state = 'active' RETURNING name, name_gen`,
+           WHERE id = ?1 AND ${active(4)} RETURNING name, name_gen`,
         )
-        .bind(repo.id, name, now),
+        .bind(repo.id, name, now, repo.ownerId),
     ]);
   } catch (error) {
     if (error instanceof Error && /UNIQUE constraint failed/i.test(error.message))
       return "name_taken";
     throw error;
   }
-  const previous = results[2]?.results[0]?.old_name ?? repo.name;
+  if (results[0]?.results[0]?.transferring) return "transferring";
+  const previous = results[3]?.results[0]?.old_name ?? repo.name;
   for (const forgotten of [previous, repo.name, name, options.alias ?? name])
     forgetResolved(repo.ownerHandle, forgotten);
-  const row = results[3]?.results[0];
+  const row = results[4]?.results[0];
   return row && { value: row.name, gen: row.name_gen };
+}
+
+/**
+ * Why a change authorized for `ownerId` was not made to `repoId`: a
+ * transfer is moving it, it moved to another owner since, or neither.
+ */
+export async function ownershipChange(
+  env: Env,
+  repoId: string,
+  ownerId: string,
+  metrics?: Metrics,
+): Promise<"transferring" | "moved" | undefined> {
+  metrics?.count("d1.query", { db: "directory", op: "ownership_change" });
+  const row = await env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT owner_id, EXISTS (SELECT 1 FROM repo_transfers
+         WHERE repo_id = ?1 AND step NOT IN ('done', 'failed')) AS transferring
+       FROM repos WHERE id = ?1`,
+    )
+    .bind(repoId)
+    .first<{ owner_id: string; transferring: number }>();
+  if (row?.transferring) return "transferring";
+  return row && row.owner_id !== ownerId ? "moved" : undefined;
 }
 
 /**
  * Changes the settings the directory holds for an active repository
  * (whether it is a template, when it expires) in one batch, auditing a
- * change. Returns the settings it now has, or undefined when the
- * repository is not active. This isolate forgets the repository's name at
+ * change. Returns the settings it now has, `"transferring"` while a
+ * transfer moves it, or undefined when the repository is not active or no
+ * longer belongs to `repo.ownerId` (the owner the caller was authorized for). This isolate forgets the repository's name at
  * once; others see the change within the cache's bound.
  */
 export async function updateDirectorySettings(
   env: Env,
-  repo: Pick<RepoEntry, "id" | "ownerHandle" | "name">,
+  repo: Pick<RepoEntry, "id" | "ownerId" | "ownerHandle" | "name">,
   change: { readonly isTemplate?: boolean; readonly expiresAt?: number | null },
   options: { actorId: string; requestId?: string; metrics?: Metrics },
-): Promise<Pick<RepoEntry, "isTemplate" | "expiresAt"> | undefined> {
+): Promise<Pick<RepoEntry, "isTemplate" | "expiresAt"> | "transferring" | undefined> {
   const db = env.DIRECTORY;
   const now = clock();
   // ?2 and ?3 are the new values, or null and 0 to keep the column.
@@ -474,14 +527,21 @@ export async function updateDirectorySettings(
   const expiry = change.expiresAt === undefined ? 0 : 1;
   const next = `coalesce(?2, is_template)`;
   const nextExpiry = `CASE WHEN ?3 THEN ?4 ELSE expires_at END`;
-  options.metrics?.count("d1.query", { db: "directory", op: "repo_settings" }, 2);
-  const [, updated] = await db.batch<{ is_template: number; expires_at: number | null }>([
+  // ?8: the owner the caller was authorized for.
+  const active = `state = 'active' AND ${NOT_TRANSFERRING} AND owner_id = ?8`;
+  options.metrics?.count("d1.query", { db: "directory", op: "repo_settings" }, 3);
+  const [pending, , updated] = await db.batch<{
+    is_template: number;
+    expires_at: number | null;
+    transferring: number;
+  }>([
+    db.prepare(TRANSFERRING).bind(repo.id),
     db
       .prepare(
         `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
          SELECT ?5, ?6, 'repo.settings', id,
            json_object('is_template', ${next}, 'expires_at', ${nextExpiry}), ?7 FROM repos
-         WHERE id = ?1 AND state = 'active'
+         WHERE id = ?1 AND ${active}
            AND (is_template <> ${next} OR expires_at IS NOT ${nextExpiry})`,
       )
       .bind(
@@ -492,16 +552,18 @@ export async function updateDirectorySettings(
         now,
         options.actorId,
         options.requestId ?? null,
+        repo.ownerId,
       ),
     db
       .prepare(
         `UPDATE repos SET is_template = ${next}, expires_at = ${nextExpiry},
            updated_at = CASE WHEN is_template <> ${next} OR expires_at IS NOT ${nextExpiry}
              THEN ?5 ELSE updated_at END
-         WHERE id = ?1 AND state = 'active' RETURNING is_template, expires_at`,
+         WHERE id = ?1 AND ${active} RETURNING is_template, expires_at`,
       )
-      .bind(repo.id, template, expiry, change.expiresAt ?? null, now),
+      .bind(repo.id, template, expiry, change.expiresAt ?? null, now, null, null, repo.ownerId),
   ]);
+  if (pending?.results[0]?.transferring) return "transferring";
   forgetResolved(repo.ownerHandle, repo.name);
   const row = updated?.results[0];
   return row && { isTemplate: row.is_template === 1, expiresAt: row.expires_at };
@@ -555,8 +617,11 @@ export function canAccessOwn(
  * limits, then the principal's role there. The owner of a user's account
  * administers it outright; anyone else's role, and everyone's on an
  * organization's repository, comes from the repository object's ACL
- * snapshot (a write from one pulled within its window; fail closed). Every
- * repository is private for now: there is no anonymous or public read.
+ * snapshot (a write from one pulled within its window; fail closed). The
+ * owner is taken from `repo` only when it was read from the directory's
+ * primary just now (a transfer may have replaced a cached one); else the
+ * repository object, which knows its owner, decides. Every repository is
+ * private for now: there is no anonymous or public read.
  */
 export async function authorize(
   env: Env,
@@ -567,12 +632,13 @@ export async function authorize(
 ): Promise<boolean> {
   // The token's limits need no call: no role widens them.
   if (!allowedWithRole(auth, repo, permission, "admin")) return false;
-  if (ownsUserAccount(auth.principalId, repo.ownerId)) return true;
+  // Only from an answer that names the owner for sure; else the repository object decides.
+  if (currentOwner.has(repo) && ownsUserAccount(auth.principalId, repo.ownerId)) return true;
   const purpose = PERMISSIONS[permission].writes ? "write" : "read";
   metrics?.count("do.request", { class: "RepoDO", method: "roleOf" });
   let role: RepoRole | null;
   try {
-    role = await env.REPO.getByName(repo.id).roleOf(auth.principalId, purpose);
+    role = await env.REPO.getByName(repo.id).roleOf(auth.principalId, purpose, repo.ownerId);
   } catch {
     // The repository object could not answer: deny (fail closed).
     role = null;

@@ -159,7 +159,11 @@ describe("rulesets", () => {
       "write",
     );
     if (!granted.ok) throw new Error(granted.error);
-    await env.REPO.getByName(repo.id).invalidateAcl(granted.epochGen, granted.version);
+    await env.REPO.getByName(repo.id).invalidateAcl(
+      owner.principalId,
+      granted.epochGen,
+      granted.version,
+    );
     const byAgent = await postPush(
       await target(agent, await scopedToken(agent.principalId, [], "git")),
       pushBody([{ old: fx.c2, new: fx.c3, ref: "refs/heads/main" }], { pack: fx.packC3ThinOnC2 }),

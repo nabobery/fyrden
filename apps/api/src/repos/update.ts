@@ -13,6 +13,13 @@ import { repoOutput, starCounts, visibleParents } from "./output.js";
 const branchNotFound = (branch: string) =>
   new OperationError(422, "branch_not_found", `The repository has no branch ${branch}.`);
 
+const transferring = () =>
+  new OperationError(
+    409,
+    "repo_transferring",
+    "The repository is being transferred; its settings change once it lands.",
+  );
+
 /**
  * The `repos.update` operation. A rename goes to the directory first (it
  * owns names and refuses a taken one); then the repository object records
@@ -52,6 +59,7 @@ export async function updateRepoOperation(
         "name_taken",
         `You already have a repository named ${input.name}.`,
       );
+    if (renamed === "transferring") throw transferring();
     if (!renamed)
       throw new OperationError(
         404,
@@ -67,6 +75,7 @@ export async function updateRepoOperation(
     ...(input.default_branch !== undefined && { defaultBranch: input.default_branch }),
     actor: { principal: auth.principalId, tokenId: auth.id, via: "api" },
   });
+  if (!result.ok && result.code === "repo_transferring") throw transferring();
   if (!result.ok && (result.code === "repo_deleted" || result.code === "access_lost"))
     throw new OperationError(
       404,
@@ -89,6 +98,7 @@ export async function updateRepoOperation(
       },
       { actorId: auth.principalId, requestId: ctx.requestId, metrics },
     );
+    if (updated === "transferring") throw transferring();
     if (updated === undefined)
       throw new OperationError(
         404,

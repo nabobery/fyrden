@@ -176,6 +176,9 @@ export class RepoPush {
       }
     | undefined;
 
+  /** Why the repository takes no change now (deleted, being transferred), checked in each commit. */
+  frozen: (() => string | undefined) | undefined;
+
   storage:
     | {
         readonly charge: (uploadId: string, bytes: number) => Promise<string | undefined>;
@@ -473,9 +476,10 @@ export class RepoPush {
             this.#capGate(uploadId, merged),
             // In the commit's transaction: the rulesets checked are still the current ones.
             () =>
-              rules && rulesStamp !== undefined && rules.stamp(upload.principal) !== rulesStamp
+              this.frozen?.() ??
+              (rules && rulesStamp !== undefined && rules.stamp(upload.principal) !== rulesStamp
                 ? RULESETS_CHANGED
-                : undefined,
+                : undefined),
           ),
         });
         return { plan, indexed, result };

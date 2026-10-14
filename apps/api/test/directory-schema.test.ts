@@ -29,6 +29,7 @@ describe("D1 directory schema", () => {
       "principals",
       "repo_deletions",
       "repo_redirects",
+      "repo_transfers",
       "repos",
       "source_epochs",
       "ssh_signing_keys",

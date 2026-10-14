@@ -39,6 +39,8 @@ export const REFS_PER_EVENT = 500;
 
 /** What a repository being deleted answers every write (and, once erased, every call). */
 export const REPO_DELETED = "the repository is being deleted";
+/** Why a repository takes no change while it moves to another account. */
+export const REPO_TRANSFERRING = "the repository is being transferred; try again in a moment";
 
 /** Whether `error` is a repository object refusing because its deletion started. */
 export function isRepoDeleted(error: unknown): boolean {
@@ -59,7 +61,7 @@ export interface RepoUpdate {
 }
 
 const META_COLUMNS =
-  "repo_id, owner_gen, epoch_gen, version, owner_id, name, name_gen, visibility, description, pushed_at, created_at, write_frozen, deleting_at";
+  "repo_id, owner_gen, epoch_gen, version, owner_id, name, name_gen, visibility, description, pushed_at, created_at, write_frozen, deleting_at, transfer_id, transfer_to";
 
 type MetaRow = {
   repo_id: string;
@@ -75,6 +77,8 @@ type MetaRow = {
   created_at: number;
   write_frozen: number;
   deleting_at: number | null;
+  transfer_id: string | null;
+  transfer_to: string | null;
 };
 
 /**
@@ -130,14 +134,19 @@ export class RepoEvents {
     return this.#meta()?.description ?? null;
   }
 
-  /** The account the repository belongs to and its owner; undefined before its identity is recorded. */
-  account(): { accountId: string; ownerId: string } | undefined {
+  /**
+   * The account the repository belongs to, its owner and owner generation
+   * (one per transfer); undefined before its identity is recorded.
+   */
+  account(): { accountId: string; ownerId: string; ownerGen: number } | undefined {
     const row = this.#storage.sql
-      .exec<{ org_id: string; owner_id: string | null }>(
-        "SELECT org_id, owner_id FROM repo_meta WHERE id = 1",
+      .exec<{ org_id: string; owner_id: string | null; owner_gen: number }>(
+        "SELECT org_id, owner_id, owner_gen FROM repo_meta WHERE id = 1",
       )
       .toArray()[0];
-    return row?.owner_id ? { accountId: row.org_id, ownerId: row.owner_id } : undefined;
+    return row?.owner_id
+      ? { accountId: row.org_id, ownerId: row.owner_id, ownerGen: row.owner_gen }
+      : undefined;
   }
 
   /** The organization (or account) the repository belongs to, or null before its creation is recorded. */
@@ -288,9 +297,147 @@ export class RepoEvents {
     return (this.#meta()?.deleting_at ?? null) !== null;
   }
 
-  /** Throws when the repository is frozen (being deleted): nothing may change it. */
+  /** Throws when the repository is frozen (being deleted or transferred): nothing may change it. */
   #assertWritable(meta: MetaRow | undefined): void {
-    if (meta?.write_frozen) throw new Error(REPO_DELETED);
+    const reason = frozenReason(meta);
+    if (reason) throw new Error(reason);
+  }
+
+  /** Why nothing may change the repository now, if anything stops it. */
+  frozen(): string | undefined {
+    return frozenReason(this.#meta());
+  }
+
+  /** Whether a transfer is moving the repository. */
+  isTransferring(): boolean {
+    return (this.#meta()?.transfer_id ?? null) !== null;
+  }
+
+  /**
+   * Freezes the repository for transfer `transferId` (from `from`, the
+   * owner its caller was authorized for, to `to`): from now on no ref, HEAD
+   * or setting changes until it lands or is called off. The same transfer
+   * again changes nothing; one that ended (a late runner) freezes nothing.
+   */
+  freezeForTransfer(transfer: {
+    readonly transferId: string;
+    readonly from: string;
+    readonly to: string;
+  }): "frozen" | "deleted" | "other_transfer" | "not_owner" | "no_identity" | "landed" | "ended" {
+    return this.#storage.transactionSync(() => {
+      const meta = this.#meta();
+      if (!meta) return "no_identity";
+      const ended = this.#ended(transfer.transferId);
+      if (ended) return ended.landed ? "landed" : "ended";
+      if (meta.transfer_id !== null)
+        return meta.transfer_id === transfer.transferId ? "frozen" : "other_transfer";
+      if (meta.deleting_at !== null) return "deleted";
+      if (meta.owner_id !== transfer.from) return "not_owner";
+      this.#exec(
+        "events.transfer_freeze",
+        "UPDATE repo_meta SET write_frozen = 1, transfer_id = ?, transfer_to = ? WHERE id = 1",
+        transfer.transferId,
+        transfer.to,
+      );
+      return "frozen";
+    });
+  }
+
+  /**
+   * Calls transfer `transferId` off: the repository takes changes again
+   * (unless it is being deleted), and a late freeze of that transfer
+   * freezes nothing. A transfer that landed is not called off.
+   */
+  unfreezeTransfer(transferId: string): void {
+    this.#storage.transactionSync(() => {
+      const meta = this.#meta();
+      if (!meta || this.#ended(transferId)) return;
+      this.#endTransfer(transferId, false, meta.owner_gen);
+      if (meta.transfer_id !== transferId) return;
+      this.#exec(
+        "events.transfer_unfreeze",
+        `UPDATE repo_meta SET transfer_id = NULL, transfer_to = NULL,
+           write_frozen = CASE WHEN deleting_at IS NULL THEN 0 ELSE 1 END WHERE id = 1`,
+      );
+    });
+  }
+
+  /** The owner generation transfer `transferId` lands the repository in. */
+  transferGeneration(transferId: string): number {
+    const meta = this.#meta();
+    const ended = this.#ended(transferId);
+    if (ended?.landed) return ended.owner_gen;
+    if (!ended && meta?.transfer_id === transferId) return meta.owner_gen + 1;
+    throw new Error("the repository is not in this transfer");
+  }
+
+  /**
+   * Lands transfer `transferId`: the repository now belongs to `to`, under
+   * `name` (`nameGen`, the directory's count of its names), in a new owner
+   * generation, so events of the old one are refused by the read model.
+   * Emits its snapshot and the audit row, and takes changes again (a
+   * deletion that started meanwhile keeps it frozen). Landed already,
+   * nothing changes (`changed` false).
+   */
+  completeTransfer(
+    to: {
+      readonly transferId: string;
+      readonly ownerId: string;
+      readonly name: string;
+      readonly nameGen: number;
+    },
+    actor: string | null,
+  ): { ownerGen: number; changed: boolean } {
+    return this.#storage.transactionSync(() => {
+      const meta = this.#meta();
+      if (!meta) throw new Error("the repository has no identity to transfer");
+      const ended = this.#ended(to.transferId);
+      if (ended?.landed) return { ownerGen: ended.owner_gen, changed: false };
+      if (ended || meta.transfer_id !== to.transferId || meta.transfer_to !== to.ownerId)
+        throw new Error("the repository is not in this transfer");
+      if (!this.#epochChecked)
+        throw new Error("the repository's epoch must be checked before it changes");
+      this.#exec(
+        "events.transfer_complete",
+        `UPDATE repo_meta SET org_id = ?1, owner_id = ?1, name = ?2,
+           name_gen = max(name_gen, ?3), owner_gen = owner_gen + 1,
+           transfer_id = NULL, transfer_to = NULL,
+           write_frozen = CASE WHEN deleting_at IS NULL THEN 0 ELSE 1 END WHERE id = 1`,
+        to.ownerId,
+        to.name,
+        to.nameGen,
+      );
+      const after = this.#emit("repo.updated", { actor, actChain: [], data: null }, true);
+      this.#endTransfer(to.transferId, true, after.owner_gen);
+      this.#audit(
+        after,
+        "repo.transfer",
+        actor === null ? null : { principal: actor, via: "api" },
+        this.git.context.now(),
+        { from: meta.owner_id, to: to.ownerId, name: to.name },
+      );
+      return { ownerGen: after.owner_gen, changed: true };
+    });
+  }
+
+  #ended(transferId: string): { landed: number; owner_gen: number } | undefined {
+    return this.#storage.sql
+      .exec<{ landed: number; owner_gen: number }>(
+        "SELECT landed, owner_gen FROM ended_transfers WHERE transfer_id = ?",
+        transferId,
+      )
+      .toArray()[0];
+  }
+
+  #endTransfer(transferId: string, landed: boolean, ownerGen: number): void {
+    this.#exec(
+      "events.transfer_end",
+      "INSERT INTO ended_transfers (transfer_id, landed, owner_gen, ended_at) VALUES (?, ?, ?, ?)",
+      transferId,
+      landed ? 1 : 0,
+      ownerGen,
+      this.git.context.now(),
+    );
   }
 
   /** In a commit's transaction: the new snapshot, the ref updates and the audit row. */
@@ -480,4 +627,9 @@ export class RepoEvents {
       createdAt: meta.created_at,
     };
   }
+}
+
+function frozenReason(meta: MetaRow | undefined): string | undefined {
+  if (!meta?.write_frozen) return undefined;
+  return meta.deleting_at === null && meta.transfer_id !== null ? REPO_TRANSFERRING : REPO_DELETED;
 }

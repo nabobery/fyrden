@@ -364,7 +364,7 @@ export class OrgDO extends MigratingDO {
     role: RepoRole,
   ): Promise<AclChange> {
     return this.#change(actor, { repoAdmin: repoId }, (meta) => {
-      if (this.#forgotten(repoId)) return REPO_GONE;
+      if (this.#notHere(repoId)) return REPO_GONE;
       const current = this.#collaboratorRole(repoId, user.id);
       if (current === role) return this.#unchanged(meta, [repoId]);
       this.ctx.storage.sql.exec(
@@ -472,26 +472,183 @@ export class OrgDO extends MigratingDO {
     reserved: number;
     freeBytes: number;
   } {
-    if (this.#forgotten(input.repoId)) return { reserved: 0, freeBytes: 0 };
+    if (this.#notHere(input.repoId)) return { reserved: 0, freeBytes: 0 };
     return this.#quotas().reserve(input);
   }
 
   /** Holds a committing upload's bytes (see `AccountQuotas.charge`); false when they do not fit. */
   chargeStorage(input: Parameters<AccountQuotas["charge"]>[0]): boolean {
-    // A deleted repository's storage is not counted again.
-    if (this.#forgotten(input.repoId)) return false;
+    // A deleted or moved repository's storage is not counted here again.
+    if (this.#notHere(input.repoId)) return false;
     return this.#quotas().charge(input);
   }
 
   /** An upload committed: its bytes become its repository's usage (see `AccountQuotas.confirm`). */
   confirmStorage(input: Parameters<AccountQuotas["confirm"]>[0]): void {
-    if (this.#forgotten(input.repoId)) return;
+    if (this.#notHere(input.repoId)) return;
     this.#quotas().confirm(input);
   }
 
   /** An upload ended without committing: what it holds is free again. */
   releaseStorage(uploadId: string): void {
     this.#quotas().release(uploadId);
+  }
+
+  /**
+   * A repository leaving this account (a transfer): its collaborators and
+   * the storage its uploads use. Team grants stay behind: they are this
+   * account's.
+   */
+  repoForTransfer(repoId: string): {
+    collaborators: { principalId: string; handle: string; role: RepoRole }[];
+    usageBytes: number;
+  } {
+    const collaborators = this.ctx.storage.sql
+      .exec<{ principal_id: string; handle: string; role: RepoRole }>(
+        "SELECT principal_id, handle, role FROM collaborators WHERE repo_id = ? ORDER BY principal_id",
+        repoId,
+      )
+      .toArray()
+      .map((r) => ({ principalId: r.principal_id, handle: r.handle, role: r.role }));
+    const usage = this.ctx.storage.sql
+      .exec<{ bytes: number }>("SELECT bytes FROM quota_usage WHERE repo_id = ?", repoId)
+      .toArray()[0];
+    return { collaborators, usageBytes: usage?.bytes ?? 0 };
+  }
+
+  /**
+   * A repository arriving from another account in transfer `transferId`:
+   * the collaborators and storage usage the old account handed over
+   * (`releaseRepo`), once for the transfer (again, nothing changes); a
+   * grant made here since it arrived wins. Returns the ACL version to tell
+   * the repository of.
+   */
+  adoptRepo(
+    transferId: string,
+    repoId: string,
+    from: ReturnType<OrgDO["repoForTransfer"]>,
+  ): { epochGen: number; version: number } {
+    // The admission checked the snapshot's limit (`canAdopt`); it is not refused here, where
+    // the repository has moved already.
+    return this.ctx.storage.transactionSync(() => {
+      const meta = this.#meta();
+      if (!meta) throw new Error("the account is not recorded");
+      if (!this.#firstTime(transferId, "adopt"))
+        return { epochGen: meta.epoch_gen, version: meta.acl_version };
+      // A repository that left before may come back.
+      this.ctx.storage.sql.exec("DELETE FROM forgotten_repos WHERE repo_id = ?", repoId);
+      this.ctx.storage.sql.exec("DELETE FROM released_repos WHERE repo_id = ?", repoId);
+      const now = this.#now();
+      for (const c of from.collaborators)
+        this.ctx.storage.sql.exec(
+          `INSERT INTO collaborators (repo_id, principal_id, handle, role, added_at)
+           VALUES (?, ?, ?, ?, ?) ON CONFLICT (repo_id, principal_id) DO NOTHING`,
+          repoId,
+          c.principalId,
+          c.handle,
+          c.role,
+          now,
+        );
+      if (from.usageBytes > 0)
+        this.ctx.storage.sql.exec(
+          `INSERT INTO quota_usage (repo_id, bytes) VALUES (?, ?)
+           ON CONFLICT (repo_id) DO UPDATE SET bytes = excluded.bytes`,
+          repoId,
+          from.usageBytes,
+        );
+      return { epochGen: meta.epoch_gen, version: this.#bump() };
+    });
+  }
+
+  /**
+   * A repository leaving for another account in transfer `transferId`: in
+   * one transaction, what it hands over (its collaborators and storage
+   * usage) and its removal here (collaborators, team grants, storage), so
+   * no grant changed meanwhile is lost; from then on no grant, storage
+   * charge or confirmation of it is taken here. It is not forgotten (it
+   * lives on). Done once per transfer: again, it answers the same.
+   */
+  releaseRepo(
+    transferId: string,
+    repoId: string,
+  ): ReturnType<OrgDO["repoForTransfer"]> & {
+    acl: { epochGen: number; version: number } | undefined;
+  } {
+    return this.ctx.storage.transactionSync(() => {
+      const meta = this.#meta();
+      const acl = meta && { epochGen: meta.epoch_gen, version: meta.acl_version };
+      const done = this.ctx.storage.sql
+        .exec<{ handed_over: string | null }>(
+          "SELECT handed_over FROM transfer_ops WHERE transfer_id = ? AND op = 'release'",
+          transferId,
+        )
+        .toArray()[0];
+      if (done?.handed_over)
+        return { ...(JSON.parse(done.handed_over) as ReturnType<OrgDO["repoForTransfer"]>), acl };
+      const handedOver = this.repoForTransfer(repoId);
+      this.ctx.storage.sql.exec(
+        "INSERT INTO transfer_ops (transfer_id, op, handed_over, done_at) VALUES (?, 'release', ?, ?)",
+        transferId,
+        JSON.stringify(handedOver),
+        this.#now(),
+      );
+      this.ctx.storage.sql.exec("DELETE FROM collaborators WHERE repo_id = ?", repoId);
+      this.ctx.storage.sql.exec("DELETE FROM team_repos WHERE repo_id = ?", repoId);
+      this.#quotas().forgetRepo(repoId);
+      this.ctx.storage.sql.exec(
+        `INSERT INTO released_repos (repo_id, transfer_id, released_at) VALUES (?, ?, ?)
+         ON CONFLICT (repo_id) DO UPDATE SET transfer_id = excluded.transfer_id,
+           released_at = excluded.released_at`,
+        repoId,
+        transferId,
+        this.#now(),
+      );
+      return {
+        ...handedOver,
+        acl: meta && { epochGen: meta.epoch_gen, version: this.#bump() },
+      };
+    });
+  }
+
+  /**
+   * Whether a repository could arrive in account `accountId` (this one,
+   * recorded or not yet) with `collaborators`: its snapshot (the owner or
+   * members, and those collaborators) stays within its limit.
+   */
+  canAdopt(accountId: string, collaborators: readonly { readonly principalId: string }[]): boolean {
+    const meta = this.#meta();
+    const sql = this.ctx.storage.sql;
+    const isMember = (id: string) =>
+      sql.exec("SELECT 1 FROM members WHERE principal_id = ?", id).toArray().length > 0;
+    const base =
+      meta?.kind === "org"
+        ? sql.exec<{ n: number }>("SELECT count(*) AS n FROM members").one().n
+        : 1;
+    const outside = collaborators.filter(
+      (c) => c.principalId !== accountId && !isMember(c.principalId),
+    );
+    return base + outside.length <= MAX_SNAPSHOT_ENTRIES;
+  }
+
+  /** Records transfer step `op` of `transferId`; false when it was done before. */
+  #firstTime(transferId: string, op: "adopt" | "release"): boolean {
+    const done = this.ctx.storage.sql.exec(
+      `INSERT INTO transfer_ops (transfer_id, op, done_at) VALUES (?, ?, ?)
+       ON CONFLICT (transfer_id, op) DO NOTHING`,
+      transferId,
+      op,
+      this.#now(),
+    );
+    return done.rowsWritten > 0;
+  }
+
+  /** Whether `repoId` is not this account's any more (deleted, or moved away): no grant or storage is taken for it. */
+  #notHere(repoId: string): boolean {
+    return (
+      this.#forgotten(repoId) ||
+      this.ctx.storage.sql.exec("SELECT 1 FROM released_repos WHERE repo_id = ?", repoId).toArray()
+        .length > 0
+    );
   }
 
   #forgotten(repoId: string): boolean {
@@ -601,7 +758,7 @@ export class OrgDO extends MigratingDO {
     return this.#change(actor, { owner: true }, (meta) => {
       const teamId = this.#teamId(slug);
       if (!teamId) return teamNotFound(slug);
-      if (this.#forgotten(repoId)) return REPO_GONE;
+      if (this.#notHere(repoId)) return REPO_GONE;
       const current = this.ctx.storage.sql
         .exec<{ role: RepoRole }>(
           "SELECT role FROM team_repos WHERE team_id = ? AND repo_id = ?",

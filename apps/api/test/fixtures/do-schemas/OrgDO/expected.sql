@@ -63,6 +63,11 @@ CREATE TABLE quota_usage (
         repo_id TEXT PRIMARY KEY,
         bytes INTEGER NOT NULL CHECK (bytes >= 0)
       ) STRICT;
+CREATE TABLE released_repos (
+        repo_id TEXT PRIMARY KEY,
+        transfer_id TEXT NOT NULL,
+        released_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE team_members (
         team_id TEXT NOT NULL REFERENCES teams (team_id),
         principal_id TEXT NOT NULL,
@@ -81,4 +86,12 @@ CREATE TABLE teams (
         slug TEXT NOT NULL UNIQUE,
         name TEXT NOT NULL,
         created_at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE transfer_ops (
+        transfer_id TEXT NOT NULL,
+        op TEXT NOT NULL CHECK (op IN ('adopt', 'release')),
+        -- What a release handed over (collaborators, storage usage), answered again on a retry.
+        handed_over TEXT CHECK (handed_over IS NULL OR json_valid(handed_over)),
+        done_at INTEGER NOT NULL,
+        PRIMARY KEY (transfer_id, op)
       ) STRICT;

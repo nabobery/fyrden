@@ -136,7 +136,7 @@ describe("ACL snapshots", () => {
       second.principalId,
     );
     if (!removed.ok) throw new Error(removed.error);
-    await stub.invalidateAcl(removed.epochGen, removed.version);
+    await stub.invalidateAcl(orgId, removed.epochGen, removed.version);
     expect(await commitAsAfterCheck(stub, second.principalId, 2)).toBe(false);
   });
 
@@ -161,7 +161,7 @@ describe("ACL snapshots", () => {
       second.principalId,
     );
     if (!removed.ok) throw new Error(removed.error);
-    await stub.invalidateAcl(removed.epochGen, removed.version);
+    await stub.invalidateAcl(orgId, removed.epochGen, removed.version);
     await inRepo(stub, () => (globalThis as { releasePull?: () => void }).releasePull?.());
     expect(await decision).toBeNull();
     // Nor is it used later: the next decision pulls the current snapshot.
@@ -170,6 +170,29 @@ describe("ACL snapshots", () => {
     });
     expect(await stub.roleOf(second.principalId, "write")).toBeNull();
     expect(await stub.roleOf(owner.principalId, "write")).toBe("admin");
+  });
+
+  it("never take a snapshot pulled before the repository was transferred, even back", async () => {
+    const { orgId, member, stub } = await orgWithRepo();
+    const before = await env.ORG.getByName(orgId).snapshotFor("x");
+    await inRepo(stub, (repo) => {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      (globalThis as { releasePull?: () => void }).releasePull = release;
+      repo.pullAcl = async () => {
+        await gate;
+        return before;
+      };
+    });
+    const decision = stub.roleOf(member.principalId, "read");
+    // Transferred away and back while the pull was out: the same account, another ownership.
+    await runInDurableObject(stub, (_: RepoDO, state) => {
+      state.storage.sql.exec("UPDATE repo_meta SET owner_gen = owner_gen + 2 WHERE id = 1");
+    });
+    await inRepo(stub, () => (globalThis as { releasePull?: () => void }).releasePull?.());
+    expect(await decision).toBeNull();
   });
 
   it("refuse a settings change by an owner removed since the API checked", async () => {
@@ -181,7 +204,7 @@ describe("ACL snapshots", () => {
       second.principalId,
     );
     if (!removed.ok) throw new Error(removed.error);
-    await stub.invalidateAcl(removed.epochGen, removed.version);
+    await stub.invalidateAcl(orgId, removed.epochGen, removed.version);
     expect(await stub.updateSettings({ description: "after", actor })).toEqual({
       ok: false,
       code: "access_lost",
@@ -231,7 +254,7 @@ describe("ACL snapshots", () => {
     const { orgId, member, stub } = await orgWithRepo();
     expect(await stub.roleOf(member.principalId, "read")).toBe("read");
     // The repository has seen a version the restored account will not reach soon.
-    await stub.invalidateAcl(1, 1_000);
+    await stub.invalidateAcl(orgId, 1, 1_000);
     expect(await stub.roleOf(member.principalId, "read")).toBeNull();
     // The restore runbook takes the next generation; the restored object restarts.
     const epoch = await allocateEpoch(env.DIRECTORY, orgId);
