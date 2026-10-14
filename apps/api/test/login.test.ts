@@ -149,8 +149,21 @@ describe("signing in", () => {
     expect(await page("/oauth/authorize?client_id=x")).toContain(
       'data-return-to="/oauth/authorize?client_id=x"',
     );
-    for (const bad of ["//evil.example/x", "https://evil.example/", "/\\evil.example"])
-      expect(await page(bad)).toContain('data-return-to="/"');
+    // Browsers drop tabs and newlines from a URL, so each of these is `//evil.example`.
+    for (const bad of [
+      "//evil.example/x",
+      "https://evil.example/",
+      "/\\evil.example",
+      "/\t/evil.example/x",
+      "/\n/evil.example/x",
+      "/\r/evil.example/x",
+      // Dot segments that canonicalize to `//evil.example`.
+      "/.%2e//evil.example",
+      "/a/..//evil.example",
+    ])
+      expect(await page(bad), JSON.stringify(bad)).toContain('data-return-to="/"');
+    // A local path comes back as the browser reads it.
+    expect(await page("/a/../b?x=1#y")).toContain('data-return-to="/b?x=1#y"');
     const res = await call("/auth/sign-in");
     expect(res.headers.get("Content-Security-Policy")).toMatch(/script-src 'nonce-[^']+'/);
   });

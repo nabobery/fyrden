@@ -9,10 +9,25 @@ import type { AuthVariables } from "../middleware/auth.js";
  * per-response nonce and talks only to this origin.
  */
 
-/** A path on this origin, or `/` (never another origin: no scheme, no `//`, no backslash). */
+const LOCAL = "https://fyrden.invalid";
+
+/**
+ * A path on this origin, or `/`. It is resolved as the browser will resolve
+ * it (which drops tabs and newlines and reads `\\` as `/`, so `/\t/evil` is
+ * `//evil`, another origin) and kept only if it stays on this origin, as
+ * the canonical path the browser would reach (never one starting `//`).
+ */
 export function safeReturnTo(raw: string | undefined): string {
-  if (!raw?.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return "/";
-  return raw.length > 4096 ? "/" : raw;
+  if (!raw?.startsWith("/") || raw.length > 4096) return "/";
+  let url: URL;
+  try {
+    url = new URL(raw, LOCAL);
+  } catch {
+    return "/";
+  }
+  // A canonical path that starts with `//` (from `/a/..//evil`) is another origin again.
+  if (url.origin !== LOCAL || url.pathname.startsWith("//")) return "/";
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
 const escapeHtml = (text: string): string =>
