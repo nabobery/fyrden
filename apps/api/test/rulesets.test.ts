@@ -2,7 +2,7 @@
 // point (and every other change of a ref goes through it), naming the
 // ruleset in the refusal.
 
-import { env } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { gzipSync } from "node:zlib";
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import { createFakeDataset } from "@fyrden/adapters-cloudflare/obs/testing";
@@ -18,6 +18,7 @@ import {
   sharedSignatures,
 } from "../src/do/repo/push-rules.js";
 import { ACCESS_LOST } from "../src/git/push/reauthorize.js";
+import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { principalWithToken, scopedToken } from "./helpers/principals.js";
 import { holdAfterRunPush, type PushTarget, postPush } from "./helpers/push.js";
@@ -78,6 +79,42 @@ beforeEach(async () => {
   );
   expect(stable.report).toContain("ok refs/heads/stable\n");
 });
+
+/**
+ * A git token of an agent of the owner's, acting for the owner under a grant
+ * to write the repository: through public entry points only (the agent, its
+ * token, the grant, the RFC 8693 exchange, then the git token).
+ */
+async function delegatedGitToken(): Promise<string> {
+  const agent = await json<{ handle: string }>(
+    api("POST", "/agents", owner.token, { handle: uniqueId("pr-bot").slice(0, 39) }),
+  );
+  const own = await json<{ token: string }>(
+    api("POST", `/agents/${agent.body.handle}/tokens`, owner.token, {}),
+  );
+  const granted = await json<{ id: string }>(
+    api("POST", "/grants", owner.token, {
+      agent: agent.body.handle,
+      scopes: ["contents:write"],
+      repositories: [`${owner.handle}/${repo.name}`],
+    }),
+  );
+  expect(granted.status).toBe(201);
+  const exchanged = await exports.default.fetch("https://fyrden.test/oauth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: TOKEN_EXCHANGE,
+      subject_token: own.body.token,
+      subject_token_type: ACCESS_TOKEN_TYPE,
+      grant_id: granted.body.id,
+    }).toString(),
+  });
+  const delegated = (await exchanged.json<{ access_token: string }>()).access_token;
+  const gitToken = await json<{ token: string }>(api("POST", "/user/git-tokens", delegated, {}));
+  expect(gitToken.status).toBe(201);
+  return gitToken.body.token;
+}
 
 describe("rulesets", () => {
   it("are created, read, renamed and deleted by administrators; readers see them", async () => {
@@ -156,27 +193,9 @@ describe("rulesets", () => {
       actor_types: ["agent"],
       rules: [{ type: "pull_request" }],
     });
-    // Its owner's, so the owner's rights do not cap it below its own.
-    const agent = await principalWithToken("agent", "pat", { owner: owner.principalId });
-    const handle = agent.principalId.toLowerCase().replace("_", "-");
-    // Agents are not collaborators through the API yet: granted in the account's object.
-    const reader = await user();
-    await api("PUT", `${path}/collaborators/${reader.handle}`, owner.token, { permission: "pull" });
-    const account = env.ORG.getByName(owner.principalId);
-    const granted = await account.setCollaborator(
-      { principalId: owner.principalId },
-      repo.id,
-      { id: agent.principalId, handle },
-      "write",
-    );
-    if (!granted.ok) throw new Error(granted.error);
-    await env.REPO.getByName(repo.id).invalidateAcl(
-      owner.principalId,
-      granted.epochGen,
-      granted.version,
-    );
+    const gitToken = await delegatedGitToken();
     const byAgent = await postPush(
-      await target(agent, await scopedToken(agent.principalId, [], "git")),
+      await target(owner, gitToken),
       pushBody([{ old: fx.c2, new: fx.c3, ref: "refs/heads/main" }], { pack: fx.packC3ThinOnC2 }),
     );
     expect(byAgent.report).toContain(
@@ -187,6 +206,27 @@ describe("rulesets", () => {
       pushBody([{ old: fx.c2, new: fx.c3, ref: "refs/heads/main" }], { pack: fx.packC3ThinOnC2 }),
     );
     expect(byHuman.report).toContain("ok refs/heads/main\n");
+  });
+
+  it("hold an agent acting for its user to them at the commit, though they came after its upload", async () => {
+    const gitToken = await delegatedGitToken();
+    const held = holdAfterRunPush();
+    const pending = postPush(
+      await target(owner, gitToken),
+      pushBody([{ old: fx.c2, new: fx.c3, ref: "refs/heads/main" }], { pack: fx.packC3ThinOnC2 }),
+      { bindings: { REPO: held.REPO } },
+    );
+    await held.accepted();
+    await ruleset({
+      name: "agents use PRs",
+      actor_types: ["agent"],
+      rules: [{ type: "pull_request" }],
+    });
+    held.resume();
+    expect((await pending).report).toContain(
+      'ng refs/heads/main changes must be made through a pull request (ruleset "agents use PRs")\n',
+    );
+    expect(await refs()).toContain(`main:${fx.c2}`);
   });
 
   it("refuse an agent whose owner lost access after the last check, at the commit", async () => {

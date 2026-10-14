@@ -135,6 +135,8 @@ export async function receivePack(c: GitContext): Promise<Response> {
   const begun = await stub.beginPush({
     principal: access.auth.principalId,
     tokenId: access.auth.id,
+    // An agent acting for the user (a git token minted under a grant): agents' rules apply.
+    grantId: access.auth.grantId,
   });
   if (!begun.ok)
     return gitPayload(encodeFatalError(begun.error, false), contentType.result(SERVICE));
