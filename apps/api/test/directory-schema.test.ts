@@ -30,6 +30,7 @@ describe("D1 directory schema", () => {
       "memberships",
       "oauth_clients",
       "oauth_requests",
+      "passkeys",
       "principals",
       "refresh_tokens",
       "repo_deletions",
@@ -41,6 +42,7 @@ describe("D1 directory schema", () => {
       "ssh_signing_keys",
       "stars",
       "tokens",
+      "webauthn_challenges",
     ]);
   });
 

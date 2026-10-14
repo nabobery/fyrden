@@ -5,7 +5,8 @@ import { METADATA_POLICY } from "./clients.js";
  * Prunes what the authorization server keeps past its use: answered or
  * abandoned authorization requests, expired access tokens (their mints
  * stay in the audit log), refresh token families past their end (90
- * days, Proposed), DPoP proofs past their freshness, sessions, and
+ * days, Proposed), DPoP proofs and passkey challenges past their
+ * freshness, sessions, and
  * client ID metadata documents not fetched for longer than they may be used,
  * each a day after it expired (a code or refresh token coming back within
  * that day still revokes its family), and registrations never used within
@@ -28,7 +29,7 @@ export async function reapOAuth(
   const before = options.now - OAUTH_REAP_POLICY.keepMs;
   const limit = OAUTH_REAP_POLICY.perRun;
   const db = env.DIRECTORY;
-  options.metrics?.count("d1.query", { db: "directory", op: "oauth_reap" }, 6);
+  options.metrics?.count("d1.query", { db: "directory", op: "oauth_reap" }, 7);
   const results = await db.batch([
     db
       .prepare(
@@ -54,6 +55,12 @@ export async function reapOAuth(
     db
       .prepare(
         `DELETE FROM dpop_proofs WHERE rowid IN (SELECT rowid FROM dpop_proofs
+           WHERE expires_at <= ?1 LIMIT ?2)`,
+      )
+      .bind(options.now, limit),
+    db
+      .prepare(
+        `DELETE FROM webauthn_challenges WHERE rowid IN (SELECT rowid FROM webauthn_challenges
            WHERE expires_at <= ?1 LIMIT ?2)`,
       )
       .bind(options.now, limit),

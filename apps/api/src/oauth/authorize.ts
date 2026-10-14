@@ -52,7 +52,7 @@ button.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
       "Cache-Control": "no-store",
       // The page is never framed (clickjacking) and loads nothing.
       "Content-Security-Policy":
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       "X-Frame-Options": "DENY",
     },
   );
@@ -95,7 +95,9 @@ export async function authorizeRequest(c: OAuthContext): Promise<Response> {
       401,
       "Sign in to Fyrden first",
       html(
-        "<p>An application asks to use your Fyrden account. Sign in, then start again from the application.</p>",
+        `<p>An application asks to use your Fyrden account.</p><p><a href="/auth/sign-in?return_to=${encodeURIComponent(
+          new URL(c.req.url).pathname + new URL(c.req.url).search,
+        )}">Sign in</a>, and you come back here.</p>`,
       ),
     );
   if (!(await c.env.RATE_LIMIT_WRITE.limit({ key: `authorize:${user.userId}` })).success)

@@ -472,7 +472,21 @@ from `/mcp` or `/api` names in its `WWW-Authenticate`.
 | Requests | Bodies up to 16 KiB; token, registration and revocation rate limited per client address; authorization requests rate limited per user, with at most 20 waiting for an answer |
 | Registrations | At most 1,000 an hour for the whole deployment; one never used within a day, or unused for 90 days, is pruned |
 | Pruning | Expired access tokens, refresh tokens, sessions and answered or abandoned requests go a day after they expire (their audit rows stay) |
-| Sessions | A `__Host-fyrden_session` cookie, 30 days; how users sign in is described with the web UI |
+| Sessions | A `__Host-fyrden_session` cookie (HttpOnly, Secure, SameSite=Lax), 30 days |
+
+## Signing in
+
+Humans sign in at `/auth/sign-in` (a page on the API's origin; the
+authorization endpoint links to it), with a passkey or with a personal
+access token that has the user's full rights (no scopes, no repository
+limits), which is how the first passkey is added.
+
+| What | Value |
+|---|---|
+| Passkeys | WebAuthn, attestation `none`, discoverable credentials, user verification required; ES256, EdDSA or RS256 keys; at most 20 per user; a signature counter that does not move forward is refused |
+| Challenges | Single use, 5 minutes |
+| Requests | Every change (sign in, sign out, add or remove a passkey) only from this origin's own pages (`Origin`); sign-in attempts rate limited per client address |
+| Audit | `session.start` (with how), `passkey.add`, `passkey.remove` |
 
 ## Templates
 
