@@ -9,9 +9,10 @@
 
 /**
  * `oat`: an access token issued by the authorization server (a token
- * exchange's delegated token, an OAuth client's).
+ * exchange's delegated token, an OAuth client's); `ort`: its refresh
+ * token; `ses`: a human's session (a cookie).
  */
-export const TOKEN_TYPES = ["git", "pat", "ist", "run", "job", "oat"] as const;
+export const TOKEN_TYPES = ["git", "pat", "ist", "run", "job", "oat", "ort", "ses"] as const;
 export type TokenType = (typeof TOKEN_TYPES)[number];
 
 export type ParsedToken =

@@ -62,12 +62,13 @@ function buildServer(ctx: OpContext): McpServer {
 
 /**
  * MCP over Streamable HTTP at /mcp. Authentication runs first, in the same
- * middleware as REST; OAuth discovery for MCP clients is not built yet.
+ * middleware as REST; a 401 points clients at the resource's metadata
+ * (RFC 9728), and an access token issued for another resource is refused.
  */
 export function mountMcp(app: Hono<{ Bindings: Env; Variables: AuthVariables }>): void {
   // Read-mode verification: tools/list and read tools use the isolate cache;
   // the executor re-verifies on the D1 primary before any write tool runs.
-  app.all(MCP_PATH, requireAuth("read"), async (c) => {
+  app.all(MCP_PATH, requireAuth("read", "mcp"), async (c) => {
     const ctx = opContext(c);
     const auth = c.get("auth");
     // The SDK buffers and parses the whole body: bound it first, as REST does.

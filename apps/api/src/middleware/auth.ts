@@ -2,6 +2,7 @@ import type { TokenRecord, VerifyMode, VerifyResult } from "@fyrden/adapters-clo
 import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { problem } from "../http/problem.js";
+import { audienceAllows, bearerChallenge, type Resource } from "../oauth/resources.js";
 import { tokenStore } from "../services.js";
 import type { ObsVariables } from "./obs.js";
 
@@ -38,9 +39,9 @@ export function extractToken(header: string | undefined): string | undefined {
   return undefined;
 }
 
-export const invalidToken = (c: Context) =>
+export const invalidToken = (c: Context, resource: Resource = "api") =>
   problem(c, 401, "invalid_token", "The token is invalid, expired or revoked.", {
-    "WWW-Authenticate": 'Bearer realm="fyrden", error="invalid_token"',
+    "WWW-Authenticate": bearerChallenge(new URL(c.req.url).origin, resource, "invalid_token"),
   });
 
 export type Authentication =
@@ -102,14 +103,18 @@ export async function authenticate(
  * - `read`: always read mode. Used by MCP, where every call is a POST; the
  *   operation executor re-verifies on the primary before any write.
  */
-export const requireAuth = (policy: "by-method" | "read" = "by-method") =>
+export const requireAuth = (
+  policy: "by-method" | "read" = "by-method",
+  resource: Resource = "api",
+) =>
   createMiddleware<{ Bindings: Env; Variables: AuthVariables }>(async (c, next) => {
     const mode: VerifyMode = policy === "read" || READ_METHODS.has(c.req.method) ? "read" : "write";
+    const origin = new URL(c.req.url).origin;
     const auth = await authenticate(c, mode);
     if (!auth.ok) {
       if (auth.reason === "missing") {
         return problem(c, 401, "unauthenticated", "A token is required.", {
-          "WWW-Authenticate": 'Bearer realm="fyrden"',
+          "WWW-Authenticate": bearerChallenge(origin, resource),
         });
       }
       if (auth.reason === "rate_limited") {
@@ -117,8 +122,11 @@ export const requireAuth = (policy: "by-method" | "read" = "by-method") =>
           "Retry-After": "60",
         });
       }
-      return invalidToken(c);
+      return invalidToken(c, resource);
     }
+    // A token issued for another resource (RFC 8707) is not taken here.
+    if (!audienceAllows(auth.state.record.audience, origin, resource))
+      return invalidToken(c, resource);
     c.set("auth", auth.state.record);
     c.set("authState", auth.state);
     await next();

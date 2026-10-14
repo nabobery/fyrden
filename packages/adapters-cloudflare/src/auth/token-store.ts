@@ -40,6 +40,11 @@ export interface TokenRecord {
    * delegated token's chain): each one's rights cap the token's.
    */
   ceilingIds: string[];
+  /**
+   * The resource the token is for (RFC 8707: an authorization server's
+   * access token is accepted only there); null for any of this deployment's.
+   */
+  audience: string | null;
 }
 
 export type VerifyFailure =
@@ -103,6 +108,8 @@ export interface MintInput {
   audit: AuditContext;
   /** A delegated token: the grant it is issued under and the agents acting (the current one first). */
   delegation?: { readonly grantId: string; readonly act: readonly string[] };
+  /** The resource it is for (RFC 8707); any of this deployment's when absent. */
+  audience?: string | null;
 }
 
 export interface AuditContext {
@@ -144,6 +151,7 @@ interface TokenRow {
   revoked_at: number | null;
   grant_id: string | null;
   act_chain: string | null;
+  audience: string | null;
 }
 
 /** One grant of a delegated token's chain, with its agent and the agent's owner. */
@@ -198,6 +206,7 @@ function toRecord(
     act: delegation?.act ?? [],
     grantId: delegation?.grantId ?? null,
     ceilingIds: delegation?.ceilingIds ?? (row.owner_id === null ? [] : [row.owner_id]),
+    audience: row.audience,
   };
 }
 
@@ -297,7 +306,7 @@ export class D1TokenStore {
       this.db
         .prepare(
           `INSERT INTO tokens (id, token_hash, type, principal_id, scopes, repo_ids, expires_at,
-             created_at, grant_id, act_chain) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             created_at, grant_id, act_chain, audience) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           id,
@@ -310,6 +319,7 @@ export class D1TokenStore {
           now,
           delegation?.grantId ?? null,
           delegation ? JSON.stringify(delegation.act) : null,
+          input.audience ?? null,
         ),
       auditStatement(this.db, now, input.audit, "token.mint", id, {
         type: input.type,
@@ -341,7 +351,8 @@ export class D1TokenStore {
       .prepare(
         `SELECT t.id, t.type, t.principal_id, p.type AS principal_type, p.handle, p.is_instance_admin,
                 p.disabled_at, p.owner_id, o.disabled_at AS owner_disabled_at, t.scopes,
-                t.repo_ids, t.expires_at, t.last_used_at, t.revoked_at, t.grant_id, t.act_chain
+                t.repo_ids, t.expires_at, t.last_used_at, t.revoked_at, t.grant_id, t.act_chain,
+                t.audience
          FROM tokens t JOIN principals p ON p.id = t.principal_id
          LEFT JOIN principals o ON o.id = p.owner_id
          WHERE t.token_hash = ?`,

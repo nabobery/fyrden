@@ -443,13 +443,34 @@ acting, the current one first, and audit rows carry it.
 | An agent's rights | Its own (or the user's, under a grant), capped by its owner's: an organization's agent reaches only the organization's repositories |
 | A grant | Scopes (at least one), optionally repositories, an expiry of up to 365 days; never wider, nor longer-lived, than the token making it |
 | Passing down | An agent holding a user's grant may pass a narrower one (scopes, repositories, expiry) to another agent of its owner; one hop at most (depth 2) |
-| Delegated token | Type `oat`, up to 1 hour, and never past any grant of its chain or the agent's own token; scopes and repositories within the grant and the agent's token |
+| Delegated token | Type `oat`, up to 1 hour, and never past any grant of its chain or the agent's own token; scopes and repositories within the grant and the agent's token; for the REST API unless `resource` asks for the MCP server |
 | Revocation | Revoking a grant revokes the grants passed down from it; tokens under them, and an agent's tokens once it (or its owner) is disabled, stop at once for writes and within 30 seconds for reads |
 | Delegated tokens may not | Make or revoke grants, mint tokens, change who has access (collaborators, team repositories), or call user-only operations (create repositories, transfer, stars, signing keys) |
 | An agent's own token | Never wider than the token that minted it (scopes and repositories) |
 | Token endpoint | Bodies up to 16 KiB; rate limited per client address |
 | Rulesets | Rules for `agent` actors apply to an agent acting for a user |
 | Not yet | Grants from organizations, and git tokens under a grant |
+
+## OAuth authorization server
+
+Fyrden is its own authorization server (OAuth 2.1, public clients with
+PKCE), for MCP clients and other tools acting for a signed-in user.
+Discovery: `/.well-known/oauth-authorization-server` (RFC 8414) and
+`/.well-known/oauth-protected-resource/{mcp,api}` (RFC 9728), which a 401
+from `/mcp` or `/api` names in its `WWW-Authenticate`.
+
+| What | Value |
+|---|---|
+| Clients | Public only (`token_endpoint_auth_method: none`), registered at `POST /oauth/register` (RFC 7591); redirect URIs `https`, loopback `http`, or a private-use scheme, matched exactly |
+| Authorization | `GET /oauth/authorize`: code flow only, PKCE `S256` required, `resource` required (`{origin}/mcp` or `{origin}/api`), scopes are Fyrden permissions; the signed-in user consents on a Fyrden page; the answer must come from Fyrden's own origin |
+| Codes | Single use, 60 seconds; redeemed again, the tokens they issued are revoked |
+| Access tokens | Type `oat`, 1 hour, accepted only at their resource (RFC 8707) |
+| Refresh tokens | 30 days, single use, within a family of at most 90 days (then the user consents again): each use issues the next; a used one coming back revokes its whole family (refresh and access tokens); of concurrent uses exactly one wins |
+| Revocation | `POST /oauth/revoke` (RFC 7009): a refresh token revokes its family, an access token itself |
+| Requests | Bodies up to 16 KiB; token, registration and revocation rate limited per client address; authorization requests rate limited per user, with at most 20 waiting for an answer |
+| Registrations | At most 1,000 an hour for the whole deployment; one never used within a day, or unused for 90 days, is pruned |
+| Pruning | Expired access tokens, refresh tokens, sessions and answered or abandoned requests go a day after they expire (their audit rows stay) |
+| Sessions | A `__Host-fyrden_session` cookie, 30 days; how users sign in is described with the web UI |
 
 ## Templates
 

@@ -1,5 +1,6 @@
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import { authenticate } from "../middleware/auth.js";
+import { audienceAllows } from "../oauth/resources.js";
 import {
   authorize,
   GIT_PERMISSION,
@@ -54,7 +55,11 @@ export async function authorizeGit(
     return fail(gitText(c, 401, "Invalid username or token.", challenge));
   }
   const auth = authn.state.record;
-  if (!tokenTypes.has(auth.type)) {
+  // An access token for another resource (RFC 8707: the MCP server's) is not taken here.
+  if (
+    !tokenTypes.has(auth.type) ||
+    !audienceAllows(auth.audience, new URL(c.req.url).origin, "api")
+  ) {
     return fail(
       gitText(
         c,

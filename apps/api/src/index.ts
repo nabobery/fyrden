@@ -5,6 +5,7 @@ import { reapExpiredRepos } from "./cron/expiry-reaper.js";
 import { sweepEffects } from "./effects/dispatcher.js";
 import { EFFECT_SINKS } from "./effects/sinks.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "./events/read-model.js";
+import { reapOAuth } from "./oauth/reaper.js";
 import { consumeEvents, EVENTS_QUEUE } from "./queues/events-consumer.js";
 import { advanceDeletions } from "./repos/deletion.js";
 import { advanceTransfers } from "./repos/transfer.js";
@@ -50,6 +51,7 @@ export default {
         ),
         reapIdempotencyKeys(env, { now: Date.now(), metrics }),
         advanceTransfers(env, { metrics }),
+        reapOAuth(env, { now: Date.now(), metrics }),
         sweepEffects({
           db: readModelFor(env, DEFAULT_ORG_SHARD),
           env,

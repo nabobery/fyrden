@@ -8,7 +8,7 @@ import { env, exports } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, it } from "vitest";
 import { recordedAccount } from "../src/accounts/grants.js";
-import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/token.js";
+import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { scopedToken } from "./helpers/principals.js";
