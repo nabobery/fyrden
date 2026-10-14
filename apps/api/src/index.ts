@@ -7,6 +7,7 @@ import { EFFECT_SINKS } from "./effects/sinks.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "./events/read-model.js";
 import { consumeEvents, EVENTS_QUEUE } from "./queues/events-consumer.js";
 import { advanceDeletions } from "./repos/deletion.js";
+import { reapIdempotencyKeys } from "./rest/idempotency.js";
 
 export { NetworkDO } from "./do/NetworkDO.js";
 export { OrgDO } from "./do/OrgDO.js";
@@ -46,6 +47,7 @@ export default {
         reapExpiredRepos(env, { now: Date.now(), metrics }).finally(() =>
           advanceDeletions(env, { metrics }),
         ),
+        reapIdempotencyKeys(env, { now: Date.now(), metrics }),
         sweepEffects({
           db: readModelFor(env, DEFAULT_ORG_SHARD),
           env,

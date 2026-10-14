@@ -370,7 +370,7 @@ branch moves, and the branch moves only from the head the commit was built on.
 | Directories a write reads | About 300 R2 reads' worth; deeper writes answer `too_expensive` |
 | A directory a write changes | 1 MiB as a tree object (about 25,000 entries), 4 MiB of trees in all; larger answers `too_expensive` (push instead); memory for them is reserved, or the write answers `busy` |
 | Request body (REST and MCP) | 8 MiB; larger answers 413 `body_too_large` before it is read |
-| Retrying a write | `Idempotency-Key` is not replayed yet: a retried single-file write answers `sha_mismatch`; give `expected_head` to make a multi-file retry safe |
+| Retrying a write | Send an `Idempotency-Key` (see [Idempotent requests](#idempotent-requests)): a retry gets the first answer and makes no second commit |
 | Signature | Signed with the platform key (see [Commit signing](#commit-signing)) |
 
 ## Repository expiry
@@ -467,6 +467,27 @@ repository role; Fyrden's `actor_types` limits a ruleset to principal types
 | Refusal text | 2,000 bytes at most per ref |
 | Refusals | `ng <ref> <reason> (ruleset "<name>")`; an atomic push fails as a whole |
 | `evaluate` | Reported to nobody yet; does not block |
+
+## Idempotent requests
+
+A REST write (any method but GET) sent with an `Idempotency-Key` header runs
+once per token and key; it is optional, as on GitHub. MCP tool calls take no
+key. The key is checked after the token (revocation included), the rate
+limit, the token's scopes and the input; a replay returns the answer the
+same token already got, without checking its access to the repository
+again.
+
+| What | Value |
+|---|---|
+| Key | 1-255 printable ASCII characters (else 422 `invalid_idempotency_key`), per token |
+| Kept | 24 hours, then forgotten (the cron deletes expired keys) |
+| A retry of the same request | The first answer again, with `Idempotent-Replayed: true`; nothing runs twice |
+| The same key, another request | 422 `idempotency_key_reused` (another operation, or another input) |
+| While the first still runs | 409 `idempotency_key_in_use` with `Retry-After: 5` |
+| When the first may or may not have taken effect | 409 `idempotent_outcome_unknown`: it failed unexpectedly, or was still marked running after 10 minutes. Check, then use a new key |
+| Answers not kept | 401, 403, 408, 429, `busy`, `network_busy` (whatever the request began was undone: a retry runs again), and an upload's completion while it is still indexing |
+| Answers with a secret (minting a token) | Not kept: a retry answers 409 `secret_already_disclosed` naming the token made |
+| Largest answer kept | 256 KiB; a larger one answers a retry 409 `idempotent_replay_unavailable` |
 
 ## Configuration variables
 

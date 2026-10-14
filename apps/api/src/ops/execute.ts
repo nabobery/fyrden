@@ -10,6 +10,13 @@ import {
 } from "@fyrden/api-contract";
 import { checkOperation } from "@fyrden/domain";
 import type { AuthState } from "../middleware/auth.js";
+import {
+  type Claim,
+  finishIdempotent,
+  outcomeOf,
+  requestHash,
+  startIdempotent,
+} from "../rest/idempotency.js";
 
 /** What every operation handler receives, whichever surface (REST or MCP) called it. */
 export interface OpContext {
@@ -34,7 +41,9 @@ export type OpHandler<D extends OperationDef> = (
 /** One handler per registry operation; a missing one is a type error. */
 export type Handlers = { [D in FyrdenRegistry[number] as D["id"]]: OpHandler<D> };
 
-export type OpResult = { ok: true; output: unknown } | { ok: false; problem: Problem };
+export type OpResult =
+  | { ok: true; output: unknown; replayed?: true; status?: number }
+  | { ok: false; problem: Problem; replayed?: true };
 
 /**
  * An expected failure a handler reports (a taken handle, a missing user). The
@@ -94,6 +103,8 @@ export async function executeOperation(
   handler: OpHandler<OperationDef>,
   ctx: OpContext,
   rawInput: unknown,
+  /** A REST write's `Idempotency-Key`, checked once the request may run at all. */
+  options: { readonly idempotencyKey?: string } = {},
 ): Promise<OpResult> {
   // Limited by token id, which a re-verification cannot change; checked
   // first so a flood of writes cannot drive D1 primary lookups.
@@ -139,16 +150,44 @@ export async function executeOperation(
       .join("; ");
     return fail(ctx, 422, "invalid_input", detail);
   }
-  let output: unknown;
+  // The same token's same request with the same key: the first answer, not a second run.
+  let claim: Claim | undefined;
+  if (options.idempotencyKey !== undefined && op.idempotency === "key") {
+    const start = await startIdempotent(
+      ctx.env,
+      {
+        tokenId: auth.id,
+        key: options.idempotencyKey,
+        opId: op.id,
+        hash: await requestHash(op.id, input.data),
+        now: Date.now(),
+      },
+      ctx.metrics,
+    );
+    if (start.kind === "refuse") return fail(ctx, start.status, start.code, start.detail);
+    if (start.kind === "replay")
+      return start.status >= 400
+        ? { ok: false, problem: start.body as Problem, replayed: true }
+        : { ok: true, output: start.body, status: start.status, replayed: true };
+    claim = start.claim;
+  }
+  let result: OpResult;
   try {
-    output = await handler(
+    const output = await handler(
       { ...ctx, auth, authState: { ...ctx.authState, record: auth } },
       input.data,
     );
+    // A handler returning the wrong shape is a server bug, never sent as-is.
+    result = { ok: true, output: op.output.parse(output) };
   } catch (error) {
-    if (error instanceof OperationError) return fail(ctx, error.status, error.code, error.message);
-    throw error;
+    if (!(error instanceof OperationError)) {
+      // It may have taken effect: retries with its key are refused, not run.
+      if (claim)
+        await finishIdempotent(ctx.env, claim, { kind: "unknown" }, ctx.metrics).catch(() => {});
+      throw error;
+    }
+    result = fail(ctx, error.status, error.code, error.message);
   }
-  // A handler returning the wrong shape is a server bug, never sent as-is.
-  return { ok: true, output: op.output.parse(output) };
+  if (claim) await finishIdempotent(ctx.env, claim, outcomeOf(op, result), ctx.metrics);
+  return result;
 }

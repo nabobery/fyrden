@@ -232,3 +232,90 @@ describe("executeOperation", () => {
     });
   });
 });
+
+describe("executeOperation with an Idempotency-Key", () => {
+  const keyed = (key: string, tokenId = "tok_idem") => {
+    const auth = { ...record, id: tokenId } as TokenRecord;
+    return [
+      { ...ctx("write", true), auth, authState: { ...ctx("write", true).authState, record: auth } },
+      key,
+    ] as const;
+  };
+
+  it("runs a handler once, and replays its answer", async () => {
+    const handler = vi.fn(async () => ({ ok: true }));
+    const [c, key] = keyed(crypto.randomUUID());
+    const first = await executeOperation(
+      writeOp,
+      handler,
+      c,
+      { value: "a" },
+      { idempotencyKey: key },
+    );
+    const again = await executeOperation(
+      writeOp,
+      handler,
+      c,
+      { value: "a" },
+      { idempotencyKey: key },
+    );
+    expect(first).toEqual({ ok: true, output: { ok: true } });
+    expect(again).toEqual({ ok: true, output: { ok: true }, status: 200, replayed: true });
+    expect(handler).toHaveBeenCalledTimes(1);
+    // Another token with the same key runs as itself.
+    const [other] = keyed(key, "tok_other");
+    await executeOperation(writeOp, handler, other, { value: "a" }, { idempotencyKey: key });
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("never runs again after a handler that threw or answered the wrong shape", async () => {
+    for (const handler of [
+      vi.fn(async () => {
+        throw new Error("after a change");
+      }),
+      vi.fn(async () => ({ wrong: 1 }) as unknown as { ok: boolean }),
+    ]) {
+      const [c, key] = keyed(crypto.randomUUID());
+      await expect(
+        executeOperation(writeOp, handler, c, { value: "a" }, { idempotencyKey: key }),
+      ).rejects.toThrow();
+      const retry = await executeOperation(
+        writeOp,
+        handler,
+        c,
+        { value: "a" },
+        {
+          idempotencyKey: key,
+        },
+      );
+      expect(retry).toMatchObject({ ok: false, problem: { code: "idempotent_outcome_unknown" } });
+      expect(handler).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("lets only the execution that holds a key record its outcome", async () => {
+    const { startIdempotent, finishIdempotent } = await import("../src/rest/idempotency.js");
+    const key = crypto.randomUUID();
+    const request = { tokenId: "tok_owner", key, opId: "test.write", hash: "h", now: Date.now() };
+    const stale = await startIdempotent(env, request);
+    if (stale.kind !== "run") throw new Error(stale.kind);
+    // It expires and another execution claims the key.
+    await env.DIRECTORY.prepare("UPDATE idempotency_keys SET expires_at = 1 WHERE key = ?")
+      .bind(key)
+      .run();
+    const current = await startIdempotent(env, { ...request, now: Date.now() });
+    if (current.kind !== "run") throw new Error(current.kind);
+    await finishIdempotent(env, stale.claim, {
+      kind: "answer",
+      status: 200,
+      body: { stale: true },
+    });
+    await finishIdempotent(env, stale.claim, { kind: "forget" });
+    const row = await env.DIRECTORY.prepare(
+      "SELECT claim_id, state, response FROM idempotency_keys WHERE key = ?",
+    )
+      .bind(key)
+      .first<{ claim_id: string; state: string; response: string | null }>();
+    expect(row).toEqual({ claim_id: current.claim.claimId, state: "running", response: null });
+  });
+});
