@@ -1,5 +1,16 @@
 import { micromark } from "micromark";
 import { gfm, gfmHtml } from "micromark-extension-gfm";
+import { encodePath, withoutTrailingSlashes } from "./types.js";
+
+/** Where a Markdown file is: its repository's page, the ref (encoded) and its directory. */
+export interface MarkdownPlace {
+  /** `/{owner}/{repo}`. */
+  readonly base: string;
+  /** The ref as the file's own URL has it (encoded). */
+  readonly ref: string;
+  /** The file's directory in the repository, "" at its top. */
+  readonly dir: string;
+}
 
 /**
  * GitHub-flavored Markdown (a README) as HTML that is safe to put in a
@@ -7,12 +18,44 @@ import { gfm, gfmHtml } from "micromark-extension-gfm";
  * and image URLs keep only safe protocols (micromark's defaults; a
  * `javascript:` link loses its URL). Mermaid diagrams stay as
  * `language-mermaid` code blocks, which the page renders on the client.
+ * With `at`, links into the repository go to its files at the same ref
+ * (as on GitHub: relative to the file, `/` its top) and images to their bytes.
  */
-export function renderMarkdown(source: string): string {
-  return micromark(source, {
+export function renderMarkdown(source: string, at?: MarkdownPlace): string {
+  const html = micromark(source, {
     extensions: [gfm()],
     htmlExtensions: [gfmHtml()],
     allowDangerousHtml: false,
     allowDangerousProtocol: false,
   });
+  if (!at) return html;
+  // Raw HTML is escaped, so every `href="` and `src="` here is micromark's own.
+  return html.replace(
+    / (href|src)="([^"]*)"/g,
+    (_, name: string, url: string) => ` ${name}="${local(url, at, name === "src")}"`,
+  );
+}
+
+/** The directory of a file's path ("" at the top). */
+export function dirOf(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash < 0 ? "" : path.slice(0, slash);
+}
+
+/** A link's or image's URL (as micromark wrote it: encoded, `&` escaped) in the repository. */
+function local(url: string, at: MarkdownPlace, image: boolean): string {
+  // Another site, the page's own anchors and other schemes stay as they are.
+  if (url === "" || url.startsWith("#") || url.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(url))
+    return url;
+  const top = "https://repo.invalid/";
+  const dir = at.dir ? `${top}${encodePath(at.dir)}/` : top;
+  const raw = url.replaceAll("&amp;", "&");
+  // `..` past the top stays at the top; a leading `/` keeps `a:b` a path, not a scheme.
+  const target = new URL(raw, raw.startsWith("/") ? top : dir);
+  const path = withoutTrailingSlashes(target.pathname);
+  const view = image ? "raw" : target.pathname.endsWith("/") ? "tree" : "blob";
+  return `${at.base}/${view}/${at.ref}${path}${target.search}${target.hash}`.replaceAll(
+    "&",
+    "&amp;",
+  );
 }

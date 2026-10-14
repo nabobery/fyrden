@@ -3,7 +3,7 @@ import { Listing } from "../components/listing.js";
 import { Markdown } from "../components/markdown.js";
 import { RepoHeader } from "../components/repo-header.js";
 import { apiCall, apiGet } from "../lib/api.server.js";
-import { renderMarkdown } from "../lib/markdown.js";
+import { dirOf, renderMarkdown } from "../lib/markdown.js";
 import { type Contents, decodeText, type Repo } from "../lib/types.js";
 import type { Route } from "./+types/repo";
 
@@ -38,7 +38,11 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
         ? null
         : {
             name: readme.body.type === "file" ? readme.body.name : "README",
-            html: renderMarkdown(readmeText),
+            html: renderMarkdown(readmeText, {
+              base: `/${params.owner}/${params.repo}`,
+              ref,
+              dir: readme.body.type === "file" ? dirOf(readme.body.path) : "",
+            }),
           },
   };
 }

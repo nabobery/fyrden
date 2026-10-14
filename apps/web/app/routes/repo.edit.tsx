@@ -1,5 +1,12 @@
 import { Form, Link, redirect, useActionData } from "react-router";
-import { apiCall, apiGet, assertSameOrigin } from "../lib/api.server.js";
+import {
+  apiCall,
+  apiGet,
+  assertSameOrigin,
+  readForm,
+  signedInUser,
+  signInUrl,
+} from "../lib/api.server.js";
 import {
   type Contents,
   decodeText,
@@ -12,6 +19,11 @@ import type { Route } from "./+types/repo.edit";
 export function meta({ params }: Route.MetaArgs): Route.MetaDescriptors {
   return [{ title: `Edit ${params["*"]} · ${params.owner}/${params.repo} · Fyrden` }];
 }
+
+/** Content one write carries at most (the API's limit), in UTF-8 bytes. */
+const MAX_CONTENT_BYTES = 4 * 1024 * 1024;
+/** The editor's form at most: that content, URL-encoded (up to 3 bytes for each), and the rest. */
+const EDIT_FORM_MAX_BYTES = 3 * MAX_CONTENT_BYTES + 64 * 1024;
 
 const repoPath = (owner: string, repo: string) =>
   `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
@@ -57,7 +69,9 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
 
 export async function action({ request, context, params }: Route.ActionArgs) {
   assertSameOrigin(request);
-  const form = await request.formData();
+  // Signed in before a large form is read.
+  if (!(await signedInUser(context, request))) throw redirect(signInUrl(request));
+  const form = await readForm(request, EDIT_FORM_MAX_BYTES);
   const dir = params["*"] ?? "";
   const adding = form.get("adding") === "1";
   const name = String(form.get("name") ?? "").trim();
@@ -77,9 +91,16 @@ export async function action({ request, context, params }: Route.ActionArgs) {
     return redirect(`/${params.owner}/${params.repo}`);
   }
   if (!path) return { error: "Name the file." };
+  const content = String(form.get("content") ?? "");
+  // Within the limit before it is encoded: a UTF-16 unit is at most 3 UTF-8 bytes.
+  if (
+    content.length * 3 > MAX_CONTENT_BYTES &&
+    new TextEncoder().encode(content).length > MAX_CONTENT_BYTES
+  )
+    return { error: "The file is larger than 4 MiB; push it with git instead." };
   const written = await apiCall<{ detail?: string }>(context, request, "PUT", base, {
     message,
-    content: encodeText(String(form.get("content") ?? "")),
+    content: encodeText(content),
     branch: params.ref,
     ...(sha && { sha }),
   });

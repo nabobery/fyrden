@@ -1,5 +1,14 @@
 import { Form, redirect, useActionData } from "react-router";
-import { apiCall, apiGet, assertSameOrigin, signedInUser, signInUrl } from "../lib/api.server.js";
+import { Pager } from "../components/pager.js";
+import {
+  apiCall,
+  apiGet,
+  assertSameOrigin,
+  readForm,
+  signedInUser,
+  signInUrl,
+} from "../lib/api.server.js";
+import { pageLinks, pageQuery } from "../lib/pages.js";
 import type { Route } from "./+types/settings.tokens";
 
 export function meta(): Route.MetaDescriptors {
@@ -18,24 +27,31 @@ interface Token {
 
 export async function loader({ request, context }: Route.LoaderArgs) {
   if (!(await signedInUser(context, request))) throw redirect(signInUrl(request));
-  const { tokens } = await apiGet<{ tokens: Token[] }>(
+  const url = new URL(request.url);
+  const page = await apiGet<{ tokens: Token[]; next_cursor: string | null }>(
     context,
     request,
-    "/user/tokens?per_page=100",
+    `/user/tokens?${pageQuery(url, "cursor")}`,
   );
-  return { tokens, host: new URL(request.url).host };
+  return {
+    tokens: page.tokens,
+    pages: pageLinks(url, "cursor", page.next_cursor),
+    host: url.host,
+  };
 }
 
 export async function action({ request, context }: Route.ActionArgs) {
   assertSameOrigin(request);
-  const form = await request.formData();
+  const form = await readForm(request);
   if (form.get("intent") === "revoke") {
-    await apiCall(
+    const revoked = await apiCall<{ detail?: string } | null>(
       context,
       request,
       "DELETE",
       `/user/tokens/${encodeURIComponent(String(form.get("id")))}`,
     );
+    if (revoked.status !== 200)
+      return { error: revoked.body?.detail ?? "The token was not revoked." };
     return { revoked: true };
   }
   const scopes = form.getAll("scopes").map(String);
@@ -58,7 +74,7 @@ const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 export default function Tokens({ loaderData }: Route.ComponentProps) {
   const result = useActionData<typeof action>();
-  const { tokens, host } = loaderData;
+  const { tokens, pages, host } = loaderData;
   return (
     <main>
       <h1>Tokens</h1>
@@ -146,6 +162,7 @@ export default function Tokens({ loaderData }: Route.ComponentProps) {
           ))}
         </tbody>
       </table>
+      <Pager links={pages} label="Tokens" />
     </main>
   );
 }

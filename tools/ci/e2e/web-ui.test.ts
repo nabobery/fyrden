@@ -2,9 +2,11 @@
 // Workers under one wrangler dev (the real service binding): a person signs
 // in, creates a repository, adds a README (GitHub-flavored Markdown with a
 // Mermaid diagram) and sees it rendered, sees the commit signed and
-// verified, copies the clone URL, creates a git token and an agent. Every
-// page is checked with axe for WCAG 2.x A and AA. Needs `pnpm --filter
-// @fyrden/web build` first (turbo does it).
+// verified, copies the clone URL, edits the README into hostile Markdown that
+// stays inert, follows its relative link, downloads an archive, creates a
+// git token and an agent; no form takes a post from another origin. Every
+// page it visits is checked with axe for WCAG 2.x A and AA. Needs `pnpm
+// --filter @fyrden/web build` first (turbo does it).
 import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -162,6 +164,7 @@ describe("the web UI", () => {
     await page.goto(`${origin}/`);
     await accessible("landing");
     await page.getByRole("link", { name: "Sign in" }).first().click();
+    await accessible("sign-in");
     await page.getByLabel(/personal access token/i).fill(token);
     await page.getByRole("button", { name: "Sign in with the token" }).click();
     await page.getByRole("button", { name: "Not now" }).click();
@@ -206,6 +209,116 @@ describe("the web UI", () => {
     await see(page.getByText("Add README.md")).toBeVisible();
     await see(page.getByText("Verified")).toBeVisible();
     await accessible("commits");
+  });
+
+  it("edits a file into hostile Markdown that stays inert, and follows its relative link", async () => {
+    // A file in a directory for the README to link to.
+    await page.goto(`${origin}/ada/demo/edit/main/?new=1`);
+    await page.getByLabel("File name").fill("docs/guide.md");
+    await page.getByLabel("Content").fill("# Guide\n");
+    await page.getByRole("button", { name: "Commit" }).click();
+    await see(page).toHaveURL(/\/ada\/demo\/blob\/main\/docs\/guide\.md$/);
+    await accessible("file");
+    await page.goto(`${origin}/ada/demo/tree/main/docs`);
+    await see(page.getByRole("link", { name: "guide.md" })).toBeVisible();
+    await accessible("directory");
+    // The README, edited where it is.
+    await page.goto(`${origin}/ada/demo/blob/main/README.md`);
+    await page.getByRole("link", { name: "Edit" }).click();
+    await accessible("editor, an existing file");
+    await page.getByLabel("Content").fill(
+      [
+        "# Demo",
+        "",
+        "[Guide](docs/guide.md) [Bad](javascript:window.pwned=1)",
+        "",
+        '<img src=x onerror="window.pwned=2"><script>window.pwned=3</script>',
+        "",
+        "```mermaid",
+        'graph TD; A["<img src=x onerror=window.pwned=4>"]-->B',
+        'click A "javascript:window.pwned=5"',
+        "```",
+        "",
+        // A diagram's own settings may not turn HTML labels back on.
+        "```mermaid",
+        '%%{init: {"htmlLabels": true, "flowchart": {"htmlLabels": true}}}%%',
+        'graph TD; C["<img src=x onerror=window.pwned=6>"]-->D',
+        "```",
+        "",
+        "```mermaid",
+        "---",
+        "config:",
+        "  htmlLabels: true",
+        "  flowchart:",
+        "    htmlLabels: true",
+        "---",
+        'graph TD; E["<img src=x onerror=window.pwned=7>"]-->F',
+        "```",
+        "",
+      ].join("\n"),
+    );
+    await page.getByRole("button", { name: "Commit" }).click();
+    await see(page).toHaveURL(/\/ada\/demo\/blob\/main\/README\.md$/);
+    await page.goto(`${origin}/ada/demo`);
+    await see(page.locator("figure.mermaid svg")).toHaveCount(3, { timeout: 20_000 });
+    const node = page.locator("figure.mermaid g.node").first();
+    if ((await node.count()) > 0) await node.click();
+    // Nothing the README holds ran, or made an element of its own.
+    expect(await page.evaluate(() => (globalThis as { pwned?: unknown }).pwned)).toBeUndefined();
+    expect(
+      await page
+        .locator(".markdown script, .markdown img[src='x']")
+        .evaluateAll((found) =>
+          found.map((e) => (e as unknown as { outerHTML: string }).outerHTML),
+        ),
+    ).toEqual([]);
+    expect(await page.locator(".markdown a[href^='javascript']").count()).toBe(0);
+    await page.getByRole("link", { name: "Guide" }).click();
+    await see(page).toHaveURL(`${origin}/ada/demo/blob/main/docs/guide.md`);
+    await see(page.getByRole("heading", { name: "Guide", exact: true })).toBeVisible();
+  });
+
+  it("downloads an archive, and shows the repository's settings", async () => {
+    await page.goto(`${origin}/ada/demo`);
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 60_000 }),
+      page.getByRole("link", { name: "Download .zip" }).click(),
+    ]);
+    expect(download.suggestedFilename()).toMatch(/^ada-demo-[0-9a-f]{7}\.zip$/);
+    await page.goto(`${origin}/ada/demo/settings`);
+    await see(page.getByLabel("Description")).toHaveValue("A demonstration");
+    await accessible("repository settings");
+  });
+
+  it("takes no form post from another origin, and changes nothing", async () => {
+    const cookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
+    const readme = () =>
+      fetch(`${origin}/api/repos/ada/demo/readme`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((r) => r.json() as Promise<{ sha: string }>);
+    const before = await readme();
+    for (const [path, fields] of [
+      ["/?index", { name: "evil" }],
+      ["/settings/tokens", { type: "git", days: "30" }],
+      ["/settings/agents", { intent: "create-agent", handle: "evil-bot" }],
+      ["/ada/demo/settings", { intent: "delete", confirm: "demo" }],
+      ["/ada/demo/edit/main/README.md", { intent: "save", content: "pwned" }],
+    ] as const) {
+      const res = await fetch(`${origin}${path}`, {
+        method: "POST",
+        redirect: "manual",
+        headers: { Origin: "https://evil.example", Cookie: cookie },
+        body: new URLSearchParams(fields),
+      });
+      // Refused by React Router's own origin check (400) or the page's (403).
+      expect([400, 403], path).toContain(res.status);
+    }
+    const api = (path: string) =>
+      fetch(`${origin}/api${path}`, { headers: { Authorization: `Bearer ${token}` } });
+    expect((await api("/repos/ada/demo")).status).toBe(200);
+    expect((await api("/repos/ada/evil")).status).toBe(404);
+    expect((await api("/agents/evil-bot")).status).toBe(404);
+    expect((await readme()).sha).toBe(before.sha);
   });
 
   it("sends a Content Security Policy whose nonce only the page's own scripts carry", async () => {

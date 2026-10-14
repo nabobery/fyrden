@@ -54,6 +54,7 @@ export async function apiDownload(
     "X-Content-Type-Options",
     "Content-Security-Policy",
     "ETag",
+    "Retry-After",
   ]) {
     const value = res.headers.get(name);
     if (value !== null) headers.set(name, value);
@@ -135,6 +136,39 @@ export async function signedInUser(
 export function assertSameOrigin(request: Request): void {
   if (request.headers.get("Origin") !== new URL(request.url).origin)
     throw data("This form did not come from Fyrden's own page.", { status: 403 });
+}
+
+/** Bytes of a form post read at most, unless a page allows more. */
+export const FORM_MAX_BYTES = 64 * 1024;
+
+/**
+ * A form post's fields, read up to `maxBytes` (counted as the bytes arrive:
+ * a body may say any Content-Length, or none); a longer one answers 413.
+ */
+export async function readForm(request: Request, maxBytes = FORM_MAX_BYTES): Promise<FormData> {
+  const tooLarge = () => data("This form is too large.", { status: 413 });
+  if (Number(request.headers.get("Content-Length")) > maxBytes) throw tooLarge();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = request.body?.getReader();
+  for (;;) {
+    const next = await reader?.read();
+    if (!next || next.done) break;
+    size += next.value.length;
+    if (size > maxBytes) {
+      await reader?.cancel();
+      throw tooLarge();
+    }
+    chunks.push(next.value);
+  }
+  const body = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, at);
+    at += chunk.length;
+  }
+  const type = request.headers.get("Content-Type") ?? "application/x-www-form-urlencoded";
+  return new Response(body, { headers: { "Content-Type": type } }).formData();
 }
 
 /** Where to sign in and come back to `request`'s page. */

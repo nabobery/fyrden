@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import { Markdown } from "../components/markdown.js";
 import { apiGet } from "../lib/api.server.js";
-import { renderMarkdown } from "../lib/markdown.js";
+import { dirOf, renderMarkdown } from "../lib/markdown.js";
 import { type Contents, decodeText, encodePath } from "../lib/types.js";
 import type { Route } from "./+types/repo.blob";
 
@@ -31,7 +31,14 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     size: contents.type === "file" ? contents.size : null,
     target: contents.type === "symlink" ? contents.target : null,
     text: text ?? null,
-    html: text !== undefined && /\.(md|markdown)$/i.test(path) ? renderMarkdown(text) : null,
+    html:
+      text !== undefined && /\.(md|markdown)$/i.test(path)
+        ? renderMarkdown(text, {
+            base: `/${params.owner}/${params.repo}`,
+            ref: encodeURIComponent(params.ref),
+            dir: dirOf(path),
+          })
+        : null,
   };
 }
 

@@ -1,5 +1,14 @@
 import { Form, redirect, useActionData } from "react-router";
-import { apiCall, apiGet, assertSameOrigin, signedInUser, signInUrl } from "../lib/api.server.js";
+import { Pager } from "../components/pager.js";
+import {
+  apiCall,
+  apiGet,
+  assertSameOrigin,
+  readForm,
+  signedInUser,
+  signInUrl,
+} from "../lib/api.server.js";
+import { pageLinks, pageQuery } from "../lib/pages.js";
 import type { Route } from "./+types/settings.agents";
 
 export function meta(): Route.MetaDescriptors {
@@ -23,16 +32,23 @@ interface Grant {
 
 export async function loader({ request, context }: Route.LoaderArgs) {
   if (!(await signedInUser(context, request))) throw redirect(signInUrl(request));
-  const [{ agents }, { grants }] = await Promise.all([
-    apiGet<{ agents: Agent[] }>(context, request, "/agents?per_page=100"),
-    apiGet<{ grants: Grant[] }>(context, request, "/grants?per_page=100"),
+  const url = new URL(request.url);
+  type Page<K extends string, T> = Record<K, T[]> & { next_cursor: string | null };
+  const [agentPage, grantPage] = await Promise.all([
+    apiGet<Page<"agents", Agent>>(context, request, `/agents?${pageQuery(url, "agents")}`),
+    apiGet<Page<"grants", Grant>>(context, request, `/grants?${pageQuery(url, "grants")}`),
   ]);
-  return { agents, grants };
+  return {
+    agents: agentPage.agents,
+    grants: grantPage.grants,
+    agentPages: pageLinks(url, "agents", agentPage.next_cursor),
+    grantPages: pageLinks(url, "grants", grantPage.next_cursor),
+  };
 }
 
 export async function action({ request, context }: Route.ActionArgs) {
   assertSameOrigin(request);
-  const form = await request.formData();
+  const form = await readForm(request);
   const intent = form.get("intent");
   const fail = (body: unknown, fallback: string) => ({
     error: (body as { detail?: string } | null)?.detail ?? fallback,
@@ -46,13 +62,15 @@ export async function action({ request, context }: Route.ActionArgs) {
       : fail(made.body, "The agent was not created.");
   }
   if (intent === "disable-agent") {
-    await apiCall(
+    const disabled = await apiCall(
       context,
       request,
       "DELETE",
       `/agents/${encodeURIComponent(String(form.get("agent")))}`,
     );
-    return { done: "Agent disabled." };
+    return disabled.status === 200
+      ? { done: "Agent disabled." }
+      : fail(disabled.body, "The agent was not disabled.");
   }
   if (intent === "agent-token") {
     const made = await apiCall<{ token: string }>(
@@ -77,20 +95,22 @@ export async function action({ request, context }: Route.ActionArgs) {
       : fail(made.body, "The grant was not created.");
   }
   if (intent === "revoke-grant") {
-    await apiCall(
+    const revoked = await apiCall(
       context,
       request,
       "DELETE",
       `/grants/${encodeURIComponent(String(form.get("grant")))}`,
     );
-    return { done: "Grant revoked." };
+    return revoked.status === 200
+      ? { done: "Grant revoked." }
+      : fail(revoked.body, "The grant was not revoked.");
   }
   return { error: "Unknown request." };
 }
 
 export default function Agents({ loaderData }: Route.ComponentProps) {
   const result = useActionData<typeof action>();
-  const { agents, grants } = loaderData;
+  const { agents, grants, agentPages, grantPages } = loaderData;
   return (
     <main>
       <h1>Agents</h1>
@@ -142,6 +162,7 @@ export default function Agents({ loaderData }: Route.ComponentProps) {
           ))}
         </tbody>
       </table>
+      <Pager links={agentPages} label="Agents" />
       <section className="panel" aria-labelledby="new-agent">
         <h2 id="new-agent">New agent</h2>
         <Form method="post" className="row">
@@ -188,6 +209,7 @@ export default function Agents({ loaderData }: Route.ComponentProps) {
           ))}
         </tbody>
       </table>
+      <Pager links={grantPages} label="Grants" />
       <section className="panel" aria-labelledby="new-grant">
         <h2 id="new-grant">Let an agent act for you</h2>
         <Form method="post">

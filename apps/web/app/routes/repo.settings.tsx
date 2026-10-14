@@ -1,6 +1,6 @@
 import { Form, redirect, useActionData } from "react-router";
 import { RepoHeader } from "../components/repo-header.js";
-import { apiCall, apiGet, assertSameOrigin } from "../lib/api.server.js";
+import { apiCall, apiGet, assertSameOrigin, readForm } from "../lib/api.server.js";
 import type { Repo } from "../lib/types.js";
 import type { Route } from "./+types/repo.settings";
 
@@ -28,7 +28,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
 
 export async function action({ request, context, params }: Route.ActionArgs) {
   assertSameOrigin(request);
-  const form = await request.formData();
+  const form = await readForm(request);
   const path = repoPath(params.owner, params.repo);
   if (form.get("intent") === "delete") {
     if (form.get("confirm") !== params.repo)
@@ -38,12 +38,15 @@ export async function action({ request, context, params }: Route.ActionArgs) {
       return { error: removed.body?.detail ?? "The repository was not deleted." };
     return redirect("/");
   }
+  // The expiry changes only when its date does (the form shows a date, the
+  // repository keeps a moment): a date chosen is the end of that day, UTC.
   const expires = String(form.get("expires_at") ?? "");
+  const unchanged = expires === String(form.get("expires_shown") ?? "");
   const updated = await apiCall<Repo & { detail?: string }>(context, request, "PATCH", path, {
     description: String(form.get("description") ?? ""),
     default_branch: String(form.get("default_branch") ?? ""),
     is_template: form.get("is_template") === "on",
-    expires_at: expires ? Date.parse(`${expires}T00:00:00Z`) : null,
+    ...(!unchanged && { expires_at: expires ? Date.parse(`${expires}T23:59:59.999Z`) : null }),
   });
   if (updated.status !== 200)
     return { error: updated.body.detail ?? "The settings were not saved." };
@@ -74,8 +77,9 @@ export default function Settings({ loaderData }: Route.ComponentProps) {
             defaultValue={repo.default_branch}
             required
           />
-          <label htmlFor="expires_at">Delete on (optional)</label>
+          <label htmlFor="expires_at">Delete after (optional; the end of that day, UTC)</label>
           <input id="expires_at" name="expires_at" type="date" defaultValue={expires} />
+          <input type="hidden" name="expires_shown" value={expires} />
           <p>
             <input
               id="is_template"

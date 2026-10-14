@@ -1,5 +1,7 @@
 import { Form, Link, redirect, useActionData } from "react-router";
-import { apiCall, apiGet, assertSameOrigin, signedInUser } from "../lib/api.server.js";
+import { Pager } from "../components/pager.js";
+import { apiCall, apiGet, assertSameOrigin, readForm, signedInUser } from "../lib/api.server.js";
+import { pageLinks, pageQuery } from "../lib/pages.js";
 import type { Repo } from "../lib/types.js";
 import type { Route } from "./+types/_index";
 
@@ -9,14 +11,19 @@ export function meta(): Route.MetaDescriptors {
 
 export async function loader({ request, context }: Route.LoaderArgs) {
   const user = await signedInUser(context, request);
-  if (!user) return { user: null, repos: [] };
-  const { repos } = await apiGet<{ repos: Repo[] }>(context, request, "/user/repos?per_page=100");
-  return { user, repos };
+  const url = new URL(request.url);
+  if (!user) return { user: null, repos: [], pages: pageLinks(url, "cursor", null) };
+  const page = await apiGet<{ repos: Repo[]; next_cursor: string | null }>(
+    context,
+    request,
+    `/user/repos?${pageQuery(url, "cursor")}`,
+  );
+  return { user, repos: page.repos, pages: pageLinks(url, "cursor", page.next_cursor) };
 }
 
 export async function action({ request, context }: Route.ActionArgs) {
   assertSameOrigin(request);
-  const form = await request.formData();
+  const form = await readForm(request);
   const name = String(form.get("name") ?? "").trim();
   const description = String(form.get("description") ?? "").trim();
   const made = await apiCall<Repo & { detail?: string }>(context, request, "POST", "/user/repos", {
@@ -69,6 +76,7 @@ export default function Index({ loaderData }: Route.ComponentProps) {
           </tbody>
         </table>
       )}
+      <Pager links={loaderData.pages} label="Repositories" />
       <section className="panel" aria-labelledby="new-repo">
         <h2 id="new-repo">New repository</h2>
         <Form method="post">
