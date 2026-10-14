@@ -7,6 +7,7 @@ import {
   type ReadResourceResult,
   ResourceNotFoundError,
   ResourceTemplate,
+  type StandardSchemaWithJSON,
 } from "@modelcontextprotocol/server";
 import type { Hono } from "hono";
 import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
@@ -125,6 +126,53 @@ async function readFileResource(
   };
 }
 
+type JsonSchemaOf = StandardSchemaWithJSON["~standard"]["jsonSchema"]["input"];
+
+const convertedOnce = new WeakMap<StandardSchemaWithJSON, StandardSchemaWithJSON>();
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
+
+/**
+ * `schema` with its JSON Schema converted once per isolate. The SDK converts
+ * every tool's schemas again for each request (one server per request), which
+ * made `tools/list` cost 50-160 ms of CPU on Workers; validation is still
+ * the schema's own. The shared result is frozen: nothing may change it.
+ */
+export function withConvertedJsonSchema(schema: StandardSchemaWithJSON): StandardSchemaWithJSON {
+  const known = convertedOnce.get(schema);
+  if (known) return known;
+  const standard = schema["~standard"];
+  const once = (convert: JsonSchemaOf): JsonSchemaOf => {
+    const results = new Map<string, ReturnType<JsonSchemaOf>>();
+    return (options) => {
+      const key = JSON.stringify(options);
+      let result = results.get(key);
+      if (!result) {
+        result = deepFreeze(convert(options));
+        results.set(key, result);
+      }
+      return result;
+    };
+  };
+  const wrapped: StandardSchemaWithJSON = {
+    "~standard": {
+      ...standard,
+      jsonSchema: {
+        input: once(standard.jsonSchema.input),
+        output: once(standard.jsonSchema.output),
+      },
+    },
+  };
+  convertedOnce.set(schema, wrapped);
+  return wrapped;
+}
+
 /** One MCP server per request (stateless Streamable HTTP), with a tool per registry operation. */
 function buildServer(ctx: OpContext): McpServer {
   // The tools and resources are the registry's: they never change while a client is connected.
@@ -150,8 +198,8 @@ function buildServer(ctx: OpContext): McpServer {
       {
         title: op.mcp.title,
         description: op.mcp.description,
-        inputSchema: op.input,
-        outputSchema: op.output,
+        inputSchema: withConvertedJsonSchema(op.input),
+        outputSchema: withConvertedJsonSchema(op.output),
         annotations: mcpAnnotations(op),
       },
       (args: unknown) => runTool(op, ctx, args),

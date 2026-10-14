@@ -1,8 +1,14 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { mcpTools, registry } from "@fyrden/api-contract";
+import {
+  createMcpHandler,
+  McpServer,
+  type StandardSchemaWithJSON,
+} from "@modelcontextprotocol/server";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { withConvertedJsonSchema } from "../src/mcp/mount.js";
 import { api, user } from "./helpers/api.js";
 import { createRepo } from "./helpers/git-http.js";
 import { principalWithToken } from "./helpers/principals.js";
@@ -90,6 +96,88 @@ describe("MCP endpoint", () => {
         outputSchema: want.outputSchema,
       });
     }
+  });
+
+  it("converts each tool's schemas once per isolate, and still validates with them", async () => {
+    const tool = (name: string) => {
+      const found = registry.find((o) => o.mcp && o.mcp.tool === name);
+      if (!found) throw new Error(`no ${name} tool`);
+      return found;
+    };
+    const op = tool("whoami");
+    const schema = withConvertedJsonSchema(op.input);
+    expect(withConvertedJsonSchema(op.input)).toBe(schema);
+    const options = { target: "draft-2020-12" } as const;
+    const first = schema["~standard"].jsonSchema.input(options);
+    expect(schema["~standard"].jsonSchema.input(options)).toBe(first);
+    expect(first).toEqual(op.input["~standard"].jsonSchema.input(options));
+    // Shared by every request: frozen, so no request can change another's.
+    expect(Object.isFrozen(first)).toBe(true);
+    const checked = await withConvertedJsonSchema(tool("get_repo").input)["~standard"].validate({
+      owner: 1,
+    });
+    expect(checked.issues?.length).toBeGreaterThan(0);
+    // And the listing is the same on every request.
+    const again = async () =>
+      JSON.stringify(await result<{ tools: unknown[] }>(await rpc("tools/list")));
+    expect(await again()).toBe(await again());
+  });
+
+  it("lists tools without converting a schema again, across servers (the SDK uses the memo)", async () => {
+    const conversions = { input: 0, output: 0 };
+    const counting: StandardSchemaWithJSON = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: (value) => ({ value }),
+        jsonSchema: {
+          input: () => {
+            conversions.input++;
+            return { type: "object", properties: {} };
+          },
+          output: () => {
+            conversions.output++;
+            return { type: "object", properties: {} };
+          },
+        },
+      },
+    };
+    const schema = withConvertedJsonSchema(counting);
+    // One server per request, as the endpoint builds them.
+    const list = async () => {
+      const server = new McpServer({ name: "t", version: "0" }, { capabilities: { tools: {} } });
+      server.registerTool("t", { inputSchema: schema, outputSchema: schema }, () => ({
+        content: [],
+        structuredContent: {},
+      }));
+      const res = await createMcpHandler(() => server).fetch(
+        new Request("https://fyrden.test/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            "MCP-Protocol-Version": "2026-07-28",
+            "Mcp-Method": "tools/list",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/list",
+            params: {
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": { name: "t", version: "0" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+              },
+            },
+          }),
+        }),
+      );
+      return result<{ tools: { name: string }[] }>(res);
+    };
+    expect((await list()).tools.map((t) => t.name)).toEqual(["t"]);
+    expect((await list()).tools.map((t) => t.name)).toEqual(["t"]);
+    expect(conversions).toEqual({ input: 1, output: 1 });
   });
 
   it("answers a tool that throws with a generic error and logs it redacted", async () => {
