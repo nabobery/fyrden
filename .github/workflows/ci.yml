@@ -133,10 +133,12 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          version: "0.12.21"
-          enable-cache: false
+      - name: uv (pinned and hash-checked, from PyPI)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/uv"
+          "$RUNNER_TEMP/uv/bin/pip" install --quiet --require-hashes --no-deps \
+            -r tools/ci/schemathesis/uv-requirements.txt
+          echo "$RUNNER_TEMP/uv/bin" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
       - name: MCP conformance
         run: pnpm --filter @fyrden/ci-tools test:conformance
