@@ -33,6 +33,7 @@ import {
   pushCommitter,
 } from "./commit.js";
 import { pushIndexEnv } from "./index-env.js";
+import { ACCESS_LOST } from "./reauthorize.js";
 import {
   INLINE_CURSOR_BYTES,
   PushCursorStore,
@@ -162,7 +163,9 @@ export class RepoPush {
    * branch the push sets as it commits, as an import's), and a stamp of
    * what they were checked against (the rulesets' version, HEAD, the
    * pusher's effective role), which `restamp` takes again: the commit is
-   * refused when it differs then.
+   * refused when it differs then, and when that role does not allow
+   * writing (`writable`: an agent whose owner lost access since the last
+   * check writes no more than its owner could).
    */
   rules:
     | {
@@ -177,6 +180,7 @@ export class RepoPush {
         }) => Promise<{
           stamp: string;
           restamp: () => string;
+          writable: boolean;
           refusals: ReadonlyMap<number, string>;
         }>;
       }
@@ -439,7 +443,9 @@ export class RepoPush {
 
     const committed: CommittedTransaction[] = [];
     const merged: TailMergeOutcome[] = [];
-    let rulesStamp: { readonly stamp: string; readonly restamp: () => string } | undefined;
+    let rulesStamp:
+      | { readonly stamp: string; readonly restamp: () => string; readonly writable: boolean }
+      | undefined;
     const rules = this.rules;
     const outcome = await this.git.locks.withLock(
       LOCK_REF_COMMIT,
@@ -481,12 +487,17 @@ export class RepoPush {
             lock,
             committed,
             this.#capGate(uploadId, merged),
-            // In the commit's transaction: the rulesets checked are still the current ones.
+            // In the commit's transaction: the pusher's effective role still
+            // allows writing, and the rulesets checked are still the current ones.
             () =>
               this.frozen?.() ??
-              (rulesStamp !== undefined && rulesStamp.restamp() !== rulesStamp.stamp
-                ? RULESETS_CHANGED
-                : undefined),
+              (rulesStamp === undefined
+                ? undefined
+                : !rulesStamp.writable
+                  ? ACCESS_LOST
+                  : rulesStamp.restamp() !== rulesStamp.stamp
+                    ? RULESETS_CHANGED
+                    : undefined),
           ),
         });
         return { plan, indexed, result };

@@ -8,7 +8,9 @@ import type { Ruleset } from "@fyrden/domain";
 import { oidFromHex } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
+import type { RepoDO } from "../src/do/RepoDO.js";
 import { checkPushRules, MAX_REFUSAL_BYTES, refusalOf } from "../src/do/repo/push-rules.js";
+import { ACCESS_LOST } from "../src/git/push/reauthorize.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { principalWithToken, scopedToken } from "./helpers/principals.js";
 import { holdAfterRunPush, type PushTarget, postPush } from "./helpers/push.js";
@@ -177,6 +179,58 @@ describe("rulesets", () => {
       pushBody([{ old: fx.c2, new: fx.c3, ref: "refs/heads/main" }], { pack: fx.packC3ThinOnC2 }),
     );
     expect(byHuman.report).toContain("ok refs/heads/main\n");
+  });
+
+  it("refuse an agent whose owner lost access after the last check, at the commit", async () => {
+    const alice = await user();
+    await api("PUT", `${path}/collaborators/${alice.handle}`, owner.token, { permission: "push" });
+    // Alice's agent, a writer of the repository itself (agents are granted in the account's object).
+    const agent = await principalWithToken("agent", "pat", { owner: alice.principalId });
+    const granted = await env.ORG.getByName(owner.principalId).setCollaborator(
+      { principalId: owner.principalId },
+      repo.id,
+      { id: agent.principalId, handle: agent.principalId.toLowerCase().replace("_", "-") },
+      "write",
+    );
+    if (!granted.ok) throw new Error(granted.error);
+    await env.REPO.getByName(repo.id).invalidateAcl(
+      owner.principalId,
+      granted.epochGen,
+      granted.version,
+    );
+    // Alice is removed after the Worker's last check, just before the object commits.
+    let removed = 0;
+    const hold = (stub: DurableObjectStub<RepoDO>) =>
+      new Proxy(stub, {
+        get(target, property) {
+          if (property === "finalizePush")
+            return async (...args: Parameters<RepoDO["finalizePush"]>) => {
+              removed = (await api("DELETE", `${path}/collaborators/${alice.handle}`, owner.token))
+                .status;
+              return target.finalizePush(...args);
+            };
+          const value: unknown = Reflect.get(target, property);
+          return typeof value === "function"
+            ? (...args: unknown[]) => Reflect.apply(value, target, args)
+            : value;
+        },
+      });
+    const REPO = new Proxy(env.REPO, {
+      get(target, property) {
+        if (property === "getByName") return (name: string) => hold(target.getByName(name));
+        const value = (target as unknown as Record<PropertyKey, unknown>)[property];
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const before = await refs();
+    const reply = await postPush(
+      await target(agent, await scopedToken(agent.principalId, [], "git")),
+      pushBody([{ old: fx.c2, new: fx.c3, ref: "refs/heads/main" }], { pack: fx.packC3ThinOnC2 }),
+      { bindings: { REPO } },
+    );
+    expect(removed).toBeLessThan(300);
+    expect(reply.report).toContain(`ng refs/heads/main ${ACCESS_LOST}\n`);
+    expect(await refs()).toEqual(before);
   });
 
   it("fail a whole atomic push when one ref is refused", async () => {

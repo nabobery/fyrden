@@ -875,6 +875,9 @@ export class RepoDO extends MigratingDO {
         return {
           stamp,
           restamp: () => this.#ruleSnapshot(input.principal, ceilings).stamp,
+          writable:
+            snapshot.role !== null &&
+            REPO_ROLES.indexOf(snapshot.role) >= REPO_ROLES.indexOf("write"),
           refusals,
         };
       },
