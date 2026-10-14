@@ -1,5 +1,13 @@
 import { makeProblem, mcpAnnotations, type OperationDef, registry } from "@fyrden/api-contract";
-import { type CallToolResult, createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import {
+  type CallToolResult,
+  createMcpHandler,
+  McpServer,
+  ProtocolError,
+  type ReadResourceResult,
+  ResourceNotFoundError,
+  ResourceTemplate,
+} from "@modelcontextprotocol/server";
 import type { Hono } from "hono";
 import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
 import { problem } from "../http/problem.js";
@@ -40,9 +48,101 @@ function toolResult(result: Awaited<ReturnType<typeof executeOperation>>): CallT
   return { content: [{ type: "text", text: JSON.stringify(output) }], structuredContent: output };
 }
 
+/** A repository file's resource URI: its default branch's version. */
+export const FILE_RESOURCE_TEMPLATE = "fyrden://repos/{owner}/{repo}/files/{+path}";
+
+const getContentsOp = (registry as readonly OperationDef[]).find(
+  (op) => op.id === "repos.contents.get",
+);
+
+/** The bytes as text, when they are UTF-8 without NUL bytes (as git counts text). */
+function asText(bytes: Uint8Array): string | undefined {
+  if (bytes.includes(0)) return undefined;
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Reads a repository file as a resource through the `repos.contents.get`
+ * operation, so it is authorized exactly as the tool and REST are: text
+ * for UTF-8 files, a blob otherwise, a directory's entries as JSON.
+ */
+async function readFileResource(
+  ctx: OpContext,
+  uri: URL,
+  variables: Record<string, string | string[]>,
+): Promise<ReadResourceResult> {
+  const one = (name: string) => {
+    const value = variables[name];
+    return Array.isArray(value) ? value.join("/") : (value ?? "");
+  };
+  if (!getContentsOp) throw new Error("repos.contents.get is not registered");
+  const result = await executeOperation(getContentsOp, operationHandler(getContentsOp), ctx, {
+    owner: one("owner"),
+    repo: one("repo"),
+    path: decodeURIComponent(one("path")),
+  });
+  if (!result.ok) {
+    // Missing and not visible look the same, as over REST.
+    if (result.problem.status === 404) throw new ResourceNotFoundError(uri.href);
+    throw new ProtocolError(-32603, result.problem.detail ?? "The resource could not be read.");
+  }
+  const contents = result.output as
+    | { type: "file"; encoding: "base64" | "none"; content: string; download_url: string }
+    | { type: "dir"; entries: unknown[]; next_cursor: string | null }
+    | { type: string };
+  if (contents.type === "dir")
+    return {
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "application/json",
+          text: JSON.stringify(contents),
+        },
+      ],
+    };
+  if (contents.type === "file" && "encoding" in contents) {
+    if (contents.encoding === "none")
+      throw new ProtocolError(
+        -32603,
+        `The file is too large for a resource; read it at ${contents.download_url}.`,
+      );
+    const bytes = Uint8Array.from(atob(contents.content), (ch) => ch.charCodeAt(0));
+    const text = asText(bytes);
+    return {
+      contents: [
+        text === undefined
+          ? { uri: uri.href, mimeType: "application/octet-stream", blob: contents.content }
+          : { uri: uri.href, mimeType: "text/plain", text },
+      ],
+    };
+  }
+  return {
+    contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(contents) }],
+  };
+}
+
 /** One MCP server per request (stateless Streamable HTTP), with a tool per registry operation. */
 function buildServer(ctx: OpContext): McpServer {
-  const server = new McpServer({ name: "fyrden", version: API_VERSION });
+  // The tools and resources are the registry's: they never change while a client is connected.
+  const server = new McpServer(
+    { name: "fyrden", version: API_VERSION },
+    { capabilities: { tools: { listChanged: false }, resources: { listChanged: false } } },
+  );
+  // Repository files as resources (not enumerable: a client names the file it wants).
+  server.registerResource(
+    "repository-file",
+    new ResourceTemplate(FILE_RESOURCE_TEMPLATE, { list: undefined }),
+    {
+      title: "Repository file",
+      description:
+        "A file (or a directory's entries) on a repository's default branch: fyrden://repos/{owner}/{repo}/files/{path}.",
+    },
+    (uri, variables) => readFileResource(ctx, uri, variables),
+  );
   for (const op of registry as readonly OperationDef[]) {
     if (!op.mcp) continue;
     server.registerTool(
@@ -60,6 +160,35 @@ function buildServer(ctx: OpContext): McpServer {
   return server;
 }
 
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * Whether a request's `Origin` (a browser's) may reach the MCP server: none
+ * (a native client), a loopback one, a workers.dev name of the
+ * deployment's Workers, or a host `FYRDEN_OWN_HOSTS` lists (its custom
+ * domains). The request's own `Host` is not trusted for this: a
+ * DNS-rebinding page names itself in both (the MCP spec asks servers to
+ * check `Origin`).
+ */
+export function mcpOriginAllowed(env: object, origin: string | undefined): boolean {
+  if (origin === undefined) return true;
+  let host: string;
+  try {
+    host = new URL(origin).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (LOOPBACK.has(host) || /^fyrden-(api|web)\.[a-z0-9-]+\.workers\.dev$/.test(host)) return true;
+  const listed = (env as { FYRDEN_OWN_HOSTS?: unknown }).FYRDEN_OWN_HOSTS;
+  return (
+    typeof listed === "string" &&
+    listed
+      .split(",")
+      .map((h) => h.trim().toLowerCase())
+      .includes(host)
+  );
+}
+
 /**
  * MCP over Streamable HTTP at /mcp. Authentication runs first, in the same
  * middleware as REST; a 401 points clients at the resource's metadata
@@ -68,6 +197,12 @@ function buildServer(ctx: OpContext): McpServer {
 export function mountMcp(app: Hono<{ Bindings: Env; Variables: AuthVariables }>): void {
   // Read-mode verification: tools/list and read tools use the isolate cache;
   // the executor re-verifies on the D1 primary before any write tool runs.
+  // A browser's request from another site (DNS rebinding) is refused before anything else.
+  app.all(MCP_PATH, async (c, next) => {
+    if (!mcpOriginAllowed(c.env, c.req.header("Origin")))
+      return problem(c, 403, "origin_not_allowed", "Requests from this origin are not accepted.");
+    await next();
+  });
   app.all(MCP_PATH, requireAuth("read", "mcp"), async (c) => {
     const ctx = opContext(c);
     const auth = c.get("auth");

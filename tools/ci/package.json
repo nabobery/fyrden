@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run -c vitest.e2e.config.ts",
-    "test:interop": "vitest run -c vitest.interop.config.ts"
+    "test:interop": "vitest run -c vitest.interop.config.ts",
+    "test:conformance": "vitest run -c vitest.conformance.config.ts"
   },
   "devDependencies": {
     "@fyrden/testing": "workspace:*",

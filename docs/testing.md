@@ -11,6 +11,7 @@
 | Local end to end | both Workers under one `wrangler dev`, with the real service binding | Node driving workerd | `pnpm turbo run test:e2e` |
 | Smoke | a deployed instance | Node | `node tools/ci/src/smoke.ts <api-url> <web-url>` |
 | Git interoperability | `tools/ci/interop`: real git (and JGit) against `fyrden-api` under `wrangler dev` | Node driving git and workerd | `pnpm --filter @fyrden/ci-tools test:interop` |
+| MCP conformance | `tools/ci/conformance`: the MCP conformance suite (pinned version, the 2026-07-28 requirement set) against `fyrden-api` under `wrangler dev`, with a per-check baseline of known failures, and the authorization server metadata scenario | Node driving the suite (needs network for `npx`) | `pnpm --filter @fyrden/ci-tools test:conformance` |
 | Parser fuzzing | `packages/git-core/fuzz` | Node (Vitest), time-boxed | `pnpm --filter @fyrden/git-core fuzz` |
 | Mutation testing | `packages/git-core`, one `src/` directory per run | Stryker | `FYRDEN_MUTATION_SCOPE=<scope> pnpm --filter @fyrden/git-core mutation` |
 
@@ -213,6 +214,19 @@ jars (JGit 7.8.0 and its three runtime dependencies) come from Maven Central,
 pinned with their SHA-256 in `jgit/jars.txt` and fetched by
 `jgit/fetch-jars.sh`. `jgit.test.ts` runs nightly with the current git; set
 `FYRDEN_JGIT_CLASSPATH` to run it locally.
+
+## MCP conformance
+
+`tools/ci/conformance/mcp.test.ts` runs the MCP conformance suite's server
+scenarios for the 2026-07-28 revision (`--requirements 2026-07-28`) against a
+local `fyrden-api`, through a proxy that adds a token (the suite sends none and
+Fyrden's MCP server takes no anonymous request). Known failures are listed one
+check at a time in `mcp-expected-failures.yml`: checks that need the suite's
+own fixture tools, resources and prompts, and features Fyrden does not offer
+(prompts, completion, the tasks extension, tools that ask for input). A new
+failure, or a listed check that starts passing, fails the run; update the
+baseline in the same change. The authorization code grant scenario needs a
+person to sign in and consent, so it is not run here.
 
 ## Fuzzing
 

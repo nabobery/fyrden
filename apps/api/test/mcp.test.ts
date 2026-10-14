@@ -3,6 +3,7 @@ import { env, exports } from "cloudflare:workers";
 import { mcpTools, registry } from "@fyrden/api-contract";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { api, user } from "./helpers/api.js";
 import { createRepo } from "./helpers/git-http.js";
 import { principalWithToken } from "./helpers/principals.js";
 import { logs } from "./setup/log-capture.js";
@@ -31,7 +32,9 @@ async function rpc(
       Accept: "application/json, text/event-stream",
       "MCP-Protocol-Version": "2026-07-28",
       "Mcp-Method": method,
+      // The tool or resource the request names (2026-07-28 routes on it).
       ...(typeof params.name === "string" && { "Mcp-Name": params.name }),
+      ...(typeof params.uri === "string" && { "Mcp-Name": params.uri }),
     },
     // 2026-07-28 is stateless: every request carries its own envelope in _meta.
     body: JSON.stringify({
@@ -125,6 +128,53 @@ describe("MCP endpoint", () => {
     }>(res);
     expect(call.isError ?? false).toBe(false);
     expect(call.structuredContent).toMatchObject({ id: principalId, type: "agent" });
+  });
+});
+
+describe("MCP origins", () => {
+  it("refuse a browser request from another site (DNS rebinding), not a native client's", async () => {
+    const send = (origin?: string) =>
+      exports.default.fetch("https://fyrden.test/mcp", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          ...(origin !== undefined && { Origin: origin }),
+        },
+        body: "{}",
+      });
+    expect((await send("http://evil.example.com")).status).toBe(403);
+    expect((await send("http://127.0.0.1:6274")).status).not.toBe(403);
+    expect((await send()).status).not.toBe(403);
+  });
+});
+
+describe("MCP resources", () => {
+  it("serve a repository's files through the same authorization as the tools", async () => {
+    const owner = await user();
+    const name = `r${Date.now()}`;
+    await api("POST", "/user/repos", owner.token, { name });
+    await api("PUT", `/repos/${owner.handle}/${name}/contents/docs/hello.md`, owner.token, {
+      message: "add",
+      content: btoa("# Hello\n"),
+    });
+    const as = `Bearer ${owner.token}`;
+    const templates = await result<{ resourceTemplates: { uriTemplate: string }[] }>(
+      await rpc("resources/templates/list", {}, as),
+    );
+    expect(templates.resourceTemplates.map((t) => t.uriTemplate)).toContain(
+      "fyrden://repos/{owner}/{repo}/files/{+path}",
+    );
+    const uri = `fyrden://repos/${owner.handle}/${name}/files/docs/hello.md`;
+    const read = await result<{ contents: { uri: string; text?: string; mimeType: string }[] }>(
+      await rpc("resources/read", { uri }, as),
+    );
+    expect(read.contents).toEqual([{ uri, mimeType: "text/plain", text: "# Hello\n" }]);
+    // Someone else's: not found, as over REST.
+    const stranger = await user();
+    const hidden = await (await rpc("resources/read", { uri }, `Bearer ${stranger.token}`)).text();
+    expect(hidden).toContain("Resource not found");
   });
 });
 
