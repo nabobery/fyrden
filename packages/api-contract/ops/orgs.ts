@@ -1,6 +1,7 @@
 import { HANDLE_PATTERN } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation, INSTANCE_ADMIN } from "../src/op.js";
+import { NewHandle } from "./admin.js";
 
 const Handle = z
   .string()
@@ -29,7 +30,9 @@ export const createOrg = defineOperation({
   description:
     "Creates an organization with a user as its first owner. Instance administrators only.",
   input: z.object({
-    login: Handle.describe("The organization's handle; unique across users and organizations."),
+    login: NewHandle.describe(
+      "The organization's handle; unique across users and organizations; not reserved.",
+    ),
     admin: UserParam.describe("The handle of the user who becomes its first owner."),
   }),
   output: Org,

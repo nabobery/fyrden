@@ -179,7 +179,7 @@ export type UsersTokensRevokeOutput = {
 
 /** Input of `admin.users.create`: Create a user. */
 export type AdminUsersCreateInput = {
-  /** 1-39 letters, digits and single inner hyphens; unique, ignoring case. */
+  /** 1-39 letters, digits and single inner hyphens; unique, ignoring case; not reserved. */
   handle: string;
 };
 
@@ -217,7 +217,7 @@ export type AdminTokensCreateOutput = {
 
 /** Input of `agents.create`: Create an agent. */
 export type AgentsCreateInput = {
-  /** 1-39 letters, digits and single inner hyphens; unique among all handles, ignoring case. */
+  /** 1-39 letters, digits and single inner hyphens; unique among all handles, ignoring case; not reserved. */
   handle: string;
   display_name?: string;
   /** An organization you own to own the agent; you when absent. */
@@ -487,7 +487,7 @@ export type GrantsRevokeOutput = {
 
 /** Input of `admin.orgs.create`: Create an organization. */
 export type AdminOrgsCreateInput = {
-  /** The organization's handle; unique across users and organizations. */
+  /** The organization's handle; unique across users and organizations; not reserved. */
   login: string;
   /** The handle of the user who becomes its first owner. */
   admin: string;

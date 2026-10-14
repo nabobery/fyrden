@@ -9,8 +9,12 @@ const requestHandler = createRequestHandler(
   import.meta.env.MODE,
 );
 
-/** Paths fyrden-api answers: its REST and MCP surfaces, sign-in and OAuth, discovery, bootstrap. */
-const API_PREFIXES = ["/api/", "/mcp", "/oauth/", "/auth/", "/.well-known/", "/v0/"];
+/**
+ * Paths fyrden-api answers: its REST and MCP surfaces, sign-in and OAuth,
+ * discovery, bootstrap. Each is a whole first segment, which no handle may
+ * take (see `isReservedHandle`).
+ */
+export const API_PREFIXES = ["/api/", "/mcp/", "/oauth/", "/auth/", "/.well-known/", "/v0/"];
 /** git's smart HTTP and chunked upload paths under a repository. */
 const GIT_PATH = /^\/[^/]+\/[^/]+\/(info\/refs$|git-upload-pack$|git-receive-pack$|uploads\/)/;
 

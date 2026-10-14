@@ -79,6 +79,11 @@ describe("organizations", () => {
       admin: owner.handle,
     });
     expect(await outcome(again)).toEqual({ status: 409, code: "handle_taken" });
+    const reserved = await api("POST", "/admin/organizations", admin.token, {
+      login: "oauth",
+      admin: owner.handle,
+    });
+    expect(await outcome(reserved)).toEqual({ status: 422, code: "invalid_input" });
     const asUser = await api("POST", "/admin/organizations", owner.token, {
       login: uniqueId("org").slice(0, 39),
       admin: owner.handle,

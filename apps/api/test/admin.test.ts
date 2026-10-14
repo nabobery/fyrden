@@ -64,6 +64,15 @@ describe("admin.users.create", () => {
     },
   );
 
+  it.each(["api", "MCP", "settings"])(
+    "refuses %j, a handle the web origin's paths take",
+    async (handle) => {
+      const res = await call("/admin/users", adminToken, { handle });
+      expect(res.status).toBe(422);
+      expect(await res.json()).toMatchObject({ code: "invalid_input" });
+    },
+  );
+
   it("is for instance administrators only", async () => {
     const res = await call("/admin/users", userToken, { handle: freshHandle() });
     expect(res.status).toBe(403);

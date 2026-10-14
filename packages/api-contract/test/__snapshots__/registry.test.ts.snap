@@ -200,7 +200,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "type": "string",
                   },
                   "login": {
-                    "description": "The organization's handle; unique across users and organizations.",
+                    "description": "The organization's handle; unique across users and organizations; not reserved.",
                     "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
                     "type": "string",
                   },
@@ -281,7 +281,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               "schema": {
                 "properties": {
                   "handle": {
-                    "description": "1-39 letters, digits and single inner hyphens; unique, ignoring case.",
+                    "description": "1-39 letters, digits and single inner hyphens; unique, ignoring case; not reserved.",
                     "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
                     "type": "string",
                   },
@@ -649,7 +649,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "type": "string",
                   },
                   "handle": {
-                    "description": "1-39 letters, digits and single inner hyphens; unique among all handles, ignoring case.",
+                    "description": "1-39 letters, digits and single inner hyphens; unique among all handles, ignoring case; not reserved.",
                     "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
                     "type": "string",
                   },

@@ -1,7 +1,7 @@
 import { HANDLE_PATTERN, PERMISSION_NAMES } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
-import { MAX_TOKEN_DAYS } from "./admin.js";
+import { MAX_TOKEN_DAYS, NewHandle } from "./admin.js";
 import { TokenId, UserToken } from "./tokens.js";
 
 export const Agent = z.object({
@@ -27,8 +27,8 @@ export const createAgent = defineOperation({
   description:
     "Creates an agent principal owned by you, or by an organization you own (`org`). An agent acts with its own tokens and collaborator roles, or for a user under a delegation grant; either way it never exceeds its owner.",
   input: z.object({
-    handle: AgentHandle.describe(
-      "1-39 letters, digits and single inner hyphens; unique among all handles, ignoring case.",
+    handle: NewHandle.describe(
+      "1-39 letters, digits and single inner hyphens; unique among all handles, ignoring case; not reserved.",
     ),
     display_name: z.string().min(1).max(100).optional(),
     org: z

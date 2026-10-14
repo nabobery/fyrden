@@ -1,6 +1,12 @@
-import { HANDLE_PATTERN, PERMISSION_NAMES } from "@fyrden/domain";
+import { HANDLE_PATTERN, isReservedHandle, PERMISSION_NAMES } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation, INSTANCE_ADMIN } from "../src/op.js";
+
+/** A new user's, organization's or agent's handle: valid, and not one the web origin's paths take. */
+export const NewHandle = z
+  .string()
+  .regex(HANDLE_PATTERN)
+  .refine((handle) => !isReservedHandle(handle), "is reserved");
 
 /** Longest lifetime an administrator can give a token. */
 export const MAX_TOKEN_DAYS = 365;
@@ -19,10 +25,9 @@ export const createUser = defineOperation({
   summary: "Create a user",
   description: "Creates a user account. Instance administrators only.",
   input: z.object({
-    handle: z
-      .string()
-      .regex(HANDLE_PATTERN)
-      .describe("1-39 letters, digits and single inner hyphens; unique, ignoring case."),
+    handle: NewHandle.describe(
+      "1-39 letters, digits and single inner hyphens; unique, ignoring case; not reserved.",
+    ),
   }),
   output: CreatedUser,
   permission: INSTANCE_ADMIN,

@@ -1,5 +1,7 @@
+import { isReservedHandle } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
-import { isApiPath } from "../workers/app.js";
+import routes from "../app/routes.js";
+import { API_PREFIXES, isApiPath } from "../workers/app.js";
 
 describe("the web Worker's routing", () => {
   it("hands the API's paths to fyrden-api and keeps its own pages", () => {
@@ -26,7 +28,22 @@ describe("the web Worker's routing", () => {
       "/alice/repo/commits",
       "/apis",
       "/authors/x",
+      // Handles that start like an API path: their pages are the web's.
+      "/mcperson/demo",
+      "/mcp-tools/demo/tree/main",
+      "/mcpx",
     ])
       expect(isApiPath(path), path).toBe(false);
+  });
+
+  it("reserves, as handles, every name an API path or a page takes at the top", () => {
+    const names = [
+      ...API_PREFIXES.map((p) => p.replace(/^\/|\/$/g, "")),
+      ...routes.flatMap((r) => (r.path && !r.path.startsWith(":") ? [r.path.split("/")[0]] : [])),
+    ].filter((name): name is string => name !== undefined && !name.startsWith("."));
+    // The built assets the platform serves before the Worker runs.
+    names.push("assets");
+    expect(names).toContain("settings");
+    for (const name of names) expect(isReservedHandle(name), name).toBe(true);
   });
 });

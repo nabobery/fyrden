@@ -92,6 +92,10 @@ describe("agents", () => {
     // Someone else sees none of it.
     const other = await user();
     expect((await api("GET", `/agents/${agent.handle}`, other.token)).status).toBe(404);
+    // Nor takes a handle the web origin's paths take.
+    expect(
+      (await json(api("POST", "/agents", owner.token, { handle: "auth" }))).body,
+    ).toMatchObject({ code: "invalid_input" });
     // An agent makes no agents.
     expect((await api("POST", "/agents", agent.token, { handle: uniqueId("x") })).status).toBe(403);
     expect((await json(api("DELETE", `/agents/${agent.handle}`, owner.token))).body).toMatchObject({

@@ -33,6 +33,7 @@ describe("first-run bootstrap", () => {
     ["42"],
     ["{not json"],
     [{ handle: "-bad-" }],
+    [{ handle: "api" }],
     [{ handle: 7 }],
   ])("rejects the body %j with a 422 problem", async (body) => {
     const res = await bootstrap(SECRET, body);
