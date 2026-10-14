@@ -1,3 +1,10 @@
+import {
+  dohResolver,
+  guardedFetch,
+  type Resolver,
+  type SsrfPolicy,
+} from "@fyrden/adapters-cloudflare/net";
+import { ownHostsOf } from "../git/import/network.js";
 import { readBoundedBody } from "../http/body.js";
 import { clock, newId } from "../services.js";
 import { MAX_OAUTH_BODY_BYTES, NO_STORE, type OAuthContext, refuse } from "./params.js";
@@ -71,19 +78,139 @@ export function matchesRedirect(registered: readonly string[], uri: string): boo
   });
 }
 
-/** The client `clientId`, if it is registered. */
-export async function clientById(env: Env, clientId: string): Promise<OAuthClient | undefined> {
+/**
+ * How client ID metadata documents are fetched: through the outbound URL
+ * policy (public https hosts only, not this deployment's, no redirects).
+ * Tests replace it.
+ */
+export const metadataNetwork: {
+  fetch: (url: string, init: RequestInit, policy: SsrfPolicy) => Promise<Response>;
+  resolve: Resolver;
+} = { fetch: guardedFetch, resolve: dohResolver() };
+
+/** Proposed. */
+export const METADATA_POLICY = {
+  /** A fetched document is used this long before it is fetched again. */
+  cacheMs: 24 * 60 * 60 * 1000,
+  /** One that cannot be fetched again is used this long after it last was. */
+  staleMs: 7 * 24 * 60 * 60 * 1000,
+  maxBytes: 5 * 1024,
+  timeoutMs: 5000,
+};
+
+type ClientRow = {
+  client_id: string;
+  client_name: string | null;
+  redirect_uris: string;
+  fetched_at: number | null;
+};
+
+const clientOf = (row: ClientRow): OAuthClient => ({
+  clientId: row.client_id,
+  name: row.client_name,
+  redirectUris: JSON.parse(row.redirect_uris) as string[],
+});
+
+/** Whether `clientId` names a client ID metadata document: an https URL with a path. */
+export function isMetadataClientId(clientId: string): boolean {
+  if (!clientId.startsWith("https://") || clientId.length > CLIENT_POLICY.maxUriLength)
+    return false;
+  try {
+    const url = new URL(clientId);
+    return (
+      url.hash === "" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.pathname !== "/" &&
+      url.href === clientId
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The client `clientId`: a registered one, or one known by its client ID
+ * metadata document (the MCP spec's preferred way), fetched and kept for a
+ * day (a week when it cannot be fetched again). The document must name
+ * itself as its `client_id` and list valid redirect URIs; a confidential
+ * client's is refused.
+ */
+export async function clientById(
+  env: Env,
+  clientId: string,
+  requestHost: string,
+): Promise<OAuthClient | undefined> {
   const row = await env.DIRECTORY.withSession("first-primary")
-    .prepare("SELECT client_id, client_name, redirect_uris FROM oauth_clients WHERE client_id = ?")
+    .prepare(
+      "SELECT client_id, client_name, redirect_uris, fetched_at FROM oauth_clients WHERE client_id = ?",
+    )
     .bind(clientId)
-    .first<{ client_id: string; client_name: string | null; redirect_uris: string }>();
-  return row
-    ? {
-        clientId: row.client_id,
-        name: row.client_name,
-        redirectUris: JSON.parse(row.redirect_uris) as string[],
-      }
-    : undefined;
+    .first<ClientRow>();
+  if (!isMetadataClientId(clientId)) return row ? clientOf(row) : undefined;
+  const now = clock();
+  if (row?.fetched_at && row.fetched_at > now - METADATA_POLICY.cacheMs) return clientOf(row);
+  const fetched = await fetchMetadata(clientId, requestHost).catch(() => undefined);
+  if (!fetched)
+    return row?.fetched_at && row.fetched_at > now - METADATA_POLICY.staleMs
+      ? clientOf(row)
+      : undefined;
+  await env.DIRECTORY.prepare(
+    `INSERT INTO oauth_clients (client_id, kind, client_name, redirect_uris, created_at, fetched_at)
+     VALUES (?1, 'metadata_document', ?2, ?3, ?4, ?4)
+     ON CONFLICT (client_id) DO UPDATE SET client_name = excluded.client_name,
+       redirect_uris = excluded.redirect_uris, fetched_at = excluded.fetched_at`,
+  )
+    .bind(clientId, fetched.name, JSON.stringify(fetched.redirectUris), now)
+    .run();
+  return fetched;
+}
+
+/** The client a metadata document describes, if it is valid. */
+async function fetchMetadata(url: string, requestHost: string): Promise<OAuthClient | undefined> {
+  const response = await metadataNetwork.fetch(
+    url,
+    {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(METADATA_POLICY.timeoutMs),
+    },
+    { ownHosts: ownHostsOf({}, requestHost), resolve: metadataNetwork.resolve },
+  );
+  if (!response.ok) {
+    await response.body?.cancel();
+    return undefined;
+  }
+  const body = await readBoundedBody(
+    new Request(url, { method: "POST", body: response.body }),
+    METADATA_POLICY.maxBytes,
+  );
+  if (!body) return undefined;
+  let doc: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(body));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+    doc = parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+  const uris = doc.redirect_uris;
+  if (
+    doc.client_id !== url ||
+    (doc.token_endpoint_auth_method ?? "none") !== "none" ||
+    !Array.isArray(uris) ||
+    uris.length === 0 ||
+    uris.length > CLIENT_POLICY.maxRedirectUris ||
+    !uris.every((u) => typeof u === "string" && isRedirectUri(u))
+  )
+    return undefined;
+  return {
+    clientId: url,
+    name:
+      typeof doc.client_name === "string"
+        ? doc.client_name.slice(0, CLIENT_POLICY.maxNameLength)
+        : null,
+    redirectUris: uris as string[],
+  };
 }
 
 /** `POST /oauth/register`: registers a public client (RFC 7591). Rate limited per address. */

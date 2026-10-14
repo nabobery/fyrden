@@ -86,7 +86,26 @@ export async function authorizeRequest(c: OAuthContext): Promise<Response> {
     if (q.getAll(key).length > 1) return badRequest(c, `The parameter ${key} is sent twice.`);
   const clientId = q.get("client_id") ?? "";
   const redirectUri = q.get("redirect_uri") ?? "";
-  const client = clientId ? await clientById(c.env, clientId) : undefined;
+  // A signed-in user, within its rate, before anything is looked up or fetched (a client ID
+  // metadata document is fetched from its URL).
+  const user = await sessionUser(c);
+  if (!user)
+    return page(
+      c,
+      401,
+      "Sign in to Fyrden first",
+      html(
+        "<p>An application asks to use your Fyrden account. Sign in, then start again from the application.</p>",
+      ),
+    );
+  if (!(await c.env.RATE_LIMIT_WRITE.limit({ key: `authorize:${user.userId}` })).success)
+    return page(
+      c,
+      429,
+      "Too many sign-in requests",
+      html("<p>Wait a minute, then start again from the application.</p>"),
+    );
+  const client = clientId ? await clientById(c.env, clientId, new URL(c.req.url).host) : undefined;
   if (!client) return badRequest(c, "The application is not known here.");
   // Exact match (RFC 9700 §4.1.3; a loopback one with any port): the client is told nothing until this holds.
   if (!matchesRedirect(client.redirectUris, redirectUri))
@@ -107,35 +126,21 @@ export async function authorizeRequest(c: OAuthContext): Promise<Response> {
   const resource = q.get("resource") ?? "";
   if (!resourceOf(originOf(c), resource))
     return fail("invalid_target", `resource must be ${originOf(c)}/mcp or ${originOf(c)}/api.`);
+  // A client may bind the code to its DPoP key now (RFC 9449 §10).
+  const dpopJkt = q.get("dpop_jkt");
+  if (dpopJkt !== null && !/^[A-Za-z0-9_-]{43}$/.test(dpopJkt))
+    return fail("invalid_request", "dpop_jkt is not a SHA-256 JWK thumbprint.");
   const scopes = [...new Set((q.get("scope") ?? "").split(" ").filter(Boolean))];
   if (scopes.length === 0 || !scopes.every(isPermission))
     return fail("invalid_scope", "scope must name one or more Fyrden permissions.");
 
-  const user = await sessionUser(c);
-  if (!user)
-    return page(
-      c,
-      401,
-      "Sign in to Fyrden first",
-      html(
-        `<p>${escapeHtml(client.name ?? "An application")} asks to use your Fyrden account. Sign in, then start again from the application.</p>`,
-      ),
-    );
-
-  if (!(await c.env.RATE_LIMIT_WRITE.limit({ key: `authorize:${user.userId}` })).success)
-    return page(
-      c,
-      429,
-      "Too many sign-in requests",
-      html("<p>Wait a minute, then start again from the application.</p>"),
-    );
   const id = randomSecret();
   const now = clock();
   // Only while the user has fewer than its share waiting (checked in the insert).
   const inserted = await c.env.DIRECTORY.prepare(
     `INSERT INTO oauth_requests (id, user_id, client_id, redirect_uri, code_challenge, scopes,
-       resource, state, expires_at)
-     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+       resource, state, expires_at, dpop_jkt)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?12
      WHERE (SELECT count(*) FROM oauth_requests WHERE user_id = ?2 AND code_hash IS NULL
        AND expires_at > ?10) < ?11`,
   )
@@ -151,6 +156,7 @@ export async function authorizeRequest(c: OAuthContext): Promise<Response> {
       now + AUTHORIZE_POLICY.requestTtlMs,
       now,
       AUTHORIZE_POLICY.pendingPerUser,
+      dpopJkt,
     )
     .run();
   if ((inserted.meta.changes ?? 0) === 0)

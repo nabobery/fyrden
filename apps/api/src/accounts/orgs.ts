@@ -6,6 +6,7 @@ import type {
   Output,
   removeMembership,
   setMembership,
+  updateOrg,
 } from "@fyrden/api-contract";
 import { isValidHandle, type OrgRole } from "@fyrden/domain";
 import { allocateEpoch } from "../events/epochs.js";
@@ -123,4 +124,34 @@ export async function listMembersOperation(
     members: page.map((m) => ({ id: m.id, login: m.handle, role: toApiRole(m.role) })),
     next_cursor: rows.length > input.per_page && last ? encodeCursor(last.handle) : null,
   };
+}
+
+/** The `orgs.update` operation: the organization's settings, audited when they change. */
+export async function updateOrgOperation(
+  ctx: OpContext,
+  input: Input<typeof updateOrg>,
+): Promise<Output<typeof updateOrg>> {
+  const org = await orgFor(ctx, input.org, "members:write");
+  const db = ctx.env.DIRECTORY;
+  if (input.require_dpop !== undefined) {
+    const now = clock();
+    const value = input.require_dpop ? 1 : 0;
+    ctx.metrics.count("d1.query", { db: "directory", op: "org_settings" }, 2);
+    await db.batch([
+      db
+        .prepare(
+          `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
+           SELECT ?1, ?2, 'org.settings', id, json_object('require_dpop', ?3), ?4 FROM principals
+           WHERE id = ?5 AND require_dpop <> ?3`,
+        )
+        .bind(now, ctx.auth.principalId, value, ctx.requestId ?? null, org.id),
+      db.prepare("UPDATE principals SET require_dpop = ? WHERE id = ?").bind(value, org.id),
+    ]);
+  }
+  const row = await db
+    .withSession("first-primary")
+    .prepare("SELECT require_dpop FROM principals WHERE id = ?")
+    .bind(org.id)
+    .first<{ require_dpop: number }>();
+  return { login: org.handle, require_dpop: row?.require_dpop === 1 };
 }

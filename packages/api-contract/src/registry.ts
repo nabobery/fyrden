@@ -31,7 +31,7 @@ import { createFileCommit, deleteContents, putContents } from "../ops/file-write
 import { createGrant, listGrants, revokeGrant } from "../ops/grants.js";
 import { createImport, getImport } from "../ops/imports.js";
 import { listSigningKeys, whoami } from "../ops/meta.js";
-import { createOrg, listMembers, removeMembership, setMembership } from "../ops/orgs.js";
+import { createOrg, listMembers, removeMembership, setMembership, updateOrg } from "../ops/orgs.js";
 import { getOrgQuota, getUserQuota, setQuota } from "../ops/quotas.js";
 import {
   createOrgRepo,
@@ -83,6 +83,7 @@ export const registry = defineRegistry([
   listGrants,
   revokeGrant,
   createOrg,
+  updateOrg,
   createRepo,
   listRepos,
   getRepo,

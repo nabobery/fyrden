@@ -45,6 +45,13 @@ export interface TokenRecord {
    * access token is accepted only there); null for any of this deployment's.
    */
   audience: string | null;
+  /** The thumbprint of the key a DPoP-bound token is bound to (RFC 9449); null for a bearer token. */
+  dpopJkt: string | null;
+  /**
+   * Whether an acting agent's owner requires DPoP of its agents' API
+   * tokens: such a token is taken only when DPoP-bound.
+   */
+  requiresDpop: boolean;
 }
 
 export type VerifyFailure =
@@ -110,6 +117,8 @@ export interface MintInput {
   delegation?: { readonly grantId: string; readonly act: readonly string[] };
   /** The resource it is for (RFC 8707); any of this deployment's when absent. */
   audience?: string | null;
+  /** The key thumbprint a DPoP-bound token is bound to. */
+  dpopJkt?: string | null;
 }
 
 export interface AuditContext {
@@ -144,6 +153,7 @@ interface TokenRow {
   disabled_at: number | null;
   owner_id: string | null;
   owner_disabled_at: number | null;
+  owner_require_dpop: number | null;
   scopes: string;
   repo_ids: string | null;
   expires_at: number;
@@ -152,6 +162,7 @@ interface TokenRow {
   grant_id: string | null;
   act_chain: string | null;
   audience: string | null;
+  dpop_jkt: string | null;
 }
 
 /** One grant of a delegated token's chain, with its agent and the agent's owner. */
@@ -164,6 +175,7 @@ export interface GrantLink {
   agent_disabled_at: number | null;
   owner_id: string;
   owner_disabled_at: number | null;
+  owner_require_dpop: number;
 }
 
 /** A grant and its parent (a delegated token's chain), with their agents and owners. */
@@ -174,7 +186,8 @@ export async function readGrantLinks(
   const { results } = await source
     .prepare(
       `SELECT g.id, g.agent_id, g.parent_id, g.expires_at, g.revoked_at,
-              a.disabled_at AS agent_disabled_at, a.owner_id, o.disabled_at AS owner_disabled_at
+              a.disabled_at AS agent_disabled_at, a.owner_id, o.disabled_at AS owner_disabled_at,
+              o.require_dpop AS owner_require_dpop
        FROM grants g JOIN principals a ON a.id = g.agent_id
        JOIN principals o ON o.id = a.owner_id
        WHERE g.id = ?1 OR g.id = (SELECT parent_id FROM grants WHERE id = ?1)`,
@@ -185,7 +198,13 @@ export async function readGrantLinks(
 }
 
 /** What a delegated token's grants add to its record, or undefined when the chain no longer holds. */
-export type Delegation = { act: string[]; grantId: string; ceilingIds: string[] };
+export type Delegation = {
+  act: string[];
+  grantId: string;
+  ceilingIds: string[];
+  /** Whether an acting agent's owner requires DPoP. */
+  requiresDpop: boolean;
+};
 
 function toRecord(
   row: TokenRow,
@@ -207,6 +226,8 @@ function toRecord(
     grantId: delegation?.grantId ?? null,
     ceilingIds: delegation?.ceilingIds ?? (row.owner_id === null ? [] : [row.owner_id]),
     audience: row.audience,
+    dpopJkt: row.dpop_jkt,
+    requiresDpop: delegation ? delegation.requiresDpop : row.owner_require_dpop === 1,
   };
 }
 
@@ -246,7 +267,12 @@ export function delegationOf(
   );
   if (!live || act.length !== chain.length) return undefined;
   if (chain.some((l, i) => l.agent_id !== act[i])) return undefined;
-  return { act, grantId, ceilingIds: chain.map((l) => l.owner_id) };
+  return {
+    act,
+    grantId,
+    ceilingIds: chain.map((l) => l.owner_id),
+    requiresDpop: chain.some((l) => l.owner_require_dpop === 1),
+  };
 }
 
 /**
@@ -306,7 +332,8 @@ export class D1TokenStore {
       this.db
         .prepare(
           `INSERT INTO tokens (id, token_hash, type, principal_id, scopes, repo_ids, expires_at,
-             created_at, grant_id, act_chain, audience) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             created_at, grant_id, act_chain, audience, dpop_jkt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           id,
@@ -320,6 +347,7 @@ export class D1TokenStore {
           delegation?.grantId ?? null,
           delegation ? JSON.stringify(delegation.act) : null,
           input.audience ?? null,
+          input.dpopJkt ?? null,
         ),
       auditStatement(this.db, now, input.audit, "token.mint", id, {
         type: input.type,
@@ -350,9 +378,10 @@ export class D1TokenStore {
     const row = await source
       .prepare(
         `SELECT t.id, t.type, t.principal_id, p.type AS principal_type, p.handle, p.is_instance_admin,
-                p.disabled_at, p.owner_id, o.disabled_at AS owner_disabled_at, t.scopes,
+                p.disabled_at, p.owner_id, o.disabled_at AS owner_disabled_at,
+                o.require_dpop AS owner_require_dpop, t.scopes,
                 t.repo_ids, t.expires_at, t.last_used_at, t.revoked_at, t.grant_id, t.act_chain,
-                t.audience
+                t.audience, t.dpop_jkt
          FROM tokens t JOIN principals p ON p.id = t.principal_id
          LEFT JOIN principals o ON o.id = p.owner_id
          WHERE t.token_hash = ?`,

@@ -1,10 +1,12 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { METADATA_POLICY } from "./clients.js";
 
 /**
  * Prunes what the authorization server keeps past its use: answered or
  * abandoned authorization requests, expired access tokens (their mints
  * stay in the audit log), refresh token families past their end (90
- * days, Proposed) and sessions,
+ * days, Proposed), DPoP proofs past their freshness, sessions, and
+ * client ID metadata documents not fetched for longer than they may be used,
  * each a day after it expired (a code or refresh token coming back within
  * that day still revokes its family), and registrations never used within
  * a day, or unused for longer than any refresh token lives. A bounded
@@ -26,7 +28,7 @@ export async function reapOAuth(
   const before = options.now - OAUTH_REAP_POLICY.keepMs;
   const limit = OAUTH_REAP_POLICY.perRun;
   const db = env.DIRECTORY;
-  options.metrics?.count("d1.query", { db: "directory", op: "oauth_reap" }, 5);
+  options.metrics?.count("d1.query", { db: "directory", op: "oauth_reap" }, 6);
   const results = await db.batch([
     db
       .prepare(
@@ -48,6 +50,13 @@ export async function reapOAuth(
            WHERE type = 'oat' AND expires_at <= ?1 LIMIT ?2)`,
       )
       .bind(before, limit),
+    // A proof past its freshness cannot be replayed: its jti is not needed.
+    db
+      .prepare(
+        `DELETE FROM dpop_proofs WHERE rowid IN (SELECT rowid FROM dpop_proofs
+           WHERE expires_at <= ?1 LIMIT ?2)`,
+      )
+      .bind(options.now, limit),
     db
       .prepare(
         `DELETE FROM sessions WHERE rowid IN (SELECT rowid FROM sessions
@@ -57,11 +66,17 @@ export async function reapOAuth(
     db
       .prepare(
         `DELETE FROM oauth_clients WHERE rowid IN (SELECT rowid FROM oauth_clients
-           WHERE kind = 'registered' AND (
-             (last_used_at IS NULL AND created_at <= ?1) OR last_used_at <= ?2)
+           WHERE (kind = 'registered' AND (
+               (last_used_at IS NULL AND created_at <= ?1) OR last_used_at <= ?2))
+             OR (kind = 'metadata_document' AND fetched_at <= ?4)
            LIMIT ?3)`,
       )
-      .bind(before, options.now - OAUTH_REAP_POLICY.idleClientMs, limit),
+      .bind(
+        before,
+        options.now - OAUTH_REAP_POLICY.idleClientMs,
+        limit,
+        options.now - METADATA_POLICY.staleMs,
+      ),
   ]);
   return results.reduce((n, r) => n + (r.meta.changes ?? 0), 0);
 }

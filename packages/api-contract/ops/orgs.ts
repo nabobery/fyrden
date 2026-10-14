@@ -46,6 +46,34 @@ export const createOrg = defineOperation({
   },
 });
 
+export const OrgSettings = z.object({
+  login: z.string(),
+  require_dpop: z
+    .boolean()
+    .describe(
+      "Whether the organization's agents may use API tokens only DPoP-bound (RFC 9449); git tokens are exempt.",
+    ),
+});
+
+export const updateOrg = defineOperation({
+  id: "orgs.update",
+  method: "PATCH",
+  path: "/orgs/{org}",
+  summary: "Update an organization's settings",
+  description:
+    "Changes an organization's settings: whether its agents' API tokens must be DPoP-bound (`require_dpop`). Owners only.",
+  input: z.object({
+    org: OrgParam,
+    require_dpop: z.boolean().optional(),
+  }),
+  output: OrgSettings,
+  permission: "members:write",
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  mcp: false,
+});
+
 export const Membership = z.object({
   org: z.string(),
   user: z.string(),

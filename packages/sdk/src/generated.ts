@@ -399,6 +399,20 @@ export type AdminOrgsCreateOutput = {
   created_at: number;
 };
 
+/** Input of `orgs.update`: Update an organization's settings. */
+export type OrgsUpdateInput = {
+  /** The organization's handle. */
+  org: string;
+  require_dpop?: boolean;
+};
+
+/** Output of `orgs.update`. */
+export type OrgsUpdateOutput = {
+  login: string;
+  /** Whether the organization's agents may use API tokens only DPoP-bound (RFC 9449); git tokens are exempt. */
+  require_dpop: boolean;
+};
+
 /** Input of `repos.create`: Create a repository. */
 export type ReposCreateInput = {
   /** 1-100 letters, digits, '.', '_' and '-'; not '.' or '..'; must not end in '.git'. Unique per owner, ignoring case. */
@@ -2426,6 +2440,7 @@ export const OPERATIONS = {
   "grants.list": { method: "GET", path: "/grants", pathParams: [], idempotent: false, items: "grants" },
   "grants.revoke": { method: "DELETE", path: "/grants/{grant_id}", pathParams: ["grant_id"], idempotent: true },
   "admin.orgs.create": { method: "POST", path: "/admin/organizations", pathParams: [], idempotent: true },
+  "orgs.update": { method: "PATCH", path: "/orgs/{org}", pathParams: ["org"], idempotent: true },
   "repos.create": { method: "POST", path: "/user/repos", pathParams: [], idempotent: true },
   "repos.list": { method: "GET", path: "/user/repos", pathParams: [], idempotent: false, items: "repos" },
   "repos.get": { method: "GET", path: "/repos/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: false },
@@ -2519,6 +2534,8 @@ export interface Operations {
   "grants.revoke": { input: GrantsRevokeInput; output: GrantsRevokeOutput };
   /** Create an organization. Creates an organization with a user as its first owner. Instance administrators only. */
   "admin.orgs.create": { input: AdminOrgsCreateInput; output: AdminOrgsCreateOutput };
+  /** Update an organization's settings. Changes an organization's settings: whether its agents' API tokens must be DPoP-bound (`require_dpop`). Owners only. */
+  "orgs.update": { input: OrgsUpdateInput; output: OrgsUpdateOutput };
   /** Create a repository. Creates an empty private repository owned by the authenticated user. Clone and push it at `/<owner>/<name>.git`. */
   "repos.create": { input: ReposCreateInput; output: ReposCreateOutput };
   /** List your repositories. Lists the repositories the authenticated principal owns and its token can see, by name (ignoring case). A repository created a moment ago is listed; its `default_branch` can lag behind a change by a few seconds (use `GET /repos/{owner}/{repo}` for the current one). */

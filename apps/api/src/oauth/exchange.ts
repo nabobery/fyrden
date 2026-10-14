@@ -2,6 +2,7 @@ import { delegationOf, readGrantLinks } from "@fyrden/adapters-cloudflare/auth";
 import { isPermission, scopesAllow } from "@fyrden/domain";
 import { grantById } from "../accounts/delegation.js";
 import { clock, tokenStore } from "../services.js";
+import { tokenRequestProof } from "./issue.js";
 import { NO_STORE, type OAuthContext, originOf, refuse } from "./params.js";
 import { resourceOf, resourceUri } from "./resources.js";
 
@@ -65,6 +66,11 @@ export async function tokenExchange(
   if (!subject.ok || subject.record.principalType !== "agent" || subject.record.act.length > 0)
     return refuse(c, "invalid_grant", "The subject token is not a valid token of an agent's own.");
   const agent = subject.record;
+  // A proof binds the delegated token to its key; an agent whose owner requires DPoP gets none without.
+  const proof = await tokenRequestProof(c);
+  if (!proof.ok) return proof.response;
+  if (agent.requiresDpop && proof.jkt === null)
+    return refuse(c, "invalid_dpop_proof", "The agent's owner requires DPoP-bound tokens.");
 
   const now = clock();
   const grant = await grantById(c.env, grantId);
@@ -120,6 +126,7 @@ export async function tokenExchange(
     delegation: { grantId: grant.id, act },
     // Bound to one resource (RFC 8707): the one asked for, else the REST API.
     audience: resource ?? resourceUri(originOf(c), "api"),
+    dpopJkt: proof.jkt,
     audit: {
       actorId: agent.principalId,
       act,
@@ -130,7 +137,7 @@ export async function tokenExchange(
     {
       access_token: minted.token,
       issued_token_type: ACCESS_TOKEN_TYPE,
-      token_type: "Bearer",
+      token_type: proof.jkt === null ? "Bearer" : "DPoP",
       expires_in: Math.max(0, Math.floor((minted.expiresAt - clock()) / 1000)),
       scope: scopes.join(" "),
     },

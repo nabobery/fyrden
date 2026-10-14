@@ -2,6 +2,7 @@ import type { TokenRecord, VerifyMode, VerifyResult } from "@fyrden/adapters-clo
 import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { problem } from "../http/problem.js";
+import { checkProof, DPOP_ALGS, takeJti } from "../oauth/dpop.js";
 import { audienceAllows, bearerChallenge, type Resource } from "../oauth/resources.js";
 import { tokenStore } from "../services.js";
 import type { ObsVariables } from "./obs.js";
@@ -19,24 +20,58 @@ export type AuthVariables = ObsVariables & { auth: TokenRecord; authState: AuthS
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /**
- * Reads a token from `Authorization: Bearer <token>` or from the password
- * slot of Basic auth (what git clients send).
+ * Reads a token from `Authorization: Bearer <token>`, `Authorization: DPoP
+ * <token>` (a DPoP-bound token, RFC 9449) or from the password slot of
+ * Basic auth (what git clients send).
  */
-export function extractToken(header: string | undefined): string | undefined {
+export function extractCredential(
+  header: string | undefined,
+): { token: string; scheme: "bearer" | "dpop" | "basic" } | undefined {
   if (!header) return undefined;
   const [scheme, value] = header.split(" ", 2);
   if (!scheme || !value) return undefined;
-  if (scheme.toLowerCase() === "bearer") return value.trim();
-  if (scheme.toLowerCase() === "basic") {
+  const kind = scheme.toLowerCase();
+  if (kind === "bearer" || kind === "dpop") return { token: value.trim(), scheme: kind };
+  if (kind === "basic") {
     try {
       const decoded = atob(value.trim());
       const colon = decoded.indexOf(":");
-      return colon >= 0 ? decoded.slice(colon + 1) : undefined;
+      return colon >= 0 ? { token: decoded.slice(colon + 1), scheme: "basic" } : undefined;
     } catch {
       return undefined;
     }
   }
   return undefined;
+}
+
+/** The token alone (see `extractCredential`). */
+export const extractToken = (header: string | undefined): string | undefined =>
+  extractCredential(header)?.token;
+
+/**
+ * Whether a verified token is presented as it must be: a DPoP-bound one
+ * with the `DPoP` scheme and a fresh proof by its key naming this request
+ * and the token (each proof taken once); a bearer one not with the `DPoP`
+ * scheme; and, where an acting agent's owner requires DPoP, an API token
+ * only DPoP-bound (git tokens are exempt: git cannot send proofs).
+ */
+async function presentedAsBound(
+  c: Context<{ Bindings: Env; Variables: AuthVariables }>,
+  record: TokenRecord,
+  credential: { token: string; scheme: string },
+): Promise<boolean> {
+  if (record.dpopJkt === null) {
+    if (credential.scheme === "dpop") return false;
+    return !(record.requiresDpop && record.type !== "git");
+  }
+  const proof = c.req.header("DPoP");
+  if (credential.scheme !== "dpop" || !proof) return false;
+  const check = await checkProof(
+    proof,
+    { method: c.req.method, url: c.req.url, now: Date.now() },
+    credential.token,
+  );
+  return check.ok && check.jkt === record.dpopJkt && (await takeJti(c.env, check));
 }
 
 export const invalidToken = (c: Context, resource: Resource = "api") =>
@@ -46,7 +81,7 @@ export const invalidToken = (c: Context, resource: Resource = "api") =>
 
 export type Authentication =
   | { ok: true; state: AuthState }
-  | { ok: false; reason: "missing" | "rate_limited" | "invalid" };
+  | { ok: false; reason: "missing" | "rate_limited" | "invalid" | "dpop" };
 
 /**
  * Verifies the request's token in `mode`. Every attempt is rate limited per
@@ -58,8 +93,9 @@ export async function authenticate(
   c: Context<{ Bindings: Env; Variables: AuthVariables }>,
   mode: VerifyMode,
 ): Promise<Authentication> {
-  const token = extractToken(c.req.header("Authorization"));
-  if (!token) return { ok: false, reason: "missing" };
+  const credential = extractCredential(c.req.header("Authorization"));
+  if (!credential) return { ok: false, reason: "missing" };
+  const { token } = credential;
   const client = c.req.header("CF-Connecting-IP") ?? "unknown";
   if (!(await c.env.RATE_LIMIT_AUTH.limit({ key: client })).success) {
     return { ok: false, reason: "rate_limited" };
@@ -75,6 +111,7 @@ export async function authenticate(
     outcome: result.ok ? "ok" : result.reason,
   });
   if (!result.ok) return { ok: false, reason: "invalid" };
+  if (!(await presentedAsBound(c, result.record, credential))) return { ok: false, reason: "dpop" };
 
   c.set(
     "log",
@@ -122,6 +159,16 @@ export const requireAuth = (
           "Retry-After": "60",
         });
       }
+      if (auth.reason === "dpop")
+        return problem(
+          c,
+          401,
+          "invalid_dpop_proof",
+          "This token needs a valid DPoP proof (RFC 9449).",
+          {
+            "WWW-Authenticate": `DPoP algs="${DPOP_ALGS.join(" ")}", error="invalid_dpop_proof"`,
+          },
+        );
       return invalidToken(c, resource);
     }
     // A token issued for another resource (RFC 8707) is not taken here.

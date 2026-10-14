@@ -1,5 +1,6 @@
 import { generateToken, hashToken, secureRandomBytes } from "@fyrden/domain";
 import { clock, newId } from "../services.js";
+import { checkProof, takeJti } from "./dpop.js";
 import { base64url, NO_STORE, type OAuthContext, originOf, refuse, sha256Hex } from "./params.js";
 import { resourceOf } from "./resources.js";
 
@@ -27,6 +28,8 @@ interface Issued {
   readonly access: string;
   readonly refresh: string;
   readonly scopes: readonly string[];
+  /** Whether the access token is DPoP-bound (its type is then `DPoP`). */
+  readonly bound: boolean;
 }
 
 /**
@@ -49,6 +52,9 @@ async function issueStatements(
     readonly now: number;
     readonly requestId: string | undefined;
     readonly via: "authorization_code" | "refresh_token";
+    /** The DPoP key the access token is bound to, and the refresh token's (its family's). */
+    readonly accessJkt: string | null;
+    readonly refreshJkt: string | null;
   },
   when: string,
 ): Promise<{ statements: D1PreparedStatement[]; issued: Issued }> {
@@ -58,7 +64,7 @@ async function issueStatements(
   const scopes = JSON.stringify(grant.scopes);
   // ?1 access id, ?2 its hash, ?3 user, ?4 scopes, ?5 its expiry, ?6 resource, ?7 client,
   // ?8 family, ?9 refresh hash, ?10 claim, ?11 now, ?12 refresh id, ?13 its expiry, ?14 request id,
-  // ?15 the family's end.
+  // ?15 the family's end, ?16 the access token's DPoP key, ?17 the refresh token's.
   const args = [
     accessId,
     await hashToken(access),
@@ -75,21 +81,23 @@ async function issueStatements(
     Math.min(grant.now + ISSUE_POLICY.refreshTokenTtlMs, grant.familyExpiresAt),
     grant.requestId ?? null,
     grant.familyExpiresAt,
+    grant.accessJkt,
+    grant.refreshJkt,
   ] as const;
   const statements = [
     db
       .prepare(
         `INSERT INTO tokens (id, token_hash, type, principal_id, scopes, expires_at, created_at,
-           audience, client_id, family_id)
-         SELECT ?1, ?2, 'oat', ?3, ?4, ?5, ?11, ?6, ?7, ?8 WHERE ${when}`,
+           audience, client_id, family_id, dpop_jkt)
+         SELECT ?1, ?2, 'oat', ?3, ?4, ?5, ?11, ?6, ?7, ?8, ?16 WHERE ${when}`,
       )
       // Exactly as many as the statement numbers (D1 checks the count).
-      .bind(...args.slice(0, 11)),
+      .bind(...args.slice(0, 16)),
     db
       .prepare(
         `INSERT INTO refresh_tokens (id, token_hash, family_id, user_id, client_id, scopes,
-           resource, created_at, expires_at, family_expires_at)
-         SELECT ?12, ?9, ?8, ?3, ?7, ?4, ?6, ?11, ?13, ?15 WHERE ${when}`,
+           resource, created_at, expires_at, family_expires_at, dpop_jkt)
+         SELECT ?12, ?9, ?8, ?3, ?7, ?4, ?6, ?11, ?13, ?15, ?17 WHERE ${when}`,
       )
       .bind(...args),
     db
@@ -101,14 +109,17 @@ async function issueStatements(
       )
       .bind(...args.slice(0, 14)),
   ];
-  return { statements, issued: { access, refresh, scopes: grant.scopes } };
+  return {
+    statements,
+    issued: { access, refresh, scopes: grant.scopes, bound: grant.accessJkt !== null },
+  };
 }
 
 function tokenResponse(c: OAuthContext, issued: Issued, now: number): Response {
   return c.json(
     {
       access_token: issued.access,
-      token_type: "Bearer",
+      token_type: issued.bound ? "DPoP" : "Bearer",
       expires_in: Math.floor((now + ISSUE_POLICY.accessTokenTtlMs - clock()) / 1000),
       refresh_token: issued.refresh,
       scope: issued.scopes.join(" "),
@@ -116,6 +127,22 @@ function tokenResponse(c: OAuthContext, issued: Issued, now: number): Response {
     200,
     NO_STORE,
   );
+}
+
+/**
+ * The request's DPoP proof, checked for this token request and taken once:
+ * its key's thumbprint; null without one; a refusal for a bad or replayed one.
+ */
+export async function tokenRequestProof(
+  c: OAuthContext,
+): Promise<{ ok: true; jkt: string | null } | { ok: false; response: Response }> {
+  const proof = c.req.header("DPoP");
+  if (proof === undefined) return { ok: true, jkt: null };
+  const check = await checkProof(proof, { method: "POST", url: c.req.url, now: clock() });
+  if (!check.ok) return { ok: false, response: refuse(c, "invalid_dpop_proof", check.reason) };
+  if (!(await takeJti(c.env, check)))
+    return { ok: false, response: refuse(c, "invalid_dpop_proof", "The proof was used before.") };
+  return { ok: true, jkt: check.jkt };
 }
 
 async function userEnabled(env: Env, userId: string): Promise<boolean> {
@@ -163,7 +190,7 @@ export async function codeGrant(c: OAuthContext, params: Map<string, string>): P
     .withSession("first-primary")
     .prepare(
       `SELECT id, user_id, client_id, redirect_uri, code_challenge, scopes, resource,
-         code_expires_at, used_at, family_id
+         code_expires_at, used_at, family_id, dpop_jkt
        FROM oauth_requests WHERE code_hash = ?`,
     )
     .bind(await sha256Hex(code))
@@ -178,6 +205,7 @@ export async function codeGrant(c: OAuthContext, params: Map<string, string>): P
       code_expires_at: number;
       used_at: number | null;
       family_id: string | null;
+      dpop_jkt: string | null;
     }>();
   const now = clock();
   if (!row) return refuse(c, "invalid_grant", "The code is not valid.");
@@ -198,6 +226,11 @@ export async function codeGrant(c: OAuthContext, params: Map<string, string>): P
     return refuse(c, "invalid_target", "resource differs from the one the code was issued for.");
   if (!(await userEnabled(c.env, row.user_id)))
     return refuse(c, "invalid_grant", "The user is disabled.");
+  // A proof binds the tokens to its key; a code bound at authorization takes only that key's.
+  const proof = await tokenRequestProof(c);
+  if (!proof.ok) return proof.response;
+  if (row.dpop_jkt !== null && proof.jkt !== row.dpop_jkt)
+    return refuse(c, "invalid_dpop_proof", "The code is bound to another DPoP key.");
 
   const claim = crypto.randomUUID();
   const family = crypto.randomUUID();
@@ -215,6 +248,8 @@ export async function codeGrant(c: OAuthContext, params: Map<string, string>): P
       now,
       requestId: c.get("requestId"),
       via: "authorization_code",
+      accessJkt: proof.jkt,
+      refreshJkt: proof.jkt,
     },
     `EXISTS (SELECT 1 FROM oauth_requests WHERE used_by = ?10)`,
   );
@@ -255,7 +290,7 @@ export async function refreshGrant(
     .withSession("first-primary")
     .prepare(
       `SELECT id, family_id, user_id, client_id, scopes, resource, expires_at, used_at, revoked_at,
-         family_expires_at
+         family_expires_at, dpop_jkt
        FROM refresh_tokens WHERE token_hash = ?`,
     )
     .bind(await hashToken(token))
@@ -270,6 +305,7 @@ export async function refreshGrant(
       used_at: number | null;
       revoked_at: number | null;
       family_expires_at: number;
+      dpop_jkt: string | null;
     }>();
   const now = clock();
   if (!row || row.client_id !== clientId)
@@ -302,6 +338,11 @@ export async function refreshGrant(
     return refuse(c, "invalid_scope", "The scopes exceed those first granted.");
   if (!(await userEnabled(c.env, row.user_id)))
     return refuse(c, "invalid_grant", "The user is disabled.");
+  // A bound family is used only with a proof by its key (RFC 9449 §5); a proof binds the access token.
+  const proof = await tokenRequestProof(c);
+  if (!proof.ok) return proof.response;
+  if (row.dpop_jkt !== null && proof.jkt !== row.dpop_jkt)
+    return refuse(c, "invalid_dpop_proof", "The refresh token is bound to another DPoP key.");
 
   // The claim is the replacing token's id: only this request knows it.
   const refreshId = newId("tok");
@@ -319,6 +360,8 @@ export async function refreshGrant(
       now,
       requestId: c.get("requestId"),
       via: "refresh_token",
+      accessJkt: proof.jkt,
+      refreshJkt: row.dpop_jkt,
     },
     `EXISTS (SELECT 1 FROM refresh_tokens WHERE replaced_by = ?10)`,
   );

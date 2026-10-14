@@ -1,6 +1,7 @@
 import { PERMISSION_NAMES } from "@fyrden/domain";
 import { Hono } from "hono";
 import type { AuthVariables } from "../middleware/auth.js";
+import { DPOP_ALGS } from "./dpop.js";
 import { TOKEN_EXCHANGE } from "./exchange.js";
 import { originOf } from "./params.js";
 import { RESOURCES, type Resource, resourceUri } from "./resources.js";
@@ -31,6 +32,8 @@ wellKnownRouter.get("/oauth-authorization-server", (c) => {
       revocation_endpoint_auth_methods_supported: ["none"],
       scopes_supported: PERMISSION_NAMES,
       authorization_response_iss_parameter_supported: true,
+      dpop_signing_alg_values_supported: DPOP_ALGS,
+      client_id_metadata_document_supported: true,
     },
     200,
     PUBLIC,
@@ -48,6 +51,7 @@ wellKnownRouter.get("/oauth-protected-resource/:resource", (c) => {
       authorization_servers: [origin],
       scopes_supported: PERMISSION_NAMES,
       bearer_methods_supported: ["header"],
+      dpop_signing_alg_values_supported: DPOP_ALGS,
     },
     200,
     PUBLIC,

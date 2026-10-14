@@ -1678,6 +1678,87 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
     },
+    "/orgs/{org}": {
+      "patch": {
+        "description": "Changes an organization's settings: whether its agents' API tokens must be DPoP-bound (\`require_dpop\`). Owners only.",
+        "operationId": "orgs.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "require_dpop": {
+                    "type": "boolean",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "login": {
+                      "type": "string",
+                    },
+                    "require_dpop": {
+                      "description": "Whether the organization's agents may use API tokens only DPoP-bound (RFC 9449); git tokens are exempt.",
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "login",
+                    "require_dpop",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Update an organization's settings",
+        "x-fyrden-permission": "members:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/orgs/{org}/members": {
       "get": {
         "description": "Lists an organization's members by handle, ignoring case. Members only.",

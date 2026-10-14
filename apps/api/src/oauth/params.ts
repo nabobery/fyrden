@@ -15,6 +15,7 @@ export type OAuthError =
   | "unsupported_grant_type"
   | "invalid_redirect_uri"
   | "invalid_client_metadata"
+  | "invalid_dpop_proof"
   | "slow_down";
 
 /** Token responses are never cached (RFC 6749 §5.1). */

@@ -30,6 +30,7 @@ import {
   listMembersOperation,
   removeMembershipOperation,
   setMembershipOperation,
+  updateOrgOperation,
 } from "../accounts/orgs.js";
 import {
   getOrgQuotaOperation,
@@ -126,6 +127,7 @@ export const handlers: Handlers = {
     },
   }),
 
+  "orgs.update": updateOrgOperation,
   "agents.create": createAgentOperation,
   "agents.list": listAgentsOperation,
   "agents.get": getAgentOperation,

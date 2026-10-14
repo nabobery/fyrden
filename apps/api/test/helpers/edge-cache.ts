@@ -22,6 +22,8 @@ export function tokenRecord(principalId: string, repoIds: string[] | null = null
     grantId: null,
     ceilingIds: [],
     audience: null,
+    dpopJkt: null,
+    requiresDpop: false,
   };
 }
 

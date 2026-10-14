@@ -6,12 +6,12 @@
 export const MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
 
 /**
- * A request's body, read up to `maxBytes`: undefined when it is longer (by
- * its declared length, or as it streams in, whichever shows first), so an
- * oversized body is never held whole.
+ * A request's (or response's) body, read up to `maxBytes`: undefined when
+ * it is longer (by its declared length, or as it streams in, whichever
+ * shows first), so an oversized body is never held whole.
  */
 export async function readBoundedBody(
-  request: Request,
+  request: Pick<Request, "headers" | "body">,
   maxBytes: number,
 ): Promise<Uint8Array | undefined> {
   const declared = Number(request.headers.get("Content-Length") ?? "0");

@@ -461,7 +461,9 @@ from `/mcp` or `/api` names in its `WWW-Authenticate`.
 
 | What | Value |
 |---|---|
-| Clients | Public only (`token_endpoint_auth_method: none`), registered at `POST /oauth/register` (RFC 7591); redirect URIs `https`, loopback `http`, or a private-use scheme, matched exactly |
+| Clients | Public only (`token_endpoint_auth_method: none`): known by a client ID metadata document (an `https` `client_id` URL with a path, fetched through the outbound URL policy, at most 5 KiB, naming itself, kept a day, a week if it cannot be fetched again), or registered at `POST /oauth/register` (RFC 7591); redirect URIs `https`, loopback `http`, or a private-use scheme, matched exactly (loopback with any port) |
+| DPoP (RFC 9449) | A token request with a proof (ES256 or EdDSA) gets tokens bound to its key (`token_type: DPoP`), taken only with `Authorization: DPoP` and a fresh proof by that key (60 seconds either way; each proof once); `dpop_jkt` at authorization binds the code; a bound refresh family needs proofs by its key |
+| Organization policy | `PATCH /orgs/{org}` `require_dpop`: the organization's agents' API tokens are taken only DPoP-bound (at once for writes, within 30 seconds for reads, like a revocation), and token exchange for them needs a proof (git tokens are exempt) |
 | Authorization | `GET /oauth/authorize`: code flow only, PKCE `S256` required, `resource` required (`{origin}/mcp` or `{origin}/api`), scopes are Fyrden permissions; the signed-in user consents on a Fyrden page; the answer must come from Fyrden's own origin |
 | Codes | Single use, 60 seconds; redeemed again, the tokens they issued are revoked |
 | Access tokens | Type `oat`, 1 hour, accepted only at their resource (RFC 8707) |
