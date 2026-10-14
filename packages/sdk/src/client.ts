@@ -68,7 +68,11 @@ export class FyrdenClient {
   readonly #fetch: typeof fetch;
 
   constructor(private readonly options: ClientOptions) {
-    this.#base = options.baseUrl.replace(/\/+$/, "");
+    // A loop, not /\/+$/: that regex is quadratic on many slashes that do not
+    // end the string, and the base URL is whatever the caller passes.
+    let end = options.baseUrl.length;
+    while (end > 0 && options.baseUrl.charCodeAt(end - 1) === 0x2f) end--;
+    this.#base = options.baseUrl.slice(0, end);
     this.#fetch = options.fetch ?? ((...args) => fetch(...args));
   }
 

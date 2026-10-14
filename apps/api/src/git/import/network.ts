@@ -5,7 +5,7 @@ import {
   type Resolver,
   type SsrfPolicy,
 } from "@fyrden/adapters-cloudflare/net";
-import type { ClientResponse, HttpTransport } from "@fyrden/git-core";
+import { type ClientResponse, type HttpTransport, withoutTrailingSlashes } from "@fyrden/git-core";
 
 /*
  * Every request an import makes goes through the shared outbound URL guard:
@@ -50,7 +50,7 @@ export async function checkImportUrl(raw: string, policy: SsrfPolicy): Promise<I
   const check = await checkOutboundUrl(raw, policy);
   if (!check.ok) return { ok: false, reason: check.reason };
   if (check.url.search !== "" || check.url.hash !== "") return { ok: false, reason: "query" };
-  return { ok: true, url: check.url.href.replace(/\/+$/, "") };
+  return { ok: true, url: withoutTrailingSlashes(check.url.href) };
 }
 
 /** How an import reaches the network; tests replace it. */

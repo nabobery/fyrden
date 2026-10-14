@@ -19,6 +19,15 @@ function fake(responses: { status?: number; body: unknown }[]) {
 }
 
 describe("FyrdenClient", () => {
+  // A regex trim of the base URL's trailing slashes is quadratic on this shape
+  // (tens of seconds); the deadline is far below that.
+  it("takes its base URL in linear time, whatever the caller passes", { timeout: 5_000 }, () => {
+    const { fetchFn } = fake([]);
+    expect(
+      () => new FyrdenClient({ baseUrl: `https://f.test/${"/".repeat(200_000)}x`, fetch: fetchFn }),
+    ).not.toThrow();
+  });
+
   it("sends path parameters in the path, the rest in the body, with a token and an idempotency key", async () => {
     const { sent, fetchFn } = fake([{ status: 201, body: { id: "rep_1", name: "x" } }]);
     const client = new FyrdenClient({

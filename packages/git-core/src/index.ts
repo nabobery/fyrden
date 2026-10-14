@@ -10,6 +10,7 @@ export {
   parseLsRefsLine,
   type RemoteRef,
   SmartHttpClient,
+  withoutTrailingSlashes,
 } from "./client/fetch-client.js";
 export type { ClientRequest, ClientResponse, HttpTransport } from "./client/transport.js";
 export { BitSet } from "./graph/bitset.js";
