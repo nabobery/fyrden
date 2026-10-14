@@ -147,18 +147,19 @@ export function coseToJwk(cose: unknown): { jwk: JsonWebKey; alg: CoseAlg } {
   if (!(cose instanceof Map)) return fail("the public key is not a COSE key");
   const kty = cose.get(1);
   const alg = cose.get(3);
-  const bytes = (label: number) => {
+  // A field of the length its key type has (an RSA modulus of 2048 to 4096 bits).
+  const bytes = (label: number, min: number, max = min) => {
     const value = cose.get(label);
-    return value instanceof Uint8Array
-      ? base64urlEncode(value)
-      : fail("the COSE key is incomplete");
+    if (!(value instanceof Uint8Array)) return fail("the COSE key is incomplete");
+    if (value.length < min || value.length > max) return fail("the COSE key is malformed");
+    return base64urlEncode(value);
   };
   if (alg === COSE_ALGS.ES256 && kty === 2 && cose.get(-1) === 1)
-    return { jwk: { kty: "EC", crv: "P-256", x: bytes(-2), y: bytes(-3) }, alg };
+    return { jwk: { kty: "EC", crv: "P-256", x: bytes(-2, 32), y: bytes(-3, 32) }, alg };
   if (alg === COSE_ALGS.EdDSA && kty === 1 && cose.get(-1) === 6)
-    return { jwk: { kty: "OKP", crv: "Ed25519", x: bytes(-2) }, alg };
+    return { jwk: { kty: "OKP", crv: "Ed25519", x: bytes(-2, 32) }, alg };
   if (alg === COSE_ALGS.RS256 && kty === 3)
-    return { jwk: { kty: "RSA", n: bytes(-1), e: bytes(-2) }, alg };
+    return { jwk: { kty: "RSA", n: bytes(-1, 256, 512), e: bytes(-2, 1, 8) }, alg };
   return fail("the key's algorithm is not supported (ES256, EdDSA, RS256)");
 }
 
@@ -179,6 +180,15 @@ const ALGORITHMS: Record<
     verify: { name: "RSASSA-PKCS1-v1_5" },
   },
 };
+
+/** The key to verify with; one WebCrypto refuses (no point on the curve, say) is refused as such. */
+export async function importPublicKey(jwk: JsonWebKey, alg: CoseAlg): Promise<CryptoKey> {
+  try {
+    return await crypto.subtle.importKey("jwk", jwk, ALGORITHMS[alg].importKey, false, ["verify"]);
+  } catch {
+    return fail("the public key is not a valid key");
+  }
+}
 
 /** An ECDSA signature as WebAuthn sends it (DER) in WebCrypto's form (r and s, 32 bytes each). */
 function derToRaw(der: Uint8Array): Uint8Array {
@@ -298,7 +308,7 @@ export async function verifyRegistration(
   if (id !== response.rawId) fail("the credential id differs from the one returned");
   const { jwk, alg } = coseToJwk(parsed.credential.publicKey);
   // The key must import: a malformed one is refused now, not at sign-in.
-  await crypto.subtle.importKey("jwk", jwk, ALGORITHMS[alg].importKey, false, ["verify"]);
+  await importPublicKey(jwk, alg);
   return { id, jwk, alg, signCount: parsed.signCount };
 }
 
@@ -320,9 +330,7 @@ export async function verifyAssertion(
   signed.set(authData, 0);
   signed.set(await sha256(clientDataJSON), authData.length);
   const algorithm = ALGORITHMS[credential.alg];
-  const key = await crypto.subtle.importKey("jwk", credential.jwk, algorithm.importKey, false, [
-    "verify",
-  ]);
+  const key = await importPublicKey(credential.jwk, credential.alg);
   let signature = base64urlDecode(response.signature);
   if (credential.alg === COSE_ALGS.ES256) signature = derToRaw(signature);
   if (!(await crypto.subtle.verify(algorithm.verify, key, signature, signed)))

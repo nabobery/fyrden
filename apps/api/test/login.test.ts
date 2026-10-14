@@ -3,7 +3,13 @@
 
 import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { decodeCbor, WebAuthnError } from "../src/auth/webauthn.js";
+import {
+  COSE_ALGS,
+  coseToJwk,
+  decodeCbor,
+  importPublicKey,
+  WebAuthnError,
+} from "../src/auth/webauthn.js";
 import { user } from "./helpers/api.js";
 import { authenticator } from "./helpers/authenticator.js";
 import { ORIGIN } from "./helpers/git-http.js";
@@ -166,6 +172,42 @@ describe("signing in", () => {
     expect(await page("/a/../b?x=1#y")).toContain('data-return-to="/b?x=1#y"');
     const res = await call("/auth/sign-in");
     expect(res.headers.get("Content-Security-Policy")).toMatch(/script-src 'nonce-[^']+'/);
+  });
+
+  it("refuses a malformed public key as such, never with an unexpected error", async () => {
+    const ec = (x: number, y: number) =>
+      new Map<number, unknown>([
+        [1, 2],
+        [3, COSE_ALGS.ES256],
+        [-1, 1],
+        [-2, new Uint8Array(x)],
+        [-3, new Uint8Array(y)],
+      ]);
+    // Coordinates of the wrong size, an Ed25519 key of the wrong size, a small RSA modulus.
+    expect(() => coseToJwk(ec(1, 1))).toThrow(WebAuthnError);
+    expect(() =>
+      coseToJwk(
+        new Map<number, unknown>([
+          [1, 1],
+          [3, COSE_ALGS.EdDSA],
+          [-1, 6],
+          [-2, new Uint8Array(31)],
+        ]),
+      ),
+    ).toThrow(WebAuthnError);
+    expect(() =>
+      coseToJwk(
+        new Map<number, unknown>([
+          [1, 3],
+          [3, COSE_ALGS.RS256],
+          [-1, new Uint8Array(64)],
+          [-2, Uint8Array.of(1, 0, 1)],
+        ]),
+      ),
+    ).toThrow(WebAuthnError);
+    // Well formed, but no point on the curve: refused when it is imported.
+    const { jwk, alg } = coseToJwk(ec(32, 32));
+    await expect(importPublicKey(jwk, alg)).rejects.toThrow(WebAuthnError);
   });
 
   it("refuses malformed CBOR as such, never with an unexpected error", () => {
