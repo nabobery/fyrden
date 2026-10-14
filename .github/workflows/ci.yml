@@ -62,6 +62,10 @@ jobs:
         run: pnpm turbo run test:coverage --continue=dependencies-successful
       - name: Dry-run deploy of both Workers
         run: pnpm turbo run deploy:dry-run
+      # The web UI's end-to-end test drives Chromium: the headless shell of
+      # the pinned Playwright, with the system libraries it needs.
+      - name: Playwright's Chromium
+        run: pnpm --filter @fyrden/ci-tools exec playwright install --with-deps --only-shell chromium
       - name: Both Workers together locally, through the service binding
         run: pnpm turbo run test:e2e
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
