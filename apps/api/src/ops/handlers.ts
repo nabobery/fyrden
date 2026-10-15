@@ -100,6 +100,16 @@ import {
   updatePullOperation,
 } from "../repos/pulls.js";
 import {
+  createReviewCommentOperation,
+  deleteReviewCommentOperation,
+  getReviewCommentOperation,
+  listReviewCommentsOperation,
+  listReviewThreadsOperation,
+  resolveReviewThreadOperation,
+  unresolveReviewThreadOperation,
+  updateReviewCommentOperation,
+} from "../repos/review-comments.js";
+import {
   createReviewOperation,
   dismissReviewOperation,
   getReviewOperation,
@@ -323,6 +333,14 @@ export const handlers: Handlers = {
   "pulls.get": getPullOperation,
   "pulls.update": updatePullOperation,
   "pulls.merge": mergePullOperation,
+  "pulls.comments.list": listReviewCommentsOperation,
+  "pulls.comments.create": createReviewCommentOperation,
+  "pulls.comments.get": getReviewCommentOperation,
+  "pulls.comments.update": updateReviewCommentOperation,
+  "pulls.comments.delete": deleteReviewCommentOperation,
+  "pulls.threads.list": listReviewThreadsOperation,
+  "pulls.threads.resolve": resolveReviewThreadOperation,
+  "pulls.threads.unresolve": unresolveReviewThreadOperation,
   "pulls.files.list": listPullFilesOperation,
   "pulls.commits.list": listPullCommitsOperation,
   "pulls.reviews.list": listReviewsOperation,

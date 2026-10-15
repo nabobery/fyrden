@@ -66,6 +66,16 @@ import {
   updateRepo,
 } from "../ops/repos.js";
 import {
+  createReviewComment,
+  deleteReviewComment,
+  getReviewComment,
+  listReviewComments,
+  listReviewThreads,
+  resolveReviewThread,
+  unresolveReviewThread,
+  updateReviewComment,
+} from "../ops/review-comments.js";
+import {
   createReview,
   dismissReview,
   getReview,
@@ -143,6 +153,14 @@ export const registry = defineRegistry([
   mergePull,
   listPullFiles,
   listPullCommits,
+  listReviewComments,
+  createReviewComment,
+  getReviewComment,
+  updateReviewComment,
+  deleteReviewComment,
+  listReviewThreads,
+  resolveReviewThread,
+  unresolveReviewThread,
   listReviews,
   getReview,
   createReview,

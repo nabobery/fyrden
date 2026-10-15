@@ -1658,6 +1658,330 @@ export type PullsCommitsListOutput = {
   next_cursor: string | null;
 };
 
+/** Input of `pulls.comments.list`: List review comments. */
+export type PullsCommentsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.comments.list`. */
+export type PullsCommentsListOutput = {
+  comments: ({
+    id: number;
+    /** Always null: comments are not part of a review yet. */
+    pull_request_review_id: number | null;
+    /** The comment this one answers. */
+    in_reply_to_id?: number;
+    /** Fyrden: the thread it is in. */
+    thread_id: number;
+    /** Who wrote it (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    body: string;
+    /** The head the thread was started on. */
+    commit_id: string;
+    original_commit_id: string;
+    path: string;
+    /** `RIGHT`: the head's file; `LEFT`: the merge base's. */
+    side: "LEFT" | "RIGHT";
+    /** The line commented on; null once the head has moved (`outdated`). */
+    line: number | null;
+    original_line: number;
+    /** The first line, for a range. */
+    start_line: number | null;
+    start_side: "LEFT" | "RIGHT" | null;
+    /** Fyrden: the head has moved since: the lines are those of `commit_id`. */
+    outdated: boolean;
+    /** Fyrden: its thread is resolved. */
+    resolved: boolean;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `pulls.comments.create`: Create a review comment. */
+export type PullsCommentsCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  body: string;
+  /** A comment to reply to. */
+  in_reply_to?: number;
+  /** The head the lines are of; needed unless replying. */
+  commit_id?: string;
+  /** The file; needed unless replying. */
+  path?: string;
+  /** The (last) line; needed unless replying. */
+  line?: number;
+  side?: "LEFT" | "RIGHT";
+  /** The first line, for a range. */
+  start_line?: number;
+  /** As `side`; a range stays on one side. */
+  start_side?: "LEFT" | "RIGHT";
+};
+
+/** Output of `pulls.comments.create`. */
+export type PullsCommentsCreateOutput = {
+  id: number;
+  /** Always null: comments are not part of a review yet. */
+  pull_request_review_id: number | null;
+  /** The comment this one answers. */
+  in_reply_to_id?: number;
+  /** Fyrden: the thread it is in. */
+  thread_id: number;
+  /** Who wrote it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  body: string;
+  /** The head the thread was started on. */
+  commit_id: string;
+  original_commit_id: string;
+  path: string;
+  /** `RIGHT`: the head's file; `LEFT`: the merge base's. */
+  side: "LEFT" | "RIGHT";
+  /** The line commented on; null once the head has moved (`outdated`). */
+  line: number | null;
+  original_line: number;
+  /** The first line, for a range. */
+  start_line: number | null;
+  start_side: "LEFT" | "RIGHT" | null;
+  /** Fyrden: the head has moved since: the lines are those of `commit_id`. */
+  outdated: boolean;
+  /** Fyrden: its thread is resolved. */
+  resolved: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+};
+
+/** Input of `pulls.comments.get`: Get a review comment. */
+export type PullsCommentsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+};
+
+/** Output of `pulls.comments.get`. */
+export type PullsCommentsGetOutput = {
+  id: number;
+  /** Always null: comments are not part of a review yet. */
+  pull_request_review_id: number | null;
+  /** The comment this one answers. */
+  in_reply_to_id?: number;
+  /** Fyrden: the thread it is in. */
+  thread_id: number;
+  /** Who wrote it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  body: string;
+  /** The head the thread was started on. */
+  commit_id: string;
+  original_commit_id: string;
+  path: string;
+  /** `RIGHT`: the head's file; `LEFT`: the merge base's. */
+  side: "LEFT" | "RIGHT";
+  /** The line commented on; null once the head has moved (`outdated`). */
+  line: number | null;
+  original_line: number;
+  /** The first line, for a range. */
+  start_line: number | null;
+  start_side: "LEFT" | "RIGHT" | null;
+  /** Fyrden: the head has moved since: the lines are those of `commit_id`. */
+  outdated: boolean;
+  /** Fyrden: its thread is resolved. */
+  resolved: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+};
+
+/** Input of `pulls.comments.update`: Update a review comment. */
+export type PullsCommentsUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  body: string;
+};
+
+/** Output of `pulls.comments.update`. */
+export type PullsCommentsUpdateOutput = {
+  id: number;
+  /** Always null: comments are not part of a review yet. */
+  pull_request_review_id: number | null;
+  /** The comment this one answers. */
+  in_reply_to_id?: number;
+  /** Fyrden: the thread it is in. */
+  thread_id: number;
+  /** Who wrote it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  body: string;
+  /** The head the thread was started on. */
+  commit_id: string;
+  original_commit_id: string;
+  path: string;
+  /** `RIGHT`: the head's file; `LEFT`: the merge base's. */
+  side: "LEFT" | "RIGHT";
+  /** The line commented on; null once the head has moved (`outdated`). */
+  line: number | null;
+  original_line: number;
+  /** The first line, for a range. */
+  start_line: number | null;
+  start_side: "LEFT" | "RIGHT" | null;
+  /** Fyrden: the head has moved since: the lines are those of `commit_id`. */
+  outdated: boolean;
+  /** Fyrden: its thread is resolved. */
+  resolved: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+};
+
+/** Input of `pulls.comments.delete`: Delete a review comment. */
+export type PullsCommentsDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+};
+
+/** Output of `pulls.comments.delete`. */
+export type PullsCommentsDeleteOutput = {
+  id: number;
+  state: "deleted";
+};
+
+/** Input of `pulls.threads.list`: List review threads. */
+export type PullsThreadsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.threads.list`. */
+export type PullsThreadsListOutput = {
+  threads: ({
+    id: number;
+    path: string;
+    side: "LEFT" | "RIGHT";
+    line: number;
+    start_line: number | null;
+    commit_id: string;
+    outdated: boolean;
+    resolved: boolean;
+    resolved_by: {
+      id: string;
+    } | null;
+    /** Its comments now. */
+    comments: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `pulls.threads.resolve`: Resolve a review thread. */
+export type PullsThreadsResolveInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The thread's id. */
+  thread_id: number;
+};
+
+/** Output of `pulls.threads.resolve`. */
+export type PullsThreadsResolveOutput = {
+  id: number;
+  path: string;
+  side: "LEFT" | "RIGHT";
+  line: number;
+  start_line: number | null;
+  commit_id: string;
+  outdated: boolean;
+  resolved: boolean;
+  resolved_by: {
+    id: string;
+  } | null;
+  /** Its comments now. */
+  comments: number;
+};
+
+/** Input of `pulls.threads.unresolve`: Unresolve a review thread. */
+export type PullsThreadsUnresolveInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The thread's id. */
+  thread_id: number;
+};
+
+/** Output of `pulls.threads.unresolve`. */
+export type PullsThreadsUnresolveOutput = {
+  id: number;
+  path: string;
+  side: "LEFT" | "RIGHT";
+  line: number;
+  start_line: number | null;
+  commit_id: string;
+  outdated: boolean;
+  resolved: boolean;
+  resolved_by: {
+    id: string;
+  } | null;
+  /** Its comments now. */
+  comments: number;
+};
+
 /** Input of `pulls.reviews.list`: List reviews. */
 export type PullsReviewsListInput = {
   /** The owner's handle. */
@@ -3596,6 +3920,14 @@ export const OPERATIONS = {
   "pulls.merge": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/merge", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.files.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/files", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "files" },
   "pulls.commits.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/commits", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "commits" },
+  "pulls.comments.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/comments", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "comments" },
+  "pulls.comments.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/comments", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.comments.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: false },
+  "pulls.comments.update": { method: "PATCH", path: "/repos/{owner}/{repo}/pulls/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: true },
+  "pulls.comments.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: true },
+  "pulls.threads.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/threads", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "threads" },
+  "pulls.threads.resolve": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/threads/{thread_id}/resolution", pathParams: ["owner","repo","pull_number","thread_id"], idempotent: true },
+  "pulls.threads.unresolve": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/{pull_number}/threads/{thread_id}/resolution", pathParams: ["owner","repo","pull_number","thread_id"], idempotent: true },
   "pulls.reviews.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "reviews" },
   "pulls.reviews.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}", pathParams: ["owner","repo","pull_number","review_id"], idempotent: false },
   "pulls.reviews.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews", pathParams: ["owner","repo","pull_number"], idempotent: true },
@@ -3746,6 +4078,22 @@ export interface Operations {
   "pulls.files.list": { input: PullsFilesListInput; output: PullsFilesListOutput };
   /** List pull request commits. The commits a pull request's head has that its base branch does not, oldest first; at most 250 (GitHub's limit). */
   "pulls.commits.list": { input: PullsCommitsListInput; output: PullsCommitsListOutput };
+  /** List review comments. The comments on a pull request's diff, oldest first. */
+  "pulls.comments.list": { input: PullsCommentsListInput; output: PullsCommentsListOutput };
+  /** Create a review comment. Comments on lines of a file in a pull request's diff, starting a thread; with `in_reply_to`, replies in that comment's thread instead (no anchor then). `commit_id` must be a head the pull request has had; `side` RIGHT comments on that commit's file, LEFT on the merge base's; the file must have the lines (whether they are part of the diff is not checked). Anyone who can read the repository may comment. */
+  "pulls.comments.create": { input: PullsCommentsCreateInput; output: PullsCommentsCreateOutput };
+  /** Get a review comment. One comment on a pull request's diff. */
+  "pulls.comments.get": { input: PullsCommentsGetInput; output: PullsCommentsGetOutput };
+  /** Update a review comment. Replaces a diff comment's body. Its author may edit its own; write access and above, anyone's. */
+  "pulls.comments.update": { input: PullsCommentsUpdateInput; output: PullsCommentsUpdateOutput };
+  /** Delete a review comment. Deletes a diff comment; its thread goes with its last comment. Its author may delete its own; write access and above, anyone's. */
+  "pulls.comments.delete": { input: PullsCommentsDeleteInput; output: PullsCommentsDeleteOutput };
+  /** List review threads. Fyrden: a pull request's review threads, oldest first, resolved or not. */
+  "pulls.threads.list": { input: PullsThreadsListInput; output: PullsThreadsListOutput };
+  /** Resolve a review thread. Fyrden: marks a review thread resolved (nothing changes when it already is). The pull request's author, or write access and above. A ruleset may require every thread resolved before a merge. */
+  "pulls.threads.resolve": { input: PullsThreadsResolveInput; output: PullsThreadsResolveOutput };
+  /** Unresolve a review thread. Fyrden: marks a review thread unresolved (nothing changes when it already is). The pull request's author, or write access and above. A ruleset may require every thread resolved before a merge. */
+  "pulls.threads.unresolve": { input: PullsThreadsUnresolveInput; output: PullsThreadsUnresolveOutput };
   /** List reviews. A pull request's reviews, in the order submitted. */
   "pulls.reviews.list": { input: PullsReviewsListInput; output: PullsReviewsListOutput };
   /** Get a review. One review of a pull request. */

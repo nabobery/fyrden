@@ -295,6 +295,8 @@ export function rawFile(
   browse: RepoBrowse,
   ref: string | undefined,
   path: string,
+  /** The largest file read; a larger one answers 422 `too_large`. */
+  maxBytes: number = CONTENTS_POLICY.maxRawBytes,
 ): Promise<Browsed<{ sha: string; bytes: Uint8Array }>> {
   return guarded(async () => {
     const at = await browse.resolveTree(ref);
@@ -308,11 +310,11 @@ export function rawFile(
       if (isTreeMode(found.mode) || found.mode === FILE_MODES.gitlink) return notFound(path);
       const header = await reader.readHeader(found.oid);
       if (header?.type !== "blob") return notFound(path);
-      if (header.size > CONTENTS_POLICY.maxRawBytes)
+      if (header.size > maxBytes)
         return fail(
           422,
           "too_large",
-          `The file is larger than ${CONTENTS_POLICY.maxRawBytes} bytes; clone the repository to get it.`,
+          `The file is larger than ${maxBytes} bytes; clone the repository to get it.`,
         );
       const object = await reader.readObject(found.oid);
       if (object?.type !== "blob") return notFound(path);

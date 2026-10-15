@@ -23,6 +23,9 @@ CREATE INDEX pull_requests_state ON pull_requests (state, number);
 CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
 CREATE INDEX refs_oid ON refs (oid);
+CREATE INDEX review_comments_pr ON review_comments (pr_number, comment_id);
+CREATE INDEX review_comments_thread ON review_comments (thread_id, comment_id);
+CREATE INDEX review_threads_pr ON review_threads (pr_number, thread_id);
 CREATE INDEX reviews_pr ON reviews (pr_number, review_id);
 CREATE UNIQUE INDEX rulesets_name ON rulesets (name);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);
@@ -293,12 +296,37 @@ CREATE TABLE repo_meta (
         created_at INTEGER NOT NULL
       , epoch_uuid TEXT, source_seq INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, owner_id TEXT, name TEXT, visibility TEXT
         CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT, next_number INTEGER NOT NULL DEFAULT 1) STRICT;
+CREATE TABLE review_comments (
+        comment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_number INTEGER NOT NULL,
+        thread_id INTEGER NOT NULL,
+        in_reply_to INTEGER,
+        author_id TEXT NOT NULL,
+        author_root TEXT NOT NULL,
+        act_chain TEXT,
+        body TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1
+      ) STRICT;
 CREATE TABLE review_requests (
         pr_number INTEGER NOT NULL,
         reviewer_id TEXT NOT NULL,
         requested_by TEXT NOT NULL,
         requested_at INTEGER NOT NULL,
         PRIMARY KEY (pr_number, reviewer_id)
+      ) STRICT;
+CREATE TABLE review_threads (
+        thread_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_number INTEGER NOT NULL,
+        commit_sha TEXT NOT NULL,
+        path TEXT NOT NULL,
+        side TEXT NOT NULL CHECK (side IN ('LEFT', 'RIGHT')),
+        line INTEGER NOT NULL,
+        start_line INTEGER,
+        resolved_at INTEGER,
+        resolved_by TEXT,
+        version INTEGER NOT NULL DEFAULT 1
       ) STRICT;
 CREATE TABLE reviews (
         review_id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -486,4 +486,43 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX pull_requests_base ON pull_requests (base_ref, state);
     `,
   },
+  {
+    version: 22,
+    // Comments on pull requests' diffs: each thread is anchored to lines of
+    // one file, on one side, at a head the pull request has had (kept when
+    // its comments are deleted, until the last one is), and is resolved or
+    // not as a whole; its comments are the first and the replies.
+    name: "review_comments",
+    sql: `
+      CREATE TABLE review_threads (
+        thread_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_number INTEGER NOT NULL,
+        commit_sha TEXT NOT NULL,
+        path TEXT NOT NULL,
+        side TEXT NOT NULL CHECK (side IN ('LEFT', 'RIGHT')),
+        line INTEGER NOT NULL,
+        start_line INTEGER,
+        resolved_at INTEGER,
+        resolved_by TEXT,
+        version INTEGER NOT NULL DEFAULT 1
+      ) STRICT;
+      CREATE INDEX review_threads_pr ON review_threads (pr_number, thread_id);
+
+      CREATE TABLE review_comments (
+        comment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_number INTEGER NOT NULL,
+        thread_id INTEGER NOT NULL,
+        in_reply_to INTEGER,
+        author_id TEXT NOT NULL,
+        author_root TEXT NOT NULL,
+        act_chain TEXT,
+        body TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1
+      ) STRICT;
+      CREATE INDEX review_comments_pr ON review_comments (pr_number, comment_id);
+      CREATE INDEX review_comments_thread ON review_comments (thread_id, comment_id);
+    `,
+  },
 ];

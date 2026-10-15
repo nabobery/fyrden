@@ -13,6 +13,7 @@ export * from "./pulls/comment.js";
 export * from "./pulls/lifecycle.js";
 export * from "./pulls/pull.js";
 export * from "./pulls/review.js";
+export * from "./pulls/review-comment.js";
 export * from "./repos/expiry.js";
 export * from "./rulesets/evaluate.js";
 export * from "./rulesets/ruleset.js";

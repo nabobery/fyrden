@@ -5,6 +5,7 @@ import {
   diffTrees,
   findExactRenames,
   type MemoryReservation,
+  MissingCommitError,
   mergeBases,
   type Oid,
   oidToHex,
@@ -110,6 +111,9 @@ export async function mergeBaseOf(
   } catch (error) {
     if (error instanceof WalkLimitError)
       return fail(422, "too_expensive", "The base and head are too far apart to compare.");
+    // A commit no longer stored (a base branch deleted, then garbage collected).
+    if (error instanceof MissingCommitError)
+      return fail(422, "unreadable", "A commit the comparison needs is no longer stored.");
     throw error;
   }
 }

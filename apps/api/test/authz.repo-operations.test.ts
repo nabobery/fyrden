@@ -86,6 +86,20 @@ const CASES: Record<
     expected: { status: 404, code: "pull_not_found" },
   },
   "pulls.merge": { input: {}, expected: { status: 404, code: "pull_not_found" } },
+  "pulls.comments.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
+  "pulls.comments.create": {
+    input: { body: "checked", commit_id: SHA, path: "a.txt", line: 1 },
+    expected: { status: 404, code: "pull_not_found" },
+  },
+  "pulls.comments.get": { input: {}, expected: { status: 404, code: "comment_not_found" } },
+  "pulls.comments.update": {
+    input: { body: "checked" },
+    expected: { status: 404, code: "comment_not_found" },
+  },
+  "pulls.comments.delete": { input: {}, expected: { status: 404, code: "comment_not_found" } },
+  "pulls.threads.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
+  "pulls.threads.resolve": { input: {}, expected: { status: 404, code: "pull_not_found" } },
+  "pulls.threads.unresolve": { input: {}, expected: { status: 404, code: "pull_not_found" } },
   "pulls.files.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
   "pulls.commits.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
   "pulls.reviews.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
@@ -209,6 +223,7 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{review_id}", "1")
     .replace("{issue_number}", "1")
     .replace("{comment_id}", "1")
+    .replace("{thread_id}", "1")
     .replace("{username}", handle)
     .replace("{branch+}", "main")
     .replace("{ref+}", "main")
