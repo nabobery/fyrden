@@ -8,6 +8,7 @@ export * from "./principals/principal.js";
 export * from "./principals/root.js";
 export * from "./principals/token.js";
 export * from "./pulls/approvals.js";
+export * from "./pulls/comment.js";
 export * from "./pulls/lifecycle.js";
 export * from "./pulls/pull.js";
 export * from "./pulls/review.js";

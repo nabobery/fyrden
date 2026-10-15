@@ -72,6 +72,13 @@ import {
   listCommitsOperation,
   listTagsOperation,
 } from "../repos/browse.js";
+import {
+  createCommentOperation,
+  deleteCommentOperation,
+  getCommentOperation,
+  listCommentsOperation,
+  updateCommentOperation,
+} from "../repos/comments.js";
 import { createOwnRepoOperation } from "../repos/create.js";
 import { deleteRepoOperation, deleteReposOperation } from "../repos/delete.js";
 import { authorize, defaultBranchOf, ownListable, resolveRepo } from "../repos/directory.js";
@@ -319,6 +326,11 @@ export const handlers: Handlers = {
   "pulls.requested_reviewers.list": listRequestedReviewersOperation,
   "pulls.requested_reviewers.add": requestReviewersOperation,
   "pulls.requested_reviewers.remove": removeRequestedReviewersOperation,
+  "issues.comments.list": listCommentsOperation,
+  "issues.comments.create": createCommentOperation,
+  "issues.comments.get": getCommentOperation,
+  "issues.comments.update": updateCommentOperation,
+  "issues.comments.delete": deleteCommentOperation,
 
   // Stars are the caller's own, of repositories it can read (repos/stars).
   "stars.put": starRepoOperation,

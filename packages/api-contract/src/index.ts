@@ -3,6 +3,7 @@ export * from "../ops/admin.js";
 export * from "../ops/agents.js";
 export * from "../ops/archives.js";
 export * from "../ops/browse.js";
+export * from "../ops/comments.js";
 export * from "../ops/contents.js";
 export * from "../ops/file-writes.js";
 export * from "../ops/grants.js";

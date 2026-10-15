@@ -28,6 +28,13 @@ import {
   listCommits,
   listTags,
 } from "../ops/browse.js";
+import {
+  createComment,
+  deleteComment,
+  getComment,
+  listComments,
+  updateComment,
+} from "../ops/comments.js";
 import { getContents, getReadme, getRootContents, getTree } from "../ops/contents.js";
 import { createFileCommit, deleteContents, putContents } from "../ops/file-writes.js";
 import { createGrant, listGrants, revokeGrant } from "../ops/grants.js";
@@ -132,6 +139,11 @@ export const registry = defineRegistry([
   listRequestedReviewers,
   requestReviewers,
   removeRequestedReviewers,
+  listComments,
+  createComment,
+  getComment,
+  updateComment,
+  deleteComment,
   starRepo,
   unstarRepo,
   listStarred,

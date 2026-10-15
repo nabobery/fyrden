@@ -118,6 +118,7 @@ import {
   RepoBrowse,
   type TagPage,
 } from "./repo/browse.js";
+import { RepoComments } from "./repo/comments.js";
 import {
   type ContentsView,
   contents,
@@ -252,6 +253,9 @@ export class RepoDO extends MigratingDO {
   /** Reviews of pull requests, and reviews requested. */
   readonly reviews: RepoReviews;
 
+  /** Conversation comments on pull requests. */
+  readonly comments: RepoComments;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.metricsDataset = env.METRICS;
@@ -280,6 +284,12 @@ export class RepoDO extends MigratingDO {
       repoId: () => this.#repoId(),
     });
     this.reviews = new RepoReviews({
+      git: this.git,
+      events: this.events,
+      pulls: this.pulls,
+      repoId: () => this.#repoId(),
+    });
+    this.comments = new RepoComments({
       git: this.git,
       events: this.events,
       pulls: this.pulls,
@@ -802,6 +812,36 @@ export class RepoDO extends MigratingDO {
         return ceilings;
       },
     );
+  }
+
+  /** A pull request's comments, oldest first; null when the repository is gone, undefined without the pull request. */
+  listComments(number: number, after: number, limit: number) {
+    return this.#measured("listComments", () => {
+      if (this.#refusesReads()) return null;
+      if (!this.pulls.get(number)) return undefined;
+      return this.comments.list(number, after, limit);
+    });
+  }
+
+  /** One comment; null when the repository is gone. */
+  getComment(id: number) {
+    return this.#measured("getComment", () =>
+      this.#refusesReads() ? null : (this.comments.get(id) ?? undefined),
+    );
+  }
+
+  createComment(number: number, body: string, actor: RefActor) {
+    return this.#pullChange("createComment", actor, (caller) =>
+      this.comments.create(number, body, caller),
+    );
+  }
+
+  editComment(id: number, body: string, actor: RefActor) {
+    return this.#pullChange("editComment", actor, (caller) => this.comments.edit(id, body, caller));
+  }
+
+  deleteComment(id: number, actor: RefActor) {
+    return this.#pullChange("deleteComment", actor, (caller) => this.comments.delete(id, caller));
   }
 
   /** Withdraws review requests. */

@@ -7,6 +7,7 @@ CREATE INDEX audit_segments_archived ON audit_segments (archived_at) WHERE state
 CREATE INDEX audit_segments_from ON audit_segments (from_seq);
 CREATE INDEX audit_segments_pending ON audit_segments (from_seq) WHERE state = 'pending';
 CREATE INDEX audit_segments_to ON audit_segments (to_seq);
+CREATE INDEX comments_number ON comments (number, comment_id);
 CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
 CREATE INDEX leases_pack ON leases (pack_id, expires_at);
@@ -82,6 +83,17 @@ CREATE TABLE audit_segments (
         state TEXT NOT NULL CHECK (state IN ('pending', 'archived')),
         created_at INTEGER NOT NULL,
         archived_at INTEGER
+      ) STRICT;
+CREATE TABLE comments (
+        comment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        number INTEGER NOT NULL,
+        author_id TEXT NOT NULL,
+        author_root TEXT NOT NULL,
+        act_chain TEXT,
+        body TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1
       ) STRICT;
 CREATE TABLE commits (
     oid BLOB PRIMARY KEY CHECK (length(oid) = 20),

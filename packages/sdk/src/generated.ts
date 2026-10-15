@@ -1764,6 +1764,144 @@ export type PullsRequestedReviewersRemoveOutput = {
   closed_at: number | null;
 };
 
+/** Input of `issues.comments.list`: List comments. */
+export type IssuesCommentsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number (issues share these comments once they exist). */
+  issue_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `issues.comments.list`. */
+export type IssuesCommentsListOutput = {
+  comments: {
+    id: number;
+    /** The pull request it is on. */
+    issue_number: number;
+    /** Who wrote it (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    body: string;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+  }[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `issues.comments.create`: Create a comment. */
+export type IssuesCommentsCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number (issues share these comments once they exist). */
+  issue_number: number;
+  body: string;
+};
+
+/** Output of `issues.comments.create`. */
+export type IssuesCommentsCreateOutput = {
+  id: number;
+  /** The pull request it is on. */
+  issue_number: number;
+  /** Who wrote it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  body: string;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+};
+
+/** Input of `issues.comments.get`: Get a comment. */
+export type IssuesCommentsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+};
+
+/** Output of `issues.comments.get`. */
+export type IssuesCommentsGetOutput = {
+  id: number;
+  /** The pull request it is on. */
+  issue_number: number;
+  /** Who wrote it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  body: string;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+};
+
+/** Input of `issues.comments.update`: Update a comment. */
+export type IssuesCommentsUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  body: string;
+};
+
+/** Output of `issues.comments.update`. */
+export type IssuesCommentsUpdateOutput = {
+  id: number;
+  /** The pull request it is on. */
+  issue_number: number;
+  /** Who wrote it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  body: string;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+};
+
+/** Input of `issues.comments.delete`: Delete a comment. */
+export type IssuesCommentsDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+};
+
+/** Output of `issues.comments.delete`. */
+export type IssuesCommentsDeleteOutput = {
+  id: number;
+  state: "deleted";
+};
+
 /** Input of `stars.put`: Star a repository. */
 export type StarsPutInput = {
   /** The repository's owner handle. */
@@ -3266,6 +3404,11 @@ export const OPERATIONS = {
   "pulls.requested_reviewers.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: false },
   "pulls.requested_reviewers.add": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.requested_reviewers.remove": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "issues.comments.list": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}/comments", pathParams: ["owner","repo","issue_number"], idempotent: false, items: "comments" },
+  "issues.comments.create": { method: "POST", path: "/repos/{owner}/{repo}/issues/{issue_number}/comments", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.comments.get": { method: "GET", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: false },
+  "issues.comments.update": { method: "PATCH", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: true },
+  "issues.comments.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: true },
   "stars.put": { method: "PUT", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.delete": { method: "DELETE", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.list": { method: "GET", path: "/user/starred", pathParams: [], idempotent: false, items: "repos" },
@@ -3412,6 +3555,16 @@ export interface Operations {
   "pulls.requested_reviewers.add": { input: PullsRequestedReviewersAddInput; output: PullsRequestedReviewersAddOutput };
   /** Remove requested reviewers. Withdraws review requests; reviewers not requested are ignored. */
   "pulls.requested_reviewers.remove": { input: PullsRequestedReviewersRemoveInput; output: PullsRequestedReviewersRemoveOutput };
+  /** List comments. A pull request's conversation comments, oldest first. */
+  "issues.comments.list": { input: IssuesCommentsListInput; output: IssuesCommentsListOutput };
+  /** Create a comment. Adds a comment to a pull request's conversation, open or closed. Anyone who can read the repository may comment. */
+  "issues.comments.create": { input: IssuesCommentsCreateInput; output: IssuesCommentsCreateOutput };
+  /** Get a comment. One conversation comment. */
+  "issues.comments.get": { input: IssuesCommentsGetInput; output: IssuesCommentsGetOutput };
+  /** Update a comment. Replaces a comment's body. Its author may edit its own; write access and above, anyone's. */
+  "issues.comments.update": { input: IssuesCommentsUpdateInput; output: IssuesCommentsUpdateOutput };
+  /** Delete a comment. Deletes a comment. Its author may delete its own; write access and above, anyone's. */
+  "issues.comments.delete": { input: IssuesCommentsDeleteInput; output: IssuesCommentsDeleteOutput };
   /** Star a repository. Stars a repository the caller can read. Starring one already starred changes nothing. The token also needs `metadata:read` for the repository. */
   "stars.put": { input: StarsPutInput; output: StarsPutOutput };
   /** Unstar a repository. Takes the caller's star off a repository it can read. Unstarring one not starred changes nothing. */

@@ -401,4 +401,24 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 18,
+    // Conversation comments on pull requests (issues share them once they
+    // exist), numbered across the repository as GitHub's comment ids are.
+    name: "comments",
+    sql: `
+      CREATE TABLE comments (
+        comment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        number INTEGER NOT NULL,
+        author_id TEXT NOT NULL,
+        author_root TEXT NOT NULL,
+        act_chain TEXT,
+        body TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1
+      ) STRICT;
+      CREATE INDEX comments_number ON comments (number, comment_id);
+    `,
+  },
 ];

@@ -8,52 +8,21 @@ import {
   runInDurableObject,
   waitOnExecutionContext,
 } from "cloudflare:test";
-import { env, exports } from "cloudflare:workers";
+import { env } from "cloudflare:workers";
 import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { DEFAULT_ORG_SHARD } from "../src/events/read-model.js";
-import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { AGENT_REPO_DEFAULTS } from "../src/repos/agent-limits.js";
 import { heldBack, newRepoStatements } from "../src/repos/directory.js";
-import { api, json, user, type Who } from "./helpers/api.js";
+import { agentFor } from "./helpers/agents.js";
+import { api, json, user } from "./helpers/api.js";
 import { ORIGIN } from "./helpers/git-http.js";
 
 const newId = createIdFactory(() => Date.now(), secureRandomBytes);
 
 type Repo = { id: string; name: string; owner: string; expires_at: number | null };
-
-/** An agent of `owner`, its own token, and a delegated token under a grant of `scopes`. */
-async function agentFor(owner: Who, scopes: string[], repositories?: string[]) {
-  const agent = await json<{ id: string; handle: string }>(
-    api("POST", "/agents", owner.token, { handle: uniqueId("bot").slice(0, 39) }),
-  );
-  const own = await json<{ token: string }>(
-    api("POST", `/agents/${agent.body.handle}/tokens`, owner.token, {}),
-  );
-  const granted = await json<{ id: string }>(
-    api("POST", "/grants", owner.token, { agent: agent.body.handle, scopes, repositories }),
-  );
-  expect(granted.status).toBe(201);
-  const res = await exports.default.fetch(`${ORIGIN}/oauth/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: TOKEN_EXCHANGE,
-      subject_token: own.body.token,
-      subject_token_type: ACCESS_TOKEN_TYPE,
-      grant_id: granted.body.id,
-    }).toString(),
-  });
-  expect(res.status).toBe(200);
-  return {
-    id: agent.body.id,
-    grantId: granted.body.id,
-    own: own.body.token,
-    delegated: (await res.json<{ access_token: string }>()).access_token,
-  };
-}
 
 /** `POST /api/user/repos` with Worker variables of the test's own. */
 async function createWith(token: string, body: unknown, vars: Record<string, string>) {

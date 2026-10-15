@@ -625,12 +625,14 @@ export class RepoEvents {
     actor: RefActor | null,
     entity: Omit<EntitySnapshot, "deleted">,
     data: Record<string, unknown> | null = null,
+    /** The entity is gone: its snapshot carries no row. */
+    deleted = false,
   ): void {
     this.#assertCanEmit();
     this.#emit(
       type,
       { actor: actor?.principal ?? null, actChain: [...(actor?.actChain ?? [])], data },
-      { ...entity, deleted: false },
+      { ...entity, deleted, row: deleted ? null : entity.row },
     );
   }
 

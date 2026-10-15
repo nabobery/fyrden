@@ -108,6 +108,17 @@ const CASES: Record<
     },
     expected: { status: 404, code: "pull_not_found" },
   },
+  "issues.comments.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
+  "issues.comments.create": {
+    input: { body: "checked" },
+    expected: { status: 404, code: "pull_not_found" },
+  },
+  "issues.comments.get": { input: {}, expected: { status: 404, code: "comment_not_found" } },
+  "issues.comments.update": {
+    input: { body: "checked" },
+    expected: { status: 404, code: "comment_not_found" },
+  },
+  "issues.comments.delete": { input: {}, expected: { status: 404, code: "comment_not_found" } },
   "pulls.requested_reviewers.remove": {
     input: {
       get reviewers() {
@@ -193,6 +204,8 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{upload_id}", UPLOAD_ID)
     .replace("{pull_number}", "1")
     .replace("{review_id}", "1")
+    .replace("{issue_number}", "1")
+    .replace("{comment_id}", "1")
     .replace("{username}", handle)
     .replace("{branch+}", "main")
     .replace("{ref+}", "main")

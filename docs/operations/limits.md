@@ -635,6 +635,7 @@ merging and pull requests from forks come later.
 | Reviews | Anyone who reads the repository may approve, request changes or comment on an open pull request (MCP `submit_review`); the author may only comment. Each review names the head commit it reviewed (`commit_id`, a head the pull request has had) and counts for that commit only. Body 65,536 characters at most, needed to request changes or comment. Whether a review counts toward a merge is decided when merging (see Rulesets) |
 | Dismissing a review | Write access, with a reason of 1-1,024 characters; only a standing approval or request for changes; the review is kept, shown as `DISMISSED` with who and why |
 | Requested reviewers | Users and agents who can read the repository (an agent as its owner allows), never the author; teams not yet. The author or triage and above asks; at most 15 at once; a request ends when that reviewer submits a review |
+| Conversation comments | `/issues/{number}/comments` on pull requests (issues share them once they exist; MCP `comment_on_pull_request`, `list_comments`, `update_comment`, `delete_comment`). Anyone who reads the repository comments, on open or closed pull requests; the author of a comment edits and deletes its own, write access and above anyone's. Body 1-65,536 characters. A deletion removes the comment |
 
 ## Idempotent requests
 
