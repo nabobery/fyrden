@@ -162,6 +162,7 @@ jobs:
             receive-pack,
             push-fsck,
             upload-pack,
+            diff,
           ]
     env:
       SCOPE: ${{ matrix.scope }}

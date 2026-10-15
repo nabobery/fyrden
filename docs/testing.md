@@ -133,6 +133,7 @@ assertion or a local variable does). They are listed below.
 | `src/receive-pack` without the push object checks † | 61.5% | 57.6% | 1,778 | | 61 | 2026-10-12 |
 | `push-fsck` †: `fsck.ts`, `gitmodules.ts`, `special-names.ts`, `git-config.ts` in `src/receive-pack` | 69.7% | 66.2% | 1,631 | | 69 | 2026-10-12 |
 | `src/upload-pack` | 56.0% | 55.6% | 932 | `commits.ts`, `reach.ts`, `shallow.ts` | 56 | 2026-10-11 |
+| `src/diff` (its git-oracle tests left out: too slow per mutant) | 82.1% | 80.0% | 987 | | 80 | 2026-10-15 |
 
 The baseline counts timed-out mutants as detected, as Stryker does.
 \* Measured on a busy machine with Stryker's default timeout, under which

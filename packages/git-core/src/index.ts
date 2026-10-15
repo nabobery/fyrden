@@ -13,6 +13,42 @@ export {
   withoutTrailingSlashes,
 } from "./client/fetch-client.js";
 export type { ClientRequest, ClientResponse, HttpTransport } from "./client/transport.js";
+export { diffFile, type FileDiff } from "./diff/file-diff.js";
+export { DEFAULT_CONTEXT_LINES, type Hunk, type HunkLine, hunksOf } from "./diff/hunks.js";
+export {
+  DEFAULT_MAX_DIFF_COST,
+  diffSequences,
+  type Edit,
+  type EditKind,
+  type LineDiff,
+} from "./diff/line-diff.js";
+export {
+  type FileHeader,
+  type FileStatus,
+  formatFileHeader,
+  formatHunks,
+  patchText,
+  quotePath,
+} from "./diff/patch.js";
+export { type DiffEntry, findExactRenames } from "./diff/rename.js";
+export {
+  BINARY_SNIFF_BYTES,
+  DEFAULT_MAX_LINES,
+  internLines,
+  isBinary,
+  type Lines,
+  lineAt,
+  splitLines,
+} from "./diff/text.js";
+export {
+  DEFAULT_MAX_PATH_BYTES,
+  DEFAULT_MAX_TREES,
+  diffTrees,
+  type TreeChange,
+  type TreeChangeStatus,
+  TreeDiffLimitError,
+  type TreeDiffOptions,
+} from "./diff/tree-diff.js";
 export { BitSet } from "./graph/bitset.js";
 export { addPendingCommits } from "./graph/commit-graph.js";
 export type { WalkOptions } from "./graph/commit-walk.js";
