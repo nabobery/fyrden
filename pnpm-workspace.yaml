@@ -12,17 +12,17 @@ catalog:
   "@msw/cloudflare": 0.2.0
   "@stryker-mutator/core": 10.0.0
   "@stryker-mutator/vitest-runner": 10.0.0
-  "@types/node": 24.19.1
+  "@types/node": 26.6.5
   "@vitest/coverage-istanbul": 5.0.3
   fast-check: 4.10.2
   hono: 4.13.13
-  msw: 3.0.2
+  msw: 3.0.3
   turbo: 2.11.7
   typescript: 7.0.2
   vite: 8.3.4
   vitest: 5.0.3
   wrangler: 4.149.0
-  zod: 4.6.5
+  zod: 4.6.6
 
 # Supply-chain policy. These match or tighten pnpm's defaults and are written
 # out so a pnpm upgrade cannot loosen them silently.

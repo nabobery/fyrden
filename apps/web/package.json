@@ -19,7 +19,7 @@
     "@fyrden/api-contract": "workspace:*",
     "isbot": "5.2.2",
     "mermaid": "12.2.0",
-    "micromark": "4.0.2",
+    "micromark": "4.0.3",
     "micromark-extension-gfm": "3.0.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
