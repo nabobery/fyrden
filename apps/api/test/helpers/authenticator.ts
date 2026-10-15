@@ -69,7 +69,16 @@ export interface Authenticator {
   signIn(
     options: { challenge: string; rpId: string },
     origin: string,
-    tweak?: { counter?: number; userVerified?: boolean; flags?: number; userHandle?: string },
+    tweak?: {
+      counter?: number;
+      userVerified?: boolean;
+      flags?: number;
+      userHandle?: string;
+      /** Signs with this key instead of the credential's. */
+      signer?: CryptoKey;
+      /** Changes one byte of the signature after signing. */
+      corrupt?: boolean;
+    },
   ): Promise<unknown>;
 }
 
@@ -146,8 +155,13 @@ export async function authenticator(): Promise<Authenticator> {
         new Uint8Array(await crypto.subtle.digest("SHA-256", clientDataJSON)),
       );
       const signature = new Uint8Array(
-        await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, signed),
+        await crypto.subtle.sign(
+          { name: "ECDSA", hash: "SHA-256" },
+          tweak.signer ?? pair.privateKey,
+          signed,
+        ),
       );
+      if (tweak.corrupt) signature.set([(signature.at(-1) ?? 0) ^ 0x01], signature.length - 1);
       return {
         id: credentialId,
         rawId: credentialId,

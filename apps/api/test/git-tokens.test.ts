@@ -64,7 +64,7 @@ async function delegatedAgent(owner: Who, repo: { name: string }, scopes: string
   const agent = await json<{ handle: string }>(
     api("POST", "/agents", owner.token, { handle: uniqueId("bot").slice(0, 39) }),
   );
-  const agentToken = await json<{ token: string }>(
+  const agentToken = await json<{ id: string; token: string }>(
     api("POST", `/agents/${agent.body.handle}/tokens`, owner.token, {}),
   );
   const granted = await json<{ id: string }>(
@@ -87,7 +87,12 @@ async function delegatedAgent(owner: Who, repo: { name: string }, scopes: string
   });
   expect(res.status).toBe(200);
   const { access_token } = await res.json<{ access_token: string }>();
-  return { token: access_token, grantId: granted.body.id };
+  return {
+    token: access_token,
+    grantId: granted.body.id,
+    agent: agent.body.handle,
+    agentToken: agentToken.body,
+  };
 }
 
 describe("git tokens", () => {
@@ -113,6 +118,47 @@ describe("git tokens", () => {
     expect((await api("DELETE", `/grants/${agent.grantId}`, owner.token)).status).toBe(200);
     const after = await push(owner, repo, minted.body.token, "after");
     expect(after.status).toBe(401);
+  });
+
+  it("stop, with the delegated token, when the agent's own token they came from is revoked", async () => {
+    const owner = await user();
+    const repo = await repoOf(owner);
+    const agent = await delegatedAgent(owner, repo, ["contents:write"]);
+    const minted = await json<GitToken>(api("POST", "/user/git-tokens", agent.token, {}));
+    expect(minted.status).toBe(201);
+    expect((await push(owner, repo, minted.body.token, "before")).report).toContain(
+      "ok refs/heads/before\n",
+    );
+    const revoked = await api(
+      "DELETE",
+      `/agents/${agent.agent}/tokens/${agent.agentToken.id}`,
+      owner.token,
+    );
+    expect(revoked.status).toBe(200);
+    // The next write with either token is refused.
+    expect((await push(owner, repo, minted.body.token, "after")).status).toBe(401);
+    expect((await api("POST", "/user/git-tokens", agent.token, {})).status).toBe(401);
+  });
+
+  it("are refused as the subject of a token exchange", async () => {
+    const owner = await user();
+    const repo = await repoOf(owner);
+    const agent = await delegatedAgent(owner, repo, ["contents:write"]);
+    // The agent's own git token, minted with its own token.
+    const own = await json<GitToken>(api("POST", "/user/git-tokens", agent.agentToken.token, {}));
+    expect(own.status).toBe(201);
+    const res = await exports.default.fetch(`${ORIGIN}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: TOKEN_EXCHANGE,
+        subject_token: own.body.token,
+        subject_token_type: ACCESS_TOKEN_TYPE,
+        grant_id: agent.grantId,
+      }).toString(),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "invalid_grant" });
   });
 
   it("narrow the scopes to git's and never outlive the token minting them", async () => {

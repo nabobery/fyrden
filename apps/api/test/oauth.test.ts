@@ -4,6 +4,7 @@
 // and revocation.
 
 import { env } from "cloudflare:workers";
+import { hashToken } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
 import { reapOAuth } from "../src/oauth/reaper.js";
@@ -286,6 +287,35 @@ describe("refresh tokens", () => {
     expect(await (await refresh(rotated.refresh_token)).json()).toMatchObject({
       error: "invalid_grant",
     });
+  });
+
+  it("issue no access token past the family's end", async () => {
+    const clientId = await registered();
+    const { cookie } = await signedIn();
+    const first = await tokens(clientId, cookie, `${ORIGIN}/api`);
+    // The family ends in ten minutes: refreshing now gets ten minutes, not an hour.
+    const end = Date.now() + 10 * 60 * 1000;
+    await env.DIRECTORY.prepare(
+      "UPDATE refresh_tokens SET family_expires_at = ?, expires_at = ? WHERE client_id = ?",
+    )
+      .bind(end, end, clientId)
+      .run();
+    const refreshed = await form("/oauth/token", {
+      grant_type: "refresh_token",
+      refresh_token: first.refresh_token,
+      client_id: clientId,
+    });
+    expect(refreshed.status).toBe(200);
+    const body = await refreshed.json<{ access_token: string; expires_in: number }>();
+    // What was left of the family when the answer was made, not an hour.
+    expect(body.expires_in).toBeLessThanOrEqual(600);
+    expect(body.expires_in).toBeGreaterThanOrEqual(Math.floor((end - Date.now()) / 1000));
+    const stored = await env.DIRECTORY.prepare(
+      "SELECT expires_at AS at FROM tokens WHERE token_hash = ?",
+    )
+      .bind(await hashToken(body.access_token))
+      .first<{ at: number }>();
+    expect(stored?.at).toBe(end);
   });
 
   it("let exactly one of concurrent uses win", async () => {

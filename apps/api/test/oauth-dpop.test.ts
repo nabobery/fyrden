@@ -62,6 +62,17 @@ describe("DPoP-bound tokens", () => {
     expect((await call("/api/user", { headers })).status).toBe(200);
     expect((await call("/api/user", { headers })).status).toBe(401);
     expect((await asDpop(await dpopKey(), token)).status).toBe(401);
+    // A signature changed after signing, a wrong or missing `ath`, or another method: refused.
+    for (const dpop of [
+      await key.proof("GET", WHOAMI_URL, token, {}, { corrupt: true }),
+      await key.proof("GET", WHOAMI_URL, token, { ath: "x".repeat(43) }),
+      await key.proof("GET", WHOAMI_URL),
+      await key.proof("POST", WHOAMI_URL, token),
+    ])
+      expect(
+        (await call("/api/user", { headers: { Authorization: `DPoP ${token}`, DPoP: dpop } }))
+          .status,
+      ).toBe(401);
     const elsewhere = await call("/api/user", {
       headers: {
         Authorization: `DPoP ${token}`,
@@ -177,6 +188,15 @@ describe("an organization's DPoP policy", () => {
       });
     expect((await overGit(gitToken)).status).toBe(404);
     expect((await overGit(`fyrden_git_${"x".repeat(43)}`)).status).toBe(401);
+    // Chunked uploads are git's too (`fyrden push --chunked` sends the git token there):
+    // taken, then the repository is not found; the agent's own token is still refused.
+    const upload = (token: string) =>
+      api("POST", `/repos/${login}/missing/uploads`, token, {
+        size: 32,
+        ref_updates: [{ ref: "refs/heads/main", old: null, new: "a".repeat(40) }],
+      });
+    expect((await upload(gitToken)).status).toBe(404);
+    expect((await upload(agentToken)).status).toBe(401);
     // ...and a delegated one is issued only against a proof.
     const granted = await json<{ id: string }>(
       api("POST", "/grants", owner.token, { agent: made.body.handle, scopes: ["metadata:read"] }),

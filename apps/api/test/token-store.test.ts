@@ -183,6 +183,34 @@ describe("D1TokenStore", () => {
     expect(await store.verify(derived.token, "write")).toEqual({ ok: false, reason: "revoked" });
   });
 
+  it("stops a token two steps from a revoked one, and keys all three by the first", async () => {
+    const { store } = setup();
+    const mint = (sourceId?: string) =>
+      store.mint({
+        principalId: "usr_owner",
+        type: sourceId ? "git" : "pat",
+        scopes: [],
+        ttlMs: HOUR,
+        ...(sourceId && { sourceId }),
+        audit,
+      });
+    // An agent's own token, the delegated token exchanged for it, a git token from that.
+    const first = await mint();
+    const second = await mint(first.id);
+    const third = await mint(second.id);
+    expect(await store.verify(third.token, "write")).toMatchObject({
+      ok: true,
+      record: { sourceId: first.id },
+    });
+    expect(await store.verify(second.token, "write")).toMatchObject({
+      ok: true,
+      record: { sourceId: first.id },
+    });
+    await store.revoke(first.id, audit);
+    expect(await store.verify(second.token, "write")).toEqual({ ok: false, reason: "revoked" });
+    expect(await store.verify(third.token, "write")).toEqual({ ok: false, reason: "revoked" });
+  });
+
   it("reports what an expired token holds now on the primary", async () => {
     const { store, advance } = setup();
     const { token, id } = await store.mint({

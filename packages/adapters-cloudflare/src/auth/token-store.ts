@@ -53,9 +53,10 @@ export interface TokenRecord {
    */
   requiresDpop: boolean;
   /**
-   * The token it was minted from by its holder (a git token from
-   * `POST /user/git-tokens`): it stops with that one, and shares its rate
-   * limits. Absent or null otherwise.
+   * The first token of those it was minted from by its holder (a delegated
+   * token exchanged for an agent's own, a git token from `POST
+   * /user/git-tokens`): it stops with any of them, and shares the first
+   * one's rate limits. Absent or null otherwise.
    */
   sourceId?: string | null;
 }
@@ -397,12 +398,13 @@ export class D1TokenStore {
                 p.disabled_at, p.owner_id, o.disabled_at AS owner_disabled_at,
                 o.require_dpop AS owner_require_dpop, t.scopes,
                 t.repo_ids, t.expires_at, t.last_used_at,
-                coalesce(t.revoked_at, s.revoked_at) AS revoked_at, t.grant_id, t.act_chain,
-                t.audience, t.dpop_jkt, t.source_id
+                coalesce(t.revoked_at, s.revoked_at, f.revoked_at) AS revoked_at, t.grant_id,
+                t.act_chain, t.audience, t.dpop_jkt, coalesce(s.source_id, t.source_id) AS source_id
          FROM tokens t JOIN principals p ON p.id = t.principal_id
          LEFT JOIN principals o ON o.id = p.owner_id
-         -- A token minted from another stops with it.
+         -- A token minted from another stops with it, and with the one that one came from.
          LEFT JOIN tokens s ON s.id = t.source_id
+         LEFT JOIN tokens f ON f.id = s.source_id
          WHERE t.token_hash = ?`,
       )
       .bind(hash)

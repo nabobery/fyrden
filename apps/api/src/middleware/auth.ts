@@ -203,11 +203,13 @@ export async function authenticate(
 export const requireAuth = (
   policy: "by-method" | "read" = "by-method",
   resource: Resource = "api",
+  /** `git`: the route is part of git's transport (a chunked upload session). */
+  options: { readonly git?: boolean } = {},
 ) =>
   createMiddleware<{ Bindings: Env; Variables: AuthVariables }>(async (c, next) => {
     const mode: VerifyMode = policy === "read" || READ_METHODS.has(c.req.method) ? "read" : "write";
     const origin = new URL(c.req.url).origin;
-    const auth = await authenticate(c, mode);
+    const auth = await authenticate(c, mode, options);
     if (!auth.ok) {
       if (auth.reason === "missing") {
         return problem(c, 401, "unauthenticated", "A token is required.", {

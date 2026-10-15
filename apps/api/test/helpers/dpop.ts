@@ -19,6 +19,8 @@ export interface DpopKey {
     url: string,
     accessToken?: string,
     claims?: Record<string, unknown>,
+    /** `corrupt`: changes one byte of the signature after signing. */
+    options?: { corrupt?: boolean },
   ): Promise<string>;
   /** The key's RFC 7638 thumbprint (`dpop_jkt`). */
   readonly jkt: string;
@@ -41,7 +43,7 @@ export async function dpopKey(): Promise<DpopKey> {
   );
   return {
     jkt: thumbprint,
-    async proof(method, url, accessToken, claims = {}) {
+    async proof(method, url, accessToken, claims = {}, options = {}) {
       const u = new URL(url);
       const payload: Record<string, unknown> = {
         jti: crypto.randomUUID(),
@@ -50,7 +52,8 @@ export async function dpopKey(): Promise<DpopKey> {
         iat: Math.floor(Date.now() / 1000),
         ...claims,
       };
-      if (accessToken !== undefined)
+      // An `ath` in `claims` stands, a wrong one included.
+      if (accessToken !== undefined && !("ath" in claims))
         payload.ath = base64url(
           new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(accessToken))),
         );
@@ -62,6 +65,7 @@ export async function dpopKey(): Promise<DpopKey> {
           encoder.encode(signingInput),
         ),
       );
+      if (options.corrupt) signature.set([(signature.at(-1) ?? 0) ^ 0x01], signature.length - 1);
       return `${signingInput}.${base64url(signature)}`;
     },
   };

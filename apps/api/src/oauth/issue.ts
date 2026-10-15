@@ -30,6 +30,8 @@ interface Issued {
   readonly scopes: readonly string[];
   /** Whether the access token is DPoP-bound (its type is then `DPoP`). */
   readonly bound: boolean;
+  /** When the access token expires (never past its family's end). */
+  readonly accessExpiresAt: number;
 }
 
 /**
@@ -62,6 +64,11 @@ async function issueStatements(
   const refresh = generateToken("ort", secureRandomBytes);
   const accessId = newId("tok");
   const scopes = JSON.stringify(grant.scopes);
+  // Neither token outlives the family: the user consents again after it.
+  const accessExpiresAt = Math.min(
+    grant.now + ISSUE_POLICY.accessTokenTtlMs,
+    grant.familyExpiresAt,
+  );
   // ?1 access id, ?2 its hash, ?3 user, ?4 scopes, ?5 its expiry, ?6 resource, ?7 client,
   // ?8 family, ?9 refresh hash, ?10 claim, ?11 now, ?12 refresh id, ?13 its expiry, ?14 request id,
   // ?15 the family's end, ?16 the access token's DPoP key, ?17 the refresh token's.
@@ -70,7 +77,7 @@ async function issueStatements(
     await hashToken(access),
     grant.user,
     scopes,
-    grant.now + ISSUE_POLICY.accessTokenTtlMs,
+    accessExpiresAt,
     grant.resource,
     grant.clientId,
     grant.family,
@@ -111,16 +118,22 @@ async function issueStatements(
   ];
   return {
     statements,
-    issued: { access, refresh, scopes: grant.scopes, bound: grant.accessJkt !== null },
+    issued: {
+      access,
+      refresh,
+      scopes: grant.scopes,
+      bound: grant.accessJkt !== null,
+      accessExpiresAt,
+    },
   };
 }
 
-function tokenResponse(c: OAuthContext, issued: Issued, now: number): Response {
+function tokenResponse(c: OAuthContext, issued: Issued): Response {
   return c.json(
     {
       access_token: issued.access,
       token_type: issued.bound ? "DPoP" : "Bearer",
-      expires_in: Math.floor((now + ISSUE_POLICY.accessTokenTtlMs - clock()) / 1000),
+      expires_in: Math.max(0, Math.floor((issued.accessExpiresAt - clock()) / 1000)),
       refresh_token: issued.refresh,
       scope: issued.scopes.join(" "),
     },
@@ -273,7 +286,7 @@ export async function codeGrant(c: OAuthContext, params: Map<string, string>): P
     if (winner?.family_id) await db.batch(revokeFamilyStatements(db, winner.family_id, now));
     return refuse(c, "invalid_grant", "The code was already used.");
   }
-  return tokenResponse(c, issued, now);
+  return tokenResponse(c, issued);
 }
 
 /** `grant_type=refresh_token`. */
@@ -390,7 +403,7 @@ export async function refreshGrant(
     await db.batch(revokeFamilyStatements(db, row.family_id, now));
     return refuse(c, "invalid_grant", "The refresh token was already used; its family is revoked.");
   }
-  return tokenResponse(c, issued, now);
+  return tokenResponse(c, issued);
 }
 
 /** `POST /oauth/revoke` (RFC 7009): a refresh token revokes its family; an access token, itself. */

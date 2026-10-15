@@ -96,6 +96,20 @@ function respond(c: AppContext, op: OperationDef, result: OpResult): Response {
 }
 
 /** Registers one Hono route per registry operation under /api. */
+/**
+ * The operations of a chunked upload session: git's transport, where a git
+ * token is taken as git takes it (`fyrden push --chunked` sends one, and
+ * cannot send DPoP proofs).
+ */
+const GIT_TRANSPORT = new Set([
+  "uploads.create",
+  "uploads.get",
+  "uploads.complete",
+  "uploads.abort",
+]);
+
+const gitTransport = (op: OperationDef) => ({ git: GIT_TRANSPORT.has(op.id) });
+
 export function mountRest(app: Hono<{ Bindings: Env; Variables: AuthVariables }>): void {
   app.get(`${API_PREFIX}/openapi.json`, (c) =>
     c.json(
@@ -109,7 +123,7 @@ export function mountRest(app: Hono<{ Bindings: Env; Variables: AuthVariables }>
   for (const op of registry as readonly OperationDef[]) {
     const path =
       API_PREFIX + op.path.replace(/\{([a-z_]+)\+\}/g, ":$1{.+}").replace(/\{([a-z_]+)\}/g, ":$1");
-    app.on(op.method, path, requireAuth("by-method"), async (c) => {
+    app.on(op.method, path, requireAuth("by-method", "api", gitTransport(op)), async (c) => {
       const read = await readInput(c, op);
       if (!read.ok) return problem(c, read.status, read.code, read.detail);
       const key = op.idempotency === "key" ? c.req.header("Idempotency-Key") : undefined;

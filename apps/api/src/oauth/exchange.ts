@@ -61,9 +61,15 @@ export async function tokenExchange(
 
   const metrics = c.get("metrics");
   const store = tokenStore(c.env, { metrics });
-  // On the primary: a revoked agent token exchanges for nothing.
+  // On the primary: a revoked agent token exchanges for nothing. A git token is git's alone
+  // (and keeps a token's lineage to the two steps its revocation check follows).
   const subject = await store.verify(subjectToken, "write");
-  if (!subject.ok || subject.record.principalType !== "agent" || subject.record.act.length > 0)
+  if (
+    !subject.ok ||
+    subject.record.principalType !== "agent" ||
+    subject.record.act.length > 0 ||
+    subject.record.type === "git"
+  )
     return refuse(c, "invalid_grant", "The subject token is not a valid token of an agent's own.");
   const agent = subject.record;
   // A proof binds the delegated token to its key; an agent whose owner requires DPoP gets none without.
@@ -127,6 +133,8 @@ export async function tokenExchange(
     // Bound to one resource (RFC 8707): the one asked for, else the REST API.
     audience: resource ?? resourceUri(originOf(c), "api"),
     dpopJkt: proof.jkt,
+    // Revoking the agent's own token stops this one, and the git tokens minted from it.
+    sourceId: agent.id,
     audit: {
       actorId: agent.principalId,
       act,

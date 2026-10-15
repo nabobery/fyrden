@@ -82,10 +82,7 @@ describe("signing in", () => {
     );
     expect(added.status).toBe(201);
     // Signed out, the passkey alone signs in.
-    const signIn = async (
-      tweak?: { counter?: number; userVerified?: boolean; flags?: number; userHandle?: string },
-      origin = ORIGIN,
-    ) => {
+    const signIn = async (tweak?: Parameters<typeof key.signIn>[2], origin = ORIGIN) => {
       const opts = await (await post("/auth/passkeys/sign-in-options", {})).json<{
         challenge_id: string;
         publicKey: { challenge: string; rpId: string };
@@ -103,6 +100,13 @@ describe("signing in", () => {
     ).toMatchObject({
       user: { id: who.principalId },
     });
+    // A signature changed after signing, or made by another key: refused.
+    const other = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, [
+      "sign",
+      "verify",
+    ])) as CryptoKeyPair;
+    expect((await signIn({ corrupt: true })).status).toBe(401);
+    expect((await signIn({ signer: other.privateKey })).status).toBe(401);
     // A counter that does not move, no user verification, or a ceremony on another origin: refused.
     expect((await signIn({ counter: 1 })).status).toBe(401);
     expect((await signIn({ userVerified: false })).status).toBe(401);

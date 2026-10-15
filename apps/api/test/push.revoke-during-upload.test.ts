@@ -5,7 +5,8 @@
 // with refs unchanged; a token that merely expired after the upload was
 // accepted does not.
 import { env } from "cloudflare:workers";
-import { hashToken } from "@fyrden/domain";
+import { D1TokenStore } from "@fyrden/adapters-cloudflare/auth";
+import { createIdFactory, hashToken, secureRandomBytes } from "@fyrden/domain";
 import { oidToHex } from "@fyrden/git-core";
 import { afterEach, beforeEach, describe, expect, inject, it, vi } from "vitest";
 import { ACCESS_LOST, TOKEN_REVOKED } from "../src/git/push/reauthorize.js";
@@ -100,6 +101,36 @@ describe("push: re-authorization at the commit point", () => {
       owner: { ...target.owner, token: (await minted.json<{ token: string }>()).token },
     };
     const { report } = await pushWith(git, () => setToken(source, "revoked_at", Date.now()));
+    expect(report).toEqual(["unpack ok\n", `ng ${MAIN} ${TOKEN_REVOKED}\n`, "0000"]);
+    expect((await state(target)).refs).toEqual([]);
+  });
+
+  it("aborts the push when the token two steps before its git token is revoked during indexing", async () => {
+    const target = await pushTarget();
+    const store = new D1TokenStore(env.DIRECTORY, {
+      clock: () => Date.now(),
+      newId: createIdFactory(() => Date.now(), secureRandomBytes),
+      randomBytes: secureRandomBytes,
+    });
+    const mint = (sourceId?: string) =>
+      store.mint({
+        principalId: target.owner.principalId,
+        type: "pat",
+        scopes: [],
+        ttlMs: DAY,
+        ...(sourceId && { sourceId }),
+        audit: { actorId: target.owner.principalId },
+      });
+    // As an agent's own token, and the delegated token exchanged for it.
+    const first = await mint();
+    const second = await mint(first.id);
+    const minted = await api("POST", "/user/git-tokens", second.token, {});
+    expect(minted.status).toBe(201);
+    const git = {
+      ...target,
+      owner: { ...target.owner, token: (await minted.json<{ token: string }>()).token },
+    };
+    const { report } = await pushWith(git, () => setToken(first.token, "revoked_at", Date.now()));
     expect(report).toEqual(["unpack ok\n", `ng ${MAIN} ${TOKEN_REVOKED}\n`, "0000"]);
     expect((await state(target)).refs).toEqual([]);
   });
