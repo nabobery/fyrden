@@ -77,10 +77,14 @@ export async function loadFixture(
       await writer.finish();
       await git.bucket.put(packObjectKey(git.networkId(), writer.packId, "idx"), idx.bytes);
       idx.release();
+      // Created in the fixture's order, a millisecond apart, whatever the clock did: what is
+      // ordered by age (repack, tail merges) comes out the same for every copy of a fixture.
       git.context.storage.sql.exec(
-        "UPDATE packs SET object_count = ?, all_reachable = ? WHERE pack_id = ?",
+        `UPDATE packs SET object_count = ?, all_reachable = ?, created_at = created_at + ?
+         WHERE pack_id = ?`,
         count,
         allReachable ? 1 : 0,
+        packIds.length,
         writer.packId,
       );
       packIds.push(writer.packId);

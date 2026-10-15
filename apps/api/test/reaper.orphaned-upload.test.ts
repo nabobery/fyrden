@@ -61,6 +61,9 @@ async function alarmsUntilReaped(stub: DurableObjectStub<RepoDO>, clock: { now: 
 
 describe("reaper.orphaned-upload", () => {
   it("removes what a Worker that died after its R2 upload and before the commit left behind, after the TTL", async () => {
+    // On the real clock: the reaper weighs an object's age by R2's upload date, which the
+    // local bucket records in real time, not the clock the test setup holds ahead.
+    vi.useRealTimers();
     const { stub, networkId } = await newRepo();
     const prefix = `net/${networkId}/`;
     const seeded = await inRepo(stub, async ({ git }) => {

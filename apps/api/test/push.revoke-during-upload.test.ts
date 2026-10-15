@@ -8,7 +8,7 @@ import { env } from "cloudflare:workers";
 import { D1TokenStore } from "@fyrden/adapters-cloudflare/auth";
 import { createIdFactory, hashToken, secureRandomBytes } from "@fyrden/domain";
 import { oidToHex } from "@fyrden/git-core";
-import { afterEach, beforeEach, describe, expect, inject, it, vi } from "vitest";
+import { describe, expect, inject, it } from "vitest";
 import { ACCESS_LOST, TOKEN_REVOKED } from "../src/git/push/reauthorize.js";
 import { api } from "./helpers/api.js";
 import { principalWithToken, scopedToken } from "./helpers/principals.js";
@@ -19,18 +19,6 @@ import { inRepo } from "./helpers/repo-git.js";
 const fx = inject("pushFixtures");
 const MAIN = "refs/heads/main";
 const DAY = 24 * 60 * 60 * 1000;
-
-// Every clock in this isolate runs a day ahead, so the alarm the index job
-// arms never fires on its own: one firing by itself would finish indexing
-// while the Worker is held, and the push would no longer be indexing there.
-beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
-  vi.setSystemTime(Date.now() + DAY);
-});
-
-afterEach(() => {
-  vi.useRealTimers();
-});
 
 /** Indexing one phase per call: the push is still indexing when the Worker is held. */
 const onePhase = {

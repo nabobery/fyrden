@@ -14,7 +14,7 @@ import {
   secureRandomBytes,
 } from "@fyrden/domain";
 import fc from "fast-check";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import {
   applyEnvelope,
@@ -415,13 +415,6 @@ describe("events consumer", () => {
   });
 
   it("builds the read model from a repository created through the API and its push", async () => {
-    // Every clock in this isolate runs a day ahead, so the outbox's own drain (an alarm a
-    // second after each change) never fires before the test reads it.
-    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
-    vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
     const owner = await principalWithToken("user", "pat");
     const name = `consumed-${Date.now()}`;
     const res = await exports.default.fetch(`${ORIGIN}/api/user/repos`, {

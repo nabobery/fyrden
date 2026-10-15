@@ -67,6 +67,7 @@ describe("Durable Object memory pool", () => {
     const budget = createDoMemoryBudget(100);
     const work = Array.from({ length: 5 }, async () => {
       const reservation = await budget.reserve(100);
+      // biome-ignore lint/style/noRestrictedGlobals: holds the reservation across a turn so the others overlap; the bound asserted holds however long.
       await new Promise((resolve) => setTimeout(resolve, 2));
       reservation.release();
     });

@@ -78,8 +78,10 @@ function mutate(pack: Uint8Array, mutations: readonly Mutation[], fixTrailer: bo
 }
 
 async function verdict(bytes: Uint8Array, chunkSize: number): Promise<"ok" | "rejected"> {
+  // biome-ignore lint/style/noRestrictedGlobals: a hang guard (the fuzz target must finish), far above any normal run; it reports a stuck parser rather than timing anything.
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
+    // biome-ignore lint/style/noRestrictedGlobals: the same hang guard.
     timer = setTimeout(() => reject(new Error("parser did not finish in time")), TIME_LIMIT_MS);
   });
   try {

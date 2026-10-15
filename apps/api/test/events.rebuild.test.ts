@@ -267,7 +267,8 @@ describe("restore epochs", () => {
       let reads = 0;
       const read = async (_recorded: number) => {
         reads++;
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        // A turn of the event loop: the second check starts while the first awaits.
+        await Promise.resolve();
         return { epochGen: 2 };
       };
       await Promise.all([repo.events.checkEpoch(read), repo.events.checkEpoch(read)]);

@@ -5,6 +5,7 @@
 import { DO_MEMORY, withReservation } from "@fyrden/adapters-cloudflare/git";
 import { describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
+// biome-ignore lint/style/noRestrictedImports: the wait keeps a reservation held while the others queue; how long it lasts does not change the outcome (one at a time).
 import { inRepo, newRepo, signal, sleep } from "./helpers/repo-git.js";
 
 const POOL = DO_MEMORY.operationPoolBytes;

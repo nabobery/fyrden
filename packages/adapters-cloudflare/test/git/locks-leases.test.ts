@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { LOCK_REF_COMMIT } from "../../src/git/index.js";
 import { inProbe, newProbe } from "./harness.js";
 
+// biome-ignore lint/style/noRestrictedGlobals: these tests are of lock and lease timeouts themselves; each wait outlasts the timeout under test, so a slow runner only lengthens it.
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("RepoLocks", () => {
@@ -41,6 +42,7 @@ describe("RepoLocks", () => {
       const waiter = (name: string, waitMs: number) =>
         git.locks.acquire(LOCK_REF_COMMIT, name, { ttlMs: 60_000, waitMs }).then((handle) => {
           order.push(handle ? name : `${name}:busy`);
+          // biome-ignore lint/style/noRestrictedGlobals: holds the lock a moment so the next waiter queues; the order asserted does not depend on how long.
           if (handle) setTimeout(() => git.locks.release(handle), 5);
         });
       const all = [

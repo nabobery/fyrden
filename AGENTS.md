@@ -60,16 +60,25 @@ pnpm audit                      # known advisories (CI fails on high and critica
    `@fyrden/adapters-cloudflare/net`. No exceptions.
 6. **Workerd tests share storage within a file.** Use `uniqueId()` for every
    Durable Object name, key and row a test touches.
-7. **Dependencies are pinned and reviewed.** Shared tools go in the
+7. **Tests never depend on time.** Wait on explicit signals (a hook, a value the
+   code returns), never on sleeps, timed polling or an alarm happening to be
+   pending: under a parallel run every step takes several times longer. The
+   `apps/api` workerd setup holds the clock a day ahead so no alarm fires on its
+   own; a test runs the alarms it needs. `setTimeout` and the `sleep` helper are lint
+   errors in tests; a deliberate exception carries a `biome-ignore` with its
+   reason. End-to-end tests start `wrangler dev` only through
+   `tools/ci/e2e/wrangler-dev.ts`. A change touching alarms, the outbox or jobs
+   runs `pnpm turbo run test:shuffle` before review.
+8. **Dependencies are pinned and reviewed.** Shared tools go in the
    `catalog:` of `pnpm-workspace.yaml` as exact versions; never add a range.
    The supply-chain settings there (release age, trust policy, reviewed
    build scripts) stay on: when one blocks an install, investigate and, if
    the package is fine, add a narrow, dated exception with the reason
    (see `trustPolicyExclude`) instead of loosening the setting. Upgrade
    pinned versions in a dedicated change.
-8. **Facts need a source.** In docs and comments, mark platform facts as
+9. **Facts need a source.** In docs and comments, mark platform facts as
    measured, verified (with a link) or unverified.
-9. **Sign off every commit**, merges included (`git commit -s`, see `CONTRIBUTING.md`). The person
+10. **Sign off every commit**, merges included (`git commit -s`, see `CONTRIBUTING.md`). The person
    who submits a change signs off on it and is responsible for it, whoever or
    whatever wrote it.
 
@@ -80,6 +89,8 @@ the task and the decisions not to relitigate, the exact diff scope, and asks
 for: correctness, edge cases (empty input, boundaries, concurrency, retries),
 performance, security, maintainability and repo conventions; completeness
 (all callers, docs, tests) and leftover cleanup; concrete attempts to break the
-change; whether the tests prove what they claim. Findings come with severity
+change; whether the tests prove what they claim, and whether any depends on time
+(a sleep, a timed wait, an alarm or background work that may or may not have run
+yet). Findings come with severity
 (BLOCKER, SHOULD-FIX, NIT), file and line, a failure scenario and a fix, and
 are verified against the code before anyone acts on them.

@@ -53,13 +53,25 @@ a machine short of memory add `--concurrency=1` to heavy runs (`test`,
   values instead.
 - Mock outbound HTTP with `@msw/cloudflare` (`setupNetwork()`), not by stubbing
   `fetch`.
-- Locally, Durable Object alarms fire on their own when they are due. A test
-  that drives alarms itself (`runDurableObjectAlarm`) must keep them from firing
-  on their own, for example by running the clock ahead with fake `Date` timers.
+- Locally, Durable Object alarms fire on their own when they are due (an
+  outbox drain a second after every change, a job's next slice), and a slow
+  run lets them fire in the middle of a test. `apps/api/test/setup/hold-alarms.ts`
+  holds every `apps/api` workerd test's clock a day ahead (fake `Date`, from before each file's
+  `beforeAll`), so none fires on its own: a test that needs one runs it, with
+  `runDurableObjectAlarm(stub)` (only an alarm still pending) or the object's
+  `alarm()`. A test may set the clock itself; the next test finds it held again.
 - Wait on explicit signals, never on sleeps or wall-clock polling: under a full
   parallel run, timings stretch several times. Deployed Durable Objects run other
   requests during R2 awaits, but the local pool does not, so race tests pause
-  code at explicit hooks.
+  code at explicit hooks. `setTimeout`, `setInterval` and the `sleep` helper are
+  lint errors in test files (`biome.json`); a deliberate exception (a test of a
+  timeout itself, a yield whose length does not change the outcome) carries a
+  `biome-ignore` saying why.
+- End-to-end tests start `wrangler dev` only through `startWranglerDev`
+  (`tools/ci/e2e/wrangler-dev.ts`): ports the OS reports free, taken right
+  before the start, and a fresh pair if one was taken meanwhile.
+- Run `pnpm turbo run test:shuffle` before review on any change to alarms, the
+  outbox, jobs or a test's setup: it runs the workerd suites in random orders.
 
 ## Coverage and mutation testing
 

@@ -29,7 +29,6 @@ const cx = inject("chunkedFixtures");
 /** A public address literal: the guard needs no name lookup for it. */
 const SOURCE = "https://93.184.215.14/source.git";
 const OWN = { FYRDEN_OWN_HOSTS: "fyrden.test, api.fyrden.test" };
-const DAY = 24 * 60 * 60 * 1000;
 
 afterEach(() => {
   vi.useRealTimers();
@@ -375,11 +374,6 @@ describe("server-side import", () => {
   });
 
   it("continues with indexing when an earlier attempt stored the pack but stopped before saying so", async () => {
-    // The clock runs a day ahead, so the alarm the import arms never fires on
-    // its own: one firing by itself would still be fetching when the single
-    // alarm below runs, and that one would find the job leased.
-    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
-    vi.setSystemTime(Date.now() + DAY);
     const target = await pushTarget();
     await useNetwork(target, replay(cx.source.exchanges, []));
     expect((await call(target, "POST", { url: SOURCE })).status).toBe(201);

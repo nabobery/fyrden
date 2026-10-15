@@ -22,6 +22,7 @@ import {
   runNetworkJob,
 } from "./helpers/network.js";
 import { principalWithToken } from "./helpers/principals.js";
+// biome-ignore lint/style/noRestrictedImports: the waits give a fork that wrongly skipped the fence time to finish while the mark is held; a slow runner can only let it pass, never fail it falsely.
 import { inRepo, signal, sleep } from "./helpers/repo-git.js";
 
 const fx = inject("gcFixtures");

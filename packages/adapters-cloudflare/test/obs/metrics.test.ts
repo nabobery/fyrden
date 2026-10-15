@@ -104,6 +104,7 @@ describe("invocations", () => {
       { where: "do", op: "planFetch", doClass: "RepoDO", now: () => clock },
       async () => {
         metrics.count("r2.class_b", { bucket: "fyrden-git", op: "get" }, 2);
+        // biome-ignore lint/style/noRestrictedGlobals: an await inside the invocation (its clock is the injected one, not this wait).
         await new Promise((resolve) => setTimeout(resolve, 1));
         metrics.count("do.rows_written", { class: "RepoDO", op: "x" }, 7);
         metrics.count("r2.class_a", { bucket: "fyrden-git", op: "put" });
@@ -125,6 +126,7 @@ describe("invocations", () => {
     const one = (op: string, calls: number) =>
       measureInvocation(metrics, { where: "do", op }, async () => {
         for (let i = 0; i < calls; i++) {
+          // biome-ignore lint/style/noRestrictedGlobals: interleaves two invocations across macrotasks; what is asserted does not depend on the wait's length.
           await new Promise((resolve) => setTimeout(resolve, 1));
           metrics.count("r2.class_b", { bucket: "b", op: "get" });
         }

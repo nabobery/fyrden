@@ -29,7 +29,11 @@ export default defineConfig(async () => {
       // Each test file starts its own runtime (and git processes), so local runs
       // are capped (CI keeps the default; FYRDEN_TEST_WORKERS overrides both).
       ...localWorkers(),
-      setupFiles: ["./test/setup/apply-migrations.ts", "./test/setup/log-capture.ts"],
+      setupFiles: [
+        "./test/setup/apply-migrations.ts",
+        "./test/setup/log-capture.ts",
+        "./test/setup/hold-alarms.ts",
+      ],
       // Node, once per run: real git's advertisement bytes for the smart HTTP tests,
       // and repositories git packed for the fetch and push tests.
       globalSetup: [

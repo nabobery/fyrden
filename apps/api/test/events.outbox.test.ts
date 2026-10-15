@@ -9,7 +9,7 @@ import {
   secureRandomBytes,
 } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   MAX_MESSAGE_BYTES,
   type NewEvent,
@@ -377,17 +377,6 @@ const commit = (repo: RepoDO, n: number, extra: { onCommitted?: () => void } = {
   });
 
 describe("repository events", () => {
-  // Every clock in this isolate runs a day ahead, so the alarm a repository's creation arms
-  // never fires on its own (sending, and so emptying, the outbox these tests read); a test
-  // that drains it drives the alarm itself.
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
-    vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("emits the creation with the repository's identity and the allocated epoch", async () => {
     const { stub, owner, repoId } = await newRepoWithEvents();
     const events = await inRepo(stub, outboxEvents);
