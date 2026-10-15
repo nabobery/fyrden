@@ -96,6 +96,7 @@ import {
   listPullCommitsOperation,
   listPullFilesOperation,
   listPullsOperation,
+  mergePullOperation,
   updatePullOperation,
 } from "../repos/pulls.js";
 import {
@@ -321,6 +322,7 @@ export const handlers: Handlers = {
   "pulls.create": createPullOperation,
   "pulls.get": getPullOperation,
   "pulls.update": updatePullOperation,
+  "pulls.merge": mergePullOperation,
   "pulls.files.list": listPullFilesOperation,
   "pulls.commits.list": listPullCommitsOperation,
   "pulls.reviews.list": listReviewsOperation,

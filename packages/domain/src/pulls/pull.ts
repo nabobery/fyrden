@@ -40,6 +40,10 @@ export const PullRequestRowSchema = z.strictObject({
   /** Bumped by each reopen: work started for an earlier opening does not apply. */
   generation: z.number().int().positive(),
   closedAt: z.number().int().min(0).nullable(),
+  /** Set once merged: the commit the base branch moved to, who merged, when. */
+  mergeCommitSha: sha.nullable(),
+  mergedBy: z.string().nullable(),
+  mergedAt: z.number().int().min(0).nullable(),
   createdAt: z.number().int().min(0),
   updatedAt: z.number().int().min(0),
 });

@@ -19,11 +19,15 @@ import {
   type TreeEntry,
 } from "@fyrden/git-core";
 import { pathSegments } from "../../git/cache/object-check.js";
-import { buildCommandHead, readPushReport } from "../../git/chunked/head.js";
+import {
+  buildCommandHead,
+  type PushReportSummary,
+  readPushReport,
+} from "../../git/chunked/head.js";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
 import { ACCESS_LOST, TOKEN_REVOKED } from "../../git/push/reauthorize.js";
 import { reauthorizeByToken } from "../../git/push/reauthorize-token.js";
-import type { RepoPush } from "../../git/push/repo-push.js";
+import type { PushLogMeta, RepoPush } from "../../git/push/repo-push.js";
 import { BUCKET_NAME, headKey, packKey } from "../../git/push/scratch.js";
 import { type Browsed, type CommitView, fail } from "./browse.js";
 import { checkSignature, type SignatureCheck } from "./signature.js";
@@ -480,12 +484,16 @@ export async function storeUpload(
 
 /**
  * Indexes a stored write, checks the writer's token again and commits it
- * (the branch moves only from the head the commit was built on).
+ * (the branch moves only from the head the commit was built on). `meta`
+ * adds the caller's part of the commit point (a merge's); `onRefused`
+ * answers a refused push.
  */
 export async function finishUpload(
   deps: FileWriteDeps,
   input: WriterOf<FileWriteInput>,
   upload: StoredUpload,
+  meta: Omit<PushLogMeta, "repoId" | "requestId"> = {},
+  onRefused: (report: PushReportSummary) => Browsed<never> = refused,
 ): Promise<Browsed<true>> {
   const { push } = deps;
   const { uploadId } = upload;
@@ -494,7 +502,7 @@ export async function finishUpload(
     for (let step = 0; ; step++) {
       const progress = await push.status(uploadId, FILE_WRITE_POLICY.indexStepMs);
       if (progress.state === "ready") break;
-      if (progress.state === "done") return refused(readPushReport(progress.response));
+      if (progress.state === "done") return onRefused(readPushReport(progress.response));
       // Indexing could not go on in this invocation (its lock or call budget is taken).
       if (step + 1 >= FILE_WRITE_POLICY.indexSteps) return BUSY;
       await new Promise((resolve) => setTimeout(resolve, FILE_WRITE_POLICY.indexPauseMs));
@@ -509,11 +517,11 @@ export async function finishUpload(
       },
       deps.writerRole,
     );
-    const response = await push.finalize(uploadId, decision, { repoId: input.repoId });
+    const response = await push.finalize(uploadId, decision, { ...meta, repoId: input.repoId });
     // The push has settled its upload and scratch objects, committed or not.
     finalized = true;
     const report = readPushReport(response);
-    return report.ok ? { ok: true, value: true } : refused(report);
+    return report.ok ? { ok: true, value: true } : onRefused(report);
   } finally {
     if (!finalized) await discard(deps, upload);
   }
@@ -558,7 +566,7 @@ export async function packOf(
 }
 
 /** A push report's refusal, as the API answers it. */
-function refused(report: ReturnType<typeof readPushReport>): Browsed<never> {
+export function refused(report: PushReportSummary): Browsed<never> {
   const reason = report.ok ? "" : report.error;
   // The branch is not where the commit was built: moved, created or deleted meanwhile.
   if (

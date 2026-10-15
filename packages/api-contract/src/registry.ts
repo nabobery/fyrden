@@ -47,6 +47,7 @@ import {
   listPullCommits,
   listPullFiles,
   listPulls,
+  mergePull,
   updatePull,
 } from "../ops/pulls.js";
 import { getOrgQuota, getUserQuota, setQuota } from "../ops/quotas.js";
@@ -139,6 +140,7 @@ export const registry = defineRegistry([
   createPull,
   getPull,
   updatePull,
+  mergePull,
   listPullFiles,
   listPullCommits,
   listReviews,

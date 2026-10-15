@@ -1,7 +1,7 @@
 import { atLeast, type RepoRole } from "../authz/roles.js";
 import type { PullState } from "./pull.js";
 
-/** What can be done to a pull request after it is opened (merging comes with reviews). */
+/** What can be done to a pull request after it is opened. */
 export const PULL_ACTIONS = [
   "edit",
   "retarget",
@@ -9,6 +9,7 @@ export const PULL_ACTIONS = [
   "ready_for_review",
   "close",
   "reopen",
+  "merge",
 ] as const;
 export type PullAction = (typeof PULL_ACTIONS)[number];
 
@@ -38,7 +39,8 @@ export interface PullActionRule {
  * The mutation matrix (GitHub's roles): the author edits, retargets,
  * drafts, closes and reopens its own pull request with any role that reads
  * the repository; on anyone else's, triage closes and reopens, write does
- * the rest.
+ * the rest. Merging takes write, the author's own included; a merge emits
+ * `closed` (with `merged` set), as GitHub's does.
  */
 export const PULL_ACTION_RULES: Readonly<Record<PullAction, PullActionRule>> = {
   edit: {
@@ -102,6 +104,17 @@ export const PULL_ACTION_RULES: Readonly<Record<PullAction, PullActionRule>> = {
     staleApprovals: false,
     invalidatesMergeability: true,
     newGeneration: true,
+  },
+  merge: {
+    author: false,
+    minRole: "write",
+    from: ["open"],
+    to: "merged",
+    event: "closed",
+    audit: "pull_request.merge",
+    staleApprovals: false,
+    invalidatesMergeability: false,
+    newGeneration: false,
   },
 };
 

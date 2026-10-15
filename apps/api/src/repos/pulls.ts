@@ -6,6 +6,7 @@ import type {
   listPullCommits,
   listPullFiles,
   listPulls,
+  mergePull,
   Output,
   updatePull,
 } from "@fyrden/api-contract";
@@ -16,6 +17,7 @@ import { decodeBytesCursor, decodeCursor, encodeBytesCursor, encodeCursor } from
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { resolveVerification } from "../signing/verification.js";
 import type { RepoEntry } from "./directory.js";
+import { commitIdentityFor, commitIdentityOf } from "./file-writes.js";
 
 type PullOutput = Output<typeof getPull>;
 
@@ -36,6 +38,9 @@ export function pullOutput(pull: PullRecord): PullOutput {
     created_at: pull.createdAt,
     updated_at: pull.updatedAt,
     closed_at: pull.closedAt,
+    merged_at: pull.mergedAt,
+    merge_commit_sha: pull.mergeCommitSha,
+    merged_by: pull.mergedBy === null ? null : { id: pull.mergedBy },
   };
 }
 
@@ -234,6 +239,43 @@ export async function updatePullOperation(
   if (!result.ok)
     throw failure(entry, result.code, "number" in result ? result.number : input.pull_number);
   return pullOutput(result.record);
+}
+
+/** The `pulls.merge` operation. */
+export async function mergePullOperation(
+  ctx: OpContext,
+  input: Input<typeof mergePull>,
+): Promise<Output<typeof mergePull>> {
+  // git stops reading a message at a NUL (and fsck warns of one).
+  for (const text of [input.commit_title, input.commit_message])
+    if (text?.includes("\0"))
+      throw new OperationError(422, "invalid_input", "A commit message must not contain NUL.");
+  const entry = await repoFor(ctx, input.owner, input.repo, "contents:write");
+  const repo = ctx.env.REPO.getByName(entry.id);
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "getPull" });
+  const pull = await repo.getPull(input.pull_number);
+  if (pull === null) throw repoNotFound(entry);
+  if (!pull) throw pullNotFound(input.pull_number);
+  const [mergerIdentity, pullAuthorIdentity] = await Promise.all([
+    commitIdentityOf(ctx),
+    commitIdentityFor(ctx, pull.authorId, pull.authorAct[0] ?? null),
+  ]);
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "mergePull" });
+  const result = await repo.mergePull(
+    {
+      number: input.pull_number,
+      method: input.merge_method,
+      ...(input.sha !== undefined && { expectedHead: input.sha }),
+      ...(input.commit_title !== undefined && { commitTitle: input.commit_title }),
+      ...(input.commit_message !== undefined && { commitMessage: input.commit_message }),
+      ownerHandle: entry.ownerHandle,
+      mergerIdentity,
+      pullAuthorIdentity,
+    },
+    actorOf(ctx),
+  );
+  if (!result.ok) throw new OperationError(result.status, result.code, result.error);
+  return { sha: result.value.sha, merged: true, message: "Pull Request successfully merged" };
 }
 
 /** A listing's cursor: the listing (an id the repository made) and where the next page starts. */

@@ -21,7 +21,12 @@ import {
   type RequestMeta,
 } from "@fyrden/adapters-cloudflare/obs";
 import {
+  atLeast,
+  type CommitIdentity,
+  coAuthorTrailers,
+  decidePullAction,
   type Envelope,
+  type MergeContext,
   principalTypeOf,
   protectsBranch,
   REPO_ROLES,
@@ -30,6 +35,7 @@ import {
   rootIdentity,
 } from "@fyrden/domain";
 import {
+  appendTrailers,
   type BlockCache,
   bytesBody,
   encodePushResponse,
@@ -145,6 +151,13 @@ import {
   type FileWriteResult,
   writeFiles,
 } from "./repo/file-writes.js";
+import {
+  MERGE_POLICY,
+  type MergeMade,
+  type MergePolicy,
+  mergePull,
+  PULL_CHANGED,
+} from "./repo/merge.js";
 import { mergeBaseOf, type PullFilesPage, pullCommits, pullFiles } from "./repo/pull-files.js";
 import {
   type OpenPull,
@@ -185,6 +198,35 @@ const INVALID_LISTING = fail(
 
 /** Why a change of pull requests or reviews was not attempted. */
 type PullChangeRefusal = "repo_not_found" | "repo_transferring" | "access_lost";
+
+/** `text` without the line breaks it ends with (a loop: a regex would backtrack on many). */
+function withoutTrailingNewlines(text: string): string {
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "\n") end--;
+  return text.slice(0, end);
+}
+
+/** Principals one directory query looks up (D1 binds at most 100 parameters). */
+const OWNER_BATCH = 50;
+
+/** Stands for a commit not made yet in a ruleset precheck (only the update's kind matters there). */
+const ZERO_ID = "0".repeat(40);
+
+/** A merge of a pull request, as the Worker asks for it. */
+export interface MergePullInput {
+  readonly number: number;
+  readonly method: "merge" | "squash";
+  /** The head the caller reviewed (GitHub's `sha`): the merge fails if the pull request is elsewhere. */
+  readonly expectedHead?: string;
+  readonly commitTitle?: string;
+  readonly commitMessage?: string;
+  /** The repository owner's handle, for the default merge message. */
+  readonly ownerHandle: string;
+  /** Who a merge commit is by: the merger. */
+  readonly mergerIdentity: CommitIdentity;
+  /** Who a squashed commit is by: the pull request's author. */
+  readonly pullAuthorIdentity: CommitIdentity;
+}
 
 /** What a repository object knows of the repository's details. */
 export interface RepoDetails {
@@ -746,6 +788,168 @@ export class RepoDO extends MigratingDO {
       return !changed.ok && changed.code === "version-conflict"
         ? { ok: false as const, code: "busy" as const }
         : changed;
+    });
+  }
+
+  /**
+   * Merges a pull request into its base branch (a merge commit, or one
+   * squashed commit) for a caller with write access, through the push path:
+   * built from the base branch's tip and the head recorded now, judged by
+   * the rulesets with the pull request's reviews and last push, and
+   * committed only while the pull request, its reviews and the base tip
+   * are as they were (the commit marks it merged).
+   */
+  mergePull(input: MergePullInput, actor: RefActor): Promise<Browsed<MergeMade>> {
+    return this.#measured("mergePull", async () => {
+      await this.checkEpoch();
+      const ceilings = await this.#rolesPulled(actor.principal, actor.grantId ?? null);
+      const refusedWrite = this.#writeRefusal();
+      if (refusedWrite) return fail(refusedWrite.status, refusedWrite.code, refusedWrite.error);
+      const { number, method } = input;
+      const pull = this.pulls.get(number);
+      if (!pull)
+        return fail(404, "pull_not_found", `The repository has no pull request ${number}.`);
+      const decision = decidePullAction("merge", {
+        state: pull.state,
+        headRefDeleted: false,
+        isAuthor: false,
+        role: this.#roleNow(actor.principal, ceilings),
+      });
+      if (!decision.ok)
+        return decision.refusal === "forbidden"
+          ? fail(403, "forbidden", "Merging a pull request takes write access.")
+          : fail(405, "not_mergeable", `Pull request ${number} is not open.`);
+      if (pull.draft)
+        return fail(
+          405,
+          "not_mergeable",
+          `Pull request ${number} is a draft; mark it ready for review first.`,
+        );
+      if (input.expectedHead !== undefined && input.expectedHead !== pull.headSha)
+        return fail(409, "head_moved", "The head branch was modified; review it and try again.");
+      const baseTip = this.pulls.branchTip(pull.baseRef);
+      if (!baseTip) return fail(422, "base_not_found", "The base branch does not exist.");
+      const head = oidFromHex(pull.headSha);
+      const walk = { maxCommits: this.mergePolicy.maxCommits };
+      let upToDate: boolean;
+      try {
+        if (await isAncestor(this.git.commitGraph, "verified", head, baseTip, walk))
+          return fail(405, "not_mergeable", "The base branch already contains the head.");
+        upToDate = await isAncestor(this.git.commitGraph, "verified", baseTip, head, walk);
+      } catch (error) {
+        if (!(error instanceof WalkLimitError)) throw error;
+        return fail(
+          422,
+          "too_expensive",
+          "The base branch and the head are too far apart to merge here.",
+        );
+      }
+
+      // What the rulesets judge the merge by, from the repository's own records.
+      const standing = this.reviews.standing(number);
+      // Whose reviews count: write access now, checked again in the commit's transaction.
+      const reviewerOwners = await this.#ownersPulled([
+        ...new Set(standing.reviews.map((r) => r.reviewerRoot)),
+      ]);
+      const eligible = () =>
+        [...reviewerOwners]
+          .filter(([root, owners]) => atLeast(this.#roleNow(root, owners), "write"))
+          .map(([root]) => root);
+      const eligibleRoots = new Set(eligible());
+      const eligibleThen = [...eligibleRoots].join(" ");
+      const lastPush =
+        pull.lastPusher === null || pull.lastPushAt === null
+          ? null
+          : {
+              pusherRoot: rootIdentity({
+                principalId: pull.lastPusher,
+                grantId: pull.lastPusherGrant,
+                ceilingIds: await this.#ceilingsOf(pull.lastPusher, pull.lastPusherGrant),
+              }),
+              at: pull.lastPushAt,
+            };
+      const merge: MergeContext = {
+        number,
+        method,
+        approvals: {
+          reviews: standing.reviews,
+          headSha: pull.headSha,
+          authorRoot: pull.authorRoot,
+          lastPush,
+          eligibleRoots,
+        },
+        unresolvedThreads: 0,
+        upToDate,
+      };
+      const baseRef = `refs/heads/${pull.baseRef}`;
+      const precheck = await this.#precheckUpdates(
+        actor.principal,
+        [{ ref: baseRef, old: oidToHex(baseTip), new: ZERO_ID }],
+        actor.grantId ?? null,
+        undefined,
+        merge,
+      );
+      if (precheck) return fail(405, "merge_refused", precheck);
+
+      // GitHub's default messages; a squash is the pull request author's.
+      const identity: CommitIdentity =
+        method === "squash" ? input.pullAuthorIdentity : input.mergerIdentity;
+      const title =
+        input.commitTitle ??
+        (method === "merge"
+          ? `Merge pull request #${number} from ${input.ownerHandle}/${pull.headRef}`
+          : `${pull.title} (#${number})`);
+      const body = input.commitMessage ?? (method === "merge" ? pull.title : (pull.body ?? ""));
+      const text =
+        body.trim() === "" ? `${title}\n` : `${title}\n\n${withoutTrailingNewlines(body)}\n`;
+      // A title or body may hold NUL; git stops reading a message there.
+      if (text.includes("\0"))
+        return fail(
+          422,
+          "invalid_input",
+          "The pull request's title or body contains NUL; give commit_title and commit_message.",
+        );
+      const message = appendTrailers(text, coAuthorTrailers(text, identity.coAuthors));
+      const made = await mergePull(
+        await this.#writeDeps(),
+        {
+          writer: {
+            principal: actor.principal,
+            tokenId: actor.tokenId ?? "",
+            grantId: actor.grantId ?? null,
+            repoId: this.#repoId(),
+            requestId: actor.requestId ?? null,
+          },
+          method,
+          baseRef,
+          baseTip,
+          head,
+          upToDate,
+          author: identity.author,
+          committer: identity.committer,
+          message,
+          merge,
+          fence: () =>
+            this.pulls.mergeFence(number, pull) &&
+            this.reviews.stamp(number) === standing.stamp &&
+            eligible().join(" ") === eligibleThen
+              ? undefined
+              : PULL_CHANGED,
+          inCommit: (sha) =>
+            this.pulls.markMerged(
+              number,
+              sha,
+              method,
+              { ...actor, via: "merge" },
+              this.git.context.now(),
+            ),
+          ...(this.mergeHooks.beforeFinish && { beforeFinish: this.mergeHooks.beforeFinish }),
+        },
+        this.mergePolicy,
+      );
+      this.#armOutbox();
+      this.#ensureAuditArchive();
+      return made;
     });
   }
 
@@ -1574,6 +1778,31 @@ export class RepoDO extends MigratingDO {
     return row?.owner_id ? [row.owner_id] : [];
   }
 
+  /**
+   * The owners capping each of `principals` (an agent's own owner; none for
+   * a user), from the directory's primary in batches, with all their roles
+   * pulled fresh: a few queries however many principals there are.
+   */
+  async #ownersPulled(principals: readonly string[]): Promise<Map<string, string[]>> {
+    const owners = new Map<string, string[]>(principals.map((id) => [id, []]));
+    const agents = principals.filter((id) => principalTypeOf(id) === "agent");
+    const db = this.env.DIRECTORY.withSession("first-primary");
+    for (let at = 0; at < agents.length; at += OWNER_BATCH) {
+      const batch = agents.slice(at, at + OWNER_BATCH);
+      this.git.context.metrics.count("d1.query", { db: "directory", op: "agent_owner" });
+      const { results } = await db
+        .prepare(
+          `SELECT id, owner_id FROM principals WHERE id IN (${batch.map(() => "?").join(", ")})`,
+        )
+        .bind(...batch)
+        .all<{ id: string; owner_id: string | null }>();
+      for (const row of results) if (row.owner_id) owners.set(row.id, [row.owner_id]);
+    }
+    for (const id of new Set([...owners.keys(), ...[...owners.values()].flat()]))
+      await this.acl.roleOf(id, "write");
+    return owners;
+  }
+
   /** A write's ceilings, with the principal's and their roles pulled fresh (one snapshot serves all). */
   async #rolesPulled(principal: string, grantId: string | null): Promise<string[]> {
     const ceilings = await this.#ceilingsOf(principal, grantId);
@@ -1612,6 +1841,8 @@ export class RepoDO extends MigratingDO {
     grantId: string | null,
     /** A default branch the write sets as it commits (an import's). */
     head?: string,
+    /** The pull request the write merges, for its `pull_request` rules. */
+    merge?: MergeContext,
   ): Promise<string | undefined> {
     if (!hasPrecheckRules(this.rulesetStore)) return undefined;
     const ceilings = await this.#rolesPulled(principal, grantId);
@@ -1626,6 +1857,7 @@ export class RepoDO extends MigratingDO {
       })),
       delegated,
       head,
+      merge,
     );
     return refusals.size === 0 ? undefined : [...refusals.values()].join("; ");
   }
@@ -1994,6 +2226,12 @@ export class RepoDO extends MigratingDO {
 
   /** Hooks into a generation from a template. For tests. */
   generationHooks: { beforeWrite?: () => Promise<void> } = {};
+
+  /** Hooks into a merge of a pull request. For tests. */
+  mergeHooks: { beforeFinish?: () => Promise<void> } = {};
+
+  /** A merge's budgets. Tests may replace them. */
+  mergePolicy: MergePolicy = MERGE_POLICY;
 
   #networkOps: RepoNetwork | undefined;
 

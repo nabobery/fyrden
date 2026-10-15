@@ -47,6 +47,15 @@ export const PullRequest = z.object({
   created_at: z.number().int().describe("Unix time in milliseconds."),
   updated_at: z.number().int().describe("Unix time in milliseconds."),
   closed_at: z.number().int().nullable().describe("Unix time in milliseconds."),
+  merged_at: z.number().int().nullable().describe("Unix time in milliseconds."),
+  merge_commit_sha: z
+    .string()
+    .nullable()
+    .describe("Once merged, the commit the base branch moved to."),
+  merged_by: z
+    .object({ id: z.string() })
+    .nullable()
+    .describe("Who merged it (the user, when agents acted for one)."),
 });
 
 export const listPulls = defineOperation({
@@ -251,5 +260,55 @@ export const listPullCommits = defineOperation({
     title: "List pull request commits",
     description: "List the commits of a pull request, oldest first.",
     readOnly: true,
+  },
+});
+
+export const mergePull = defineOperation({
+  id: "pulls.merge",
+  method: "PUT",
+  path: "/repos/{owner}/{repo}/pulls/{pull_number}/merge",
+  summary: "Merge a pull request",
+  description:
+    "Merges an open pull request that is not a draft into its base branch: `merge` makes a merge commit of the base branch's tip and the head, `squash` one commit on the base branch with the head's changes (by the pull request's author). The commit is made and signed by the server; the base branch's rulesets apply, with the pull request's reviews and last push. Refused (405) on conflicts, or when the base branch moved while merging; refused (409) when `sha` is not the head. Rebasing is not offered yet.",
+  input: z.object({
+    ...RepoInput,
+    pull_number: PullNumber,
+    commit_title: z
+      .string()
+      .min(1)
+      .max(1024)
+      .optional()
+      .describe(
+        "The commit's first line; GitHub's default for the method when left out (`Merge pull request #n from owner/branch`, or the title and number).",
+      ),
+    commit_message: z
+      .string()
+      .max(MAX_PULL_BODY_LENGTH)
+      .optional()
+      .describe(
+        "The commit's message after its title; by default the pull request's title (merge) or body (squash).",
+      ),
+    sha: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/)
+      .optional()
+      .describe("The head the pull request must be at: the merge is refused otherwise."),
+    merge_method: z.enum(["merge", "squash"]).default("merge"),
+  }),
+  output: z.object({
+    sha: z.string().describe("The commit the base branch now points at."),
+    merged: z.boolean(),
+    message: z.string(),
+  }),
+  permission: "contents:write",
+  principals: ["user", "agent"],
+  rateLimit: "expensive",
+  idempotency: "key",
+  mcp: {
+    tool: "merge_pull_request",
+    title: "Merge a pull request",
+    description:
+      "Merge an open pull request into its base branch, with a merge commit or squashed into one commit.",
+    readOnly: false,
   },
 });

@@ -34,6 +34,14 @@ export const MAX_LISTINGS = 1_000;
 export interface PullRecord extends PullRequestRow {
   /** The agents that opened it for `authorId`, the current one first; empty when it acted itself. */
   readonly authorAct: readonly string[];
+  /**
+   * Who made the head what it is (its opener, the last push to its branch,
+   * or a reopening that took a newer head), under which grant, and when;
+   * null when unknown.
+   */
+  readonly lastPusher: string | null;
+  readonly lastPusherGrant: string | null;
+  readonly lastPushAt: number | null;
   /** Bumped on every change. */
   readonly version: number;
 }
@@ -52,6 +60,12 @@ type Row = {
   head_ref: string;
   head_sha: string;
   head_ref_deleted: number;
+  last_pusher: string | null;
+  last_pusher_grant: string | null;
+  last_push_at: number | null;
+  merge_commit_sha: string | null;
+  merged_by: string | null;
+  merged_at: number | null;
   generation: number;
   version: number;
   closed_at: number | null;
@@ -115,7 +129,7 @@ export class RepoPulls {
     return row && record(row);
   }
 
-  /** Newest first, below `before` (a number) when given. */
+  /** Newest first, below `before` (a number) when given; `closed` includes merged ones, as GitHub's does. */
   list(state: PullState | "all", before: number | undefined, limit: number): PullRecord[] {
     const below = before ?? Number.MAX_SAFE_INTEGER;
     const rows =
@@ -126,8 +140,10 @@ export class RepoPulls {
             limit,
           )
         : this.#rows(
-            "SELECT * FROM pull_requests WHERE state = ? AND number < ? ORDER BY number DESC LIMIT ?",
+            `SELECT * FROM pull_requests WHERE state IN (?, ?) AND number < ?
+             ORDER BY number DESC LIMIT ?`,
             state,
+            state === "closed" ? "merged" : state,
             below,
             limit,
           );
@@ -174,9 +190,13 @@ export class RepoPulls {
       const number = Number(PULL_HEAD.exec(update.name)?.[1]);
       if (!number || update.newOid === null) continue;
       const [row] = this.#rows(
-        `UPDATE pull_requests SET head_sha = ?, version = version + 1, updated_at = ?
+        `UPDATE pull_requests SET head_sha = ?, last_pusher = ?, last_pusher_grant = ?,
+           last_push_at = ?, version = version + 1, updated_at = ?
          WHERE number = ? AND state = 'open' RETURNING *`,
         oidToHex(update.newOid),
+        actor?.principal ?? null,
+        actor?.grantId ?? null,
+        now,
         now,
         number,
       );
@@ -186,6 +206,51 @@ export class RepoPulls {
           after: row.head_sha,
         });
     }
+  }
+
+  /**
+   * Whether a merge begun on `at` may commit now (its fence, in the commit
+   * transaction): the pull request is still open and ready, in the
+   * generation, at the head (from the same last push) and on the base the
+   * merge was made for.
+   */
+  mergeFence(number: number, at: PullRecord): boolean {
+    const now = this.get(number);
+    return (
+      now !== undefined &&
+      now.state === "open" &&
+      !now.draft &&
+      now.generation === at.generation &&
+      now.headSha === at.headSha &&
+      now.baseRef === at.baseRef &&
+      // A head moved away and back is a newer push: the approvals were judged against the old one.
+      now.lastPusher === at.lastPusher &&
+      now.lastPusherGrant === at.lastPusherGrant &&
+      now.lastPushAt === at.lastPushAt
+    );
+  }
+
+  /**
+   * In a merge's commit transaction: the pull request is merged into
+   * `sha` by `actor`; it emits `closed` and records the merge.
+   */
+  markMerged(number: number, sha: Oid, method: string, actor: RefActor, now: number): void {
+    const rule = PULL_ACTION_RULES.merge;
+    const [row] = this.#rows(
+      `UPDATE pull_requests SET state = 'merged', merge_commit_sha = ?, merged_by = ?,
+         merged_at = ?, closed_at = ?, version = version + 1, updated_at = ?
+       WHERE number = ? AND state = 'open' RETURNING *`,
+      oidToHex(sha),
+      actor.principal,
+      now,
+      now,
+      now,
+      number,
+    );
+    // The fence ran in this transaction: it is open.
+    if (!row) throw new Error(`pull request ${number} is not open to merge`);
+    this.#emit(rule.event, record(row), actor);
+    this.deps.events.auditChange(rule.audit, actor, { number, sha: oidToHex(sha), method });
   }
 
   /** Whether the pull request's head has been `sha`, now or before. */
@@ -305,8 +370,9 @@ export class RepoPulls {
         storage.sql.exec("UPDATE repo_meta SET next_number = ? WHERE id = 1", number + 1);
         const [row] = this.#rows(
           `INSERT INTO pull_requests (number, title, body, state, draft, author_id, author_root,
-             author_act, base_ref, base_sha, head_ref, head_sha, created_at, updated_at)
-           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+             author_act, base_ref, base_sha, head_ref, head_sha, last_pusher, last_pusher_grant,
+             last_push_at, created_at, updated_at)
+           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
           number,
           input.title,
           input.body,
@@ -318,6 +384,9 @@ export class RepoPulls {
           oidToHex(input.baseSha),
           input.headRef,
           oidToHex(input.headSha),
+          caller.actor.principal,
+          caller.actor.grantId ?? null,
+          now,
           now,
           now,
         );
@@ -413,7 +482,7 @@ export class RepoPulls {
 
   #apply(
     current: PullRecord,
-    action: PullAction,
+    action: PatchAction,
     patch: PullPatch,
     baseTip: Oid | null,
     now: number,
@@ -458,10 +527,16 @@ export class RepoPulls {
         // The base it had until then: a retarget in the same patch comes after.
         const head = this.branchTip(current.headRef) as Oid;
         const base = this.branchTip(current.baseRef);
+        // A head pushed while it was closed is the reopener's to answer for.
+        const pushed = oidToHex(head) !== current.headSha;
         row = set(
-          "state = 'open', closed_at = NULL, generation = generation + 1, head_sha = ?, base_sha = ?",
+          `state = 'open', closed_at = NULL, generation = generation + 1, head_sha = ?, base_sha = ?,
+           last_pusher = ?, last_pusher_grant = ?, last_push_at = ?`,
           oidToHex(head),
           base ? oidToHex(base) : current.baseSha,
+          pushed ? actor.principal : current.lastPusher,
+          pushed ? (actor.grantId ?? null) : current.lastPusherGrant,
+          pushed ? now : current.lastPushAt,
         );
         break;
       }
@@ -503,7 +578,14 @@ export class RepoPulls {
       pull.number,
       pull.headSha,
     );
-    const { authorAct: _act, version, ...row } = pull;
+    const {
+      authorAct: _act,
+      lastPusher: _pusher,
+      lastPusherGrant: _grant,
+      lastPushAt: _at,
+      version,
+      ...row
+    } = pull;
     this.deps.events.emitEntity(
       `pull_request.${event}`,
       actor,
@@ -528,9 +610,12 @@ export class RepoPulls {
   }
 }
 
+/** What a patch can ask for: a merge is made through the push path. */
+type PatchAction = Exclude<PullAction, "merge">;
+
 /** The actions a patch asks for, in the order they apply: a reopen first, a close last. */
-function plannedActions(current: PullRecord, patch: PullPatch): PullAction[] {
-  const actions: PullAction[] = [];
+function plannedActions(current: PullRecord, patch: PullPatch): PatchAction[] {
+  const actions: PatchAction[] = [];
   if (patch.state === "open" && current.state !== "open") actions.push("reopen");
   if (
     (patch.title !== undefined && patch.title !== current.title) ||
@@ -559,6 +644,12 @@ function record(row: Row): PullRecord {
     baseSha: row.base_sha,
     headSha: row.head_sha,
     headRefDeleted: row.head_ref_deleted === 1,
+    lastPusher: row.last_pusher,
+    lastPusherGrant: row.last_pusher_grant,
+    lastPushAt: row.last_push_at,
+    mergeCommitSha: row.merge_commit_sha,
+    mergedBy: row.merged_by,
+    mergedAt: row.merged_at,
     generation: row.generation,
     closedAt: row.closed_at,
     createdAt: row.created_at,

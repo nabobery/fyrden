@@ -443,4 +443,21 @@ export const repoSchema: readonly DoMigration[] = [
         ON pull_listings (pr_number, kind, base_sha, head_sha, created_at);
     `,
   },
+  {
+    version: 20,
+    // Merging pull requests: who made each head what it is (its opening, a
+    // push to its branch, or a reopening that took a newer head), so a
+    // merge can ask for an approval from someone else after it (unknown for
+    // pull requests opened before this, which no approval comes after), and
+    // the merge itself once made.
+    name: "pull_request_merges",
+    sql: `
+      ALTER TABLE pull_requests ADD COLUMN last_pusher TEXT;
+      ALTER TABLE pull_requests ADD COLUMN last_pusher_grant TEXT;
+      ALTER TABLE pull_requests ADD COLUMN last_push_at INTEGER;
+      ALTER TABLE pull_requests ADD COLUMN merge_commit_sha TEXT;
+      ALTER TABLE pull_requests ADD COLUMN merged_by TEXT;
+      ALTER TABLE pull_requests ADD COLUMN merged_at INTEGER;
+    `,
+  },
 ];

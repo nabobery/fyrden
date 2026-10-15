@@ -7,6 +7,7 @@ import {
   principalTypeOf,
   type RepoRole,
   type ReviewEvent,
+  type ReviewFact,
   type ReviewState,
   reviewStateOf,
 } from "@fyrden/domain";
@@ -95,6 +96,43 @@ export class RepoReviews {
       after,
       limit,
     ).map(record);
+  }
+
+  /**
+   * What a merge's approval check reads of the pull request's reviews:
+   * those that can count (not comments, not dismissed), and a stamp the
+   * merge's commit transaction compares, so a review submitted or
+   * dismissed meanwhile stops the merge.
+   */
+  standing(number: number): { reviews: ReviewFact[]; stamp: string } {
+    const reviews = this.deps.git.context.storage.sql
+      .exec<Pick<Row, "reviewer_root" | "by_agent" | "commit_sha" | "state" | "submitted_at">>(
+        `SELECT reviewer_root, by_agent, commit_sha, state, submitted_at FROM reviews
+         WHERE pr_number = ? AND state != 'COMMENTED' AND dismissed_at IS NULL`,
+        number,
+      )
+      .toArray()
+      .map((row) => ({
+        reviewerRoot: row.reviewer_root,
+        byAgent: row.by_agent === 1,
+        commitSha: row.commit_sha,
+        state: row.state,
+        submittedAt: row.submitted_at,
+        dismissed: false,
+      }));
+    return { reviews, stamp: this.stamp(number) };
+  }
+
+  /** Changes when any review of the pull request is submitted or changed. */
+  stamp(number: number): string {
+    const row = this.deps.git.context.storage.sql
+      .exec<{ n: number; last: number; versions: number }>(
+        `SELECT count(*) AS n, coalesce(max(review_id), 0) AS last,
+           coalesce(sum(version), 0) AS versions FROM reviews WHERE pr_number = ?`,
+        number,
+      )
+      .one();
+    return `${row.n}:${row.last}:${row.versions}`;
   }
 
   get(number: number, id: number): ReviewRecord | undefined {

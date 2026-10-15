@@ -26,6 +26,8 @@ describe("decidePullAction", () => {
     ["retarget", false, "write", true],
     ["convert_to_draft", false, "triage", false],
     ["ready_for_review", false, "maintain", true],
+    ["merge", true, "triage", false],
+    ["merge", false, "write", true],
   ] as const)("%s by author=%s with %s: %s", (action, isAuthor, role, allowed) => {
     expect(decidePullAction(action, { ...open, isAuthor, role }).ok).toBe(allowed);
   });

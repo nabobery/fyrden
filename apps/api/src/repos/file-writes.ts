@@ -107,6 +107,34 @@ export async function commitIdentityOf(ctx: OpContext): Promise<CommitIdentity> 
   });
 }
 
+/**
+ * The identity of a commit the server makes for someone other than the
+ * caller (a squashed pull request is its author's): `principalId`, with
+ * `agentId` acting for it under a delegation (null for none).
+ */
+export async function commitIdentityFor(
+  ctx: OpContext,
+  principalId: string,
+  agentId: string | null,
+): Promise<CommitIdentity> {
+  const ids = agentId === null ? [principalId] : [principalId, agentId];
+  ctx.metrics.count("d1.query", { db: "directory", op: "principal_handle" });
+  const { results } = await ctx.env.DIRECTORY.prepare(
+    `SELECT id, handle FROM principals WHERE id IN (${ids.map(() => "?").join(", ")})`,
+  )
+    .bind(...ids)
+    .all<{ id: string; handle: string | null }>();
+  const party = (id: string): CommitParty => ({
+    id,
+    handle: results.find((r) => r.id === id)?.handle ?? null,
+  });
+  return serverCommitIdentity({
+    host: ctx.requestHost,
+    principal: party(principalId),
+    actingAgent: agentId === null ? null : party(agentId),
+  });
+}
+
 async function write(
   ctx: OpContext,
   owner: string,

@@ -2,11 +2,13 @@ import {
   indexJobId,
   type JobHandler,
   LOCK_REF_COMMIT,
+  type RefActor,
   type RepoGitStorage,
   UPLOAD_TTL_MS,
   type UploadRecord,
 } from "@fyrden/adapters-cloudflare/git";
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
+import type { MergeContext } from "@fyrden/domain";
 import {
   type BlockCache,
   type CheckedCommand,
@@ -144,6 +146,15 @@ export interface PushLogMeta {
    * default branch there): what it writes commits with the refs, or not at all.
    */
   readonly inCommit?: () => void;
+  /**
+   * The pull request this upload merges, built by the repository from its
+   * own records: the rulesets judge the update as that merge.
+   */
+  readonly merge?: MergeContext;
+  /** A last refusal of the caller's, checked in the commit's transaction after the push's own. */
+  readonly fence?: () => string | undefined;
+  /** How the change is made, for the reflog (a pull request's merge: `merge`). */
+  readonly via?: RefActor["via"];
 }
 
 export class RepoPush {
@@ -177,6 +188,8 @@ export class RepoPush {
           readonly commands: readonly CheckedCommand[];
           /** An atomic push: one refused update fails them all. */
           readonly atomic: boolean;
+          /** The pull request the upload merges, when it is a merge. */
+          readonly merge?: MergeContext;
         }) => Promise<{
           stamp: string;
           restamp: () => string;
@@ -485,6 +498,7 @@ export class RepoPush {
                 head: meta.head,
                 commands,
                 atomic: plan.capabilities.atomic,
+                ...(meta.merge && { merge: meta.merge }),
               });
               rulesStamp = checked;
               return checked.refusals;
@@ -507,13 +521,15 @@ export class RepoPush {
                   ? ACCESS_LOST
                   : rulesStamp.restamp() !== rulesStamp.stamp
                     ? RULESETS_CHANGED
-                    : undefined),
+                    : undefined) ??
+              meta.fence?.(),
             // In the commit's transaction: the account is owed its confirmation (told after,
             // or later should that fail), and the caller's own writes.
             () => {
               this.storage?.owe(uploadId, record.bodyBytes);
               meta.inCommit?.();
             },
+            meta.via,
           ),
         });
         return { plan, indexed, result };

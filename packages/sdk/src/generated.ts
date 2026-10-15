@@ -1323,6 +1323,14 @@ export type PullsListOutput = {
     updated_at: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
+    /** Unix time in milliseconds. */
+    merged_at: number | null;
+    /** Once merged, the commit the base branch moved to. */
+    merge_commit_sha: string | null;
+    /** Who merged it (the user, when agents acted for one). */
+    merged_by: {
+      id: string;
+    } | null;
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -1380,6 +1388,14 @@ export type PullsCreateOutput = {
   updated_at: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
+  /** Unix time in milliseconds. */
+  merged_at: number | null;
+  /** Once merged, the commit the base branch moved to. */
+  merge_commit_sha: string | null;
+  /** Who merged it (the user, when agents acted for one). */
+  merged_by: {
+    id: string;
+  } | null;
 };
 
 /** Input of `pulls.get`: Get a pull request. */
@@ -1428,6 +1444,14 @@ export type PullsGetOutput = {
   updated_at: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
+  /** Unix time in milliseconds. */
+  merged_at: number | null;
+  /** Once merged, the commit the base branch moved to. */
+  merge_commit_sha: string | null;
+  /** Who merged it (the user, when agents acted for one). */
+  merged_by: {
+    id: string;
+  } | null;
 };
 
 /** Input of `pulls.update`: Update a pull request. */
@@ -1484,6 +1508,39 @@ export type PullsUpdateOutput = {
   updated_at: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
+  /** Unix time in milliseconds. */
+  merged_at: number | null;
+  /** Once merged, the commit the base branch moved to. */
+  merge_commit_sha: string | null;
+  /** Who merged it (the user, when agents acted for one). */
+  merged_by: {
+    id: string;
+  } | null;
+};
+
+/** Input of `pulls.merge`: Merge a pull request. */
+export type PullsMergeInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The commit's first line; GitHub's default for the method when left out (`Merge pull request #n from owner/branch`, or the title and number). */
+  commit_title?: string;
+  /** The commit's message after its title; by default the pull request's title (merge) or body (squash). */
+  commit_message?: string;
+  /** The head the pull request must be at: the merge is refused otherwise. */
+  sha?: string;
+  merge_method?: "merge" | "squash";
+};
+
+/** Output of `pulls.merge`. */
+export type PullsMergeOutput = {
+  /** The commit the base branch now points at. */
+  sha: string;
+  merged: boolean;
+  message: string;
 };
 
 /** Input of `pulls.files.list`: List pull request files. */
@@ -1809,6 +1866,14 @@ export type PullsRequestedReviewersAddOutput = {
   updated_at: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
+  /** Unix time in milliseconds. */
+  merged_at: number | null;
+  /** Once merged, the commit the base branch moved to. */
+  merge_commit_sha: string | null;
+  /** Who merged it (the user, when agents acted for one). */
+  merged_by: {
+    id: string;
+  } | null;
 };
 
 /** Input of `pulls.requested_reviewers.remove`: Remove requested reviewers. */
@@ -1861,6 +1926,14 @@ export type PullsRequestedReviewersRemoveOutput = {
   updated_at: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
+  /** Unix time in milliseconds. */
+  merged_at: number | null;
+  /** Once merged, the commit the base branch moved to. */
+  merge_commit_sha: string | null;
+  /** Who merged it (the user, when agents acted for one). */
+  merged_by: {
+    id: string;
+  } | null;
 };
 
 /** Input of `issues.comments.list`: List comments. */
@@ -3496,6 +3569,7 @@ export const OPERATIONS = {
   "pulls.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: true },
   "pulls.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: false },
   "pulls.update": { method: "PATCH", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.merge": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/merge", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.files.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/files", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "files" },
   "pulls.commits.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/commits", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "commits" },
   "pulls.reviews.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "reviews" },
@@ -3642,6 +3716,8 @@ export interface Operations {
   "pulls.get": { input: PullsGetInput; output: PullsGetOutput };
   /** Update a pull request. Changes the title or body, retargets it onto another base branch, marks it a draft or ready, closes or reopens it; fields left out are kept, and all of it happens or none. The author may do any of it to its own pull request; on anyone else's, triage closes and reopens and write does the rest. Reopening needs the head branch to exist. */
   "pulls.update": { input: PullsUpdateInput; output: PullsUpdateOutput };
+  /** Merge a pull request. Merges an open pull request that is not a draft into its base branch: `merge` makes a merge commit of the base branch's tip and the head, `squash` one commit on the base branch with the head's changes (by the pull request's author). The commit is made and signed by the server; the base branch's rulesets apply, with the pull request's reviews and last push. Refused (405) on conflicts, or when the base branch moved while merging; refused (409) when `sha` is not the head. Rebasing is not offered yet. */
+  "pulls.merge": { input: PullsMergeInput; output: PullsMergeOutput };
   /** List pull request files. The files a pull request changes, compared from the merge base of its base branch and head to its head (as GitHub's three-dot comparison), in path order, with each file's patch. At most 3,000 files are listed; renames with unchanged content are found. Pages keep the comparison they started with: the cursor carries `merge_base_sha` and `head_sha`. */
   "pulls.files.list": { input: PullsFilesListInput; output: PullsFilesListOutput };
   /** List pull request commits. The commits a pull request's head has that its base branch does not, oldest first; at most 250 (GitHub's limit). */
