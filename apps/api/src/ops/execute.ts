@@ -1,16 +1,22 @@
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
-  AUTHENTICATED,
   type FyrdenRegistry,
-  INSTANCE_ADMIN,
   type Input,
   makeProblem,
   type OperationDef,
   type Output,
   type Problem,
 } from "@fyrden/api-contract";
+import { checkOperation } from "@fyrden/domain";
 import type { AuthState } from "../middleware/auth.js";
+import {
+  type Claim,
+  finishIdempotent,
+  outcomeOf,
+  requestHash,
+  startIdempotent,
+} from "../rest/idempotency.js";
 
 /** What every operation handler receives, whichever surface (REST or MCP) called it. */
 export interface OpContext {
@@ -22,6 +28,8 @@ export interface OpContext {
   requestId: string;
   /** The hostname the request arrived on (this deployment's own host). */
   requestHost: string;
+  /** The origin (scheme, host and port) the request arrived on, for links back to this API. */
+  requestOrigin: string;
   waitUntil(promise: Promise<unknown>): void;
 }
 
@@ -33,7 +41,9 @@ export type OpHandler<D extends OperationDef> = (
 /** One handler per registry operation; a missing one is a type error. */
 export type Handlers = { [D in FyrdenRegistry[number] as D["id"]]: OpHandler<D> };
 
-export type OpResult = { ok: true; output: unknown } | { ok: false; problem: Problem };
+export type OpResult =
+  | { ok: true; output: unknown; replayed?: true; status?: number }
+  | { ok: false; problem: Problem; replayed?: true };
 
 /**
  * An expected failure a handler reports (a taken handle, a missing user). The
@@ -42,7 +52,7 @@ export type OpResult = { ok: true; output: unknown } | { ok: false; problem: Pro
 export class OperationError extends Error {
   override name = "OperationError";
   constructor(
-    readonly status: 400 | 404 | 409 | 422,
+    readonly status: 400 | 401 | 403 | 404 | 409 | 422,
     readonly code: string,
     detail: string,
   ) {
@@ -69,15 +79,23 @@ function fail(
   };
 }
 
+/** Whose budget a request spends: a token's own, or the token it was minted from (minting more resets nothing). */
+export function rateLimitKey(auth: Pick<TokenRecord, "id" | "sourceId">): string {
+  return auth.sourceId ?? auth.id;
+}
+
 /**
- * Whether the caller holds an operation's permission. Until the authorization
- * layer (repository and org roles) exists, any other permission is denied:
- * an operation declared with one cannot run by accident.
+ * Whether the caller may call an operation with this permission at all: its
+ * principal type and its token's scopes, and for instance permissions the
+ * whole check. The handler checks repository and account permissions again,
+ * completely, once it has resolved the repository or account.
  */
-export function hasPermission(permission: string, auth: TokenRecord): boolean {
-  if (permission === AUTHENTICATED) return true;
-  if (permission === INSTANCE_ADMIN) return auth.isInstanceAdmin;
-  return false;
+export function hasPermission(permission: OperationDef["permission"], auth: TokenRecord): boolean {
+  return checkOperation(permission, {
+    actorType: auth.principalType,
+    isInstanceAdmin: auth.isInstanceAdmin,
+    scopes: auth.scopes,
+  }).allow;
 }
 
 /**
@@ -90,11 +108,13 @@ export async function executeOperation(
   handler: OpHandler<OperationDef>,
   ctx: OpContext,
   rawInput: unknown,
+  /** A REST write's `Idempotency-Key`, checked once the request may run at all. */
+  options: { readonly idempotencyKey?: string } = {},
 ): Promise<OpResult> {
-  // Limited by token id, which a re-verification cannot change; checked
+  // Limited by token (or its source) id, which a re-verification cannot change; checked
   // first so a flood of writes cannot drive D1 primary lookups.
   const limiter = op.rateLimit === "read" ? ctx.env.RATE_LIMIT_READ : ctx.env.RATE_LIMIT_WRITE;
-  if (!(await limiter.limit({ key: ctx.auth.id })).success) {
+  if (!(await limiter.limit({ key: rateLimitKey(ctx.auth) })).success) {
     return fail(ctx, 429, "rate_limited", "Too many requests for this token.");
   }
 
@@ -106,6 +126,15 @@ export async function executeOperation(
     const fresh = await ctx.authState.verifyForWrite();
     if (!fresh.ok)
       return fail(ctx, 401, "invalid_token", "The token is invalid, expired or revoked.");
+    // An owner may have required DPoP since the cached answer (a bound token's proof was
+    // checked); a git token is exempt only where git uses it, never here.
+    if (fresh.record.requiresDpop && fresh.record.dpopJkt === null)
+      return fail(
+        ctx,
+        401,
+        "invalid_dpop_proof",
+        "This token needs a valid DPoP proof (RFC 9449).",
+      );
     auth = fresh.record;
   }
 
@@ -135,16 +164,44 @@ export async function executeOperation(
       .join("; ");
     return fail(ctx, 422, "invalid_input", detail);
   }
-  let output: unknown;
+  // The same token's same request with the same key: the first answer, not a second run.
+  let claim: Claim | undefined;
+  if (options.idempotencyKey !== undefined && op.idempotency === "key") {
+    const start = await startIdempotent(
+      ctx.env,
+      {
+        tokenId: auth.id,
+        key: options.idempotencyKey,
+        opId: op.id,
+        hash: await requestHash(op.id, input.data),
+        now: Date.now(),
+      },
+      ctx.metrics,
+    );
+    if (start.kind === "refuse") return fail(ctx, start.status, start.code, start.detail);
+    if (start.kind === "replay")
+      return start.status >= 400
+        ? { ok: false, problem: start.body as Problem, replayed: true }
+        : { ok: true, output: start.body, status: start.status, replayed: true };
+    claim = start.claim;
+  }
+  let result: OpResult;
   try {
-    output = await handler(
+    const output = await handler(
       { ...ctx, auth, authState: { ...ctx.authState, record: auth } },
       input.data,
     );
+    // A handler returning the wrong shape is a server bug, never sent as-is.
+    result = { ok: true, output: op.output.parse(output) };
   } catch (error) {
-    if (error instanceof OperationError) return fail(ctx, error.status, error.code, error.message);
-    throw error;
+    if (!(error instanceof OperationError)) {
+      // It may have taken effect: retries with its key are refused, not run.
+      if (claim)
+        await finishIdempotent(ctx.env, claim, { kind: "unknown" }, ctx.metrics).catch(() => {});
+      throw error;
+    }
+    result = fail(ctx, error.status, error.code, error.message);
   }
-  // A handler returning the wrong shape is a server bug, never sent as-is.
-  return { ok: true, output: op.output.parse(output) };
+  if (claim) await finishIdempotent(ctx.env, claim, outcomeOf(op, result), ctx.metrics);
+  return result;
 }

@@ -19,6 +19,7 @@ export {
   isNetworkId,
   isUlid,
   newPackId,
+  newUlid,
   packObjectKey,
   packPrefix,
   scratchPrefix,
@@ -37,6 +38,7 @@ export {
   DO_MEMORY,
   type DoMemoryBudget,
   type MemoryBudgetStats,
+  MemoryWaitTimeoutError,
   withReservation,
 } from "./memory-budget.js";
 export { type PackKind, PackRegistry, type PackRow, type PackState } from "./pack-registry.js";
@@ -46,6 +48,7 @@ export {
   type NetworkRetire,
   PACK_RETIRE_DEFAULTS,
   type PackRetireOptions,
+  packR2Keys,
   packRetireHandler,
   RETIRE_JOB_ID,
   schedulePackRetire,

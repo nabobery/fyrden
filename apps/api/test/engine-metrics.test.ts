@@ -73,8 +73,9 @@ describe("engine metrics", () => {
     // object, R2 (the body PUT) and D1 (the token and repository lookups).
     const workerCalls = points(worker.points, "subrequests");
     expect(workerCalls.map((p) => p.blobs)).toEqual([["worker", "internal", route]]);
-    const objectCalls = sum(worker.points, "do.request", ["RepoDO", "*"]);
-    expect(objectCalls).toBeGreaterThanOrEqual(3); // beginPush, runPush, finalizePush
+    expect(sum(worker.points, "do.request", ["RepoDO", "*"])).toBeGreaterThanOrEqual(3); // beginPush, runPush, finalizePush
+    expect(sum(worker.points, "do.request", ["OrgDO", "reserveStorage"])).toBe(1);
+    const objectCalls = sum(worker.points, "do.request", ["*", "*"]);
     expect(workerCalls[0]?.value).toBe(
       objectCalls +
         sum(worker.points, "r2.class_a", ["*", "*"]) +

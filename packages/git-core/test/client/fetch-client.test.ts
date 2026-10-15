@@ -5,6 +5,7 @@ import {
   FetchClientError,
   type RemoteRef,
   SmartHttpClient,
+  withoutTrailingSlashes,
 } from "../../src/client/fetch-client.js";
 import type { HttpTransport } from "../../src/client/transport.js";
 import { latin1 } from "../../src/object/bytes.js";
@@ -237,5 +238,21 @@ describe("SmartHttpClient", () => {
       .fetchPack([oidFromHex("1".repeat(40))], { write: () => {} })
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ProtocolError);
+  });
+});
+
+describe("withoutTrailingSlashes", () => {
+  it("drops every trailing slash and nothing else", () => {
+    expect(withoutTrailingSlashes("https://h/a/b///")).toBe("https://h/a/b");
+    expect(withoutTrailingSlashes("https://h/a")).toBe("https://h/a");
+    expect(withoutTrailingSlashes("///")).toBe("");
+    expect(withoutTrailingSlashes("")).toBe("");
+  });
+
+  // Well under the old regex's time on this input (over 20 s), with room for slow runners.
+  it("takes linear time on many slashes that do not end the URL", { timeout: 5_000 }, () => {
+    // A regex trim (/\/+$/) backtracks quadratically on this shape.
+    const url = `https://h/${"/".repeat(200_000)}a`;
+    expect(withoutTrailingSlashes(url)).toBe(url);
   });
 });

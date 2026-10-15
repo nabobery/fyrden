@@ -1,10 +1,18 @@
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import { authenticate } from "../middleware/auth.js";
-import { canAccess, type RepoAccess, type RepoEntry, resolveRepo } from "../repos/directory.js";
+import { audienceAllows } from "../oauth/resources.js";
+import { rateLimitKey } from "../ops/execute.js";
+import {
+  authorize,
+  GIT_PERMISSION,
+  type RepoAccess,
+  type RepoEntry,
+  resolveRepo,
+} from "../repos/directory.js";
 import { type GitContext, gitText } from "./http.js";
 
 /** Token types a git client may use: git tokens and personal access tokens. */
-const GIT_TOKEN_TYPES: ReadonlySet<string> = new Set(["git", "pat"]);
+export const GIT_TOKEN_TYPES: ReadonlySet<string> = new Set(["git", "pat"]);
 
 export const REPO_NOT_FOUND = "Repository not found.";
 
@@ -29,11 +37,13 @@ export async function authorizeGit(
   owner: string,
   name: string,
   access: RepoAccess,
+  /** Token types taken; git's own (smart HTTP) take git tokens and personal access tokens only. */
+  tokenTypes: ReadonlySet<string> = GIT_TOKEN_TYPES,
 ): Promise<GitAccess> {
   const fail = (response: Response): GitAccess => ({ ok: false, response });
   const challenge = { "WWW-Authenticate": 'Basic realm="Fyrden"' };
 
-  const authn = await authenticate(c, access === "write" ? "write" : "read");
+  const authn = await authenticate(c, access === "write" ? "write" : "read", { git: true });
   if (!authn.ok) {
     if (authn.reason === "rate_limited")
       return fail(
@@ -46,7 +56,11 @@ export async function authorizeGit(
     return fail(gitText(c, 401, "Invalid username or token.", challenge));
   }
   const auth = authn.state.record;
-  if (!GIT_TOKEN_TYPES.has(auth.type)) {
+  // An access token for another resource (RFC 8707: the MCP server's) is not taken here.
+  if (
+    !tokenTypes.has(auth.type) ||
+    !audienceAllows(auth.audience, new URL(c.req.url).origin, "api")
+  ) {
     return fail(
       gitText(
         c,
@@ -57,7 +71,7 @@ export async function authorizeGit(
   }
 
   const limiter = access === "write" ? c.env.RATE_LIMIT_WRITE : c.env.RATE_LIMIT_READ;
-  if (!(await limiter.limit({ key: auth.id })).success) {
+  if (!(await limiter.limit({ key: rateLimitKey(auth) })).success) {
     return fail(gitText(c, 429, "Too many requests for this token.", { "Retry-After": "60" }));
   }
 
@@ -65,7 +79,8 @@ export async function authorizeGit(
     consistency: access === "write" ? "primary" : "cached",
     metrics: c.get("metrics"),
   });
-  if (!repo || !canAccess(auth, repo, access)) return fail(gitText(c, 404, REPO_NOT_FOUND));
+  if (!repo || !(await authorize(c.env, auth, repo, GIT_PERMISSION[access], c.get("metrics"))))
+    return fail(gitText(c, 404, REPO_NOT_FOUND));
 
   c.set("auth", auth);
   c.set("authState", authn.state);

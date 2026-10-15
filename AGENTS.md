@@ -42,9 +42,12 @@ pnpm audit                      # known advisories (CI fails on high and critica
    fail for the right reason, then write the code. New parsers get a
    fast-check property suite.
 2. **One operation, every surface.** Add an API capability as an operation in
-   `packages/api-contract/ops/` with a permission and allowed principal types,
+   `packages/api-contract/ops/` with a permission from the table in
+   `packages/domain/src/authz/permissions.ts` and allowed principal types,
    and a handler in `apps/api/src/ops/handlers.ts`. REST, MCP and OpenAPI come
-   from it; never add a hand-written route for an API capability.
+   from it; never add a hand-written route for an API capability. A handler
+   checks a repository permission itself (`canAccess`), and an operation on
+   one repository needs an input in `apps/api/test/authz.repo-operations.test.ts`.
 3. **Schema changes are forward-only.** Durable Object schemas are lists of
    numbered migrations (`apps/api/src/do/schema/`); never edit a released
    migration. Destructive steps must be marked as contract steps. D1 changes

@@ -1,14 +1,17 @@
 // Re-authorization at the commit point: the Worker checks the pusher's token
 // on the D1 primary just before the commit, and the commit transaction
 // accepts only a fresh decision for the upload's own token. A revoked token
-// (during upload or indexing) aborts the push with refs unchanged; a token
-// that merely expired after the upload was accepted does not.
+// (during upload or indexing) or one that lost its write scope aborts the push
+// with refs unchanged; a token that merely expired after the upload was
+// accepted does not.
 import { env } from "cloudflare:workers";
-import { hashToken } from "@fyrden/domain";
+import { D1TokenStore } from "@fyrden/adapters-cloudflare/auth";
+import { createIdFactory, hashToken, secureRandomBytes } from "@fyrden/domain";
 import { oidToHex } from "@fyrden/git-core";
 import { afterEach, beforeEach, describe, expect, inject, it, vi } from "vitest";
 import { ACCESS_LOST, TOKEN_REVOKED } from "../src/git/push/reauthorize.js";
-import { principalWithToken } from "./helpers/principals.js";
+import { api } from "./helpers/api.js";
+import { principalWithToken, scopedToken } from "./helpers/principals.js";
 import { holdAfterRunPush, type PushTarget, postPush, pushTarget } from "./helpers/push.js";
 import { pushBody, reportLines, ZERO } from "./helpers/push-fixtures.js";
 import { inRepo } from "./helpers/repo-git.js";
@@ -88,6 +91,50 @@ describe("push: re-authorization at the commit point", () => {
     expect(await state(target)).toEqual({ refs: [], uploads: ["rejected"], pending: 0, live: 0 });
   });
 
+  it("aborts the push when the token its git token was minted from is revoked during indexing", async () => {
+    const target = await pushTarget();
+    const source = await scopedToken(target.owner.principalId, [], "pat");
+    const minted = await api("POST", "/user/git-tokens", source, {});
+    expect(minted.status).toBe(201);
+    const git = {
+      ...target,
+      owner: { ...target.owner, token: (await minted.json<{ token: string }>()).token },
+    };
+    const { report } = await pushWith(git, () => setToken(source, "revoked_at", Date.now()));
+    expect(report).toEqual(["unpack ok\n", `ng ${MAIN} ${TOKEN_REVOKED}\n`, "0000"]);
+    expect((await state(target)).refs).toEqual([]);
+  });
+
+  it("aborts the push when the token two steps before its git token is revoked during indexing", async () => {
+    const target = await pushTarget();
+    const store = new D1TokenStore(env.DIRECTORY, {
+      clock: () => Date.now(),
+      newId: createIdFactory(() => Date.now(), secureRandomBytes),
+      randomBytes: secureRandomBytes,
+    });
+    const mint = (sourceId?: string) =>
+      store.mint({
+        principalId: target.owner.principalId,
+        type: "pat",
+        scopes: [],
+        ttlMs: DAY,
+        ...(sourceId && { sourceId }),
+        audit: { actorId: target.owner.principalId },
+      });
+    // As an agent's own token, and the delegated token exchanged for it.
+    const first = await mint();
+    const second = await mint(first.id);
+    const minted = await api("POST", "/user/git-tokens", second.token, {});
+    expect(minted.status).toBe(201);
+    const git = {
+      ...target,
+      owner: { ...target.owner, token: (await minted.json<{ token: string }>()).token },
+    };
+    const { report } = await pushWith(git, () => setToken(first.token, "revoked_at", Date.now()));
+    expect(report).toEqual(["unpack ok\n", `ng ${MAIN} ${TOKEN_REVOKED}\n`, "0000"]);
+    expect((await state(target)).refs).toEqual([]);
+  });
+
   it("aborts the push when write access is lost before the commit", async () => {
     const target = await pushTarget();
     const { report } = await pushWith(target, async () => {
@@ -100,6 +147,26 @@ describe("push: re-authorization at the commit point", () => {
     expect(report).toEqual(["unpack ok\n", `ng ${MAIN} ${ACCESS_LOST}\n`, "0000"]);
     expect((await state(target)).refs).toEqual([]);
   });
+
+  it.each([
+    ["while the token stays valid", false],
+    ["and the token then expires", true],
+  ])(
+    "aborts the push when the token loses its write scope during indexing %s",
+    async (_, expire) => {
+      const target = await pushTarget();
+      const { report } = await pushWith(target, async () => {
+        await env.DIRECTORY.prepare(
+          `UPDATE tokens SET scopes = '["contents:read"]' WHERE token_hash = ?`,
+        )
+          .bind(await hashToken(target.owner.token))
+          .run();
+        if (expire) await setToken(target.owner.token, "expires_at", Date.now() - 1);
+      });
+      expect(report).toEqual(["unpack ok\n", `ng ${MAIN} ${ACCESS_LOST}\n`, "0000"]);
+      expect((await state(target)).refs).toEqual([]);
+    },
+  );
 
   it("completes a push whose token expired after the upload was accepted", async () => {
     const target = await pushTarget();

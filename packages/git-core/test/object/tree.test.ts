@@ -2,7 +2,13 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { GitObjectError } from "../../src/object/fsck.js";
 import { type Oid, oidFromBytes, oidFromHex, zeroOid } from "../../src/object/oid.js";
-import { encodeTree, FILE_MODES, parseTree, type TreeEntry } from "../../src/object/tree.js";
+import {
+  encodeTree,
+  FILE_MODES,
+  parseTree,
+  type TreeEntry,
+  treeEntries,
+} from "../../src/object/tree.js";
 
 const utf8 = (s: string) => new TextEncoder().encode(s);
 const latin1 = (s: string) => Uint8Array.from(s, (c) => c.charCodeAt(0));
@@ -253,5 +259,51 @@ describe("parseTree under mutation", () => {
         },
       ),
     );
+  });
+});
+
+describe("treeEntries", () => {
+  it("yields what parseTree returns, or throws where it throws, under mutation", () => {
+    const seed = rawTree(
+      rawEntry("100644", "a.c"),
+      rawEntry("40000", "a"),
+      rawEntry("120000", "z"),
+      rawEntry("160000", "sub"),
+    );
+    fc.assert(
+      fc.property(
+        fc.array(fc.tuple(fc.nat(), fc.integer({ min: 0, max: 255 })), { maxLength: 4 }),
+        fc.nat(),
+        (edits, cut) => {
+          const body = seed.slice(0, seed.length - (cut % 40));
+          for (const [at, byte] of edits) if (body.length > 0) body[at % body.length] = byte;
+          let parsed: TreeEntry[] | GitObjectError;
+          try {
+            parsed = parseTree(body).value;
+          } catch (e) {
+            parsed = e as GitObjectError;
+          }
+          if (parsed instanceof GitObjectError) {
+            expect(() => [...treeEntries(body)]).toThrow(GitObjectError);
+            return;
+          }
+          const lazy = [...treeEntries(body)];
+          expect(lazy.map((e) => [e.mode, [...e.name], [...e.oid]])).toEqual(
+            parsed.map((e) => [e.mode, [...e.name], [...e.oid]]),
+          );
+        },
+      ),
+    );
+  });
+
+  it("reads entries one at a time, and resumes after any of them", () => {
+    const body = rawTree(rawEntry("100644", "a"), rawEntry("100644", "b"), rawEntry("40000", "c"));
+    const first = treeEntries(body).next();
+    expect(first.done).toBe(false);
+    expect(new TextDecoder().decode(first.value?.name)).toBe("a");
+    const rest = [...treeEntries(body, first.value?.end)].map((e) =>
+      new TextDecoder().decode(e.name),
+    );
+    expect(rest).toEqual(["b", "c"]);
   });
 });

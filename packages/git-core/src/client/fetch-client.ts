@@ -175,6 +175,17 @@ function remoteErrorOf(data: Uint8Array): FetchClientError | undefined {
   );
 }
 
+/**
+ * `url` without its trailing slashes. A loop, not /\/+$/: that regex
+ * backtracks quadratically on many slashes that do not end the string, and
+ * the URL is a caller's input.
+ */
+export function withoutTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) === 0x2f) end--;
+  return url.slice(0, end);
+}
+
 /** A packet source that hands back one packet it was given first. */
 function withFirst(first: PktLine, rest: PktLineSource): PktLineSource {
   let pending: PktLine | undefined = first;
@@ -200,7 +211,7 @@ export class SmartHttpClient {
     /** What the server advertised. */
     readonly capabilities: readonly Capability[],
   ) {
-    this.#base = options.url.replace(/\/+$/, "");
+    this.#base = withoutTrailingSlashes(options.url);
     this.#agent = options.agent ?? "fyrden";
     this.#transport = options.transport;
     this.#limits = { ...DEFAULT_FETCH_CLIENT_LIMITS, ...options.limits };
@@ -215,7 +226,7 @@ export class SmartHttpClient {
   /** Reads the server's protocol v2 capabilities; refuses servers that cannot serve a fetch. */
   static async connect(options: FetchClientOptions): Promise<SmartHttpClient> {
     const limits = { ...DEFAULT_FETCH_CLIENT_LIMITS, ...options.limits };
-    const base = options.url.replace(/\/+$/, "");
+    const base = withoutTrailingSlashes(options.url);
     const response = await options.transport({
       method: "GET",
       url: `${base}/info/refs?service=git-upload-pack`,

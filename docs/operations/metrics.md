@@ -106,8 +106,11 @@ The latest point of a group is its current value.
 | `do.request` | `class`, `method` | Calls to a Durable Object |
 | `do.rows_written` | `class`, `op` | Durable Object SQLite rows written (the billed unit) |
 | `d1.query` | `db`, `op` | D1 statements |
+| `queue.send` | `queue` | Queue messages sent (an outbox drain sends one per batch of events) |
 | `http.request` | `route`, `method`, `status` | One per HTTP request |
 | `auth.token` | `type`, `outcome` | One per token check |
+| `acl.snapshot` | `purpose` (`read` or `write`), `outcome` (`cached`, `pulled`, `denied`: no usable snapshot, and the pull failed or was refused) | One per access decision a repository object makes from its ACL snapshot |
+| `acl.snapshot_age_ms` | `purpose` | Age of the snapshot that decision used, in milliseconds (one point per decision; its maximum is the snapshot staleness bound in practice: at most 60 s for writes, 5 minutes for reads) |
 
 `r2.*`, `do.request` and `d1.query` are also what the `internal` budget of
 `subrequests` counts. A D1 batch is counted once per statement here, while the

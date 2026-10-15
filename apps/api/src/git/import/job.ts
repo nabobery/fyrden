@@ -4,13 +4,14 @@ import {
   type RepoGitStorage,
 } from "@fyrden/adapters-cloudflare/git";
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
+import type { RepoRole } from "@fyrden/domain";
 import { FetchClientError, ProtocolError, SmartHttpClient } from "@fyrden/git-core";
-import { buildCommandHead, readPushReport } from "../chunked/head.js";
+import { buildCommandHead, type RefUpdateSpec, readPushReport } from "../chunked/head.js";
+import { reauthorizeByToken } from "../push/reauthorize-token.js";
 import type { RepoPush } from "../push/repo-push.js";
 import { BUCKET_NAME, headKey, packKey } from "../push/scratch.js";
 import { type ImportNetwork, importPolicy } from "./network.js";
 import { MultipartPackSink } from "./pack-parts.js";
-import { reauthorizeImport } from "./reauthorize.js";
 import { IMPORT_REF_PREFIXES, MAX_IMPORT_REFS, selectImportRefs } from "./refs.js";
 
 /*
@@ -45,13 +46,19 @@ export interface ImportRecord {
   readonly ownHosts: readonly string[];
   readonly principal: string;
   readonly tokenId: string;
+  /** The delegation grant the import is made under; null or absent for none. */
+  readonly grantId?: string | null;
   readonly repoId: string;
+  /** The request that started the import, for the commit's audit row. */
+  readonly requestId?: string | null;
   readonly limits: ImportLimits;
   readonly state: ImportState;
   readonly bytes: number;
   readonly refs: readonly string[];
   readonly skipped: readonly { readonly ref: string; readonly reason: string }[];
   readonly head?: string;
+  /** The repository's owner generation when the import began (a transfer since bumps it). */
+  readonly ownerGen?: number;
   readonly error?: string;
   readonly startedAt: number;
   readonly updatedAt: number;
@@ -60,10 +67,14 @@ export interface ImportRecord {
 export interface BeginImport {
   readonly principal: string;
   readonly tokenId: string;
+  /** The delegation grant the write is made under (an agent acting for `principal`); null for none. */
+  readonly grantId?: string | null;
   readonly repoId: string;
   readonly url: string;
   readonly ownHosts: readonly string[];
   readonly limits: ImportLimits;
+  /** The request starting the import. */
+  readonly requestId?: string | null;
 }
 
 const RECORD_KEY = "git-import";
@@ -88,6 +99,18 @@ export class RepoImports {
     private readonly log: Logger,
     /** Read on each fetch, so tests can replace it. */
     private readonly network: () => ImportNetwork,
+    /** A principal's role for a write, from the repository's ACL snapshot. */
+    private readonly writerRole: (principalId: string) => Promise<RepoRole | null>,
+    /** The repository's owner generation (bumped by a transfer); undefined without an identity. */
+    private readonly ownerGen: () => number | undefined,
+    /** The rulesets' refusal of the ref updates, before anything is fetched or stored. */
+    private readonly precheck: (
+      principal: string,
+      updates: readonly RefUpdateSpec[],
+      grantId: string | null,
+      /** The default branch the import sets as it commits. */
+      head: string | undefined,
+    ) => Promise<string | undefined>,
   ) {}
 
   async record(): Promise<ImportRecord | undefined> {
@@ -102,9 +125,14 @@ export class RepoImports {
       return { ok: false, code: "import_running", error: "An import is already running." };
     if (this.git.refStore.readRefsSync().refs.size > 0)
       return { ok: false, code: "repo_not_empty", error: "Import needs an empty repository." };
-    const begun = this.push.begin({ principal: input.principal, tokenId: input.tokenId });
+    const begun = this.push.begin({
+      principal: input.principal,
+      tokenId: input.tokenId,
+      grantId: input.grantId ?? null,
+    });
     if (!begun.ok) return { ok: false, code: "import_refused", error: begun.error };
     const now = this.git.context.now();
+    const ownerGen = this.ownerGen();
     const record: ImportRecord = {
       v: 1,
       uploadId: begun.uploadId,
@@ -112,12 +140,15 @@ export class RepoImports {
       ownHosts: [...input.ownHosts],
       principal: input.principal,
       tokenId: input.tokenId,
+      ...(input.grantId && { grantId: input.grantId }),
       repoId: input.repoId,
+      ...(input.requestId && { requestId: input.requestId }),
       limits: input.limits,
       state: "fetching",
       bytes: 0,
       refs: [],
       skipped: [],
+      ...(ownerGen !== undefined && { ownerGen }),
       startedAt: now,
       updatedAt: now,
     };
@@ -232,6 +263,14 @@ export class RepoImports {
       await this.push.abort(uploadId);
       return this.#save({ ...listed, state: "committed" });
     }
+    // Refs a ruleset refuses: the import fails before anything is fetched or stored.
+    const refused = await this.precheck(
+      record.principal,
+      selection.updates,
+      record.grantId ?? null,
+      selection.head,
+    );
+    if (refused !== undefined) throw new ImportError(refused);
 
     const networkId = this.git.networkId();
     const head = buildCommandHead(selection.updates);
@@ -279,12 +318,25 @@ export class RepoImports {
   }
 
   async #commit(record: ImportRecord): Promise<ImportRecord> {
-    const decision = await reauthorizeImport(this.env.DIRECTORY, record);
+    const ownerGen = record.ownerGen ?? this.ownerGen();
+    const decision = await reauthorizeByToken(this.env.DIRECTORY, record, this.writerRole);
+    const { head } = record;
     const report = readPushReport(
-      await this.push.finalize(record.uploadId, decision, { repoId: record.repoId }),
+      await this.push.finalize(record.uploadId, decision, {
+        repoId: record.repoId,
+        // The rulesets see the default branch the import is about to set.
+        ...(head && {
+          head,
+          // The new default branch (and its snapshot event) commits with the refs, so no
+          // push in between sees the old one; not once the repository was transferred
+          // after the import began (its new owner decides).
+          inCommit: () => {
+            if (this.ownerGen() === ownerGen) this.git.refStore.setHead(head);
+          },
+        }),
+      }),
     );
     if (!report.ok) return this.#save({ ...record, state: "failed", error: report.error });
-    if (record.head) this.git.refStore.setHead(record.head);
     return this.#save({ ...record, state: "committed" });
   }
 

@@ -54,12 +54,24 @@
       { "binding": "INDEXING", "queue": "fyrden-indexing" }
     ],
     "consumers": [
-      { "queue": "fyrden-events" },
+      // Batch size, retries and the dead-letter queue are Proposed, sized for
+      // the consumer's CPU and D1 query budgets on Free.
+      {
+        "queue": "fyrden-events",
+        "max_batch_size": 5,
+        "max_batch_timeout": 5,
+        "max_retries": 10,
+        "dead_letter_queue": "fyrden-events-dlq"
+      },
       { "queue": "fyrden-webhooks" },
       { "queue": "fyrden-ci-dispatch" },
       { "queue": "fyrden-indexing" }
     ]
   },
+
+  // Archives the directory's audit log to R2 and retries stuck effects
+  // (Proposed interval; Free allows a few cron triggers per account).
+  "triggers": { "crons": ["*/5 * * * *"] },
 
   // Cache only; never an authoritative store.
   "kv_namespaces": [{ "binding": "CACHE" }],
@@ -84,8 +96,10 @@
     }
   ],
 
-  // Uploaded with the first deploy by `fyrden deploy` (--secrets-file); only first-run setup uses it.
-  "secrets": { "required": ["BOOTSTRAP_SECRET"] },
+  // Uploaded with the first deploy by `fyrden deploy` (--secrets-file): the first-run setup's
+  // secret, and the platform's commit signing key. Listed, they also reach `wrangler dev` from an
+  // env file (only listed secrets do).
+  "secrets": { "required": ["BOOTSTRAP_SECRET", "SIGNING_KEY"] },
 
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "fyrden_metrics" }],
 

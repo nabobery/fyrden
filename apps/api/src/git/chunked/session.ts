@@ -49,6 +49,8 @@ export interface ChunkedView {
 export interface BeginChunked {
   readonly principal: string;
   readonly tokenId: string;
+  /** The delegation grant the write is made under (an agent acting for `principal`); null for none. */
+  readonly grantId?: string | null;
   readonly size: number;
   readonly partBytes: number;
   readonly updates: readonly RefUpdateSpec[];
@@ -167,7 +169,11 @@ export class ChunkedUploads {
       return fail(422, "invalid_ref_update", error.message);
     }
 
-    const begun = this.push.begin({ principal: input.principal, tokenId: input.tokenId });
+    const begun = this.push.begin({
+      principal: input.principal,
+      tokenId: input.tokenId,
+      grantId: input.grantId ?? null,
+    });
     if (!begun.ok) return fail(409, "upload_refused", begun.error);
     const { uploadId } = begun;
     const networkId = this.git.networkId();

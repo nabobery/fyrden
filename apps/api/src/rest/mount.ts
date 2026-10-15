@@ -1,9 +1,13 @@
 import { type OperationDef, openApiDocument, registry } from "@fyrden/api-contract";
 import type { Context, Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
+import { NO_STORE } from "../http/cache.js";
 import { problem, problemResponse } from "../http/problem.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
-import { executeOperation, type OpContext, type OpHandler } from "../ops/execute.js";
+import { executeOperation, type OpContext, type OpHandler, type OpResult } from "../ops/execute.js";
 import { handlers } from "../ops/handlers.js";
+import { IDEMPOTENCY_KEY } from "./idempotency.js";
 
 export const API_PREFIX = "/api";
 export const API_VERSION = "0.0.0";
@@ -19,6 +23,7 @@ export function opContext(c: AppContext): OpContext {
     metrics: c.get("metrics"),
     requestId: c.get("requestId"),
     requestHost: new URL(c.req.url).hostname,
+    requestOrigin: new URL(c.req.url).origin,
     waitUntil: (p) => c.executionCtx.waitUntil(p),
   };
 }
@@ -29,7 +34,9 @@ export function operationHandler(op: OperationDef): OpHandler<OperationDef> {
 
 type ReadResult =
   | { ok: true; input: unknown }
-  | { ok: false; status: 400 | 422; code: string; detail: string };
+  | { ok: false; status: 400 | 413 | 422; code: string; detail: string };
+
+const utf8 = new TextDecoder();
 
 /**
  * An operation's input: path parameters over the query (GET) or the JSON
@@ -39,7 +46,15 @@ type ReadResult =
 async function readInput(c: AppContext, op: OperationDef): Promise<ReadResult> {
   const params = c.req.param() as Record<string, string>;
   if (op.method === "GET") return { ok: true, input: { ...c.req.query(), ...params } };
-  const text = await c.req.text();
+  const raw = await readBoundedBody(c.req.raw, MAX_JSON_BODY_BYTES);
+  if (!raw)
+    return {
+      ok: false,
+      status: 413,
+      code: "body_too_large",
+      detail: `The request body is larger than ${MAX_JSON_BODY_BYTES} bytes.`,
+    };
+  const text = utf8.decode(raw);
   if (text.trim() === "") return { ok: true, input: { ...params } };
   let body: unknown;
   try {
@@ -63,7 +78,40 @@ async function readInput(c: AppContext, op: OperationDef): Promise<ReadResult> {
   return { ok: true, input: { ...body, ...params } };
 }
 
+function respond(c: AppContext, op: OperationDef, result: OpResult): Response {
+  const replayed: Record<string, string> = result.replayed ? { "Idempotent-Replayed": "true" } : {};
+  if (!result.ok) {
+    const retry =
+      result.problem.code === "rate_limited"
+        ? { "Retry-After": "60" }
+        : result.problem.code === "idempotency_key_in_use"
+          ? { "Retry-After": "5" }
+          : {};
+    return problemResponse(c, result.problem, { ...retry, ...replayed });
+  }
+  // A secret (a new token) is shown once: no cache keeps it.
+  return c.json(
+    result.output as Record<string, unknown>,
+    (result.status ?? op.successStatus ?? 200) as ContentfulStatusCode,
+    op.secretResponse ? { ...NO_STORE, ...replayed } : replayed,
+  );
+}
+
 /** Registers one Hono route per registry operation under /api. */
+/**
+ * The operations of a chunked upload session: git's transport, where a git
+ * token is taken as git takes it (`fyrden push --chunked` sends one, and
+ * cannot send DPoP proofs).
+ */
+const GIT_TRANSPORT = new Set([
+  "uploads.create",
+  "uploads.get",
+  "uploads.complete",
+  "uploads.abort",
+]);
+
+const gitTransport = (op: OperationDef) => ({ git: GIT_TRANSPORT.has(op.id) });
+
 export function mountRest(app: Hono<{ Bindings: Env; Variables: AuthVariables }>): void {
   app.get(`${API_PREFIX}/openapi.json`, (c) =>
     c.json(
@@ -75,16 +123,26 @@ export function mountRest(app: Hono<{ Bindings: Env; Variables: AuthVariables }>
   );
 
   for (const op of registry as readonly OperationDef[]) {
-    const path = API_PREFIX + op.path.replace(/\{([a-z_]+)\}/g, ":$1");
-    app.on(op.method, path, requireAuth("by-method"), async (c) => {
+    const path =
+      API_PREFIX + op.path.replace(/\{([a-z_]+)\+\}/g, ":$1{.+}").replace(/\{([a-z_]+)\}/g, ":$1");
+    app.on(op.method, path, requireAuth("by-method", "api", gitTransport(op)), async (c) => {
       const read = await readInput(c, op);
       if (!read.ok) return problem(c, read.status, read.code, read.detail);
-      const result = await executeOperation(op, operationHandler(op), opContext(c), read.input);
-      if (!result.ok) {
-        const retry = result.problem.code === "rate_limited" ? { "Retry-After": "60" } : {};
-        return problemResponse(c, result.problem, retry);
-      }
-      return c.json(result.output as Record<string, unknown>, op.successStatus ?? 200);
+      const key = op.idempotency === "key" ? c.req.header("Idempotency-Key") : undefined;
+      if (key !== undefined && !IDEMPOTENCY_KEY.test(key))
+        return problem(
+          c,
+          422,
+          "invalid_idempotency_key",
+          "An Idempotency-Key is 1-255 printable ASCII characters.",
+        );
+      return respond(
+        c,
+        op,
+        await executeOperation(op, operationHandler(op), opContext(c), read.input, {
+          ...(key !== undefined && { idempotencyKey: key }),
+        }),
+      );
     });
   }
 }

@@ -57,8 +57,19 @@ function lazyIdx(read: IdxRangeReader): PackIdxSource {
  * the registry keeps a copy of the fanout that would save it, but does not
  * expose it yet.
  */
-export function liveView(git: RepoGitStorage, onRead: () => void = () => {}): RepoView {
-  const live = git.registry.inState("live").reverse();
+export function liveView(
+  git: RepoGitStorage,
+  onRead: () => void = () => {},
+  /** Packs of a push not live yet (indexed), read with the live ones (its commit point). */
+  extraPacks: readonly string[] = [],
+): RepoView {
+  const live = [
+    ...git.registry.inState("live").reverse(),
+    ...extraPacks.flatMap((id) => {
+      const row = git.registry.get(id);
+      return row ? [row] : [];
+    }),
+  ];
   // Borrowed packs may hold another fork's objects: a push proves what it uses from them.
   const borrowed = new Set(
     git.context.storage.sql

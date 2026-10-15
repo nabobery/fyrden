@@ -1,4 +1,10 @@
-import { generateToken, hashToken, isValidHandle, secureRandomBytes } from "@fyrden/domain";
+import {
+  generateToken,
+  hashToken,
+  isReservedHandle,
+  isValidHandle,
+  secureRandomBytes,
+} from "@fyrden/domain";
 import { Hono } from "hono";
 import { problem } from "../../http/problem.js";
 import type { ObsVariables } from "../../middleware/obs.js";
@@ -35,8 +41,13 @@ export const bootstrap = new Hono<{ Bindings: Env; Variables: ObsVariables }>().
       typeof body.handle === "string"
         ? body.handle
         : "";
-    if (!isValidHandle(handle))
-      return problem(c, 422, "invalid_handle", "handle must be a valid user name.");
+    if (!isValidHandle(handle) || isReservedHandle(handle))
+      return problem(
+        c,
+        422,
+        "invalid_handle",
+        "handle must be a valid user name, not a reserved one.",
+      );
 
     const db = c.env.DIRECTORY;
     const now = clock();
@@ -55,7 +66,7 @@ export const bootstrap = new Hono<{ Bindings: Env; Variables: ObsVariables }>().
       db
         .prepare(
           `INSERT INTO tokens (id, token_hash, type, principal_id, scopes, expires_at, created_at)
-         SELECT ?, ?, 'pat', ?, '["admin"]', ?, ? WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?)`,
+         SELECT ?, ?, 'pat', ?, '[]', ?, ? WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?)`,
         )
         .bind(tokenId, await hashToken(token), userId, now + BOOTSTRAP_TOKEN_TTL_MS, now, userId),
       db

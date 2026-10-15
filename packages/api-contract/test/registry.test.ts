@@ -1,3 +1,4 @@
+import { isPermission } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { whoami } from "../ops/meta.js";
@@ -7,6 +8,8 @@ import {
   defineOperation,
   defineRegistry,
   type OperationDef,
+  openApiPath,
+  pathParams,
   RegistryError,
 } from "../src/op.js";
 import { openApiDocument } from "../src/openapi.js";
@@ -19,7 +22,7 @@ const base = {
   summary: "Get a repo",
   input: z.object({ owner: z.string(), repo: z.string() }),
   output: z.object({ id: z.string() }),
-  permission: "repo:read",
+  permission: "metadata:read",
   principals: ["user"],
   rateLimit: "read",
   idempotency: "none",
@@ -34,10 +37,24 @@ describe("defineOperation", () => {
   it.each([
     ["no permission", { permission: "" }, /permission is required/],
     ["blank permission", { permission: "   " }, /permission is required/],
+    ["permission not in the table", { permission: "repo:read" }, /unknown permission repo:read/],
+    ["a scope-like name that is no permission", { permission: "admin" }, /unknown permission/],
+    [
+      "a principal type that cannot hold the permission",
+      { permission: "instance:admin", principals: ["agent"] },
+      /agent principals cannot hold instance:admin/,
+    ],
+    ["a GET that needs a write permission", { permission: "contents:write" }, /write permission/],
     ["no principal types", { principals: [] }, /principal type/],
     ["unknown principal type", { principals: ["robot"] }, /unknown principal/],
     ["bad id", { id: "GetRepo" }, /id must/],
     ["bad path", { path: "repos/x" }, /not a valid template/],
+    [
+      "a greedy parameter before the end",
+      { path: "/repos/{owner+}/{repo}" },
+      /not a valid template/,
+    ],
+    ["an empty path", { path: "" }, /not a valid template/],
     ["path param missing from input", { path: "/repos/{owner}/{name}" }, /\{name\} missing/],
     ["GET with an idempotency key", { idempotency: "key" }, /naturally idempotent/],
     [
@@ -50,6 +67,14 @@ describe("defineOperation", () => {
     ["GET answering 201", { successStatus: 201 }, /cannot answer 201/],
   ])("rejects %s", (_, change, message) => {
     expect(() => defineOperation({ ...base, ...change } as OperationDef)).toThrow(message);
+  });
+});
+
+describe("greedy path parameters", () => {
+  it("take the rest of the path as their last parameter, written plainly in OpenAPI", () => {
+    const op = defineOperation({ ...base, path: "/repos/{owner}/{repo+}" } as OperationDef);
+    expect(pathParams(op.path)).toEqual(["owner", "repo"]);
+    expect(openApiPath(op.path)).toBe("/repos/{owner}/{repo}");
   });
 });
 
@@ -89,5 +114,35 @@ describe("generated artifacts", () => {
 
   it("uses the AUTHENTICATED permission for whoami", () => {
     expect(whoami.permission).toBe(AUTHENTICATED);
+  });
+
+  it("names a permission from the table for every other operation", () => {
+    // Facts about the caller or the instance, for any authenticated caller.
+    const anyCaller = new Set(["meta.whoami", "meta.signing_keys.list"]);
+    for (const op of registry) {
+      if (anyCaller.has(op.id)) continue;
+      expect(isPermission(op.permission), op.id).toBe(true);
+    }
+  });
+});
+
+describe("MCP tool annotations", () => {
+  it("call a tool idempotent only when calling it again changes nothing more", () => {
+    const hints = Object.fromEntries(
+      mcpTools(registry).map((t) => [t.operationId, t.annotations.idempotentHint]),
+    );
+    // A create makes another resource each time (an MCP call carries no idempotency key).
+    expect(hints["repos.create"]).toBe(false);
+    expect(hints["repos.fork"]).toBe(false);
+    // A file write is a PUT, but each call makes another commit.
+    expect(hints["repos.contents.put"]).toBe(false);
+    // Each replacement of a ruleset makes another version.
+    expect(hints["repos.rulesets.update"]).toBe(false);
+    // Setting or removing a thing, and reading, change nothing more when repeated.
+    expect(hints["repos.delete"]).toBe(true);
+    expect(hints["repos.get"]).toBe(true);
+    for (const op of registry)
+      if (op.mcp !== false && op.method === "POST" && !op.mcp.readOnly)
+        expect(hints[op.id], op.id).toBe(false);
   });
 });

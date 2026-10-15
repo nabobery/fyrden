@@ -60,12 +60,13 @@ describe("fyrden deploy", () => {
     expect([...fake.state.queues].sort()).toEqual([
       "fyrden-ci-dispatch",
       "fyrden-events",
+      "fyrden-events-dlq",
       "fyrden-indexing",
       "fyrden-webhooks",
     ]);
     expect([...fake.state.d1.keys()].sort()).toEqual(["fyrden-directory", "fyrden-org"]);
     expect([...fake.state.kv.values()]).toEqual(["fyrden-api-cache"]);
-    expect(result.created).toHaveLength(11);
+    expect(result.created).toHaveLength(12);
   });
 
   it("uploads the required secret with the first API deploy and reports a generated one", async () => {
@@ -78,6 +79,23 @@ describe("fyrden deploy", () => {
     expect(fake.calls.some((c) => c.args.join(" ").includes("s3cret-value"))).toBe(false);
     const file = fake.calls.find((c) => c.args.includes("--secrets-file"))?.args.at(-1) as string;
     await expect(stat(file)).rejects.toThrow();
+  });
+
+  it("makes a commit signing key once, never shown, and keeps it", async () => {
+    const fake = fakeWrangler();
+    const { d, lines } = deps(fake.runner);
+    await deploy(d);
+    const key = fake.state.secrets.get("SIGNING_KEY") as string;
+    expect(Buffer.from(key, "base64")).toHaveLength(32);
+    expect(lines.join("\n")).not.toContain(key);
+    expect(fake.calls.some((c) => c.args.join(" ").includes(key))).toBe(false);
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.secrets.get("SIGNING_KEY")).toBe(key);
+    // A deployment from before signing gets one with its next deploy.
+    fake.state.secrets.delete("SIGNING_KEY");
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.secrets.get("SIGNING_KEY")).not.toBe(key);
+    expect(fake.state.secrets.get("BOOTSTRAP_SECRET")).toBe("s3cret-value");
   });
 
   it("is idempotent: a second run creates nothing and keeps the secret", async () => {
@@ -112,6 +130,16 @@ describe("fyrden deploy", () => {
     await deploy(d);
     expect(fake.state.secrets.get("BOOTSTRAP_SECRET")).toBe("from-ci");
     expect(generated).toEqual([]);
+    expect(lines.join("\n")).not.toContain("from-ci");
+  });
+
+  it("says so when a preset secret is not uploaded because one is already set", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    const { d, lines } = deps(fake.runner, { presetBootstrapSecret: "from-ci" });
+    await deploy(d);
+    expect(fake.state.secrets.get("BOOTSTRAP_SECRET")).toBe("s3cret-value");
+    expect(lines.join("\n")).toContain("already has a BOOTSTRAP_SECRET");
     expect(lines.join("\n")).not.toContain("from-ci");
   });
 
@@ -191,7 +219,7 @@ describe("fyrden deploy", () => {
   it("migrates D1 before deploying, and deploys the API before the web Worker", async () => {
     const fake = fakeWrangler();
     const result = await deploy(deps(fake.runner).d);
-    expect(fake.state.migrated).toEqual(["fyrden-directory"]);
+    expect(fake.state.migrated).toEqual(["fyrden-directory", "fyrden-org"]);
     expect(fake.state.deployed.slice(0, 2)).toEqual(["fyrden-api", "fyrden-web"]);
     expect(result.apiUrl).toBe("https://fyrden-api.acct.workers.dev");
     const migrateIndex = fake.calls.findIndex((c) => c.args[1] === "migrations");

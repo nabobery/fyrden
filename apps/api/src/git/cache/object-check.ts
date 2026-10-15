@@ -1,17 +1,15 @@
-import { createWorkersZlib } from "@fyrden/adapters-cloudflare";
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import {
   type BlockCache,
   FILE_MODES,
   GitObjectError,
   isTreeMode,
-  ObjectReader,
   type Oid,
   oidFromHex,
   oidToHex,
   parseTree,
 } from "@fyrden/git-core";
-import { liveView } from "../pack-view.js";
+import { openLiveReader } from "../live-reader.js";
 import {
   DENIED,
   HEX_OID,
@@ -19,7 +17,6 @@ import {
   type ObjectAccessAnswer,
   type ObjectAccessRequest,
 } from "./object-access.js";
-import { openRequestBlockCache } from "./pack-blocks.js";
 
 /** Delta-base cache of one path check: a few trees. Proposed; tuned under load. */
 const CHECK_DELTA_CACHE_BYTES = 4 * 1024 * 1024;
@@ -82,7 +79,7 @@ function verifiedTree(git: RepoGitStorage, hex: unknown): Oid | undefined {
 }
 
 /** `a/b/c` as UTF-8 names; `[]` for the root; undefined for a path that names nothing. */
-function pathSegments(path: unknown): Uint8Array[] | undefined {
+export function pathSegments(path: unknown): Uint8Array[] | undefined {
   if (typeof path !== "string") return undefined;
   if (path === "") return [];
   if (encoder.encode(path).length > MAX_PATH_BYTES) return undefined;
@@ -100,23 +97,11 @@ async function walkPath(
   root: Oid,
   segments: readonly Uint8Array[],
 ): Promise<{ kind: "tree" | "blob"; oid: string } | undefined> {
-  const { git } = deps;
-  const view = liveView(git, () =>
-    git.context.metrics.count("r2.class_b", { bucket: "fyrden-git", op: "get_idx" }),
-  );
-  if (view.packs.length === 0) return undefined;
-  const blocks = await openRequestBlockCache(deps.memoryBlocks, {
-    scope: view.scope,
-    maxCalls: CHECK_CACHE_API_CALLS,
+  const reader = await openLiveReader(deps, {
+    deltaBaseCacheBytes: CHECK_DELTA_CACHE_BYTES,
+    maxCacheCalls: CHECK_CACHE_API_CALLS,
   });
-  const reader = await ObjectReader.open({
-    view,
-    packStore: git.packStore,
-    zlib: createWorkersZlib(),
-    memory: git.memory,
-    blockCache: blocks.cache,
-    limits: { deltaBaseCacheBytes: CHECK_DELTA_CACHE_BYTES },
-  });
+  if (!reader) return undefined;
   try {
     let current = root;
     let kind: "tree" | "blob" = "tree";

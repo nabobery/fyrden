@@ -8,14 +8,18 @@
 | Workerd integration | `apps/api`, `packages/adapters-cloudflare` | workerd via `@cloudflare/vitest-plugin`, with local D1, R2, KV, Queues and Durable Objects | `pnpm turbo run test` |
 | Shuffle guard | workerd suites | the same, in random file and test order with several seeds | `pnpm turbo run test:shuffle` |
 | Dry-run deploy | both Workers | wrangler bundling | `pnpm turbo run deploy:dry-run` |
-| Local end to end | both Workers under one `wrangler dev`, with the real service binding | Node driving workerd | `pnpm turbo run test:e2e` |
+| Local end to end | both Workers under one `wrangler dev`, with the real service binding; the web UI in Chromium through Playwright, every page checked with axe (WCAG 2.x A and AA); hostile Markdown and Mermaid stay inert, no form takes a post from another origin, a file named `*.data` opens and the pages' data is never cached; and, with fyrden-api alone, an agent's whole workflow: an MCP client signs its user in with OAuth 2.1 (PKCE, a resource indicator, a DPoP-bound token), creates a repository, gets a git token, pushes with stock git, browses, reads a file as a resource at a commit, commits a verified change, downloads an archive, forks, and sets an expiry the reaper deletes it after; then an agent acting for that user under a grant (its own token exchanged for a DPoP-bound one) makes a scratch repository that expires, is refused a direct push by a pull-request ruleset its user is not, and is stopped by revoking the grant | Node driving workerd and the browser (Playwright's Chromium must be installed: `pnpm --filter @fyrden/ci-tools exec playwright install chromium`) | `pnpm turbo run test:e2e` |
 | Smoke | a deployed instance | Node | `node tools/ci/src/smoke.ts <api-url> <web-url>` |
 | Git interoperability | `tools/ci/interop`: real git (and JGit) against `fyrden-api` under `wrangler dev` | Node driving git and workerd | `pnpm --filter @fyrden/ci-tools test:interop` |
+| MCP conformance | `tools/ci/conformance`: the MCP conformance suite (pinned version, the 2026-07-28 requirement set) against `fyrden-api` under `wrangler dev`, with a per-check baseline of known failures, and the authorization server metadata scenario | Node driving the suite (needs network for `npx`) | `pnpm --filter @fyrden/ci-tools test:conformance` |
+| REST API fuzzing | `tools/ci/schemathesis`: Schemathesis (pinned version) generates requests for every operation in the OpenAPI document (coverage, fuzzing and stateful phases) against `fyrden-api` under `wrangler dev`, with seeded data to point at; any server error or undocumented response fails | Node driving Schemathesis through `uvx` (needs uv and network) | `pnpm --filter @fyrden/ci-tools test:schemathesis` |
 | Parser fuzzing | `packages/git-core/fuzz` | Node (Vitest), time-boxed | `pnpm --filter @fyrden/git-core fuzz` |
 | Mutation testing | `packages/git-core`, one `src/` directory per run | Stryker | `FYRDEN_MUTATION_SCOPE=<scope> pnpm --filter @fyrden/git-core mutation` |
 
-Pull requests run the unit, workerd, shuffle, dry-run and end-to-end tiers,
-the interoperability subset with the current pinned git, and mutation testing
+Pull requests and pushes to `main` run the unit, workerd, shuffle, dry-run
+and end-to-end tiers, MCP conformance and REST API fuzzing (one job,
+`contract`, which deploys also wait for), and the interoperability subset with
+the current pinned git. Pull requests also run mutation testing
 (incremental) for the `git-core` scopes they change. The nightly workflow runs
 every interoperability case on every pinned git, long fuzzing budgets, and a
 full mutation run of every scope.
@@ -213,6 +217,35 @@ jars (JGit 7.8.0 and its three runtime dependencies) come from Maven Central,
 pinned with their SHA-256 in `jgit/jars.txt` and fetched by
 `jgit/fetch-jars.sh`. `jgit.test.ts` runs nightly with the current git; set
 `FYRDEN_JGIT_CLASSPATH` to run it locally.
+
+## MCP conformance
+
+`tools/ci/conformance/mcp.test.ts` runs the MCP conformance suite's server
+scenarios for the 2026-07-28 revision (`--requirements 2026-07-28`) against a
+local `fyrden-api`, through a proxy that adds a token (the suite sends none and
+Fyrden's MCP server takes no anonymous request). Known failures are listed one
+check at a time in `mcp-expected-failures.yml`: checks that need the suite's
+own fixture tools, resources and prompts, and features Fyrden does not offer
+(prompts, completion, the tasks extension, tools that ask for input). A new
+failure, or a listed check that starts passing, fails the run; update the
+baseline in the same change. The authorization code grant scenario needs a
+person to sign in and consent, so it is not run here.
+
+## REST API fuzzing
+
+`tools/ci/schemathesis/rest.test.ts` runs Schemathesis against a local
+`fyrden-api`, from the API's own `/api/openapi.json`. Before the run it
+bootstraps a user and creates what path parameters point at: a repository
+with a README, an organization with a team, and an agent. Operations that
+would remove those targets (deleting or transferring the repository, deleting
+the agent) get disposable ones of their own. Two checks apply:
+`not_a_server_error` and `response_schema_conformance`; a 4xx the document
+describes passes. The local rate limits are raised for the run (a copy of
+`wrangler.jsonc` beside the original, removed afterwards), because at the
+real limits most generated requests are refused with 429 before they reach an
+operation; the test reads the run's HAR report and fails if any request was
+rate limited. A failure prints the run's seed: rerun Schemathesis with
+`--seed` to reproduce it.
 
 ## Fuzzing
 

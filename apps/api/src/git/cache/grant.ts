@@ -1,5 +1,11 @@
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
-import { canAccess, type RepoAccess, type RepoEntry } from "../../repos/directory.js";
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import {
+  authorize,
+  GIT_PERMISSION,
+  type RepoAccess,
+  type RepoEntry,
+} from "../../repos/directory.js";
 
 /**
  * Proof that the repository-level access check allowed one caller to read
@@ -27,12 +33,14 @@ export class RepoAccessGrant {
   }
 
   /** The grant when `auth` may access `repo` that way; undefined otherwise. */
-  static check(
+  static async check(
+    env: Env,
     auth: TokenRecord,
     repo: RepoEntry,
     access: RepoAccess,
-  ): RepoAccessGrant | undefined {
-    if (!canAccess(auth, repo, access)) return undefined;
+    metrics?: Metrics,
+  ): Promise<RepoAccessGrant | undefined> {
+    if (!(await authorize(env, auth, repo, GIT_PERMISSION[access], metrics))) return undefined;
     return new RepoAccessGrant(repo.id, repo.networkId, repo.visibility, auth.principalId, access);
   }
 

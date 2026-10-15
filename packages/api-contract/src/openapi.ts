@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type OperationDef, pathParams, type Registry } from "./op.js";
+import { type OperationDef, openApiPath, pathParams, type Registry } from "./op.js";
 import { Problem } from "./problem.js";
 
 type JsonSchema = Record<string, unknown>;
@@ -73,12 +73,15 @@ export function openApiDocument(
   registry: Registry,
   info: { version: string; serverUrl?: string },
 ): JsonSchema {
-  const paths: Record<string, Record<string, JsonSchema>> = {};
+  // A Map, so no path (not even "__proto__") can reach an object's prototype.
+  const byPath = new Map<string, Record<string, JsonSchema>>();
   for (const op of registry) {
-    const item = paths[op.path] ?? {};
+    const path = openApiPath(op.path);
+    const item = byPath.get(path) ?? {};
     item[op.method.toLowerCase()] = operationObject(op);
-    paths[op.path] = item;
+    byPath.set(path, item);
   }
+  const paths = Object.fromEntries(byPath);
   return {
     openapi: "3.1.1",
     info: { title: "Fyrden API", version: info.version },

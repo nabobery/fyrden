@@ -358,6 +358,47 @@ describe("atomic and non-atomic commits", () => {
     expect(result.applied.map((u) => u.name)).toEqual(["refs/heads/a", "refs/heads/n"]);
   });
 
+  it("refuses the commands the repository's rules refuse, with their facts; atomic pushes as a whole", async () => {
+    for (const atomic of [false, true]) {
+      const local = memoryServer();
+      await local.push(request([{ new: c1, ref: "refs/heads/a" }], await packOf(sandbox, objects)));
+      const body = bytesBody(
+        request(
+          [
+            { old: c1, new: c2, ref: "refs/heads/a" },
+            { new: c2, ref: "refs/heads/n" },
+          ],
+          await packOf(sandbox, []),
+          { capabilities: atomic ? ["report-status", "atomic"] : ["report-status"] },
+        ),
+      );
+      const { request: req } = await readPushBody(body, { pushOptionsAdvertised: true });
+      const plan = planPush(req, await local.refStore.readRefs());
+      const seen: unknown[] = [];
+      const result = await finalizePush(plan, undefined, `rules-${atomic}`, {
+        ...local.finalizeEnv(),
+        checkCommands: async (commands) => {
+          seen.push(...commands.map((c) => [c.name, c.kind, c.fastForward]));
+          return new Map([[1, "cannot create this ref"]]);
+        },
+      });
+      expect(seen).toEqual([
+        ["refs/heads/a", "update", true],
+        ["refs/heads/n", "create", false],
+      ]);
+      expect(reportLines(encodePushResponse(result.report, plan.capabilities))).toEqual(
+        atomic
+          ? [
+              "unpack ok",
+              "ng refs/heads/a atomic push failure",
+              "ng refs/heads/n cannot create this ref",
+            ]
+          : ["unpack ok", "ok refs/heads/a", "ng refs/heads/n cannot create this ref"],
+      );
+      expect(result.uploadCommitted).toBe(!atomic);
+    }
+  });
+
   it("refuses at the commit point a namespace conflict created after the plan", async () => {
     for (const atomic of [false, true]) {
       const local = memoryServer();

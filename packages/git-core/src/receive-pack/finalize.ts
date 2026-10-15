@@ -71,10 +71,27 @@ export interface FinalizeEnv {
   reauthorize(): Promise<string | undefined>;
   /** Runs one ref transaction. */
   commit(request: PushCommitRequest): Promise<PushCommitResult>;
+  /**
+   * The repository's own rules on each live command (rulesets), once the
+   * fast-forward proof is known and the pusher re-authorized: a refusal
+   * message by command index. Runs once per push.
+   */
+  checkCommands?(commands: readonly CheckedCommand[]): Promise<ReadonlyMap<number, string>>;
   /** Commits a fast-forward walk may visit per ref. Proposed: 100,000. Beyond it, the update counts as non-fast-forward. */
   readonly maxFastForwardWalk?: number;
   /** git's receive.denyNonFastForwards for refs/heads/. Default false. */
   readonly denyNonFastForwards?: boolean;
+}
+
+/** A live command as the rules see it. */
+export interface CheckedCommand {
+  readonly index: number;
+  readonly name: string;
+  readonly kind: "create" | "update" | "delete";
+  readonly oldOid: Oid | null;
+  readonly newOid: Oid | null;
+  /** For an update: whether the new commit has the old one in its history. */
+  readonly fastForward: boolean;
 }
 
 export interface PushResult {
@@ -147,6 +164,28 @@ export async function finalizePush(
     return done(undefined, false, []);
   }
 
+  if (env.checkCommands) {
+    const refusals = await env.checkCommands(
+      live.map((cmd) => ({
+        index: cmd.index,
+        name: cmd.name as string,
+        kind: cmd.kind,
+        oldOid: cmd.oldOid,
+        newOid: cmd.newOid,
+        fastForward: fastForward.has(cmd.name as string),
+      })),
+    );
+    for (const cmd of live) {
+      const refusal = refusals.get(cmd.index);
+      if (refusal === undefined) continue;
+      messages.push(`error: ${refusal}`);
+      cmd.error = refusal;
+    }
+    failAtomically(plan);
+  }
+  const checked = liveCommands(plan);
+  if (checked.length === 0) return done(undefined, false, []);
+
   const packs = indexed?.ok ? indexed.packs : [];
   const deps = indexed?.ok ? indexed.deps : [];
   const toUpdate = (cmd: PushCommandState): RefUpdate => ({
@@ -163,21 +202,21 @@ export async function finalizePush(
       withUpload: true,
       packs,
       deps,
-      updates: live.map(toUpdate),
+      updates: checked.map(toUpdate),
       fastForward,
     });
     if (result.ok) {
       committed = true;
-      for (const cmd of live) applied.push(toUpdate(cmd));
+      for (const cmd of checked) applied.push(toUpdate(cmd));
     } else if (result.reason === "refname-conflict") {
-      const inRequest = live.some((cmd) => cmd.name === result.conflictsWith);
+      const inRequest = checked.some((cmd) => cmd.name === result.conflictsWith);
       messages.push(
         `error: ${refnameConflictMessage(result.ref, result.conflictsWith, inRequest)}`,
       );
-      for (const cmd of live) cmd.error = ATOMIC_TRANSACTION_FAILED;
+      for (const cmd of checked) cmd.error = ATOMIC_TRANSACTION_FAILED;
     } else {
       const failed = result.reason === "ref-conflict" ? result.ref : undefined;
-      for (const cmd of live) {
+      for (const cmd of checked) {
         if (cmd.name === failed) cmd.error = conflictReason(cmd);
         else
           cmd.error = result.reason === "ref-conflict" ? ATOMIC_TRANSACTION_FAILED : result.message;
@@ -189,8 +228,8 @@ export async function finalizePush(
 
   // Deletions first, then the rest, as git's non-atomic path does.
   const ordered = [
-    ...live.filter((c) => c.kind === "delete"),
-    ...live.filter((c) => c.kind !== "delete"),
+    ...checked.filter((c) => c.kind === "delete"),
+    ...checked.filter((c) => c.kind !== "delete"),
   ];
   for (const cmd of ordered) {
     const update = toUpdate(cmd);

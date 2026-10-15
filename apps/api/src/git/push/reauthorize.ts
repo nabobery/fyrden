@@ -1,7 +1,7 @@
 import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { AuthState } from "../../middleware/auth.js";
-import { canAccess, type RepoEntry, resolveRepo } from "../../repos/directory.js";
+import { authorize, type RepoEntry, resolveRepo } from "../../repos/directory.js";
 import type { GitContext } from "../http.js";
 import type { PushDecision } from "./commit.js";
 
@@ -21,7 +21,12 @@ export function reauthorizePush(
   repoName: { readonly owner: string; readonly name: string },
 ): Promise<PushDecision> {
   return reauthorizeWriter(
-    { env: c.env, authState: c.get("authState"), metrics: c.get("metrics") },
+    {
+      env: c.env,
+      authState: c.get("authState"),
+      metrics: c.get("metrics"),
+      requestId: c.get("requestId"),
+    },
     accepted,
     repoName,
   );
@@ -29,24 +34,38 @@ export function reauthorizePush(
 
 /** The same check for any request that holds the writer's token (an API operation). */
 export async function reauthorizeWriter(
-  request: { readonly env: Env; readonly authState: AuthState; readonly metrics: Metrics },
+  request: {
+    readonly env: Env;
+    readonly authState: AuthState;
+    readonly metrics: Metrics;
+    readonly requestId?: string | undefined;
+  },
   accepted: { readonly auth: TokenRecord; readonly repo: RepoEntry },
   repoName: { readonly owner: string; readonly name: string },
 ): Promise<PushDecision> {
+  // The agents acting, as the primary says when it says (what the commit records).
+  let actChain: readonly string[] = accepted.auth.act;
   const decide = (refusal?: string): PushDecision => ({
     ...(refusal === undefined ? {} : { refusal }),
     tokenId: accepted.auth.id,
     decidedAt: Date.now(),
+    actChain,
+    requestId: request.requestId ?? null,
   });
   const verified = await request.authState.verifyForWrite();
-  if (!verified.ok && verified.reason !== "expired") return decide(TOKEN_REVOKED);
-  const record = verified.ok ? verified.record : accepted.auth;
-  if (record.id !== accepted.auth.id) return decide(TOKEN_REVOKED);
+  // An expired token is judged on what the primary says it holds now.
+  const record = verified.ok ? verified.record : verified.expiredRecord;
+  if (record) actChain = record.act;
+  if (!record || record.id !== accepted.auth.id) return decide(TOKEN_REVOKED);
   const repo = await resolveRepo(request.env, repoName.owner, repoName.name, {
     consistency: "primary",
     metrics: request.metrics,
   });
-  if (!repo || repo.id !== accepted.repo.id || !canAccess(record, repo, "write")) {
+  if (
+    !repo ||
+    repo.id !== accepted.repo.id ||
+    !(await authorize(request.env, record, repo, "contents:write", request.metrics))
+  ) {
     return decide(ACCESS_LOST);
   }
   return decide();

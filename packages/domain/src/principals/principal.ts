@@ -11,6 +11,12 @@ export const PRINCIPAL_ID_PREFIX = {
   installation: "ins",
 } as const satisfies Record<PrincipalType, IdPrefix>;
 
+/** The type of principal an id names, by its prefix; undefined for any other id. */
+export function principalTypeOf(id: string): PrincipalType | undefined {
+  const prefix = id.slice(0, id.indexOf("_"));
+  return PRINCIPAL_TYPES.find((type) => PRINCIPAL_ID_PREFIX[type] === prefix);
+}
+
 export interface Principal {
   id: string;
   type: PrincipalType;
@@ -24,4 +30,29 @@ export const HANDLE_PATTERN = /^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-
 
 export function isValidHandle(handle: string): boolean {
   return HANDLE_PATTERN.test(handle);
+}
+
+/**
+ * Handles no new user, organization or agent may take: the names the web
+ * origin's paths start with (the API's and the pages'), where an owner's
+ * pages would otherwise be. A new top-level page adds its name here (the
+ * web's routing test holds every one to it).
+ */
+const RESERVED_HANDLES: ReadonlySet<string> = new Set([
+  // The API's paths on the web origin.
+  "api",
+  "auth",
+  "mcp",
+  "oauth",
+  "v0",
+  // The web's own pages, and the built assets served before it runs.
+  "assets",
+  "healthz",
+  "settings",
+  "sign-out",
+]);
+
+/** Whether `handle` is reserved (ignoring case, as handles are unique). */
+export function isReservedHandle(handle: string): boolean {
+  return RESERVED_HANDLES.has(handle.toLowerCase());
 }

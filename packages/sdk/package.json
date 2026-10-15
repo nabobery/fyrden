@@ -9,13 +9,17 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p .",
+    "typecheck": "tsc -p . && tsc -p tsconfig.test.json",
     "test": "vitest run --passWithNoTests",
-    "test:coverage": "vitest run --coverage --passWithNoTests"
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "generate": "UPDATE_SDK=1 vitest run test/generated.test.ts"
   },
   "devDependencies": {
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "@vitest/coverage-istanbul": "catalog:"
+    "@vitest/coverage-istanbul": "catalog:",
+    "@fyrden/api-contract": "workspace:*",
+    "zod": "catalog:",
+    "@types/node": "catalog:"
   }
 }

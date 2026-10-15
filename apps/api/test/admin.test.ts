@@ -64,6 +64,15 @@ describe("admin.users.create", () => {
     },
   );
 
+  it.each(["api", "MCP", "settings"])(
+    "refuses %j, a handle the web origin's paths take",
+    async (handle) => {
+      const res = await call("/admin/users", adminToken, { handle });
+      expect(res.status).toBe(422);
+      expect(await res.json()).toMatchObject({ code: "invalid_input" });
+    },
+  );
+
   it("is for instance administrators only", async () => {
     const res = await call("/admin/users", userToken, { handle: freshHandle() });
     expect(res.status).toBe(403);
@@ -83,7 +92,7 @@ describe("admin.tokens.create", () => {
   it("mints a token that authenticates as the new user, shown once and never logged", async () => {
     const userId = await newUser();
     const res = await call(`/admin/users/${userId}/tokens`, adminToken, {
-      scopes: ["repo"],
+      scopes: ["contents:read"],
       expires_in_days: 7,
     });
     expect(res.status).toBe(201);
@@ -93,7 +102,7 @@ describe("admin.tokens.create", () => {
 
     const me = await call("/user", minted.token, undefined, "GET");
     expect(me.status).toBe(200);
-    expect(await me.json()).toMatchObject({ id: userId, token: { scopes: ["repo"] } });
+    expect(await me.json()).toMatchObject({ id: userId, token: { scopes: ["contents:read"] } });
 
     // Hash-only storage, and the secret never reaches a log line.
     const stored = await env.DIRECTORY.prepare("SELECT * FROM tokens WHERE id = ?")
@@ -166,13 +175,16 @@ describe("admin.tokens.create", () => {
     expect(res.status).toBe(409);
   });
 
-  it.each([{ expires_in_days: 0 }, { expires_in_days: 366 }, { type: "job" }, { scopes: [""] }])(
-    "rejects %j",
-    async (body) => {
-      const res = await call(`/admin/users/${await newUser()}/tokens`, adminToken, body);
-      expect(res.status).toBe(422);
-    },
-  );
+  it.each([
+    { expires_in_days: 0 },
+    { expires_in_days: 366 },
+    { type: "job" },
+    { scopes: [""] },
+    { scopes: ["repo"] },
+  ])("rejects %j", async (body) => {
+    const res = await call(`/admin/users/${await newUser()}/tokens`, adminToken, body);
+    expect(res.status).toBe(422);
+  });
 
   it("is for instance administrators only", async () => {
     const res = await call("/admin/users/usr_x/tokens", userToken, {});

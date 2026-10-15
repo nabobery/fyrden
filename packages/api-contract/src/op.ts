@@ -1,12 +1,19 @@
-import { PRINCIPAL_TYPES, type PrincipalType } from "@fyrden/domain";
+import {
+  AUTHENTICATED,
+  isPermission,
+  type Permission,
+  PRINCIPAL_TYPES,
+  type PrincipalType,
+  permissionDef,
+} from "@fyrden/domain";
 import type { z } from "zod";
+
+export { AUTHENTICATED };
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-/** Any authenticated principal may call the operation; authorization is not otherwise narrowed. */
-export const AUTHENTICATED = "authenticated";
 /** Only an instance administrator may call the operation. */
-export const INSTANCE_ADMIN = "instance:admin";
+export const INSTANCE_ADMIN = "instance:admin" satisfies Permission;
 
 /**
  * One operation, declared once. REST routes, the OpenAPI document, MCP
@@ -20,15 +27,22 @@ export interface OperationDef<
   /** Stable id, `<area>.<verb>`; kept as a literal type so handler maps can require every id. */
   id: Id;
   method: HttpMethod;
-  /** OpenAPI-style path under /api, e.g. `/repos/{owner}/{repo}`. */
+  /**
+   * OpenAPI-style path under /api, e.g. `/repos/{owner}/{repo}`. The last
+   * parameter may be greedy, `{path+}`: it takes the rest of the path,
+   * slashes included (a file path, a branch name).
+   */
   path: string;
   summary: string;
   description?: string;
   /** All inputs: path parameters, then the query (GET) or JSON body (others). */
   input: I;
   output: O;
-  /** Permission the caller needs, checked by the authorization layer. */
-  permission: string;
+  /**
+   * Permission the caller needs, from the permission table in
+   * `@fyrden/domain`; `AUTHENTICATED` when any authenticated caller may.
+   */
+  permission: Permission | typeof AUTHENTICATED;
   /** Principal types allowed to call it at all. */
   principals: readonly PrincipalType[];
   rateLimit: "read" | "write" | "expensive";
@@ -38,7 +52,19 @@ export interface OperationDef<
   successStatus?: 200 | 201;
   /** The response carries a secret, so idempotent replays omit it. */
   secretResponse?: boolean;
-  mcp: false | { tool: string; title: string; description: string; readOnly: boolean };
+  mcp:
+    | false
+    | {
+        tool: string;
+        title: string;
+        description: string;
+        readOnly: boolean;
+        /**
+         * Whether calling it again with the same arguments changes nothing
+         * more; by default when it reads, sets (PUT) or removes (DELETE).
+         */
+        idempotent?: boolean;
+      };
 }
 
 export type Input<D extends OperationDef> = z.infer<D["input"]>;
@@ -50,10 +76,15 @@ export class RegistryError extends Error {
 
 const ID = /^[a-z][a-z0-9]*(\.[a-z][a-z0-9_]*)+$/;
 const TOOL = /^[a-z][a-z0-9_]{0,63}$/;
-const PATH = /^(\/([a-z0-9-]+|\{[a-z_]+\}))+$/;
+const PATH = /^(\/([a-z0-9_-]+|\{[a-z_]+\}))*(\/\{[a-z_]+\+\})?$/;
 
 export function pathParams(path: string): string[] {
-  return [...path.matchAll(/\{([a-z_]+)\}/g)].map((m) => m[1] as string);
+  return [...path.matchAll(/\{([a-z_]+)\+?\}/g)].map((m) => m[1] as string);
+}
+
+/** The path as OpenAPI writes it: a greedy `{path+}` is `{path}`. */
+export function openApiPath(path: string): string {
+  return path.replace(/\{([a-z_]+)\+\}/g, "{$1}");
 }
 
 function validate(def: OperationDef): void {
@@ -61,11 +92,19 @@ function validate(def: OperationDef): void {
     throw new RegistryError(`operation ${def.id || "<unnamed>"}: ${reason}`);
   };
   if (!ID.test(def.id)) fail("id must look like area.verb");
-  if (!PATH.test(def.path)) fail(`path ${def.path} is not a valid template`);
+  if (!def.path || !PATH.test(def.path)) fail(`path ${def.path} is not a valid template`);
   if (!def.permission.trim()) fail("a permission is required");
   if (def.principals.length === 0) fail("at least one principal type is required");
   for (const p of def.principals)
     if (!PRINCIPAL_TYPES.includes(p)) fail(`unknown principal type ${p}`);
+  if (def.permission !== AUTHENTICATED) {
+    if (!isPermission(def.permission)) fail(`unknown permission ${def.permission}`);
+    const held = permissionDef(def.permission as Permission);
+    for (const p of def.principals)
+      if (!held.principals.includes(p)) fail(`${p} principals cannot hold ${def.permission}`);
+    // The executor re-verifies a token on the primary for non-GET methods only.
+    if (def.method === "GET" && held.writes) fail("a GET operation cannot need a write permission");
+  }
   if (def.method === "GET" && def.idempotency !== "none")
     fail("GET operations are naturally idempotent");
   if (def.method !== "GET" && def.idempotency !== "key")
@@ -102,7 +141,7 @@ export function defineRegistry<R extends readonly OperationDef[]>(ops: R): R {
     validate(op);
     unique(`id:${op.id}`, `operation id ${op.id}`);
     unique(
-      `route:${op.method} ${op.path.replace(/\{[a-z_]+\}/g, "{}")}`,
+      `route:${op.method} ${op.path.replace(/\{[a-z_]+\}/g, "{}").replace(/\{[a-z_]+\+\}/g, "{+}")}`,
       `route ${op.method} ${op.path}`,
     );
     if (op.mcp) unique(`tool:${op.mcp.tool}`, `MCP tool ${op.mcp.tool}`);

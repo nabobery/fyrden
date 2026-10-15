@@ -1,3 +1,4 @@
+import type { MemoryReservation } from "@fyrden/git-core";
 import { currentInvocation } from "../obs/invocation.js";
 import { newUlid } from "./keys.js";
 import type { DoMemoryBudget } from "./memory-budget.js";
@@ -22,6 +23,7 @@ export const JOB_KINDS = [
   "retire_packs",
   "network_gc",
   "network_delete",
+  "storage_confirm",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -265,10 +267,22 @@ export class JobQueue {
     let slices = 0;
     for (;;) {
       if (this.#outOfBudget(deadline)) break;
-      const job = this.#claimNext(Object.keys(handlers) as JobKind[]);
-      if (!job) break;
-      if ((await this.#runClaimed(job, handlers[job.kind] as JobHandler, memory)) === "ran")
-        slices++;
+      const next = this.#nextDue(Object.keys(handlers) as JobKind[]);
+      if (!next) break;
+      const handler = handlers[next.kind] as JobHandler;
+      // Memory first: a job is claimed only once its slice can run, so a
+      // run whose lease expired keeps its claim while the pool is short.
+      const reservation = this.#admit(handler, memory);
+      if (reservation === "short") {
+        this.#postpone(next);
+        continue;
+      }
+      const job = this.#releasingOnThrow(reservation, () => this.#claimDue(next.job_id));
+      if (!job) {
+        reservation?.release();
+        continue;
+      }
+      if ((await this.#runClaimed(job, handler, reservation)) === "ran") slices++;
     }
     this.rearm();
     return slices;
@@ -296,23 +310,27 @@ export class JobQueue {
           if (slices === 0) state = this.#stateOf(jobId);
           break;
         }
-        const job = this.#claim(jobId);
+        const reservation = this.#admit(handler, memory);
+        if (reservation === "short") {
+          // The pool is short: the job stays as it is, for a later run.
+          state = this.#stateOf(jobId);
+          break;
+        }
+        const job = this.#releasingOnThrow(reservation, () => this.#claim(jobId));
         if (!job) {
+          reservation?.release();
           if (slices === 0) state = this.get(jobId) ? "busy" : "missing";
           break;
         }
-        const ran = await this.#runClaimed(job, handler, memory);
-        if (ran === "short") {
-          state = "queued";
-          break;
-        }
+        const ran = await this.#runClaimed(job, handler, reservation);
         if (ran === "taken-over") {
           state = "busy";
           break;
         }
         slices++;
         state = this.#stateOf(jobId);
-        if (state !== "queued" || this.#outOfBudget(deadline)) break;
+        // A slice that asked to go on later is not run again now.
+        if (state !== "queued" || this.#outOfBudget(deadline) || this.#later(jobId)) break;
       }
     } finally {
       this.rearm();
@@ -320,22 +338,32 @@ export class JobQueue {
     return { slices, state };
   }
 
+  /** Runs `claim`, giving `reservation` back if it throws. */
+  #releasingOnThrow<T>(reservation: MemoryReservation | undefined, claim: () => T): T {
+    try {
+      return claim();
+    } catch (error) {
+      reservation?.release();
+      throw error;
+    }
+  }
+
+  /** The memory a slice of `handler` needs, reserved; "short" when the pool has no room. */
+  #admit(handler: JobHandler, memory: DoMemoryBudget): MemoryReservation | undefined | "short" {
+    if (!handler.memoryBytes) return undefined;
+    return memory.tryReserve(handler.memoryBytes) ?? "short";
+  }
+
   /**
-   * Runs one slice of a claimed job and records the result: "short" when
-   * the pool had no room, "taken-over" when another run claimed the job
+   * Runs one slice of a claimed job, its memory already reserved, and
+   * records the result: "taken-over" when another run claimed the job
    * meanwhile (nothing of this slice is recorded).
    */
   async #runClaimed(
     job: Job,
     handler: JobHandler,
-    memory: DoMemoryBudget,
-  ): Promise<"ran" | "short" | "taken-over"> {
-    const reservation = handler.memoryBytes ? memory.tryReserve(handler.memoryBytes) : undefined;
-    if (handler.memoryBytes && !reservation) {
-      // The pool is short: give the job back and continue it on a later alarm.
-      this.#update(job, job.cursor, job.attempts, this.policy.memoryRetryMs, null);
-      return "short";
-    }
+    reservation: MemoryReservation | undefined,
+  ): Promise<"ran" | "taken-over"> {
     let recorded: boolean;
     try {
       const result = await handler.runSlice(job);
@@ -369,14 +397,20 @@ export class JobQueue {
     return state === "running" ? "busy" : (state as RunJobState);
   }
 
-  /** Sets the alarm to the earliest pending job, if any. */
-  rearm(): void {
+  /** When the earliest pending job is due (or its runner's lease expires), or null when none is pending. */
+  nextAt(): number | null {
     const next = first<{ at: number | null }>(
       this.context.storage,
       `SELECT min(CASE WHEN state = 'running' THEN lease_expires_at ELSE next_run_at END) AS at
        FROM jobs WHERE state IN ('queued', 'running')`,
     );
-    if (next?.at != null) this.setAlarm(next.at);
+    return next?.at ?? null;
+  }
+
+  /** Sets the alarm to the earliest pending job, if any. */
+  rearm(): void {
+    const at = this.nextAt();
+    if (at !== null) this.setAlarm(at);
   }
 
   /** Claims the job `jobId` if it is queued (at any time) or its runner's lease has expired. */
@@ -416,25 +450,77 @@ export class JobQueue {
     };
   }
 
-  #claimNext(kinds: readonly JobKind[]): Job | undefined {
+  /** The next due job of `kinds` (queued and due, or running past its lease), not claimed. */
+  #nextDue(
+    kinds: readonly JobKind[],
+  ): { job_id: string; kind: JobKind; state: string; claim: number } | undefined {
     if (kinds.length === 0) return undefined;
+    const now = this.context.now();
+    return rows<{ job_id: string; kind: JobKind; state: string; claim: number }>(
+      this.context.storage,
+      `SELECT job_id, kind, state, claim FROM jobs
+       WHERE kind IN (${kinds.map(() => "?").join(", ")})
+         AND ((state = 'queued' AND next_run_at <= ?)
+           OR (state = 'running' AND lease_expires_at <= ?))
+       ORDER BY next_run_at, job_id LIMIT 1`,
+      ...kinds,
+      now,
+      now,
+    )[0];
+  }
+
+  /** Claims the job `jobId` if it is still due (queued and due, or past its lease). */
+  #claimDue(jobId: string): Job | undefined {
     const { storage } = this.context;
     const now = this.context.now();
     return storage.transactionSync(() => {
       const raw = rows<RawJob>(
         storage,
         `SELECT job_id, kind, cursor, attempts, claim FROM jobs
-         WHERE kind IN (${kinds.map(() => "?").join(", ")})
-           AND ((state = 'queued' AND next_run_at <= ?)
-             OR (state = 'running' AND lease_expires_at <= ?))
-         ORDER BY next_run_at, job_id LIMIT 1`,
-        ...kinds,
+         WHERE job_id = ? AND ((state = 'queued' AND next_run_at <= ?)
+           OR (state = 'running' AND lease_expires_at <= ?))`,
+        jobId,
         now,
         now,
       )[0];
-      if (!raw) return undefined;
-      return this.#take(raw, now);
+      return raw && this.#take(raw, now);
     });
+  }
+
+  /**
+   * A due job whose slice found the pool short waits `memoryRetryMs`: a
+   * queued one is due later; a running one whose lease expired keeps its
+   * runner's claim, with the lease extended (that runner may still finish).
+   */
+  #postpone(job: { job_id: string; state: string; claim: number }): void {
+    const at = this.context.now() + this.policy.memoryRetryMs;
+    const written =
+      job.state === "queued"
+        ? run(
+            this.context.storage,
+            "UPDATE jobs SET next_run_at = ? WHERE job_id = ? AND state = 'queued' AND claim = ?",
+            at,
+            job.job_id,
+            job.claim,
+          )
+        : run(
+            this.context.storage,
+            `UPDATE jobs SET lease_expires_at = ? WHERE job_id = ? AND state = 'running' AND claim = ?`,
+            at,
+            job.job_id,
+            job.claim,
+          );
+    countRowsWritten(this.context, "jobs.postpone", written);
+  }
+
+  /** Whether the queued job `jobId` is due only later (its slice asked for a delay). */
+  #later(jobId: string): boolean {
+    const row = rows<{ next_run_at: number }>(
+      this.context.storage,
+      "SELECT next_run_at FROM jobs WHERE job_id = ? AND state = 'queued'",
+      jobId,
+    )[0];
+    return row !== undefined && row.next_run_at > this.context.now();
   }
 
   /**

@@ -14,7 +14,12 @@ import { TokenCache } from "./token-cache.js";
 export interface TokenRecord {
   id: string;
   type: TokenType;
+  /** Whose rights the token uses: its principal, or for a delegated token the user acted for. */
   principalId: string;
+  /**
+   * The type of the principal making the call: for a delegated token,
+   * `agent` (principal-type rules apply to the agent, never to the user).
+   */
   principalType: PrincipalType;
   principalHandle: string | null;
   isInstanceAdmin: boolean;
@@ -23,6 +28,37 @@ export interface TokenRecord {
   repoIds: string[] | null;
   expiresAt: number;
   lastUsedAt: number | null;
+  /**
+   * For a delegated token: the agents acting, the current one first (an
+   * RFC 8693 `act` chain); empty otherwise.
+   */
+  act: string[];
+  /** For a delegated token, the delegation grant it was issued under; null otherwise. */
+  grantId: string | null;
+  /**
+   * Owners of the agents acting (an agent's own token, or every agent of a
+   * delegated token's chain): each one's rights cap the token's.
+   */
+  ceilingIds: string[];
+  /**
+   * The resource the token is for (RFC 8707: an authorization server's
+   * access token is accepted only there); null for any of this deployment's.
+   */
+  audience: string | null;
+  /** The thumbprint of the key a DPoP-bound token is bound to (RFC 9449); null for a bearer token. */
+  dpopJkt: string | null;
+  /**
+   * Whether an acting agent's owner requires DPoP of its agents' API
+   * tokens: such a token is taken only when DPoP-bound.
+   */
+  requiresDpop: boolean;
+  /**
+   * The first token of those it was minted from by its holder (a delegated
+   * token exchanged for an agent's own, a git token from `POST
+   * /user/git-tokens`): it stops with any of them, and shares the first
+   * one's rate limits. Absent or null otherwise.
+   */
+  sourceId?: string | null;
 }
 
 export type VerifyFailure =
@@ -32,7 +68,41 @@ export type VerifyFailure =
   | "expired"
   | "revoked"
   | "disabled";
-export type VerifyResult = { ok: true; record: TokenRecord } | { ok: false; reason: VerifyFailure };
+export type VerifyResult =
+  | { ok: true; record: TokenRecord }
+  | {
+      ok: false;
+      reason: VerifyFailure;
+      /**
+       * For a token found expired on the D1 primary, what it holds now: a
+       * commit that started before the expiry is judged on it.
+       */
+      expiredRecord?: TokenRecord;
+    };
+
+/**
+ * A token's stored scopes and repository list (JSON columns), or undefined
+ * when either is not a list of strings: such a row grants nothing, rather
+ * than reading as "no scopes" (the principal's full rights).
+ */
+export function parseTokenRestrictions(
+  scopes: string,
+  repoIds: string | null,
+): { scopes: string[]; repoIds: string[] | null } | undefined {
+  const list = (json: string): string[] | undefined => {
+    let value: unknown;
+    try {
+      value = JSON.parse(json);
+    } catch {
+      return undefined;
+    }
+    return Array.isArray(value) && value.every((v) => typeof v === "string") ? value : undefined;
+  };
+  const parsedScopes = list(scopes);
+  const parsedRepoIds = repoIds === null ? null : list(repoIds);
+  if (parsedScopes === undefined || parsedRepoIds === undefined) return undefined;
+  return { scopes: parsedScopes, repoIds: parsedRepoIds };
+}
 
 /**
  * Read paths may use the isolate cache. Write paths (push, merge, admin, every
@@ -47,7 +117,22 @@ export interface MintInput {
   scopes: string[];
   repoIds?: string[] | null;
   ttlMs: number;
+  /** The latest the token may expire (Unix ms), whatever `ttlMs` says. */
+  notAfter?: number;
   audit: AuditContext;
+  /** A delegated token: the grant it is issued under and the agents acting (the current one first). */
+  delegation?: { readonly grantId: string; readonly act: readonly string[] };
+  /** The resource it is for (RFC 8707); any of this deployment's when absent. */
+  audience?: string | null;
+  /** The key thumbprint a DPoP-bound token is bound to. */
+  dpopJkt?: string | null;
+  /** The token it is minted from by its holder: revoking that one revokes it. */
+  sourceId?: string | null;
+}
+
+/** A token would expire before it is issued: the token minting it expired meanwhile. */
+export class TokenExpiredError extends Error {
+  override name = "TokenExpiredError";
 }
 
 export interface AuditContext {
@@ -80,11 +165,130 @@ interface TokenRow {
   handle: string | null;
   is_instance_admin: number;
   disabled_at: number | null;
+  owner_id: string | null;
+  owner_disabled_at: number | null;
+  owner_require_dpop: number | null;
   scopes: string;
   repo_ids: string | null;
   expires_at: number;
   last_used_at: number | null;
   revoked_at: number | null;
+  grant_id: string | null;
+  act_chain: string | null;
+  audience: string | null;
+  dpop_jkt: string | null;
+  source_id: string | null;
+}
+
+/** One grant of a delegated token's chain, with its agent and the agent's owner. */
+export interface GrantLink {
+  id: string;
+  agent_id: string;
+  parent_id: string | null;
+  expires_at: number;
+  revoked_at: number | null;
+  agent_disabled_at: number | null;
+  owner_id: string;
+  owner_disabled_at: number | null;
+  owner_require_dpop: number;
+}
+
+/** A grant and its parent (a delegated token's chain), with their agents and owners. */
+export async function readGrantLinks(
+  source: D1Database | D1DatabaseSession,
+  grantId: string,
+): Promise<GrantLink[]> {
+  const { results } = await source
+    .prepare(
+      `SELECT g.id, g.agent_id, g.parent_id, g.expires_at, g.revoked_at,
+              a.disabled_at AS agent_disabled_at, a.owner_id, o.disabled_at AS owner_disabled_at,
+              o.require_dpop AS owner_require_dpop
+       FROM grants g JOIN principals a ON a.id = g.agent_id
+       JOIN principals o ON o.id = a.owner_id
+       WHERE g.id = ?1 OR g.id = (SELECT parent_id FROM grants WHERE id = ?1)`,
+    )
+    .bind(grantId)
+    .all<GrantLink>();
+  return results;
+}
+
+/** What a delegated token's grants add to its record, or undefined when the chain no longer holds. */
+export type Delegation = {
+  act: string[];
+  grantId: string;
+  ceilingIds: string[];
+  /** Whether an acting agent's owner requires DPoP. */
+  requiresDpop: boolean;
+};
+
+function toRecord(
+  row: TokenRow,
+  restrictions: { scopes: string[]; repoIds: string[] | null },
+  delegation: Delegation | null,
+): TokenRecord {
+  return {
+    id: row.id,
+    type: row.type,
+    principalId: row.principal_id,
+    principalType: delegation ? "agent" : row.principal_type,
+    principalHandle: row.handle,
+    // Never delegated.
+    isInstanceAdmin: !delegation && row.is_instance_admin === 1,
+    ...restrictions,
+    expiresAt: row.expires_at,
+    lastUsedAt: row.last_used_at,
+    act: delegation?.act ?? [],
+    grantId: delegation?.grantId ?? null,
+    ceilingIds: delegation?.ceilingIds ?? (row.owner_id === null ? [] : [row.owner_id]),
+    audience: row.audience,
+    dpopJkt: row.dpop_jkt,
+    requiresDpop: delegation ? delegation.requiresDpop : row.owner_require_dpop === 1,
+    sourceId: row.source_id,
+  };
+}
+
+/**
+ * A delegated token's chain, checked against its grants: every grant live
+ * (not revoked, not expired at `now`), every agent and owner enabled, and
+ * the act chain the grants' agents (the token's grant's first, then its
+ * parent's). Undefined when any of that fails.
+ */
+export function delegationOf(
+  grantId: string,
+  actChain: string,
+  links: readonly GrantLink[],
+  now: number,
+): Delegation | undefined {
+  let act: unknown;
+  try {
+    act = JSON.parse(actChain);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(act) || !act.every((a) => typeof a === "string")) return undefined;
+  const chain: GrantLink[] = [];
+  let next: string | null = grantId;
+  while (next !== null) {
+    const link = links.find((l) => l.id === next);
+    if (!link || chain.includes(link)) return undefined;
+    chain.push(link);
+    next = link.parent_id;
+  }
+  const live = chain.every(
+    (l) =>
+      l.revoked_at === null &&
+      l.expires_at > now &&
+      l.agent_disabled_at === null &&
+      l.owner_disabled_at === null,
+  );
+  if (!live || act.length !== chain.length) return undefined;
+  if (chain.some((l, i) => l.agent_id !== act[i])) return undefined;
+  return {
+    act,
+    grantId,
+    ceilingIds: chain.map((l) => l.owner_id),
+    requiresDpop: chain.some((l) => l.owner_require_dpop === 1),
+  };
 }
 
 /**
@@ -136,12 +340,16 @@ export class D1TokenStore {
     const token = generateToken(input.type, this.deps.randomBytes);
     const id = this.deps.newId("tok");
     const now = this.deps.clock();
-    const expiresAt = now + input.ttlMs;
+    const expiresAt = Math.min(now + input.ttlMs, input.notAfter ?? Number.POSITIVE_INFINITY);
+    if (expiresAt <= now) throw new TokenExpiredError("the token would expire before it is issued");
     this.countQuery("token_mint", 2);
+    const { delegation } = input;
     await this.db.batch([
       this.db
         .prepare(
-          "INSERT INTO tokens (id, token_hash, type, principal_id, scopes, repo_ids, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          `INSERT INTO tokens (id, token_hash, type, principal_id, scopes, repo_ids, expires_at,
+             created_at, grant_id, act_chain, audience, dpop_jkt, source_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           id,
@@ -152,10 +360,16 @@ export class D1TokenStore {
           input.repoIds ? JSON.stringify(input.repoIds) : null,
           expiresAt,
           now,
+          delegation?.grantId ?? null,
+          delegation ? JSON.stringify(delegation.act) : null,
+          input.audience ?? null,
+          input.dpopJkt ?? null,
+          input.sourceId ?? null,
         ),
       auditStatement(this.db, now, input.audit, "token.mint", id, {
         type: input.type,
         principalId: input.principalId,
+        ...(delegation && { grantId: delegation.grantId, act: delegation.act }),
       }),
     ]);
     return { token, id, expiresAt };
@@ -181,44 +395,66 @@ export class D1TokenStore {
     const row = await source
       .prepare(
         `SELECT t.id, t.type, t.principal_id, p.type AS principal_type, p.handle, p.is_instance_admin,
-                p.disabled_at, t.scopes, t.repo_ids, t.expires_at, t.last_used_at, t.revoked_at
+                p.disabled_at, p.owner_id, o.disabled_at AS owner_disabled_at,
+                o.require_dpop AS owner_require_dpop, t.scopes,
+                t.repo_ids, t.expires_at, t.last_used_at,
+                coalesce(t.revoked_at, s.revoked_at, f.revoked_at) AS revoked_at, t.grant_id,
+                t.act_chain, t.audience, t.dpop_jkt, coalesce(s.source_id, t.source_id) AS source_id
          FROM tokens t JOIN principals p ON p.id = t.principal_id
+         LEFT JOIN principals o ON o.id = p.owner_id
+         -- A token minted from another stops with it, and with the one that one came from.
+         LEFT JOIN tokens s ON s.id = t.source_id
+         LEFT JOIN tokens f ON f.id = s.source_id
          WHERE t.token_hash = ?`,
       )
       .bind(hash)
       .first<TokenRow>();
+    // A delegated token holds only while its grants and agents do.
+    const links =
+      row?.grant_id && row.revoked_at === null ? await this.grantLinks(source, row.grant_id) : [];
 
     // Judge expiry at the time the answer arrived, not when the lookup began.
     const answeredAt = this.deps.clock();
+    const restrictions = row && parseTokenRestrictions(row.scopes, row.repo_ids);
+    const delegation =
+      row?.grant_id && row.act_chain !== null
+        ? delegationOf(row.grant_id, row.act_chain, links, answeredAt)
+        : null;
     const failure: VerifyFailure | undefined = !row
       ? "unknown"
-      : row.revoked_at !== null
+      : row.revoked_at !== null || delegation === undefined
         ? "revoked"
-        : row.disabled_at !== null
+        : row.disabled_at !== null || row.owner_disabled_at !== null
           ? "disabled"
-          : row.expires_at <= answeredAt
-            ? "expired"
-            : undefined;
-    if (!row || failure) {
+          : !restrictions
+            ? "unknown"
+            : row.expires_at <= answeredAt
+              ? "expired"
+              : undefined;
+    if (!row || !restrictions || delegation === undefined || failure) {
       this.cache.delete(hash);
-      return { ok: false, reason: failure ?? "unknown" };
+      return failure === "expired" &&
+        mode === "write" &&
+        row &&
+        restrictions &&
+        delegation !== undefined
+        ? { ok: false, reason: failure, expiredRecord: toRecord(row, restrictions, delegation) }
+        : { ok: false, reason: failure ?? "unknown" };
     }
 
-    const record: TokenRecord = {
-      id: row.id,
-      type: row.type,
-      principalId: row.principal_id,
-      principalType: row.principal_type,
-      principalHandle: row.handle,
-      isInstanceAdmin: row.is_instance_admin === 1,
-      scopes: JSON.parse(row.scopes) as string[],
-      repoIds: row.repo_ids === null ? null : (JSON.parse(row.repo_ids) as string[]),
-      expiresAt: row.expires_at,
-      lastUsedAt: row.last_used_at,
-    };
+    const record = toRecord(row, restrictions, delegation);
     // Freshness counts from `now`, when this lookup started.
     this.cache.set(hash, record, now);
     return this.touch(hash, record, answeredAt);
+  }
+
+  /** A grant and its parent (a delegated token's chain), with their agents and owners. */
+  private grantLinks(
+    source: D1Database | D1DatabaseSession,
+    grantId: string,
+  ): Promise<GrantLink[]> {
+    this.countQuery("token_grants");
+    return readGrantLinks(source, grantId);
   }
 
   /** Revokes a token and records it in the audit log in one batch. */

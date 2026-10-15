@@ -10,12 +10,15 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import { checkOutboundUrl, type Resolver } from "@fyrden/adapters-cloudflare/net";
 import { type HttpTransport, oidToHex } from "@fyrden/git-core";
 import { afterEach, describe, expect, inject, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { ImportNetwork } from "../src/git/import/network.js";
 import { guardedTransport } from "../src/git/import/network.js";
+import { RepoPush } from "../src/git/push/repo-push.js";
+import { api } from "./helpers/api.js";
 import type { RecordedExchange } from "./helpers/chunked-fixtures.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { fromHex } from "./helpers/git-oracle.js";
@@ -51,7 +54,7 @@ async function call(target: PushTarget, method: string, body?: unknown, vars = O
   // biome-ignore lint/suspicious/noExplicitAny: test assertions over JSON
   const json: any = await response.json();
   await waitOnExecutionContext(ctx);
-  return { status: response.status, json };
+  return { status: response.status, json, requestId: response.headers.get("X-Request-Id") };
 }
 
 const decoder = new TextDecoder();
@@ -158,12 +161,100 @@ describe("server-side import", () => {
       head: cx.source.head,
       scratch: 0,
     });
+    // The job keeps the request that started it, which its commit's
+    // re-check hands to the commit (as a file write's does).
+    expect(started.requestId).toBeTruthy();
+    expect((await target.repo.stub.importRecord())?.requestId).toBe(started.requestId);
     // Every request went to the source URL (through the guard).
     expect(seen).toEqual([
       `GET ${SOURCE}/info/refs?service=git-upload-pack`,
       `POST ${SOURCE}/git-upload-pack`,
       `POST ${SOURCE}/git-upload-pack`,
     ]);
+  });
+
+  it("fails, fetching nothing, when a ruleset refuses the refs it would create", async () => {
+    const target = await pushTarget();
+    const seen: string[] = [];
+    await useNetwork(target, replay(cx.source.exchanges, seen));
+    const [, owner, repo] = target.path.split("/");
+    const made = await api(
+      "POST",
+      `/repos/${owner}/${(repo as string).replace(/\.git$/, "")}/rulesets`,
+      target.owner.token,
+      {
+        name: "closed",
+        enforcement: "active",
+        target: "branch",
+        conditions: { ref_name: { include: ["~ALL"] } },
+        rules: [{ type: "creation" }],
+      },
+    );
+    expect(made.status).toBe(201);
+    expect((await call(target, "POST", { url: `${SOURCE}/` })).status).toBe(201);
+    const record = await untilImported(target);
+    expect(record.state).toBe("failed");
+    expect(record.error).toContain('cannot create this ref (ruleset "closed")');
+    // The refs were listed; no pack was fetched, and nothing was stored.
+    expect(seen).toEqual([
+      `GET ${SOURCE}/info/refs?service=git-upload-pack`,
+      `POST ${SOURCE}/git-upload-pack`,
+    ]);
+    expect(await repoState(target)).toMatchObject({ refs: {}, scratch: 0 });
+  });
+
+  it("checks the default branch rules against the branch the import makes the default", async () => {
+    const target = await pushTarget();
+    const seen: string[] = [];
+    await useNetwork(target, replay(cx.source.exchanges, seen));
+    const [, owner, repo] = target.path.split("/");
+    expect(cx.source.head).not.toBe("refs/heads/main");
+    const made = await api(
+      "POST",
+      `/repos/${owner}/${(repo as string).replace(/\.git$/, "")}/rulesets`,
+      target.owner.token,
+      {
+        name: "default",
+        enforcement: "active",
+        target: "branch",
+        conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } },
+        rules: [{ type: "creation" }],
+      },
+    );
+    expect(made.status).toBe(201);
+    expect((await call(target, "POST", { url: `${SOURCE}/` })).status).toBe(201);
+    const record = await untilImported(target);
+    expect(record.state).toBe("failed");
+    expect(record.error).toContain('cannot create this ref (ruleset "default")');
+    expect(seen).toHaveLength(2);
+    expect(await repoState(target)).toMatchObject({ refs: {}, scratch: 0 });
+  });
+
+  it("sets the default branch in its commit, so no push in between can delete that branch", async () => {
+    const target = await pushTarget();
+    await useNetwork(target, replay(cx.source.exchanges, []));
+    // Right after the import's commit: a push deleting the branch the import makes the
+    // default, refused (as git refuses deleting the current branch) only once HEAD names it.
+    const finalize = RepoPush.prototype.finalize;
+    const spy = vi.spyOn(RepoPush.prototype, "finalize").mockImplementation(async function (
+      this: RepoPush,
+      ...args: Parameters<RepoPush["finalize"]>
+    ) {
+      const response = await finalize.apply(this, args);
+      const { git } = this as unknown as { git: RepoGitStorage };
+      if (git.refStore.readRefsSync().head !== cx.source.head)
+        git.context.storage.sql.exec("DELETE FROM refs WHERE name = ?", cx.source.head);
+      return response;
+    });
+    try {
+      expect((await call(target, "POST", { url: `${SOURCE}/` })).status).toBe(201);
+      expect((await untilImported(target)).state).toBe("committed");
+    } finally {
+      spy.mockRestore();
+    }
+    const state = await repoState(target);
+    expect(state.head).toBe(cx.source.head);
+    expect(Object.keys(state.refs)).toContain(cx.source.head);
   });
 
   it.each([

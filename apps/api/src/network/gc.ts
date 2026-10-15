@@ -76,7 +76,15 @@ async function gcSlice(runtime: NetworkRuntime, saved: GcCursor | undefined): Pr
       if (context.now() >= deadline) return { done: false, cursor: encode(cursor), runAfterMs: 0 };
       const repoId = cursor.members[cursor.next] as string;
       await runtime.hooks.onMarkMember?.(cursor.epoch, repoId);
-      const view = await runtime.env.REPO.getByName(repoId).networkSnapshot(networkId);
+      // A member deleted since the snapshot holds nothing (its storage may be gone).
+      const view = registry.member(repoId)
+        ? await runtime.env.REPO.getByName(repoId)
+            .networkSnapshot(networkId)
+            .catch(async (error: unknown) => {
+              if (await forgetIfDeleted(runtime, repoId)) return [];
+              throw error;
+            })
+        : [];
       cursor = {
         ...cursor,
         next: cursor.next + 1,
@@ -159,6 +167,8 @@ function decide(runtime: NetworkRuntime, cursor: GcCursor): void {
   const { registry, context, policy } = runtime;
   context.storage.transactionSync(() => {
     for (const repoId of cursor.members) {
+      // Deleted since the snapshot: its claims went with it.
+      if (!registry.member(repoId)) continue;
       const holds = new Set(cursor.holds[repoId] ?? []);
       const before = context.storage.sql
         .exec<{ pack_id: string }>(
@@ -205,9 +215,17 @@ async function sweep(
     registered: async (ids) => {
       const out = new Set<string>();
       for (const id of registry.known(ids)) if (registry.packState(id) !== "deleted") out.add(id);
-      for (const member of members)
-        for (const id of await env.REPO.getByName(member.repoId).registeredPacks([...ids]))
-          out.add(id);
+      for (const member of members) {
+        let registered: string[];
+        try {
+          registered = await env.REPO.getByName(member.repoId).registeredPacks([...ids]);
+        } catch (error) {
+          // Deleted meanwhile: it registers nothing any more.
+          if (await forgetIfDeleted(runtime, member.repoId)) continue;
+          throw error;
+        }
+        for (const id of registered) out.add(id);
+      }
       return out;
     },
     onList: () => context.metrics.count("r2.class_a", { bucket: "fyrden-git", op: "list" }),
@@ -215,4 +233,27 @@ async function sweep(
   if (deleted.length > 0)
     context.metrics.count("git.maintenance", { job: "network-gc", what: "swept" }, deleted.length);
   return cursor;
+}
+
+/**
+ * After a call to member `repoId` failed: true when it is no longer a member
+ * (deleted meanwhile), or the directory says it is deleted. Such a member is
+ * removed here with its claims: its deletion left it behind (a network it
+ * was in before it recorded its networks), and its storage is gone.
+ */
+async function forgetIfDeleted(runtime: NetworkRuntime, repoId: string): Promise<boolean> {
+  const { registry, env, context, policy } = runtime;
+  if (!registry.member(repoId)) return true;
+  context.metrics.count("d1.query", { db: "directory", op: "member_state" });
+  const row = await env.DIRECTORY.prepare("SELECT state FROM repos WHERE id = ?")
+    .bind(repoId)
+    .first<{ state: string }>();
+  if (row?.state !== "deleted") return false;
+  const unclaimed = context.storage.transactionSync(() => {
+    const left = registry.removeMember(repoId);
+    registry.condemn(left, policy.retentionMs);
+    return left;
+  });
+  if (unclaimed.length > 0) scheduleDeletions(runtime);
+  return true;
 }

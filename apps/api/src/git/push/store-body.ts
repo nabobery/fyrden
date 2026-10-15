@@ -1,4 +1,5 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { putChunks } from "../put-chunks.js";
 import { BUCKET_NAME } from "./scratch.js";
 
 export type StoredPushBody =
@@ -55,23 +56,9 @@ export async function storePushBody(
     : request.body;
   const read = await readCapped(stream, options.maxBytes, options.gzip);
   if (!read.ok) return read;
-  const { chunks, length } = read;
-  const { readable, writable } = new FixedLengthStream(length);
-  const writer = writable.getWriter();
-  const feed = async () => {
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i] as Uint8Array;
-      chunks[i] = EMPTY;
-      await writer.write(chunk);
-    }
-    await writer.close();
-  };
-  const [object] = await Promise.all([bucket.put(key, readable), feed()]);
-  if (!object) throw new Error("R2 did not store the push body");
+  const object = await putChunks(bucket, key, read.chunks);
   return { ok: true, bytes: object.size };
 }
-
-const EMPTY = new Uint8Array(0);
 
 async function readCapped(
   stream: ReadableStream<Uint8Array>,

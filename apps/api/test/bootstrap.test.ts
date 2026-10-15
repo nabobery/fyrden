@@ -33,6 +33,7 @@ describe("first-run bootstrap", () => {
     ["42"],
     ["{not json"],
     [{ handle: "-bad-" }],
+    [{ handle: "api" }],
     [{ handle: 7 }],
   ])("rejects the body %j with a 422 problem", async (body) => {
     const res = await bootstrap(SECRET, body);
@@ -61,7 +62,7 @@ describe("first-run bootstrap", () => {
       expect(await res.json()).toMatchObject({
         type: "user",
         is_instance_admin: true,
-        token: { type: "pat", scopes: ["admin"] },
+        token: { type: "pat", scopes: [] },
       });
     }
   });

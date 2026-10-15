@@ -9,6 +9,7 @@ import {
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
   type BlockCache,
+  type CheckedCommand,
   encodeFatalError,
   encodePushResponse,
   finalizePush,
@@ -32,6 +33,7 @@ import {
   pushCommitter,
 } from "./commit.js";
 import { pushIndexEnv } from "./index-env.js";
+import { ACCESS_LOST } from "./reauthorize.js";
 import {
   INLINE_CURSOR_BYTES,
   PushCursorStore,
@@ -69,8 +71,12 @@ export type PushProgress =
   | { readonly state: "indexing"; readonly sideband: boolean }
   /** Indexing has finished (or was not needed): the Worker may re-authorize and finalize. */
   | { readonly state: "ready"; readonly sideband: boolean }
-  /** The push is over; `response` is the whole response body. */
-  | { readonly state: "done"; readonly response: Uint8Array };
+  /**
+   * The push is over; `response` is the whole response body. `discardBody`:
+   * no upload holds the stored body any more (it expired, or the repository
+   * was erased), so the Worker that stored it deletes it.
+   */
+  | { readonly state: "done"; readonly response: Uint8Array; readonly discardBody?: true };
 
 export interface BeginPushInput {
   readonly principal: string;
@@ -79,7 +85,13 @@ export interface BeginPushInput {
 }
 
 export type BeginPushResult =
-  | { readonly ok: true; readonly uploadId: string; readonly bodyKey: string }
+  | {
+      readonly ok: true;
+      readonly uploadId: string;
+      readonly bodyKey: string;
+      /** Rulesets check the commands before the body is stored (`precheckPush`). */
+      readonly precheck?: boolean;
+    }
   | { readonly ok: false; readonly error: string };
 
 /**
@@ -111,6 +123,10 @@ const noBlockCache = (): BlockCache => ({ get: async () => undefined, put: async
 
 const PUSH_OPTIONS = { pushOptionsAdvertised: true } as const;
 
+/** The rulesets changed between the push's check and its commit. */
+export const RULESETS_CHANGED =
+  "the repository's rulesets changed while the push was checked; try the push again";
+
 const fatal = (message: string, sideband: boolean): PushProgress => ({
   state: "done",
   response: encodeFatalError(message, sideband),
@@ -121,10 +137,74 @@ type Planned = NonNullable<PushRecord["planned"]>;
 export interface PushLogMeta {
   readonly requestId?: string;
   readonly repoId?: string;
+  /** The default branch the push sets as it commits (an import's), for the rulesets. */
+  readonly head?: string;
+  /**
+   * Runs in the transaction that commits the upload (an import sets its
+   * default branch there): what it writes commits with the refs, or not at all.
+   */
+  readonly inCommit?: () => void;
 }
 
 export class RepoPush {
   readonly #cursors: PushCursorStore;
+
+  /**
+   * The repository's access check for the principal that started a push,
+   * just before its commit: a refusal message, or undefined to go on.
+   */
+  accessCheck: ((principal: string) => Promise<string | undefined>) | undefined;
+
+  /**
+   * The repository's rulesets at the commit point: refusals by command
+   * index (`packs` are the push's own, not live yet; `head`, a default
+   * branch the push sets as it commits, as an import's), and a stamp of
+   * what they were checked against (the rulesets' version, HEAD, the
+   * pusher's effective role), which `restamp` takes again: the commit is
+   * refused when it differs then, and when that role does not allow
+   * writing (`writable`: an agent whose owner lost access since the last
+   * check writes no more than its owner could).
+   */
+  rules:
+    | {
+        readonly check: (input: {
+          readonly principal: string;
+          /** The delegation grant the push is made under; null for none. */
+          readonly grantId: string | null;
+          readonly uploadId: string;
+          readonly packs: readonly PackId[];
+          readonly head: string | undefined;
+          readonly commands: readonly CheckedCommand[];
+          /** An atomic push: one refused update fails them all. */
+          readonly atomic: boolean;
+        }) => Promise<{
+          stamp: string;
+          restamp: () => string;
+          writable: boolean;
+          refusals: ReadonlyMap<number, string>;
+        }>;
+      }
+    | undefined;
+
+  /** Why the repository takes no change now (deleted, being transferred), checked in each commit. */
+  frozen: (() => string | undefined) | undefined;
+
+  /**
+   * The account's storage quota: at the commit point, after the access
+   * check, `charge` holds the upload's stored bytes (a refusal message
+   * when they do not fit); in the commit's transaction, `owe` records
+   * that the account must be told; once committed, `confirm` makes them
+   * the repository's usage (or leaves them owed, told later); an upload
+   * aborted without committing `release`s what it held.
+   */
+  storage:
+    | {
+        readonly charge: (uploadId: string, bytes: number) => Promise<string | undefined>;
+        readonly owe: (uploadId: string, bytes: number) => void;
+        readonly confirm: (uploadId: string, bytes: number) => Promise<void>;
+        readonly release: (uploadId: string) => Promise<void>;
+      }
+    | undefined;
 
   constructor(
     private readonly git: RepoGitStorage,
@@ -179,7 +259,12 @@ export class RepoPush {
    */
   async run(uploadId: string, bodyBytes: number, budgetMs: number): Promise<PushProgress> {
     const upload = this.git.uploads.get(uploadId);
-    if (!upload) return fatal("this push has expired; push again", false);
+    if (!upload)
+      return {
+        state: "done",
+        response: encodeFatalError("this push has expired; push again", false),
+        discardBody: true,
+      };
     if (upload.state === "open") {
       if (!Number.isSafeInteger(bodyBytes) || bodyBytes < 0) throw new RangeError("bad body size");
       this.git.uploads.recordCommands(uploadId, { v: 1, bodyBytes });
@@ -367,6 +452,10 @@ export class RepoPush {
 
     const committed: CommittedTransaction[] = [];
     const merged: TailMergeOutcome[] = [];
+    let rulesStamp:
+      | { readonly stamp: string; readonly restamp: () => string; readonly writable: boolean }
+      | undefined;
+    const rules = this.rules;
     const outcome = await this.git.locks.withLock(
       LOCK_REF_COMMIT,
       `push:${uploadId}`,
@@ -380,7 +469,27 @@ export class RepoPush {
           : undefined;
         const result = await finalizePush(plan, indexed, uploadId, {
           commitGraph: this.git.commitGraph,
-          reauthorize: async () => decision.refusal,
+          // The caller's decision (token, repository), then the object's
+          // own access check for the pusher.
+          reauthorize: async () =>
+            decision.refusal ??
+            (await this.accessCheck?.(upload.principal)) ??
+            (await this.storage?.charge(uploadId, record.bodyBytes)),
+          ...(rules && {
+            checkCommands: async (commands: readonly CheckedCommand[]) => {
+              const checked = await rules.check({
+                principal: upload.principal,
+                grantId: upload.grantId,
+                uploadId,
+                packs: indexed?.ok ? indexed.packs : [],
+                head: meta.head,
+                commands,
+                atomic: plan.capabilities.atomic,
+              });
+              rulesStamp = checked;
+              return checked.refusals;
+            },
+          }),
           commit: pushCommitter(
             this.git,
             upload,
@@ -388,6 +497,23 @@ export class RepoPush {
             lock,
             committed,
             this.#capGate(uploadId, merged),
+            // In the commit's transaction: the pusher's effective role still
+            // allows writing, and the rulesets checked are still the current ones.
+            () =>
+              this.frozen?.() ??
+              (rulesStamp === undefined
+                ? undefined
+                : !rulesStamp.writable
+                  ? ACCESS_LOST
+                  : rulesStamp.restamp() !== rulesStamp.stamp
+                    ? RULESETS_CHANGED
+                    : undefined),
+            // In the commit's transaction: the account is owed its confirmation (told after,
+            // or later should that fail), and the caller's own writes.
+            () => {
+              this.storage?.owe(uploadId, record.bodyBytes);
+              meta.inCommit?.();
+            },
           ),
         });
         return { plan, indexed, result };
@@ -400,6 +526,7 @@ export class RepoPush {
     const { plan, indexed, result } = outcome.value;
     const response = encodePushResponse(result.report, plan.capabilities, result.messages);
     if (result.uploadCommitted) {
+      await this.storage?.confirm(uploadId, record.bodyBytes);
       const cursorObject = this.#cursors.objectKey(uploadId);
       this.#cursors.saveResponse(uploadId, response);
       await deleteScratch(
@@ -450,7 +577,10 @@ export class RepoPush {
   /** Aborts an upload that will not commit and deletes what it stored (the reaper retries what fails). */
   async #discard(uploadId: string): Promise<void> {
     const cursorObject = this.#cursors.objectKey(uploadId);
-    const keys = this.git.uploads.abort(uploadId) ?? [];
+    const aborted = this.git.uploads.abort(uploadId);
+    // Only an upload this aborted (not one committed meanwhile) frees what it held.
+    if (aborted) await this.storage?.release(uploadId);
+    const keys = aborted ?? [];
     const networkId = this.git.networkId();
     const files = keys.flatMap((key) => [key, key.replace(/\.pack$/, ".idx")]);
     try {
@@ -479,7 +609,7 @@ export class RepoPush {
     );
   }
 
-  /** The push event: one structured log line and counters (no outbox table exists yet). */
+  /** The push's log line and counters (its events go through the outbox with each commit). */
   #report(
     meta: PushLogMeta,
     uploadId: string,

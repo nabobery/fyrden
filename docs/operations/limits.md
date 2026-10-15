@@ -275,9 +275,360 @@ alarm. These periods are defaults and are not configurable in this version:
 | Uncommitted uploads and their stored bytes | 24 hours after the upload started |
 | Stored fetch responses (regenerated or framed packs) | 1 hour after the last clone that read them |
 | Outputs of an interrupted repack | 24 hours |
+| An event's stored data (a change too large for one queue message keeps its data in the repository, for consumers to fetch) | 7 days after the event was sent; never while it waits to be sent |
 
 A repack that replaces packs a clone is reading waits up to 1 hour for that
 clone before it switches; the old packs stay readable either way.
+
+## Repository deletion
+
+`DELETE /repos/{owner}/{repo}` and the bulk `POST /user/repos/delete` start a
+deletion that finishes in the background:
+
+| What | Value |
+|---|---|
+| Names in one bulk delete | 1 to 100 |
+| Deletions one request finishes itself | The one it deletes; 3 for a bulk delete |
+| The rest | Advanced by the cron every 5 minutes, 10 per run, oldest first; one that is waiting goes to the back |
+| Pushes, ref and setting changes | Refused as soon as the deletion starts |
+| Found or read under any name | Not after about 30 seconds (an isolate that resolved it before may serve it until then) |
+| The name | Taken until the deletion is `deleted`; free afterwards. The id is never reused |
+| Audit records | Archived to R2 before anything is erased; an R2 outage makes the deletion wait |
+| A clone or fork in progress | The erase waits for its read lease: 10 minutes, renewed while it reads |
+| A push admitted before the deletion | The erase waits up to 15 minutes for it to store its body; a body stored later is deleted by the push itself |
+| Forks | Keep the packs they borrowed; the network deletes a pack once no member claims it |
+| Incomplete multipart uploads of interrupted maintenance | Left to R2, which aborts them after 7 days |
+
+A deletion that keeps failing shows `attempts` and `last_error` in the
+directory's `repo_deletions` row.
+
+## Browsing history
+
+Branches, tags, commits, comparisons and files (`/repos/{owner}/{repo}/branches`,
+`/tags`, `/commits`, `/compare/{base}...{head}`, `/contents`, `/readme`,
+`/git/trees`, `/raw`) start from a branch, a tag or a full commit SHA of the
+repository itself; a commit that only another repository of the same fork
+network has is not found.
+
+| What | Value |
+|---|---|
+| Page size | 1 to 100, default 30 |
+| Commits one history page examines | 2,000, and about 400 R2 reads for the walk; with `path`, a page can hold fewer commits than asked (even none) and still have a next one |
+| R2 reads one browse request makes | 800 at most (Free allows 1,000 calls per invocation); a history page then ends early, anything else answers `too_expensive` |
+| Commit text in one answer | 8 MiB; a history page then ends early, anything else answers `too_large` |
+| History order | Newest first by corrected commit date, then commit id: what `git log` shows, unless commit dates go backwards or are equal |
+| Tags | A tag of a tree or blob is not listed; a page can be short (even empty) and still have a next one |
+| Branches waiting in a history cursor | 256; a wider history answers `history_too_wide` |
+| Commits a comparison counts on each side | 10,000; more answers `comparison_too_large` |
+| Commits a comparison lists | The newest 100, oldest first |
+| Commit text | Decoded as the commit's `encoding` header says (UTF-8 without one, or for an encoding the runtime does not know) |
+| Directory entries per page (`/contents`) | 1 to 1,000, default 1,000 |
+| File content in a JSON answer | 1 MiB; a larger file has `encoding: none` and is read through its `download_url` |
+| Raw file (`/raw/{path}`) | 24 MiB; larger answers `too_large` (clone the repository instead) |
+| Recursive tree listing (`/git/trees/{ref}?recursive=1`) | 10,000 entries; more, more trees than one request may read, or directories nested so that their trees together pass 32 MiB, is `truncated` |
+| `/git/trees/{tree_sha}` | Takes a branch, a tag or a commit SHA; a bare tree SHA is not found |
+| Names that are not valid UTF-8 | Shown with replacement characters; such a file cannot be asked for by path (clone the repository) |
+| A directory page's cursor | Valid for that version of the directory; after the branch moves it answers `cursor_stale` |
+
+## Archives
+
+`GET /repos/{owner}/{repo}/tarball[/{ref}]` and `/zipball[/{ref}]` serve a
+commit's files under `<owner>-<repo>-<short id>/`; `GET
+/repos/{owner}/{repo}/archives/{format}` (REST and MCP) prepares one and
+links it. The repository's object builds an archive in slices into R2 and
+keeps it a week.
+
+| What | Value |
+|---|---|
+| File content in one archive | 1 GiB; more fails with `archive_failed` (clone instead) |
+| One file | 24 MiB; a symbolic link's target, 64 KiB |
+| Zip entries | 65,535 (no ZIP64); use tar.gz past that |
+| Directory depth | A path's directories, with their names, fit in 1 MiB of build state (about 2,500 levels of 255-byte names); deeper fails with `archive_failed` |
+| Building | 8 MiB encoded or 5,000 entries per slice (a file that would take a slice past 8 MiB starts the next, alone if it is larger), at most 300 slices (a commit with very many small files fails: clone it); a file of 1 MiB or more has its bytes reserved while it is compressed, and waits for them; a request builds for up to 5 seconds, then answers 202 with `Retry-After: 5` until it is ready |
+| Kept | 7 days, then deleted when the repository next builds one (not while a download that started in the last hour may still read it); deleted with the repository |
+| Dates | tar holds dates up to 2242, zip 1980 to 2107; later or earlier commit dates are written as the nearest one |
+| Zip names | Flagged UTF-8 when they are; other bytes are written as they are, without the flag (as git does) |
+| tar.gz | Several gzip members (any gzip reader reads them as one stream; a file of 1 MiB or more is one of its own); pax headers for long names; the commit id in a pax global header, as `git archive` writes |
+| Downloads | `ETag` per commit and format; a matching `If-None-Match` answers 304 without reading the archive (raw files likewise, by blob) |
+
+## File writes
+
+`PUT`/`DELETE /repos/{owner}/{repo}/contents/{path}` and
+`POST /repos/{owner}/{repo}/file-commits` make one commit on a branch. The
+repository's object builds it and commits it through the push path: the pack
+is checked like a pushed one, the token is checked again just before the
+branch moves, and the branch moves only from the head the commit was built on.
+
+| What | Value |
+|---|---|
+| Files one write changes | 1 to 100 |
+| Content one write carries | 4 MiB (all files together), checked before it is decoded |
+| Commit message | 64 KiB |
+| Branch | Must exist; an empty repository takes a first commit on its default branch |
+| Committer | The caller, as `<handle> <id@users.noreply.host>`; `author` may name someone else |
+| Branch moved meanwhile | 409 `head_moved`; read again and retry |
+| File changed meanwhile (`sha` given) | 409 `sha_mismatch` |
+| Token revoked during the write | 403 `token_revoked`; nothing is committed |
+| Indexing wait | 4 steps of up to 5 seconds; a busier repository answers 409 `busy` |
+| Directories a write reads | About 300 R2 reads' worth; deeper writes answer `too_expensive` |
+| A directory a write changes | 1 MiB as a tree object (about 25,000 entries), 4 MiB of trees in all; larger answers `too_expensive` (push instead); memory for them is reserved, or the write answers `busy` |
+| Request body (REST and MCP) | 8 MiB; larger answers 413 `body_too_large` before it is read |
+| Retrying a write | Send an `Idempotency-Key` (see [Idempotent requests](#idempotent-requests)): a retry gets the first answer and makes no second commit |
+| Signature | Signed with the platform key (see [Commit signing](#commit-signing)) |
+
+## Repository expiry
+
+A repository may carry `expires_at` (Unix milliseconds), set when it is
+created (also by fork or generation) or by an update, and cleared with
+`null`. The cron, every 5 minutes, marks expired repositories for deletion
+and advances their deletions in the same run; they go through the ordinary
+deletion, audited as `repo.expire` with no actor.
+
+| What | Value |
+|---|---|
+| Earliest | Any time in the future; a past time answers 422 `invalid_expiry` |
+| Latest | One year ahead |
+| Repositories marked per cron run | 50; the rest in later runs |
+| Deletions advanced per cron run | 10 (as for any deletion) |
+
+## Quotas
+
+Each account (a user or an organization) has two limits, set per account by
+an instance administrator (`PUT /admin/accounts/{account}/quota`) or else the
+instance defaults below; `GET /user/quota` and `GET /orgs/{org}/quota` show
+them and their use.
+
+| What | Value |
+|---|---|
+| Active repositories | 1,000 by default (`QUOTA_MAX_REPOS`). Create, organization create, fork and generate past it answer 403 `quota_exceeded`; the check holds against concurrent creates. Repositories being deleted do not count |
+| Storage | 1 GiB by default (`QUOTA_MAX_STORAGE_BYTES`): the bytes the account's repositories' pushes stored, as received (pack and commands). Forks count nothing until pushed to; repacking does not change it; a deleted repository's bytes are free once its deletion finishes |
+| Before a push is stored | Its `Content-Length` is reserved, or, without one, as much as is free (up to the body limit); a push larger than the reservation is refused with a message git shows. A chunked upload reserves its declared size |
+| At the commit | The push's stored bytes are held for it; one that does not fit (the limit was lowered, or a write the repository makes itself: file writes, imports, generation) is refused, every ref `ng`, nothing changed. Once committed, the bytes become the repository's usage |
+| A push that commits nothing | What it reserved or held is free again |
+| Holds | A reservation lasts the push's longest wait plus 15 minutes (a chunked upload's session plus an hour), a commit's hold 30 minutes; a lapsed one counts nothing. A commit's confirmation is owed by its repository until the account takes it (counted once): one that fails is told again every minute, for up to six days (then given up, uncounted: the account remembers the ones it took for seven) |
+| Forks | A fork that loses the last slot to a concurrent create is deleted again |
+| An agent's repositories | Besides the account's quota, an agent acting for a user may have created at most 100 active repositories (`QUOTA_AGENT_MAX_REPOS`); past it, 403 `quota_exceeded`, held against concurrent creates |
+
+## Repository transfer
+
+`POST /repos/{owner}/{repo}/transfer` moves a repository to the caller or to
+an organization it may create repositories in. It runs as a resumable job:
+the repository stops taking changes, the directory moves its owner and name,
+the old account hands over its collaborators and storage, and the
+repository's object takes its new owner. The request usually sees it land;
+the cron finishes any it does not.
+
+| What | Value |
+|---|---|
+| Moves with it | History, refs, rulesets, stars, forks' parent link, collaborators, storage usage |
+| Stays behind | The old organization's team grants |
+| The old path | Redirects to the new one (for the API, clone, fetch and push), until the old account uses the name again |
+| While it moves | Pushes, file writes, renames, settings, rulesets and deletion are refused (409 `repo_transferring`, or "being transferred" to git); reads go on |
+| Refused | 409 `name_taken`, 403 `quota_exceeded` (repositories or storage), 422 `same_owner`, 409 `transfer_in_progress` (another transfer or a deletion is under way, or the owner changed since the request was authorized), 409 `repo_generating` (still being generated from a template), 422 `too_many_collaborators` (the new account's members and the repository's collaborators would exceed one access list's 10,000 entries); a refused transfer leaves the repository as it was |
+| Storage of an upload committing as it moves | Not counted (its confirmation reaches the old account, which no longer counts the repository) |
+| Admission checks | The new account's repository count is enforced when the directory moves the repository. Just before the move, the new account makes room for it, held until the transfer lands or is called off: its storage (and, charged to each, the uploads whose confirmations it still owes, until the new account takes them) and its collaborators, counted against later membership changes. Concurrent transfers and members added meanwhile cannot take the account past either limit |
+| One runner at a time | A runner holds a transfer for 60 seconds; one that dies frees it after that |
+| Caches | Other Workers may resolve the old path to the old owner for up to 30 seconds; access is decided by the repository, which knows its owner, and changes authorized for the old owner are refused |
+| Read model | Events from before the transfer are refused once it lands (a new owner generation) |
+| Restore | A repository object restored from before a transfer or rename takes, with its new epoch, the owner and name the directory names now, in an owner generation no older than the read model's; if the directory has a transfer under way, the object rejoins it, frozen, and the transfer lands it |
+| Transfers one cron run finishes | 10 |
+
+## Agents and delegation
+
+Agents are principals owned by a user or an organization (`POST /agents`).
+An agent acts with its own tokens (`POST /agents/{agent}/tokens`) and its
+own collaborator roles, or for a user under a delegation grant
+(`POST /grants`): it exchanges its own token for a delegated one at
+`POST /oauth/token` (RFC 8693 token exchange, `grant_id` names the grant).
+A delegated token's principal is the user; its act chain names the agents
+acting, the current one first, and audit rows carry it.
+
+| What | Value |
+|---|---|
+| An agent's rights | Its own (or the user's, under a grant), capped by its owner's: an organization's agent reaches only the organization's repositories |
+| A grant | Scopes (at least one), optionally repositories, an expiry of up to 365 days; never wider, nor longer-lived, than the token making it |
+| Passing down | An agent holding a user's grant may pass a narrower one (scopes, repositories, expiry) to another agent of its owner; one hop at most (depth 2) |
+| Delegated token | Type `oat`, up to 1 hour, and never past any grant of its chain or the agent's own token; scopes and repositories within the grant and the agent's token; for the REST API unless `resource` asks for the MCP server |
+| Revocation | Revoking a grant revokes the grants passed down from it; tokens under them, an agent's token its owner revokes (`DELETE /agents/{agent}/tokens/{token_id}`; `GET /agents/{agent}/tokens` lists them) with the delegated tokens exchanged for it and the git tokens minted from those, and an agent's tokens once it (or its owner) is disabled, stop at once for writes and within 30 seconds for reads |
+| Delegated tokens may not | Make or revoke grants, mint tokens (but a git token for themselves), change who has access (collaborators, team repositories), call user-only operations (transfer, stars), or manage signing keys (they would be the user's) |
+| Repositories an agent creates | Acting for a user under a grant with `repos:create` (create and fork): the user's, within every acting agent's owner's rights; each expires after 7 days (`AGENT_REPO_TTL_DAYS`) unless `expires_at` says when (at most a year: an agent may move it, only the user may clear it), and counts against the agent's own limit (see Quotas). An agent's own token, or a token limited to repositories (by its grant or the agent's token; it could not reach the new one), creates none |
+| An agent's own token | Never wider than the token that minted it (scopes and repositories) |
+| Token endpoint | Bodies up to 16 KiB; rate limited per client address |
+| Rulesets | Rules for `agent` actors apply to an agent acting for a user |
+| Git tokens for the caller | `POST /user/git-tokens` (MCP `create_git_token`): a `git` token for stock git, as the caller (a user, an agent, or an agent acting under a grant, keeping that grant and chain: revoking the grant stops it); `contents:write`, or `contents:read`, within the caller's scopes; 1 hour at most (`expires_in_minutes`), never past the caller's token. The only token minted over MCP |
+| Not yet | Grants from organizations |
+
+## OAuth authorization server
+
+Fyrden is its own authorization server (OAuth 2.1, public clients with
+PKCE), for MCP clients and other tools acting for a signed-in user.
+Discovery: `/.well-known/oauth-authorization-server` (RFC 8414) and
+`/.well-known/oauth-protected-resource/{mcp,api}` (RFC 9728), which a 401
+from `/mcp` or `/api` names in its `WWW-Authenticate`.
+
+| What | Value |
+|---|---|
+| Clients | Public only (`token_endpoint_auth_method: none`): known by a client ID metadata document (an `https` `client_id` URL with a path, fetched through the outbound URL policy, at most 5 KiB, naming itself, kept a day, a week if it cannot be fetched again), or registered at `POST /oauth/register` (RFC 7591); redirect URIs `https`, loopback `http`, or a private-use scheme, matched exactly (loopback with any port) |
+| DPoP (RFC 9449) | A token request with a proof (ES256 or EdDSA) gets tokens bound to its key (`token_type: DPoP`), taken only with `Authorization: DPoP` and a fresh proof by that key (60 seconds either way; each proof once); `dpop_jkt` at authorization binds the code; a bound refresh family needs proofs by its key |
+| Organization policy | `PATCH /orgs/{org}` `require_dpop`: the organization's agents' API tokens are taken only DPoP-bound (at once for writes, within 30 seconds for reads, like a revocation), and token exchange for them needs a proof (git tokens only where git itself uses them, since git cannot send a proof: smart HTTP and the chunked upload session `fyrden push --chunked` drives, `/api/repos/{owner}/{repo}/uploads`; elsewhere at the REST API, and at MCP, they are refused like any other) |
+| Authorization | `GET /oauth/authorize`: code flow only, PKCE `S256` required, `resource` required (`{origin}/mcp` or `{origin}/api`), scopes are Fyrden permissions; the signed-in user consents on a Fyrden page; the answer must come from Fyrden's own origin |
+| Codes | Single use, 60 seconds; redeemed again, the tokens they issued are revoked |
+| Access tokens | Type `oat`, 1 hour (never past their family's end), accepted only at their resource (RFC 8707) |
+| Refresh tokens | 30 days, single use, within a family of at most 90 days (then the user consents again): each use issues the next; a used one coming back revokes its whole family (refresh and access tokens); of concurrent uses exactly one wins |
+| Revocation | `POST /oauth/revoke` (RFC 7009): a refresh token revokes its family, an access token itself |
+| Requests | Bodies up to 16 KiB; token, registration and revocation rate limited per client address; authorization requests rate limited per user, with at most 20 waiting for an answer |
+| Registrations | At most 1,000 an hour for the whole deployment; one never used within a day, or unused for 90 days, is pruned |
+| Pruning | Expired access tokens, refresh tokens, sessions and answered or abandoned requests go a day after they expire (their audit rows stay) |
+| Sessions | A `__Host-fyrden_session` cookie (HttpOnly, Secure, SameSite=Lax), 30 days |
+
+## Signing in
+
+Humans sign in at `/auth/sign-in` (a page on the API's origin; the
+authorization endpoint links to it), with a passkey or with a personal
+access token that has the user's full rights (no scopes, no repository
+limits), which is how the first passkey is added.
+
+| What | Value |
+|---|---|
+| Passkeys | WebAuthn, attestation `none`, discoverable credentials, user verification required; ES256, EdDSA or RS256 keys; at most 20 per user; a signature counter that does not move forward is refused |
+| Challenges | Single use, 5 minutes |
+| Requests | Every change (sign in, sign out, add or remove a passkey) only from this origin's own pages (`Origin`); sign-in attempts rate limited per client address |
+| Audit | `session.start` (with how), `passkey.add`, `passkey.remove` |
+
+## MCP server
+
+`/mcp` serves MCP over stateless Streamable HTTP (protocol revision
+2026-07-28): a tool per API operation (but those returning a credential, other
+than a short-lived git token), and repository files as resources
+(`fyrden://repos/{owner}/{repo}/files/{+path}` on the default branch,
+`fyrden://repos/{owner}/{repo}/refs/{ref}/files/{+path}` at a branch, tag or
+commit, a branch's slashes as `%2F`; not listed, a client names the file it
+wants). Each request builds its own
+server; each tool's JSON Schema is converted once per Worker isolate and
+shared after that.
+
+| What | Value |
+|---|---|
+| Tools | 77; `tools/list` answers about 161 KB |
+| Browser requests | Only from the deployment's own hosts (`Origin`, against DNS rebinding): on `workers.dev`, both Fyrden Workers on the request's account subdomain; the hosts in `FYRDEN_OWN_HOSTS`; loopback. Native clients send no `Origin` |
+| Request body | 8 MiB, as REST |
+| CPU per request | **Measured** on Workers Free (2026-10-14, `wrangler tail`): `tools/list` 5 ms on a warm isolate with 63 tools (45 to 160 ms before tool schemas were converted once per isolate); `whoami` 32 ms and `resources/read` 16 ms (measured before that change) |
+| First request on a new isolate | **Measured** on Workers Free (2026-10-14): 60 to 190 ms of CPU for `tools/list`, paid once per isolate: loading the Worker's code, the MCP SDK building its protocol schemas on first use, and converting every tool's schema. New isolates are most common right after a deploy and when traffic grows |
+
+On Free, whose nominal CPU limit is 10 ms per request
+([platform limit](https://developers.cloudflare.com/workers/platform/limits/#cpu-time)),
+those first requests completed in the measurement, but they run well past the
+nominal limit, so a burst of new MCP clients just after a deploy is the
+likeliest place for a Free deployment to hit it (the request then fails with
+error 1102). Paid's default is 30 s. Not measured yet: the same on Paid,
+and how often Free actually enforces the limit for these requests.
+
+## Web UI
+
+`fyrden-web` is the one origin people use: it serves its pages, and hands
+the API's paths (`/api`, `/mcp`, `/oauth`, `/auth`, `/.well-known`, `/v0`
+and git's) to `fyrden-api` over the service binding unchanged, so the
+session cookie, OAuth and git all work on it. Its server calls the API as
+the signed-in user: the session cookie with an `X-Fyrden-Session: 1`
+header, which no other site's page can send (the API grants no CORS).
+
+| What | Value |
+|---|---|
+| Pages | Sign in, repositories (list, create), files (browse, view, edit, add, delete), README (GitHub-flavored Markdown with Mermaid diagrams), commits with their verification, clone URL, archives, repository settings, tokens, agents and delegation grants |
+| Forms | Taken only from the web origin's own pages (`Origin`) |
+| Markdown | Raw HTML escaped, unsafe link protocols dropped; Mermaid drawn in the browser in strict mode |
+| Content Security Policy | Scripts only from the origin, plus React Router's inline scripts with a new nonce per response; styles may be inline (Mermaid); images, fonts and everything else only from the origin (and `data:`); no plugins, `<base>`, foreign form targets or framing. A README's images from other sites are not shown: with no image proxy, they would tell their author who viewed a private repository |
+| Raw files | Served as downloads (`application/octet-stream`, `nosniff`, a sandboxing CSP), never rendered on the origin |
+| Caching | Pages, the data they navigate with, and downloads are `private, no-store` |
+| Names | A file, branch or repository name is read from the URL as written (a literal `%2F` stays in the name); a page whose path ends in `.data` opens with a trailing slash (React Router takes that suffix for its own data requests) |
+| A session's credential | The user's full rights, rechecked on the primary each request; tokens and grants made from a session may last their full allowed time |
+| Custom domains | List them in `FYRDEN_OWN_HOSTS` (MCP takes browser requests only from the deployment's own hosts) |
+
+## Templates
+
+`POST /repos/{template_owner}/{template_repo}/generate` makes a repository
+whose first commit holds the template's default-branch tree. The template's
+object reads the tree; the new repository's object commits it through the
+push path, as a file write.
+
+| What | Value |
+|---|---|
+| Trees and files copied | 2,000 at most |
+| Their bytes | 8 MiB at most (they cross between two objects and are packed); larger answers 422 `template_too_large` |
+| Storage reads | The browse budget (800 R2 reads); more answers 422 `too_expensive` |
+| History | None: one commit on `main`, `Initial commit`, by the caller |
+| Token | Needs `contents:write` too, without a repository list |
+| A failure | The new repository's object settles it: if its first commit was made (the answer was lost), the repository is kept; otherwise its commit is refused from then on and the repository is deleted, its name free once the deletion finishes |
+| A request that never finished | The cron settles the generation the same way once it is 15 minutes overdue; while the generation is pending, the repository takes no write |
+
+## Stars
+
+A star is one directory row per user and repository. Starring needs
+`starring:write` and `metadata:read` on the repository; `GET /user/starred`
+needs `starring:read`. A repository's `stargazers_count` counts stars of
+enabled users. Deleting a repository deletes its stars. A listing leaves out
+repositories the caller can no longer read, so a page can be short.
+
+## Commit signing
+
+Commits Fyrden makes itself (file writes, generated repositories) are signed
+with the platform's Ed25519 key as SSH signatures (`gpg.format = ssh`), so
+`git verify-commit` checks them against the published key. Every commit in
+the API carries GitHub's `verification` object.
+
+| What | Value |
+|---|---|
+| The key | The Worker secret `SIGNING_KEY`: a 32-byte Ed25519 seed, base64. `fyrden deploy` makes one when the Worker has none and never shows it |
+| Published at | `GET /api/meta/signing-keys` (any token; the `list_signing_keys` MCP tool): each key's `key_id` (the SHA-256 fingerprint ssh-keygen shows), its public key line, and whether it is current |
+| Rotation | Set a new `SIGNING_KEY` and list the old public key line in `SIGNING_KEYS_RETIRED` (one per line), so commits it signed still verify |
+| Verified | A valid signature by the platform's key, current or retired; or by a key a user (or an agent, with its own token) added (`POST /user/ssh_signing_keys`) on a commit whose committer email is that principal's no-reply address, `<user or agent id>@users.noreply.<host>` (else `bad_email`) |
+| Users' and agents' signing keys | Ed25519 only; 100 per user or agent (an agent adds its own with its own token); a key belongs to one of them (`key_in_use`); deleting one unverifies what it signed, and so does disabling its user, its agent or the agent's owner |
+| Not verified | `unsigned`, `unknown_key` (valid, by a key Fyrden does not know), `invalid` (the commit or signature was changed), `malformed_signature`, `unknown_signature_type` (OpenPGP, or a key type other than Ed25519) |
+| Without `SIGNING_KEY` | Fyrden's commits are unsigned |
+| A malformed `SIGNING_KEY` | Writes it would sign are refused (logged); reading and verifying go on, with the keys that can be read |
+| Signatures read | 64 KiB at most; a longer `gpgsig` is `malformed_signature`, not shown |
+
+## Rulesets
+
+Repository rulesets (`/repos/{owner}/{repo}/rulesets`, GitHub's shape) hold
+rules on the branches or tags whose full names match: `creation`, `update`,
+`deletion`, `non_fast_forward`, `required_signatures`, `pull_request` (no
+direct change at all; changes come through pull requests). Bypass is by
+repository role; Fyrden's `actor_types` limits a ruleset to principal types
+(`["agent"]` with `pull_request`: agents must use pull requests).
+
+| What | Value |
+|---|---|
+| Rulesets per repository | 50 |
+| Checked before anything is stored | `creation`, `update`, `deletion`, `pull_request`: a push whose every command is refused is answered before its body reaches R2 (repositories with such a ruleset read the push's command section first, up to 1 MiB; of a gzip body, its first 64 KiB, inflated to at most 1 MiB; a command section past either bound is checked at the commit only; others stream it to R2 untouched); an upload session or a file write a rule refuses answers 409 `ruleset_violation`; an import a rule refuses fails after listing the source's refs, before fetching |
+| Checked at the commit | Every rule, with the rulesets current then (a change of the rulesets, the default branch or the pusher's role in between refuses the push; push again): force pushes against the commit graph, signatures of every new commit (reachable from the new tip, not from that ref's old one; ancestors from other branches included) |
+| Required signatures | Branch rulesets only. Each new commit verified as the API shows it (platform key, or a user's key on that user's commits); at most 1,000 new commits per ref update (and 20,000 commits walked to find them), more is refused (push in parts); commits are read from the repository's packs and the push's own, once a push however many refs share them, within 800 R2 reads for the whole push (a commit not read by then is refused as `unreadable`) |
+| Default branch | `~DEFAULT_BRANCH` names the current default branch and, for an import, the one it sets |
+| Refusal text | 2,000 bytes at most per ref |
+| Refusals | `ng <ref> <reason> (ruleset "<name>")`; an atomic push fails as a whole |
+| `evaluate` | Does not block; what it would have refused at a push's commit point (its signatures too) is listed at `GET /repos/{owner}/{repo}/rulesets/rule-suites` (MCP `list_rule_suites`): one suite per ref update one of them objected to, the newest 1,000 kept, nothing for an update they all let through |
+| Actor types | Each principal type at most once |
+
+## Idempotent requests
+
+A REST write (any method but GET) sent with an `Idempotency-Key` header runs
+once per token and key; it is optional, as on GitHub. MCP tool calls take no
+key. The key is checked after the token (revocation included), the rate
+limit, the token's scopes and the input; a replay returns the answer the
+same token already got, without checking its access to the repository
+again.
+
+| What | Value |
+|---|---|
+| Key | 1-255 printable ASCII characters (else 422 `invalid_idempotency_key`), per token |
+| Kept | 24 hours, then forgotten (the cron deletes expired keys) |
+| A retry of the same request | The first answer again, with `Idempotent-Replayed: true`; nothing runs twice |
+| The same key, another request | 422 `idempotency_key_reused` (another operation, or another input) |
+| While the first still runs | 409 `idempotency_key_in_use` with `Retry-After: 5` |
+| When the first may or may not have taken effect | 409 `idempotent_outcome_unknown`: it failed unexpectedly, or was still marked running after 10 minutes. Check, then use a new key |
+| Answers not kept | 401, 403, 408, 429, `busy`, `network_busy` (whatever the request began was undone: a retry runs again), and an upload's completion while it is still indexing |
+| Answers with a secret (minting a token) | Not kept: a retry answers 409 `secret_already_disclosed` naming the token made |
+| Largest answer kept | 256 KiB; a larger one answers a retry 409 `idempotent_replay_unavailable` |
 
 ## Configuration variables
 
@@ -306,6 +657,10 @@ and the default applies.
 | `GIT_UPLOAD_COMPLETE_WAIT_MS` | 20,000 | 0 | How long one `complete` call waits |
 | `GIT_IMPORT_MAX_BYTES` | 4,294,967,296 (4 GiB) | 32 | Largest pack an import fetches |
 | `GIT_IMPORT_MAX_MS` | 600,000 (10 min) | 1,000 | Longest an import's fetch may take |
+| `QUOTA_MAX_REPOS` | 1,000 | 0 | Active repositories an account may have, unless an administrator set its own |
+| `QUOTA_MAX_STORAGE_BYTES` | 1,073,741,824 (1 GiB) | 0 | Bytes an account's pushes may store, unless an administrator set its own |
+| `QUOTA_AGENT_MAX_REPOS` | 100 | 0 | Active repositories one agent may have created acting for users |
+| `AGENT_REPO_TTL_DAYS` | 7 | 1 | Days until a repository an agent creates expires, unless it gives an expiry |
 
 `fyrden-api` also needs the secret `BOOTSTRAP_SECRET`, which `fyrden deploy`
 sets. The `fyrden` CLI reads `FYRDEN_TOKEN` (the token for `fyrden push`),

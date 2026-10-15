@@ -82,8 +82,9 @@ async function workerSecrets(runner: WranglerRunner, worker: string): Promise<Se
 /**
  * `fyrden deploy`: provisions resources, applies D1 migrations, deploys
  * fyrden-api first and fyrden-web second (fyrden-api must accept the current
- * and previous web RPC version). The required BOOTSTRAP_SECRET is
- * uploaded with the first API deploy, from a 0600 file that is removed after.
+ * and previous web RPC version). The required BOOTSTRAP_SECRET and the
+ * platform's commit signing key (SIGNING_KEY) are uploaded with the first
+ * API deploy that lacks them, from a 0600 file that is removed after.
  */
 export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   const { log } = deps;
@@ -148,7 +149,9 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   const deployArgs = ["deploy", "-c", API_DEPLOY_CONFIG];
   let generated: string | undefined;
   let secretsDir: string | undefined;
-  if (!(await workerSecrets(runner, config.name))?.has("BOOTSTRAP_SECRET")) {
+  const existing = await workerSecrets(runner, config.name);
+  const upload: Record<string, string> = {};
+  if (!existing?.has("BOOTSTRAP_SECRET")) {
     const secret = deps.presetBootstrapSecret ?? deps.randomSecret?.();
     if (secret === undefined) {
       throw new Error(
@@ -156,9 +159,19 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
       );
     }
     if (!deps.presetBootstrapSecret) generated = secret;
+    upload.BOOTSTRAP_SECRET = secret;
+  } else if (deps.presetBootstrapSecret) {
+    // An earlier deploy set it: first-run setup needs that value, not this one.
+    log(
+      `${config.name} already has a BOOTSTRAP_SECRET; FYRDEN_BOOTSTRAP_SECRET was not uploaded (set it with wrangler secret put to replace it)`,
+    );
+  }
+  // The platform's commit signing key: made here once, never shown, kept across deploys.
+  if (!existing?.has("SIGNING_KEY")) upload.SIGNING_KEY = signingKey();
+  if (Object.keys(upload).length > 0) {
     secretsDir = await mkdtemp(join(tmpdir(), "fyrden-secrets-"));
     const file = join(secretsDir, "secrets.json");
-    await writeFile(file, JSON.stringify({ BOOTSTRAP_SECRET: secret }), { mode: 0o600 });
+    await writeFile(file, JSON.stringify(upload), { mode: 0o600 });
     deployArgs.push("--secrets-file", file);
   }
   let apiUrl: string | undefined;
@@ -170,7 +183,7 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
     if (secretsDir) await rm(secretsDir, { recursive: true, force: true });
   }
   log(`deployed ${config.name}${apiUrl ? ` at ${apiUrl}` : ""}`);
-  if (secretsDir) log("set BOOTSTRAP_SECRET");
+  for (const name of Object.keys(upload)) log(`set ${name}`);
 
   await deps.buildWeb();
   const webUrl = workersDevUrl(await wrangler(runner, ["deploy"], { cwd: webDir }));
@@ -183,4 +196,9 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   }
 
   return { created: resources.created, apiUrl, webUrl };
+}
+
+/** A new Ed25519 signing key: its 32-byte seed, base64. */
+function signingKey(): string {
+  return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64");
 }

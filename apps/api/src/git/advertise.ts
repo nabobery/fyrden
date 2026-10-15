@@ -1,15 +1,13 @@
-import { createWorkersZlib, DEFAULT_CACHE_API_CALLS } from "@fyrden/adapters-cloudflare";
+import { DEFAULT_CACHE_API_CALLS } from "@fyrden/adapters-cloudflare";
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import {
   type BlockCache,
   encodeRefAdvertisement,
   type LsRefsArgs,
-  ObjectReader,
   type Oid,
 } from "@fyrden/git-core";
-import { openRequestBlockCache } from "./cache/pack-blocks.js";
+import { openLiveReader } from "./live-reader.js";
 import { encodeLsRefs, peelCandidates, selectRefs } from "./ls-refs.js";
-import { liveView } from "./pack-view.js";
 import { peelAll } from "./peel.js";
 import { RECEIVE_PACK_CAPABILITIES } from "./protocol.js";
 
@@ -33,24 +31,11 @@ async function peeledFor(deps: AdvertiseDeps, oids: readonly Oid[]): Promise<Map
     oids,
     (list) => git.commitGraph.readSync(list, "verified").map((row) => row !== undefined),
     async () => {
-      const view = liveView(git, () =>
-        git.context.metrics.count("r2.class_b", { bucket: "fyrden-git", op: "get_idx" }),
-      );
-      if (view.packs.length === 0) return undefined;
-      const reader = await ObjectReader.open({
-        view,
-        packStore: git.packStore,
-        zlib: createWorkersZlib(),
-        memory: git.memory,
-        blockCache: (
-          await openRequestBlockCache(deps.memoryBlocks, {
-            scope: view.scope,
-            maxCalls: DEFAULT_CACHE_API_CALLS,
-          })
-        ).cache,
-        limits: { deltaBaseCacheBytes: PEEL_DELTA_CACHE_BYTES },
+      const reader = await openLiveReader(deps, {
+        deltaBaseCacheBytes: PEEL_DELTA_CACHE_BYTES,
+        maxCacheCalls: DEFAULT_CACHE_API_CALLS,
       });
-      return { reader, close: () => reader.release() };
+      return reader && { reader, close: () => reader.release() };
     },
   );
 }

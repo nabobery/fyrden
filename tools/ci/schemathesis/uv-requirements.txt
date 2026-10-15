@@ -1,0 +1,6 @@
+# uv, which runs the pinned Schemathesis (`uvx`), for CI: installed with
+# `pip --require-hashes` (the repository allows no third-party setup action).
+# The hashes are PyPI's for the Linux wheels (x86_64, aarch64).
+uv==0.12.21 \
+    --hash=sha256:0083454d25479f1cd03547c8c98c235b4af92bd07f0e61c3eae5d1cbb0c1834c \
+    --hash=sha256:fcd28fd87972f677f0e12d577842deb5d445adf36bcd4cd1ebaaec4c67788d7f

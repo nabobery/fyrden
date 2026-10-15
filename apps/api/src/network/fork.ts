@@ -1,9 +1,19 @@
-import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { RepoDO } from "../do/RepoDO.js";
+import { allocateEpoch } from "../events/epochs.js";
+import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
 import type { RewriteState } from "../git/maintenance/rewrite.js";
 import { packCapPolicy } from "../git/maintenance/tail-merge-plan.js";
-import { defaultBranchOf, type RepoEntry } from "../repos/directory.js";
+import { advanceDeletion } from "../repos/deletion.js";
+import {
+  agentRepoQuotaError,
+  defaultBranchOf,
+  forgetResolved,
+  heldBack,
+  type NewRepoRow,
+  newRepoStatements,
+  type RepoEntry,
+} from "../repos/directory.js";
 import { clock, newId } from "../services.js";
 import type { ForkExport, NetworkFailure, ViewPack } from "./types.js";
 import { chooseBaseCompaction, VIEW_CAP } from "./view-cap.js";
@@ -47,16 +57,24 @@ const COMMIT_PAGE = 2_000;
 const COPY_CALLS = 400;
 /** Wall time after which a copy step starts no new page. Proposed: inside 30 s of CPU per invocation. */
 const COPY_STEP_MS = 10_000;
-/** The org database a repository's rows go to (one per deployment for now). */
-const DEFAULT_ORG_SHARD = "default";
 
 export interface ForkRequest {
   readonly parent: RepoEntry;
   readonly ownerId: string;
   readonly ownerHandle: string;
   readonly name: string;
+  /** When the fork is deleted (Unix ms); null to keep it. */
+  readonly expiresAt?: number | null;
+  /** The owner's repository quota, checked again as the fork is published. */
+  readonly maxRepos: number;
   readonly requestId?: string;
   readonly metrics?: Metrics;
+  /** Who forks it, when not the owner itself: an agent acting for it (its audit row names the chain). */
+  readonly actorId?: string;
+  readonly act?: readonly string[];
+  readonly grantId?: string;
+  /** The agent forking it for its owner, and that agent's limit, checked again as it is published. */
+  readonly createdBy?: NewRepoRow["createdBy"];
 }
 
 export interface ForkOptions {
@@ -90,7 +108,7 @@ export type ForkResult =
     }
   | {
       readonly ok: false;
-      readonly status: 409 | 404;
+      readonly status: 409 | 404 | 403;
       readonly code: string;
       readonly error: string;
     };
@@ -115,7 +133,17 @@ export async function forkRepository(
   let commitsCopied = 0;
   let packsCompacted = 0;
   try {
-    await fork.initFork({ networkId, head: exported.head, packs: exported.packs });
+    const epochGen = await allocateEpoch(env.DIRECTORY, forkId, request.metrics);
+    await fork.initFork(
+      { networkId, head: exported.head, packs: exported.packs },
+      {
+        ownerId: request.ownerId,
+        name: request.name,
+        visibility: parent.visibility,
+        epochGen,
+        actor: request.actorId ?? request.ownerId,
+      },
+    );
 
     let frontier = exported.tips.map(hex);
     for (let step = 1; frontier.length > 0; step++) {
@@ -147,7 +175,13 @@ export async function forkRepository(
       packsCompacted = chosen.length;
     }
 
-    await fork.finishFork(exported.refs);
+    await fork.finishFork(exported.refs, {
+      principal: request.ownerId,
+      ...(request.act && { actChain: request.act }),
+      ...(request.grantId && { grantId: request.grantId }),
+      requestId: request.requestId ?? null,
+      via: "api",
+    });
     if (!(await network.completeFork({ networkId, forkRepoId: forkId })))
       throw new Error("the fork is no longer joining its network");
   } catch (error) {
@@ -158,42 +192,60 @@ export async function forkRepository(
     if (exported.leaseId) await parentStub.releaseFetchLease(exported.leaseId).catch(() => {});
   }
 
-  // Published: the directory row is the last write.
+  // Published: the directory row is the last write. Held back (a create
+  // took the name or the quota's last slot meanwhile), the same batch hands
+  // the fork to the deletion instead, so it never stays a member unpublished.
   const now = clock();
-  request.metrics?.count("d1.query", { db: "directory", op: "repo_create" }, 2);
-  try {
+  const row = {
+    id: forkId,
+    ownerId: request.ownerId,
+    name: request.name,
+    networkId,
+    orgShard: DEFAULT_ORG_SHARD,
+    visibility: parent.visibility,
+    parentId: parent.id,
+    expiresAt: request.expiresAt ?? null,
+    now,
+    createdBy: request.createdBy ?? null,
+  };
+  request.metrics?.count("d1.query", { db: "directory", op: "repo_create" }, 6);
+  const refused = heldBack(
     await env.DIRECTORY.batch([
-      env.DIRECTORY.prepare(
-        `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(
-        forkId,
-        request.ownerId,
-        request.name,
-        networkId,
-        DEFAULT_ORG_SHARD,
-        parent.visibility,
-        now,
-        now,
-      ),
-      auditStatement(
+      ...newRepoStatements(
         env.DIRECTORY,
-        now,
+        row,
         {
-          actorId: request.ownerId,
+          actorId: request.actorId ?? request.ownerId,
           ...(request.requestId ? { requestId: request.requestId } : {}),
+          action: "repo.fork",
+          details: { name: request.name, parent_id: parent.id, network_id: networkId },
+          ...(request.act && { act: request.act }),
         },
-        "repo.fork",
-        forkId,
-        { name: request.name, parent_id: parent.id, network_id: networkId },
+        request.maxRepos,
       ),
-    ]);
-  } catch (error) {
-    // The fork stays a member without a directory row: unreachable, collected with its claims later.
-    if (error instanceof Error && /UNIQUE constraint failed/i.test(error.message))
-      return { ok: false, status: 409, code: "name_taken", error: nameTaken(request.name) };
-    throw error;
+      ...discardStatements(env.DIRECTORY, row),
+    ]),
+    request.createdBy?.maxRepos,
+  );
+  if (refused) {
+    await advanceDeletion(env, forkId, request.metrics ? { metrics: request.metrics } : {}).catch(
+      () => "deleting",
+    );
+    if (refused === "agent_quota_exceeded") {
+      const { message } = agentRepoQuotaError(request.createdBy?.maxRepos ?? 0);
+      return { ok: false, status: 403, code: "quota_exceeded", error: message };
+    }
+    return refused === "name_taken"
+      ? { ok: false, status: 409, code: "name_taken", error: nameTaken(request.name) }
+      : {
+          ok: false,
+          status: 403,
+          code: "quota_exceeded",
+          error: `You have ${request.maxRepos} repositories, as many as your quota allows; delete one first.`,
+        };
   }
+  // The name may have redirected to another repository here.
+  forgetResolved(request.ownerHandle, request.name);
   const publishMs = clock() - started;
   log.info("fork published", { forkId, publishMs, commitsCopied, packsCompacted });
   return {
@@ -206,12 +258,51 @@ export async function forkRepository(
       networkId,
       visibility: parent.visibility,
       createdAt: now,
+      nameGen: 0,
+      parentId: parent.id,
+      isTemplate: false,
+      expiresAt: request.expiresAt ?? null,
     },
     defaultBranch: defaultBranchOf(exported.head),
     publishMs,
     commitsCopied,
     packsCompacted,
   };
+}
+
+/**
+ * For a fork whose publication the batch held back: a directory row
+ * already being deleted (named by its id, so it takes no name and counts
+ * against no quota) and its deletion, so the ordinary deletion erases the
+ * fork's object and removes it from the network. Nothing when the fork was
+ * published.
+ */
+function discardStatements(db: D1Database, fork: NewRepoRow): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, parent_id,
+           state, created_at, updated_at)
+         SELECT ?1, ?2, ?1, ?3, ?4, ?5, ?6, 'deleting', ?7, ?7
+         WHERE NOT EXISTS (SELECT 1 FROM repos WHERE id = ?1)`,
+      )
+      .bind(
+        fork.id,
+        fork.ownerId,
+        fork.networkId,
+        fork.orgShard,
+        fork.visibility,
+        fork.parentId,
+        fork.now,
+      ),
+    db
+      .prepare(
+        `INSERT INTO repo_deletions (repo_id, step, attempts, updated_at, requested_by)
+         SELECT id, 'prepare', 0, ?2, NULL FROM repos WHERE id = ?1 AND state = 'deleting'
+         ON CONFLICT (repo_id) DO NOTHING`,
+      )
+      .bind(fork.id, fork.now),
+  ];
 }
 
 /** Compacts `sources` (borrowed packs of the fork) into one pack, slice by slice; swaps it in. */
@@ -233,7 +324,7 @@ async function compactBase(
   }
 }
 
-export const nameTaken = (name: string) => `You already have a repository named ${name}.`;
+const nameTaken = (name: string) => `You already have a repository named ${name}.`;
 
 function refusal(failure: NetworkFailure): ForkResult {
   switch (failure.code) {

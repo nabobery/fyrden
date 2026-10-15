@@ -28,6 +28,9 @@ coverage/
 # Generated per account by `fyrden deploy`
 **/wrangler.deploy.jsonc
 
+# Written for a Schemathesis run (rate limits raised), removed after it
+**/wrangler.schemathesis-*.jsonc
+
 # Stryker mutation testing
 .stryker-tmp/
 **/reports/mutation/

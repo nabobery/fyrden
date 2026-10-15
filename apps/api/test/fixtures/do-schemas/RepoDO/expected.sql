@@ -1,3 +1,13 @@
+CREATE INDEX archives_created ON archives (created_at);
+CREATE UNIQUE INDEX archives_live ON archives (commit_id, format, prefix)
+        WHERE state <> 'deleting';
+CREATE INDEX audit_log_archived ON audit_log (archived_at) WHERE archived_at IS NOT NULL;
+CREATE INDEX audit_log_unarchived ON audit_log (seq) WHERE archived_at IS NULL;
+CREATE INDEX audit_segments_archived ON audit_segments (archived_at) WHERE state = 'archived';
+CREATE INDEX audit_segments_from ON audit_segments (from_seq);
+CREATE INDEX audit_segments_pending ON audit_segments (from_seq) WHERE state = 'pending';
+CREATE INDEX audit_segments_to ON audit_segments (to_seq);
+CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
 CREATE INDEX leases_pack ON leases (pack_id, expires_at);
 CREATE INDEX packs_state ON packs (state, created_at);
@@ -5,7 +15,71 @@ CREATE INDEX packs_unit ON packs (unit_id) WHERE unit_id IS NOT NULL;
 CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
 CREATE INDEX refs_oid ON refs (oid);
+CREATE UNIQUE INDEX rulesets_name ON rulesets (name);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);
+CREATE TABLE acl_snapshot (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        account_id TEXT NOT NULL DEFAULT '',
+        epoch_gen INTEGER NOT NULL DEFAULT 0,
+        version INTEGER NOT NULL DEFAULT 0,
+        pulled_at INTEGER NOT NULL DEFAULT 0,
+        roles TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(roles)),
+        floor_epoch INTEGER NOT NULL DEFAULT 0,
+        floor_version INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+CREATE TABLE archive_segments (
+        run_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        key TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        PRIMARY KEY (run_id, seq)
+      ) STRICT;
+CREATE TABLE archive_zip_records (
+        run_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        record TEXT NOT NULL CHECK (json_valid(record)),
+        PRIMARY KEY (run_id, seq)
+      ) STRICT;
+CREATE TABLE archives (
+        run_id TEXT PRIMARY KEY,
+        commit_id TEXT NOT NULL,
+        format TEXT NOT NULL CHECK (format IN ('tar.gz', 'zip')),
+        prefix TEXT NOT NULL,
+        network_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('building', 'ready', 'failed', 'deleting')),
+        segments INTEGER NOT NULL DEFAULT 0,
+        bytes INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        leased_until INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE audit_log (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        epoch_gen INTEGER NOT NULL,
+        at INTEGER NOT NULL,
+        actor_id TEXT,
+        on_behalf_of TEXT,
+        act_chain TEXT CHECK (act_chain IS NULL OR json_valid(act_chain)),
+        token_id TEXT,
+        grant_id TEXT,
+        action TEXT NOT NULL,
+        target_id TEXT,
+        result TEXT NOT NULL,
+        details TEXT CHECK (details IS NULL OR json_valid(details)),
+        request_id TEXT,
+        archived_at INTEGER
+      ) STRICT;
+CREATE TABLE audit_segments (
+        segment_id INTEGER PRIMARY KEY,
+        epoch_gen INTEGER NOT NULL,
+        from_seq INTEGER NOT NULL,
+        to_seq INTEGER NOT NULL CHECK (to_seq >= from_seq),
+        r2_key TEXT NOT NULL UNIQUE,
+        state TEXT NOT NULL CHECK (state IN ('pending', 'archived')),
+        created_at INTEGER NOT NULL,
+        archived_at INTEGER
+      ) STRICT;
 CREATE TABLE commits (
     oid BLOB PRIMARY KEY CHECK (length(oid) = 20),
     tree BLOB NOT NULL CHECK (length(tree) = 20),
@@ -15,6 +89,22 @@ CREATE TABLE commits (
     level INTEGER NOT NULL,
     signature TEXT
   ) STRICT, WITHOUT ROWID;
+CREATE TABLE ended_transfers (
+        transfer_id TEXT PRIMARY KEY,
+        landed INTEGER NOT NULL CHECK (landed IN (0, 1)),
+        owner_gen INTEGER NOT NULL,
+        ended_at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE event_payloads (
+        event_key TEXT PRIMARY KEY,
+        payload TEXT NOT NULL CHECK (json_valid(payload)),
+        created_at INTEGER NOT NULL
+      , sent_at INTEGER) STRICT;
+CREATE TABLE generation (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        template_id TEXT NOT NULL,
+        started_at INTEGER NOT NULL
+      , abandoned_at INTEGER) STRICT;
 CREATE TABLE git_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     network_id TEXT NOT NULL,
@@ -49,6 +139,22 @@ CREATE TABLE locks (
     acquired_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
   ) STRICT;
+CREATE TABLE networks (
+        network_id TEXT PRIMARY KEY,
+        recorded_at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE outbox (
+        source_seq INTEGER PRIMARY KEY,
+        event TEXT NOT NULL CHECK (json_valid(event)),
+        bytes INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE outbox_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        next_drain_at INTEGER,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
+      ) STRICT;
 CREATE TABLE packs (
     pack_id TEXT PRIMARY KEY,
     network_id TEXT NOT NULL,
@@ -120,10 +226,39 @@ CREATE TABLE repo_meta (
         epoch_gen INTEGER NOT NULL,
         write_frozen INTEGER NOT NULL DEFAULT 0 CHECK (write_frozen IN (0, 1)),
         created_at INTEGER NOT NULL
+      , epoch_uuid TEXT, source_seq INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, owner_id TEXT, name TEXT, visibility TEXT
+        CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT) STRICT;
+CREATE TABLE rule_suites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        upload_id TEXT NOT NULL,
+        ref TEXT NOT NULL,
+        before_sha TEXT,
+        after_sha TEXT,
+        actor_id TEXT NOT NULL,
+        pushed_at INTEGER NOT NULL,
+        refused INTEGER NOT NULL,
+        evaluations TEXT NOT NULL,
+        UNIQUE (upload_id, ref)
+      ) STRICT;
+CREATE TABLE ruleset_version (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        version INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE rulesets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        body TEXT NOT NULL CHECK (json_valid(body)),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
       ) STRICT;
 CREATE TABLE shallow (
     oid BLOB PRIMARY KEY CHECK (length(oid) = 20)
   ) STRICT, WITHOUT ROWID;
+CREATE TABLE storage_owed (
+        upload_id TEXT PRIMARY KEY,
+        bytes INTEGER NOT NULL,
+        owed_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE uploads (
     upload_id TEXT PRIMARY KEY,
     pack_id TEXT,

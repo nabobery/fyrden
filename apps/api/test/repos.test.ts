@@ -42,7 +42,13 @@ describe("repos.create", () => {
       name,
       full_name: `${handle}/${name}`,
       visibility: "private",
+      description: null,
       default_branch: "main",
+      fork: false,
+      is_template: false,
+      stargazers_count: 0,
+      expires_at: null,
+      parent_id: null,
       created_at: expect.any(Number),
     });
 

@@ -29,7 +29,7 @@ export async function startImport(
   ctx: OpContext,
   input: Input<typeof createImport>,
 ): Promise<RepoImport> {
-  const repo = await repoFor(ctx, input.owner, input.repo, "write");
+  const repo = await repoFor(ctx, input.owner, input.repo, "contents:write");
   const ownHosts = ownHostsOf(ctx.env, ctx.requestHost);
   const check = await checkImportUrl(input.url, importPolicy(ownHosts, dohResolver()));
   if (!check.ok)
@@ -42,16 +42,19 @@ export async function startImport(
   const begun = await ctx.env.REPO.getByName(repo.id).beginImport({
     principal: ctx.auth.principalId,
     tokenId: ctx.auth.id,
+    grantId: ctx.auth.grantId,
     repoId: repo.id,
     url: check.url,
     ownHosts,
+    requestId: ctx.requestId ?? null,
     limits: {
       maxBytes: tuning.maxImportBytes,
       maxMs: tuning.maxImportMs,
       partBytes: tuning.partBytes,
     },
   });
-  if (!begun.ok) throw new OperationError(409, begun.code, begun.error);
+  if (!begun.ok)
+    throw new OperationError(begun.code === "repo_not_found" ? 404 : 409, begun.code, begun.error);
   return output(begun.record);
 }
 
@@ -59,7 +62,7 @@ export async function getRepoImport(
   ctx: OpContext,
   input: Input<typeof getImport>,
 ): Promise<RepoImport> {
-  const repo = await repoFor(ctx, input.owner, input.repo, "read");
+  const repo = await repoFor(ctx, input.owner, input.repo, "contents:read");
   const record = await ctx.env.REPO.getByName(repo.id).importRecord();
   if (!record) throw new OperationError(404, "import_not_found", "This repository has no import.");
   return output(record);

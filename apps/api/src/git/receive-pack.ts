@@ -1,14 +1,20 @@
 import { currentInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { bytesBody, encodeFatalError, requestedSideband } from "@fyrden/git-core";
+import { isRepoDeleted } from "../do/repo/events.js";
 import { authorizeGit } from "./auth.js";
 import { checkRequestType, type GitContext, gitPayload, gitText, repoParams } from "./http.js";
 import { contentType, NO_CACHE_HEADERS } from "./protocol.js";
+import { readBodyHead } from "./push/body-head.js";
+import { releaseUpload, reserveUpload } from "./push/quota.js";
 import { reauthorizePush } from "./push/reauthorize.js";
 import { pushResponseBody } from "./push/respond.js";
 import { storePushBody } from "./push/store-body.js";
 import { pushTuning } from "./push/tuning.js";
 
 const SERVICE = "git-receive-pack";
+
+/** How much longer than the Worker's longest wait a push's reservation lasts. */
+const RESERVATION_MARGIN_MS = 15 * 60 * 1000;
 
 /** A `Content-Length` as a byte count; undefined when absent or not a plain decimal. */
 function declaredLength(request: Request): number | undefined {
@@ -122,15 +128,58 @@ export async function receivePack(c: GitContext): Promise<Response> {
   const call = (method: string) => metrics.count("do.request", { class: "RepoDO", method });
   const abort = (uploadId: string) => {
     call("abortPush");
+    // The object's abort also frees the upload's reservation.
     c.executionCtx.waitUntil(stub.abortPush(uploadId));
   };
   call("beginPush");
   const begun = await stub.beginPush({
     principal: access.auth.principalId,
     tokenId: access.auth.id,
+    // An agent acting for the user (a git token minted under a grant): agents' rules apply.
+    grantId: access.auth.grantId,
   });
   if (!begun.ok)
     return gitPayload(encodeFatalError(begun.error, false), contentType.result(SERVICE));
+
+  // The account's storage, reserved before a byte is stored; the store stops at it.
+  metrics.count("do.request", { class: "OrgDO", method: "reserveStorage" });
+  const reservation = await reserveUpload(c.env, access.repo, begun.uploadId, {
+    declared,
+    maxBytes,
+    ttlMs: tuning.maxWaitMs + RESERVATION_MARGIN_MS,
+  }).catch((error: unknown) => {
+    abort(begun.uploadId);
+    throw error;
+  });
+  if (!reservation.ok) {
+    abort(begun.uploadId);
+    const sideband = await requestedSideband(bytesBody(await readHead(request)));
+    return gitPayload(encodeFatalError(reservation.message, sideband), contentType.result(SERVICE));
+  }
+  const storeMax = Math.min(maxBytes, reservation.bytes);
+
+  // The rulesets' check of the commands, before a byte is stored (only where
+  // a ruleset has such rules: elsewhere the body goes to R2 untouched); a
+  // gzip body's commands are read inflated, its bytes stored as they came.
+  if (begun.precheck && request.body) {
+    let checked: Awaited<ReturnType<typeof stub.precheckPush>>;
+    let body: Awaited<ReturnType<typeof readBodyHead>> | undefined;
+    try {
+      body = await readBodyHead(request.body, { gzip });
+      call("precheckPush");
+      checked = await stub.precheckPush(begun.uploadId, body.commands);
+    } catch (error) {
+      await body?.cancel();
+      abort(begun.uploadId);
+      throw error;
+    }
+    if (!checked.ok) {
+      await body.cancel();
+      abort(begun.uploadId);
+      return gitPayload(new Uint8Array(checked.response), contentType.result(SERVICE));
+    }
+    request = new Request(request, { body: body.rest(declared), duplex: "half" } as RequestInit);
+  }
 
   let stored: Awaited<ReturnType<typeof storePushBody>>;
   try {
@@ -138,7 +187,7 @@ export async function receivePack(c: GitContext): Promise<Response> {
       c.env.GIT,
       begun.bodyKey,
       request,
-      { declaredBytes: declared, maxBytes, gzip },
+      { declaredBytes: declared, maxBytes: storeMax, gzip },
       metrics,
     );
   } catch (error) {
@@ -147,6 +196,16 @@ export async function receivePack(c: GitContext): Promise<Response> {
   }
   if (!stored.ok) {
     abort(begun.uploadId);
+    if (stored.reason === "too-large" && storeMax < maxBytes) {
+      const sideband = await requestedSideband(bytesBody(stored.head));
+      return gitPayload(
+        encodeFatalError(
+          `the push is larger than the account's storage quota has free (${storeMax} bytes)`,
+          sideband,
+        ),
+        contentType.result(SERVICE),
+      );
+    }
     if (stored.reason === "too-large")
       return refuseTooLarge(stored.head, maxBytes, gzip && maxBytes < tuning.maxBodyBytes);
     return gitPayload(
@@ -161,10 +220,25 @@ export async function receivePack(c: GitContext): Promise<Response> {
   const first = await stub
     .runPush(uploadId, stored.bytes, tuning.indexBudgetMs)
     .catch((error: unknown) => {
+      if (isRepoDeleted(error)) return "deleted" as const;
       // The object was reset mid-call: indexing continues from its cursor.
       log.warn("push run call failed; waiting for the index job", { uploadId, error });
       return { state: "indexing", sideband: false } as const;
     });
+  if (first === "deleted" || (first.state === "done" && first.discardBody)) {
+    // No upload holds the body any more (the repository was deleted, or the
+    // upload expired, while the body was stored): nothing else will delete it
+    // or free its reservation.
+    c.executionCtx.waitUntil(releaseUpload(c.env, access.repo, uploadId).catch(() => {}));
+    await c.env.GIT.delete(begun.bodyKey).catch((error: unknown) =>
+      log.warn("deleting the body of a push nobody holds failed", { uploadId, error }),
+    );
+    return first === "deleted"
+      ? gitPayload(encodeFatalError("repository not found", false), contentType.result(SERVICE))
+      : new Response(first.response as BodyInit, {
+          headers: { "Content-Type": contentType.result(SERVICE), ...NO_CACHE_HEADERS },
+        });
+  }
   const body = await pushResponseBody(
     first,
     {

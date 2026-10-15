@@ -37,6 +37,10 @@ export interface RefActor {
   readonly grantId?: string | null;
   readonly tokenId?: string | null;
   readonly onBehalfOf?: string | null;
+  /** The agents acting for `principal` (a delegated token's act chain), the current one first. */
+  readonly actChain?: readonly string[];
+  /** The request that made the change. */
+  readonly requestId?: string | null;
   readonly via: "push" | "merge" | "api" | "import";
 }
 
@@ -135,6 +139,28 @@ export class SqliteRefStore implements RefStore {
    */
   afterCommit: ((commit: { version: number; nonFastForward: boolean }) => void) | undefined;
 
+  /**
+   * Runs inside every commit's transaction, after the request's own
+   * `onCommitted`: the owner's rows that must commit with any ref change,
+   * whichever path made it (events, audit rows). A throw rolls the commit
+   * back.
+   */
+  inCommit: ((context: CommitContext) => void) | undefined;
+
+  /**
+   * The owner's check of every commit, in its transaction before any write,
+   * after the request's own `authorize`: a refusal message refuses the
+   * commit as that one does (the repository's access control).
+   */
+  authorizeCommit: ((context: CommitContext) => string | undefined) | undefined;
+
+  /**
+   * Runs after `setHead` moved HEAD to another target, in the caller's
+   * transaction when there is one (the owner's snapshot of the default
+   * branch). A throw undoes the move inside a transaction.
+   */
+  onHeadChanged: ((target: string) => void) | undefined;
+
   constructor(
     private readonly context: GitStorageContext,
     private readonly registry: PackRegistry,
@@ -191,11 +217,23 @@ export class SqliteRefStore implements RefStore {
     );
   }
 
+  /** Whether the branch or tag `name` (a full ref name) exists; one row read. */
+  hasRef(name: string): boolean {
+    return (
+      first<{ one: number }>(
+        this.context.storage,
+        "SELECT 1 AS one FROM refs WHERE name = ? AND kind = 'direct'",
+        name,
+      ) !== undefined
+    );
+  }
+
   /** Sets where HEAD points (the default branch). Does not move any ref. */
   setHead(target: string): void {
     checkRefName(target);
     const now = this.context.now();
     const { storage } = this.context;
+    const before = this.head();
     const written = run(
       storage,
       `INSERT INTO refs (name, kind, oid, target, version, updated_at)
@@ -205,6 +243,7 @@ export class SqliteRefStore implements RefStore {
       now,
     );
     countRowsWritten(this.context, "refs.set_head", written);
+    if (before !== target) this.onHeadChanged?.(target);
   }
 
   async commit(request: RefCommitRequest): Promise<RefCommitResult> {
@@ -316,7 +355,7 @@ export class SqliteRefStore implements RefStore {
       const next = version + 1;
       const now = this.context.now();
       const context: CommitContext = { version: next, now, request };
-      const refusal = request.authorize?.(context);
+      const refusal = request.authorize?.(context) ?? this.authorizeCommit?.(context);
       if (refusal !== undefined)
         return { result: { ok: false, reason: "refused", message: refusal } as const, written: 0 };
 
@@ -395,6 +434,7 @@ export class SqliteRefStore implements RefStore {
         now,
       );
       request.onCommitted?.(context);
+      this.inCommit?.(context);
       return { result: { ok: true, version: next } as const, written, nonFastForward };
     });
     countRowsWritten(this.context, "refs.commit", outcome.written);

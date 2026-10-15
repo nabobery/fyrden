@@ -10,6 +10,7 @@ export {
   parseLsRefsLine,
   type RemoteRef,
   SmartHttpClient,
+  withoutTrailingSlashes,
 } from "./client/fetch-client.js";
 export type { ClientRequest, ClientResponse, HttpTransport } from "./client/transport.js";
 export { BitSet } from "./graph/bitset.js";
@@ -85,6 +86,7 @@ export {
   isTreeMode,
   parseTree,
   type TreeEntry,
+  treeEntries,
 } from "./object/tree.js";
 export { applyDelta, type DeltaHeader, readDeltaHeader } from "./pack/delta-apply.js";
 export {
@@ -207,6 +209,7 @@ export type {
   RefStore,
   RefUpdate,
 } from "./ports/ref-store.js";
+export type { Signer } from "./ports/signer.js";
 export { type InflateResult, type Zlib, ZlibError, type ZlibErrorKind } from "./ports/zlib.js";
 export {
   type AdvertisedRef,
@@ -270,6 +273,7 @@ export {
   type V2Advertised,
   type V2CommandRequest,
 } from "./protocol/v2-command.js";
+export { type LogPage, type LogPageOptions, logPage, type PathEntryLookup } from "./read/log.js";
 export {
   type CachedObject,
   DELTA_BASE_ENTRY_OVERHEAD,
@@ -298,6 +302,7 @@ export {
   type CommandKind,
   casConflict,
   DEFAULT_PUSH_POLICY,
+  failAtomically,
   liveCommands,
   type PushCapabilities,
   type PushCommandState,
@@ -307,6 +312,7 @@ export {
 } from "./receive-pack/commands.js";
 export type { IndexPhase, PushTip, UnpackFailure } from "./receive-pack/cursor.js";
 export {
+  type CheckedCommand,
   type FinalizeEnv,
   finalizePush,
   type PushCommitRequest,
@@ -354,6 +360,28 @@ export {
 } from "./refs/namespace.js";
 export { isValidRefname } from "./refs/refname.js";
 export {
+  MAX_SIGNATURE_BYTES,
+  type SignedCommit,
+  splitSignedCommit,
+  verifyCommitSignature,
+} from "./sign/commit-signature.js";
+export {
+  armorSshSignature,
+  ed25519FromSeed,
+  ed25519KeyOf,
+  ed25519PublicKeyBlob,
+  GIT_NAMESPACE,
+  parseSshPublicKey,
+  parseSshSignature,
+  type SshSignature,
+  SshSignatureError,
+  type SshVerification,
+  sshCommitSigner,
+  sshFingerprint,
+  sshSignedData,
+  verifySshSignature,
+} from "./sign/sshsig.js";
+export {
   framedCopyKey,
   type RegeneratedKeyInput,
   regeneratedPackKey,
@@ -383,3 +411,29 @@ export {
 } from "./upload-pack/response.js";
 export { INFINITE_DEPTH } from "./upload-pack/shallow.js";
 export type { VerbatimCandidate } from "./upload-pack/verbatim-plan.js";
+export {
+  type ArchiveEntry,
+  type ArchiveEntryKind,
+  deflateRaw,
+  gzipMember,
+  gzipMemberParts,
+  tarCommitHeader,
+  tarEnd,
+  tarEntry,
+  tarEntryParts,
+  ZIP_LIMITS,
+  type ZipRecord,
+  zipEnd,
+  zipEntry,
+  zipEntryParts,
+} from "./write/archive.js";
+export {
+  type BuildCommitInput,
+  type BuiltCommit,
+  type BuiltObject,
+  buildCommit,
+  CommitBuildError,
+  type CommitBuildErrorCode,
+  type FileChange,
+  type TreeLookup,
+} from "./write/commit-builder.js";

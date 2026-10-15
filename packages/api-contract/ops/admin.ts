@@ -1,6 +1,12 @@
-import { HANDLE_PATTERN } from "@fyrden/domain";
+import { HANDLE_PATTERN, isReservedHandle, PERMISSION_NAMES } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation, INSTANCE_ADMIN } from "../src/op.js";
+
+/** A new user's, organization's or agent's handle: valid, and not one the web origin's paths take. */
+export const NewHandle = z
+  .string()
+  .regex(HANDLE_PATTERN)
+  .refine((handle) => !isReservedHandle(handle), "is reserved");
 
 /** Longest lifetime an administrator can give a token. */
 export const MAX_TOKEN_DAYS = 365;
@@ -19,10 +25,9 @@ export const createUser = defineOperation({
   summary: "Create a user",
   description: "Creates a user account. Instance administrators only.",
   input: z.object({
-    handle: z
-      .string()
-      .regex(HANDLE_PATTERN)
-      .describe("1-39 letters, digits and single inner hyphens; unique, ignoring case."),
+    handle: NewHandle.describe(
+      "1-39 letters, digits and single inner hyphens; unique, ignoring case; not reserved.",
+    ),
   }),
   output: CreatedUser,
   permission: INSTANCE_ADMIN,
@@ -58,7 +63,13 @@ export const createToken = defineOperation({
   input: z.object({
     user_id: z.string().min(1),
     type: z.enum(["pat", "git"]).default("pat"),
-    scopes: z.array(z.string().min(1).max(64)).max(32).default([]),
+    scopes: z
+      .array(z.enum(PERMISSION_NAMES))
+      .max(32)
+      .default([])
+      .describe(
+        "Permissions the token is limited to (and what they imply). Empty: the user's full rights.",
+      ),
     expires_in_days: z.number().int().min(1).max(MAX_TOKEN_DAYS).default(30),
   }),
   output: CreatedToken,

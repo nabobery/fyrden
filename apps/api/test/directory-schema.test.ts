@@ -23,13 +23,34 @@ describe("D1 directory schema", () => {
     ).all<{ name: string }>();
     expect(results.map((r) => r.name)).toEqual([
       "audit_log",
+      "audit_segments",
+      "dpop_proofs",
+      "grants",
+      "idempotency_keys",
       "memberships",
+      "oauth_clients",
+      "oauth_requests",
+      "passkeys",
       "principals",
+      "refresh_tokens",
       "repo_deletions",
+      "repo_redirects",
+      "repo_transfers",
       "repos",
+      "sessions",
       "source_epochs",
+      "ssh_signing_keys",
+      "stars",
       "tokens",
+      "webauthn_challenges",
     ]);
+  });
+
+  it("records the token a token was minted from, none for the tokens before", async () => {
+    const { results } = await env.DIRECTORY.prepare(
+      "SELECT name, \"notnull\" AS required FROM pragma_table_info('tokens') WHERE name = 'source_id'",
+    ).all<{ name: string; required: number }>();
+    expect(results).toEqual([{ name: "source_id", required: 0 }]);
   });
 
   it("keeps handles unique regardless of case", async () => {

@@ -1,4 +1,4 @@
-import { type Oid, oidToHex } from "../object/oid.js";
+import { compareOids, type Oid, oidToHex } from "../object/oid.js";
 import type { CommitGraph, CommitGraphView } from "../ports/commit-graph.js";
 import { MissingCommitError, WalkLimitError } from "./errors.js";
 import { OidTable } from "./oid-table.js";
@@ -10,6 +10,8 @@ export interface WalkOptions {
    * validation, for example) set it and fail closed.
    */
   readonly maxCommits?: number;
+  /** Keeps each loaded commit's tree (`treeOf`), for walks that read trees. */
+  readonly keepTrees?: boolean;
 }
 
 /**
@@ -36,11 +38,20 @@ export class CommitWalk {
   readonly #graph: CommitGraph;
   readonly #view: CommitGraphView;
   readonly #maxCommits: number;
+  readonly #trees: Map<number, Oid> | undefined;
 
   constructor(graph: CommitGraph, view: CommitGraphView, options: WalkOptions = {}) {
     this.#graph = graph;
     this.#view = view;
     this.#maxCommits = options.maxCommits ?? Number.POSITIVE_INFINITY;
+    if (options.keepTrees) this.#trees = new Map();
+  }
+
+  /** The tree of loaded commit `i`; only for a walk made with `keepTrees`. */
+  treeOf(i: number): Oid {
+    const tree = this.#trees?.get(i);
+    if (!tree) throw new Error("the walk keeps no tree for this commit");
+    return tree;
   }
 
   /** The walk index of `oid`, added unloaded if new. */
@@ -75,6 +86,7 @@ export class CommitWalk {
         return;
       }
       const parents = row.parents.map((p) => this.intern(p));
+      this.#trees?.set(i, row.tree);
       this.generation[i] = row.generation;
       this.date[i] = row.commitTime;
       this.#parentStart[i] = this.#parentsUsed;
@@ -138,15 +150,20 @@ export class CommitWalk {
 
 /**
  * A max-heap of walk indexes ordered by generation, then commit date: the
- * order of git's `compare_commits_by_gen_then_commit_date`.
+ * order of git's `compare_commits_by_gen_then_commit_date`. With
+ * `byOidOnTies`, commits equal in both come out by ascending oid, so the
+ * order does not depend on how the heap was filled (a walk resumed from a
+ * saved frontier pops them as the uninterrupted one did).
  */
 export class CommitQueue {
   #heap = new Int32Array(64);
   #size = 0;
   readonly #walk: CommitWalk;
+  readonly #byOidOnTies: boolean;
 
-  constructor(walk: CommitWalk) {
+  constructor(walk: CommitWalk, options: { readonly byOidOnTies?: boolean } = {}) {
     this.#walk = walk;
+    this.#byOidOnTies = options.byOidOnTies ?? false;
   }
 
   get size(): number {
@@ -194,6 +211,11 @@ export class CommitQueue {
     const { generation, date } = this.#walk;
     const ga = generation[a] as number;
     const gb = generation[b] as number;
-    return ga !== gb ? ga > gb : (date[a] as number) > (date[b] as number);
+    if (ga !== gb) return ga > gb;
+    const da = date[a] as number;
+    const db = date[b] as number;
+    if (da !== db || !this.#byOidOnTies) return da > db;
+    const { oids } = this.#walk;
+    return compareOids(oids.oidAt(a), oids.oidAt(b)) < 0;
   }
 }

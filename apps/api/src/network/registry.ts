@@ -175,6 +175,13 @@ export class NetworkRegistry {
     return this.release(repoId, claimed);
   }
 
+  /** Removes a member in any state (a deleted repository), with its claims. Returns packs left unclaimed. */
+  removeMember(repoId: string): string[] {
+    const written = exec(this.#sql, "DELETE FROM members WHERE repo_id = ?", repoId);
+    if (written > 0) this.#bumpMembership();
+    return this.release(repoId, this.claimsOf(repoId));
+  }
+
   /** Records `packs` as shared, claimed by every repository in `claimants`; cancels their deletion. */
   share(packs: readonly ViewPack[], writerOf: (pack: ViewPack) => string, claimants: string[]) {
     const now = this.context.now();

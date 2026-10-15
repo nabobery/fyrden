@@ -85,6 +85,40 @@ export function parseTree(body: Uint8Array): Parsed<TreeEntry[]> {
   return { value: entries, issues: REPORT_ORDER.filter((id) => found.has(id)).map(issue) };
 }
 
+/**
+ * A tree's entries one at a time, in stored order, without fsck checks or
+ * copies (names and ids are views into `body`): for listing large trees in
+ * bounded memory. Each entry carries `end`, the offset just after it, so a
+ * walk can resume from there (`start`). Throws `GitObjectError("badTree")`
+ * at the first entry that cannot be read, as `parseTree` does.
+ */
+export function* treeEntries(
+  body: Uint8Array,
+  start = 0,
+): Generator<TreeEntry & { readonly end: number }> {
+  let offset = start;
+  while (offset < body.length) {
+    const space = body.indexOf(SPACE, offset);
+    if (space <= offset) throw badTree("malformed mode in tree entry");
+    let mode = 0;
+    for (let i = offset; i < space; i++) {
+      const digit = (body[i] as number) - 0x30;
+      if (digit < 0 || digit > 7) throw badTree("malformed mode in tree entry");
+      mode = (mode * 8 + digit) & 0xffff;
+    }
+    const nul = body.indexOf(0, space + 1);
+    if (nul < 0 || nul + 1 + OID_BYTES > body.length) throw badTree("too-short tree object");
+    if (nul === space + 1) throw badTree("empty filename in tree entry");
+    offset = nul + 1 + OID_BYTES;
+    yield {
+      mode,
+      name: body.subarray(space + 1, nul),
+      oid: body.subarray(nul + 1, offset) as Oid,
+      end: offset,
+    };
+  }
+}
+
 /** The order git's fsck_tree reports its findings in. */
 const REPORT_ORDER: readonly FsckMessageId[] = [
   "nullSha1",

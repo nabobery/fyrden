@@ -10,6 +10,10 @@ export interface PushDecision {
   readonly tokenId: string;
   /** When the Worker made the decision (ms since the epoch). */
   readonly decidedAt: number;
+  /** The agents acting for the pusher, from the token checked (a delegated token's act chain). */
+  readonly actChain?: readonly string[];
+  /** The request committing the push, for its audit row. */
+  readonly requestId?: string | null;
 }
 
 /**
@@ -65,8 +69,8 @@ const LOCK_RENEW_MS = 30_000;
  * the fast-forward proof, and the in-transaction hooks. `authorize` checks,
  * inside the transaction, that the Worker's decision is for this upload's
  * token and fresh, and that this push still holds the commit lock.
- * `onCommitted` records the transaction for the push event (no outbox
- * table exists yet; the event is logged after the commit).
+ * `onCommitted` records the transaction for the push's log line; the
+ * repository's own commit hook writes its events and audit row.
  *
  * With a `cap` gate, the transaction that makes the upload live first gets
  * the merge the pack-count cap needs. That transaction then also swaps in
@@ -84,9 +88,15 @@ export function pushCommitter(
   lock: LockHandle,
   committed: CommittedTransaction[],
   cap?: PushCapGate,
+  /** A last refusal checked in the transaction (the rulesets are still the ones checked). */
+  fence?: () => string | undefined,
+  /** Runs in the transaction that commits the upload, after its refs. */
+  inCommit?: () => void,
 ): (request: PushCommitRequest) => Promise<PushCommitResult> {
   const authorize = ({ now }: { now: number }, removing: readonly PackId[]): string | undefined => {
     if (!git.locks.isHeld(lock)) return "the push lost its turn to commit; try the push again";
+    const fenced = fence?.();
+    if (fenced) return fenced;
     if (anyLeased(git, removing)) return PACKS_IN_USE;
     if (upload.tokenId !== decision.tokenId) return "the push was authorized for another token";
     if (now - decision.decidedAt > DECISION_MAX_AGE_MS)
@@ -131,12 +141,15 @@ export function pushCommitter(
           principal: upload.principal,
           grantId: upload.grantId,
           tokenId: upload.tokenId,
+          actChain: decision.actChain ?? [],
+          requestId: decision.requestId ?? null,
           via: "push",
         },
         fastForward: request.fastForward,
         authorize: (context) => authorize(context, removePacks),
         onCommitted: (context) => {
           committed.push({ version: context.version, updates: request.updates });
+          if (request.withUpload) inCommit?.();
         },
       });
       if (result.ok) return { ok: true };

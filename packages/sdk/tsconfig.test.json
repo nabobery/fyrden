@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  // The generator and tests run on Node.
+  "include": ["src", "test", "scripts", "vitest.config.ts"]
+}

@@ -2,7 +2,10 @@
 
 Fyrden is an open-source, self-hostable code forge built on Cloudflare Workers, designed for both humans and AI agents.
 
-> **Status:** early development. Nothing is usable yet.
+> **Status:** early development. Git over HTTPS, the REST API, the MCP
+> server, agents with delegated access, and a web UI for browsing and
+> editing work; pull requests, issues and CI are not built yet. Expect
+> breaking changes.
 
 ## Goals
 
@@ -43,6 +46,10 @@ curl -X POST "$API/api/admin/users/$USER_ID/tokens" -H "Authorization: Bearer $A
 ```
 
 The API is described at `$API/api/openapi.json`; MCP clients connect to `$API/mcp`.
+
+To use the web UI, open the `fyrden-web` Worker's URL and sign in with a
+personal access token (from the commands above); it then offers to add a
+passkey for later sign-ins.
 
 ### Uninstalling
 

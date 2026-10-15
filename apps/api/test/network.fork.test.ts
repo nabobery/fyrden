@@ -4,6 +4,7 @@
 // once that copy is done. Clones of the fork are checked against what git
 // says the refs reach.
 
+import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, inject, it } from "vitest";
@@ -11,7 +12,7 @@ import { resolveRepo } from "../src/repos/directory.js";
 import { loadFixture } from "./helpers/fetch-repo.js";
 import { createRepo, ORIGIN } from "./helpers/git-http.js";
 import { cloneObjects, fork, handleOf, inNetwork, type Owner } from "./helpers/network.js";
-import { principalWithToken } from "./helpers/principals.js";
+import { principalWithToken, scopedToken } from "./helpers/principals.js";
 import { inRepo } from "./helpers/repo-git.js";
 
 const fixtures = inject("fetchFixtures");
@@ -256,6 +257,42 @@ describe("repos.fork operation", () => {
     expect(body).toMatchObject({ owner: handleOf(user), name, visibility: "private" });
     const entry = await resolveRepo(env, handleOf(user), name, { consistency: "primary" });
     expect(entry?.networkId).toBe(await inRepo(parent.stub, ({ git }) => git.networkId()));
+    // Its first commit is the caller's, made by this request.
+    const requestId = res.headers.get("X-Request-Id");
+    expect(requestId).toBeTruthy();
+    const audit = await runInDurableObject(env.REPO.getByName(entry?.id ?? ""), (_, state) =>
+      state.storage.sql
+        .exec("SELECT actor_id, request_id FROM audit_log WHERE action = 'refs.update'")
+        .toArray(),
+    );
+    expect(audit).toEqual([{ actor_id: user.principalId, request_id: requestId }]);
+  });
+
+  it("needs repos:create and read access to the source from a scoped token", async () => {
+    const user = await principalWithToken("user", "pat");
+    const parent = await createRepo(user.principalId);
+    const other = await createRepo(user.principalId);
+    await loadFixture(parent.stub, single);
+    const forkWith = async (scopes: string[], repoIds?: string[]) => {
+      const token = await scopedToken(user.principalId, scopes, "pat", repoIds);
+      const res = await exports.default.fetch(
+        `${ORIGIN}/api/repos/${handleOf(user)}/${parent.name}/forks`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "Idempotency-Key": crypto.randomUUID(),
+          },
+          body: JSON.stringify({ name: uniqueId("forked") }),
+        },
+      );
+      return res.ok ? res.status : (await res.json<{ code: string }>()).code;
+    };
+    expect(await forkWith(["contents:read"])).toBe("missing_permission");
+    expect(await forkWith(["repos:create"])).toBe("repo_not_found");
+    expect(await forkWith(["repos:create", "contents:read"], [other.id])).toBe("repo_not_found");
+    expect(await forkWith(["repos:create", "contents:read"])).toBe(201);
   });
 
   it("reports the default branch HEAD names (master here), in the lookup and the fork response", async () => {

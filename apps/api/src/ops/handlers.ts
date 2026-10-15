@@ -1,4 +1,56 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { principalTypeOf } from "@fyrden/domain";
+import {
+  createAgentOperation,
+  createAgentTokenOperation,
+  disableAgentOperation,
+  getAgentOperation,
+  listAgentsOperation,
+  listAgentTokensOperation,
+  revokeAgentTokenOperation,
+} from "../accounts/agents.js";
+import {
+  createGrantOperation,
+  listGrantsOperation,
+  revokeGrantOperation,
+} from "../accounts/delegation.js";
+import {
+  createTeamOperation,
+  listCollaboratorsOperation,
+  listTeamsOperation,
+  removeCollaboratorOperation,
+  removeTeamMembershipOperation,
+  removeTeamRepoOperation,
+  setCollaboratorOperation,
+  setTeamMembershipOperation,
+  setTeamRepoOperation,
+} from "../accounts/grants.js";
+import { createOrgRepoOperation, listOrgReposOperation } from "../accounts/org-repos.js";
+import {
+  createOrgOperation,
+  listMembersOperation,
+  removeMembershipOperation,
+  setMembershipOperation,
+  updateOrgOperation,
+} from "../accounts/orgs.js";
+import {
+  getOrgQuotaOperation,
+  getUserQuotaOperation,
+  setQuotaOperation,
+} from "../accounts/quotas.js";
+import {
+  createSshSigningKeyOperation,
+  deleteSshSigningKeyOperation,
+  getSshSigningKeyOperation,
+  listSshSigningKeysOperation,
+} from "../accounts/signing-keys.js";
+import {
+  createGitTokenOperation,
+  createUserTokenOperation,
+  listUserTokensOperation,
+  revokeUserTokenOperation,
+} from "../accounts/tokens.js";
 import {
   abortUploadSession,
   completeUploadSession,
@@ -6,48 +58,112 @@ import {
   getUploadSession,
 } from "../git/chunked/operations.js";
 import { getRepoImport, startImport } from "../git/import/operations.js";
-import { forkRepoOperation } from "../network/operations.js";
+import { forkRepoOperation, listForksOperation } from "../network/operations.js";
 import {
-  canAccess,
-  defaultBranchOf,
-  INITIAL_BRANCH,
-  type RepoEntry,
-  resolveRepo,
-} from "../repos/directory.js";
+  compareCommitsOperation,
+  getArchiveOperation,
+  getBranchOperation,
+  getCommitOperation,
+  getContentsOperation,
+  getReadmeOperation,
+  getRootContentsOperation,
+  getTreeOperation,
+  listBranchesOperation,
+  listCommitsOperation,
+  listTagsOperation,
+} from "../repos/browse.js";
+import { createOwnRepoOperation } from "../repos/create.js";
+import { deleteRepoOperation, deleteReposOperation } from "../repos/delete.js";
+import { authorize, defaultBranchOf, ownListable, resolveRepo } from "../repos/directory.js";
+import {
+  createFileCommitOperation,
+  deleteContentsOperation,
+  putContentsOperation,
+} from "../repos/file-writes.js";
+import { generateRepoOperation } from "../repos/generate.js";
+import { listAccountRepos } from "../repos/listing.js";
+import { networkSource, repoOutput, starCounts, visibleParents } from "../repos/output.js";
+import {
+  createRulesetOperation,
+  deleteRulesetOperation,
+  getRulesetOperation,
+  listRuleSuitesOperation,
+  listRulesetsOperation,
+  updateRulesetOperation,
+} from "../repos/rulesets.js";
+import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "../repos/stars.js";
+import { transferRepoOperation } from "../repos/transfer.js";
+import { updateRepoOperation } from "../repos/update.js";
 import { clock, newId, tokenStore } from "../services.js";
+import { platformKeys } from "../signing/platform-key.js";
 import { type Handlers, OperationError } from "./execute.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * The read-model database a repository's rows go to. A deployment binds one
- * org database (`ORG_READ`) for now; this names it until shards exist.
- */
-const DEFAULT_ORG_SHARD = "default";
-
-function repoOutput(repo: RepoEntry, defaultBranch: string) {
-  return {
-    id: repo.id,
-    owner: repo.ownerHandle,
-    name: repo.name,
-    full_name: `${repo.ownerHandle}/${repo.name}`,
-    visibility: repo.visibility,
-    default_branch: defaultBranch,
-    created_at: repo.createdAt,
-  };
-}
-
 // D1 reports a unique-index violation in the error message.
 const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
 
+/** The agents of an act chain, in its order, with their handles. */
+async function actChainOf(
+  env: Env,
+  act: readonly string[],
+  metrics: Metrics,
+): Promise<{ id: string; handle: string | null }[]> {
+  if (act.length === 0) return [];
+  metrics.count("d1.query", { db: "directory", op: "act_handles" });
+  const { results } = await env.DIRECTORY.prepare(
+    "SELECT id, handle FROM principals WHERE id IN (SELECT value FROM json_each(?))",
+  )
+    .bind(JSON.stringify(act))
+    .all<{ id: string; handle: string | null }>();
+  return act.map((id) => ({ id, handle: results.find((r) => r.id === id)?.handle ?? null }));
+}
+
 export const handlers: Handlers = {
-  "meta.whoami": async ({ auth }) => ({
+  "meta.whoami": async ({ env, auth, metrics }) => ({
     id: auth.principalId,
-    type: auth.principalType,
+    // A delegated token's principal is the user acted for; its type is the agent's.
+    type: auth.act.length > 0 ? (principalTypeOf(auth.principalId) ?? "user") : auth.principalType,
     handle: auth.principalHandle,
     is_instance_admin: auth.isInstanceAdmin,
-    token: { id: auth.id, type: auth.type, scopes: auth.scopes, expires_at: auth.expiresAt },
+    act: await actChainOf(env, auth.act, metrics),
+    token: {
+      id: auth.id,
+      type: auth.type,
+      scopes: auth.scopes,
+      expires_at: auth.expiresAt,
+      grant_id: auth.grantId,
+    },
   }),
+
+  "users.tokens.list": listUserTokensOperation,
+  "users.tokens.create": createUserTokenOperation,
+  "users.git_tokens.create": createGitTokenOperation,
+  "users.tokens.revoke": revokeUserTokenOperation,
+  "orgs.update": updateOrgOperation,
+  "agents.create": createAgentOperation,
+  "agents.list": listAgentsOperation,
+  "agents.get": getAgentOperation,
+  "agents.disable": disableAgentOperation,
+  "agents.tokens.create": createAgentTokenOperation,
+  "agents.tokens.list": listAgentTokensOperation,
+  "agents.tokens.revoke": revokeAgentTokenOperation,
+  "grants.create": createGrantOperation,
+  "grants.list": listGrantsOperation,
+  "grants.revoke": revokeGrantOperation,
+
+  "meta.signing_keys.list": async ({ env }) => ({
+    keys: (await platformKeys(env)).map((k) => ({
+      key_id: k.fingerprint,
+      key: k.key,
+      current: k.current,
+    })),
+  }),
+
+  "users.ssh_signing_keys.list": listSshSigningKeysOperation,
+  "users.ssh_signing_keys.create": createSshSigningKeyOperation,
+  "users.ssh_signing_keys.get": getSshSigningKeyOperation,
+  "users.ssh_signing_keys.delete": deleteSshSigningKeyOperation,
 
   "admin.users.create": async ({ env, auth, requestId, metrics }, { handle }) => {
     const db = env.DIRECTORY;
@@ -104,77 +220,105 @@ export const handlers: Handlers = {
     };
   },
 
-  "repos.create": async ({ env, auth, requestId, metrics }, { name }) => {
-    const db = env.DIRECTORY.withSession("first-primary");
-    const taken = () =>
-      new OperationError(409, "name_taken", `You already have a repository named ${name}.`);
-    metrics.count("d1.query", { db: "directory", op: "repo_name_check" });
-    const existing = await db
-      .prepare(
-        "SELECT 1 AS one FROM repos WHERE owner_id = ? AND name = ? COLLATE NOCASE AND state <> 'deleted'",
-      )
-      .bind(auth.principalId, name)
-      .first();
-    if (existing) throw taken();
+  "repos.create": createOwnRepoOperation,
 
-    // Storage first: if the directory insert then fails, the new object is
-    // unreachable and empty, never a listed repository without storage.
-    const id = newId("rep");
-    const networkId = newId("net");
-    const init = await env.REPO.getByName(id).initGitStorage(
-      networkId,
-      `refs/heads/${INITIAL_BRANCH}`,
-    );
-    if (!init.ok) throw new Error(`initializing repository storage failed: ${init.error}`);
-
-    const now = clock();
-    metrics.count("d1.query", { db: "directory", op: "repo_create" }, 2);
-    try {
-      await env.DIRECTORY.batch([
-        env.DIRECTORY.prepare(
-          `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'private', ?, ?)`,
-        ).bind(id, auth.principalId, name, networkId, DEFAULT_ORG_SHARD, now, now),
-        auditStatement(
-          env.DIRECTORY,
-          now,
-          { actorId: auth.principalId, requestId },
-          "repo.create",
-          id,
-          { name },
-        ),
-      ]);
-    } catch (error) {
-      // Lost a race with another create of the same name.
-      if (error instanceof Error && UNIQUE_VIOLATION.test(error.message)) throw taken();
-      throw error;
-    }
-    return repoOutput(
-      {
-        id,
-        ownerId: auth.principalId,
-        ownerHandle: auth.principalHandle ?? "",
-        name,
-        networkId,
-        visibility: "private",
-        createdAt: now,
-      },
-      INITIAL_BRANCH,
-    );
-  },
+  // A user's own repositories: it administers them all.
+  "repos.list": async ({ env, auth, metrics }, { per_page, cursor }) =>
+    listAccountRepos(
+      env,
+      auth,
+      { id: auth.principalId, role: "admin" },
+      { perPage: per_page, cursor },
+      metrics,
+      // An agent of another owner acting for the user sees only what its owner's role allows.
+      await ownListable(env, auth, metrics),
+    ),
 
   "repos.get": async ({ env, auth, metrics }, { owner, repo }) => {
     const entry = await resolveRepo(env, owner, repo, { metrics });
     // Missing and not visible look the same, so private names do not leak.
-    if (!entry || !canAccess(auth, entry, "read"))
+    if (!entry || !(await authorize(env, auth, entry, "metadata:read", metrics)))
       throw new OperationError(404, "repo_not_found", `No repository ${owner}/${repo} was found.`);
     // HEAD is the repository object's (an import or a fork sets it from its source).
-    metrics.count("do.request", { class: "RepoDO", method: "headTarget" });
-    return repoOutput(entry, defaultBranchOf(await env.REPO.getByName(entry.id).headTarget()));
+    metrics.count("do.request", { class: "RepoDO", method: "details" });
+    const details = await env.REPO.getByName(entry.id).details();
+    const [parents, stars, source] = await Promise.all([
+      visibleParents(env, auth, [entry], metrics),
+      starCounts(env, [entry.id], metrics),
+      networkSource(env, auth, entry, metrics),
+    ]);
+    return {
+      ...repoOutput(entry, {
+        defaultBranch: defaultBranchOf(details.headTarget),
+        description: details.description,
+        parentVisible: parents.has(entry.parentId ?? ""),
+        stars: stars.get(entry.id) ?? 0,
+      }),
+      source_id: source,
+    };
   },
+
+  "repos.update": updateRepoOperation,
+  "repos.delete": deleteRepoOperation,
+  "repos.delete_many": deleteReposOperation,
+
+  "admin.orgs.create": createOrgOperation,
+  "orgs.memberships.set": setMembershipOperation,
+  "orgs.memberships.remove": removeMembershipOperation,
+  "orgs.members.list": listMembersOperation,
+  "orgs.repos.create": createOrgRepoOperation,
+  "orgs.repos.list": listOrgReposOperation,
+  "repos.collaborators.set": setCollaboratorOperation,
+  "repos.collaborators.remove": removeCollaboratorOperation,
+  "repos.collaborators.list": listCollaboratorsOperation,
+  "orgs.teams.create": createTeamOperation,
+  "orgs.teams.list": listTeamsOperation,
+  "orgs.teams.memberships.set": setTeamMembershipOperation,
+  "orgs.teams.memberships.remove": removeTeamMembershipOperation,
+  "orgs.teams.repos.set": setTeamRepoOperation,
+  "orgs.teams.repos.remove": removeTeamRepoOperation,
 
   // Forks share the parent's packs in its fork network (network/).
   "repos.fork": forkRepoOperation,
+  "repos.forks.list": listForksOperation,
+  "repos.generate": generateRepoOperation,
+  "repos.transfer": transferRepoOperation,
+
+  // Rulesets live in the repository's object (repos/rulesets).
+  "repos.rulesets.list": listRulesetsOperation,
+  "repos.rulesets.rule_suites.list": listRuleSuitesOperation,
+  "repos.rulesets.get": getRulesetOperation,
+  "repos.rulesets.create": createRulesetOperation,
+  "repos.rulesets.update": updateRulesetOperation,
+  "repos.rulesets.delete": deleteRulesetOperation,
+
+  // Stars are the caller's own, of repositories it can read (repos/stars).
+  "stars.put": starRepoOperation,
+  "stars.delete": unstarRepoOperation,
+  "stars.list": listStarredOperation,
+
+  // Quotas live in each account's object (accounts/quotas).
+  "quotas.user.get": getUserQuotaOperation,
+  "quotas.org.get": getOrgQuotaOperation,
+  "admin.quotas.set": setQuotaOperation,
+
+  // Branches, tags, commits and comparisons (repos/browse).
+  "repos.branches.list": listBranchesOperation,
+  "repos.branches.get": getBranchOperation,
+  "repos.tags.list": listTagsOperation,
+  "repos.commits.list": listCommitsOperation,
+  "repos.commits.get": getCommitOperation,
+  "repos.compare": compareCommitsOperation,
+  "repos.contents.get": getContentsOperation,
+  "repos.contents.root": getRootContentsOperation,
+  "repos.readme.get": getReadmeOperation,
+  "repos.trees.get": getTreeOperation,
+  "repos.archives.get": getArchiveOperation,
+
+  // File writes (repos/file-writes).
+  "repos.contents.put": putContentsOperation,
+  "repos.contents.delete": deleteContentsOperation,
+  "repos.file_commits.create": createFileCommitOperation,
 
   // Chunked pack uploads and server-side import (git/chunked, git/import).
   "uploads.create": createUploadSession,

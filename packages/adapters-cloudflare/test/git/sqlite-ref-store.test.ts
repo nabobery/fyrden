@@ -214,6 +214,40 @@ describe("SqliteRefStore commit hooks", () => {
   });
 });
 
+describe("SqliteRefStore inCommit", () => {
+  it("runs inside every commit after the request's own hook, and rolls back when it throws", async () => {
+    const { stub } = await newProbe();
+    const result = await inProbe(stub, ({ git }) => {
+      const order: string[] = [];
+      const commit = (n: number, old: Oid | null) =>
+        git.refStore.commitSync({
+          addPacks: [],
+          removePacks: [],
+          refUpdates: [{ name: "refs/heads/main", oldOid: old, newOid: oid(n) }],
+          expectedVersion: n - 1,
+          onCommitted: () => order.push("request"),
+        });
+      git.refStore.inCommit = ({ version }) => {
+        order.push(`owner ${version}`);
+        if (version === 2) throw new Error("outbox full");
+      };
+      const first = commit(1, null);
+      let threw = false;
+      try {
+        commit(2, oid(1));
+      } catch {
+        threw = true;
+      }
+      git.refStore.inCommit = undefined;
+      return { first, threw, order, version: git.refStore.readRefsSync().version };
+    });
+    expect(result.first).toEqual({ ok: true, version: 1 });
+    expect(result.threw).toBe(true);
+    expect(result.order).toEqual(["request", "owner 1", "request", "owner 2"]);
+    expect(result.version).toBe(1);
+  });
+});
+
 describe("SqliteRefStore bookkeeping", () => {
   it("bumps nonff_version for deletions and unproven updates only", async () => {
     const { stub } = await newProbe();

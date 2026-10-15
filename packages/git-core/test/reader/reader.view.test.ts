@@ -360,3 +360,131 @@ describe("reader errors", () => {
     }
   });
 });
+
+describe("prefetch", () => {
+  /** A view pack whose `.idx` counts single and batched lookups. */
+  function counted(pack: ViewPack, batched = true) {
+    const counts = { lookup: 0, lookupMany: 0 };
+    const idx = pack.idx;
+    return {
+      counts,
+      pack: {
+        ...pack,
+        idx: {
+          lookup: (oid: Uint8Array, at?: number) => {
+            counts.lookup++;
+            return idx.lookup(oid, at);
+          },
+          ...(batched && {
+            lookupMany: (oids: readonly Uint8Array[]) => {
+              counts.lookupMany++;
+              return idx.lookupMany?.(oids) ?? [];
+            },
+          }),
+        },
+      } satisfies ViewPack,
+    };
+  }
+
+  it("finds many objects with one batched lookup per pack, then reads them without lookups", async () => {
+    const repo = createMemoryRepoStore();
+    const first = blobs(3, 4, 300);
+    const second = blobs(4, 4, 300);
+    const a = counted(
+      await loadPack(
+        repo.packStore,
+        buildPack(first.map((data) => ({ kind: "blob", data }))).bytes,
+      ),
+    );
+    const b = counted(
+      await loadPack(
+        repo.packStore,
+        buildPack(second.map((data) => ({ kind: "blob", data }))).bytes,
+      ),
+    );
+    const reader = await open({
+      view: { scope: "net", packs: [a.pack, b.pack] },
+      packStore: repo.packStore,
+    });
+    try {
+      const absent = toOid(gitOid("blob", new Uint8Array([1, 2, 3])));
+      const all = [...first, ...second].map((data) => toOid(gitOid("blob", data)));
+      await reader.prefetch([...all, absent]);
+      expect([a.counts.lookupMany, b.counts.lookupMany]).toEqual([1, 1]);
+      for (const [i, data] of [...first, ...second].entries())
+        expect(hex((await reader.readObject(all[i] as never))?.bytes as Uint8Array)).toBe(
+          hex(data),
+        );
+      expect(await reader.readObject(absent)).toBeUndefined();
+      expect(a.counts.lookup + b.counts.lookup).toBe(0);
+    } finally {
+      reader.release();
+    }
+  });
+
+  it("still finds a delta's base in the delta's own pack first", async () => {
+    // The newer pack holds Y as a chain of three deltas; the older one holds
+    // Y whole and X as a delta against it. With a depth limit of two, X reads
+    // only through the older pack's copy of Y, as it does without prefetch.
+    const repo = createMemoryRepoStore();
+    const [z0, z1, z2, y, x] = blobs(6, 5, 400) as [
+      Uint8Array,
+      Uint8Array,
+      Uint8Array,
+      Uint8Array,
+      Uint8Array,
+    ];
+    const newer = await loadPack(
+      repo.packStore,
+      buildPack([
+        { kind: "blob", data: z0 },
+        { kind: "ofs", base: 0, delta: makeDelta(z0, z1) },
+        { kind: "ofs", base: 1, delta: makeDelta(z1, z2) },
+        { kind: "ofs", base: 2, delta: makeDelta(z2, y) },
+      ]).bytes,
+    );
+    const yOid = gitOid("blob", y);
+    const older = await loadPack(
+      repo.packStore,
+      buildPack([
+        { kind: "blob", data: y },
+        { kind: "ref", baseOid: yOid, delta: makeDelta(y, x) },
+      ]).bytes,
+    );
+    const reader = await open({
+      view: { scope: "net", packs: [newer, older] },
+      packStore: repo.packStore,
+      limits: { maxDeltaDepth: 2 },
+    });
+    try {
+      const xOid = toOid(gitOid("blob", x));
+      await reader.prefetch([xOid, toOid(yOid)]);
+      expect(hex((await reader.readObject(xOid))?.bytes as Uint8Array)).toBe(hex(x));
+    } finally {
+      reader.release();
+    }
+  });
+
+  it("leaves objects a pack without batched lookups may hold to the ordinary lookup", async () => {
+    const repo = createMemoryRepoStore();
+    const data = blobs(5, 2, 300);
+    const plain = counted(
+      await loadPack(repo.packStore, buildPack(data.map((d) => ({ kind: "blob", data: d }))).bytes),
+      false,
+    );
+    const reader = await open({
+      view: { scope: "net", packs: [plain.pack] },
+      packStore: repo.packStore,
+    });
+    try {
+      const oids = data.map((d) => toOid(gitOid("blob", d)));
+      await reader.prefetch(oids);
+      expect(hex((await reader.readObject(oids[0] as never))?.bytes as Uint8Array)).toBe(
+        hex(data[0] as Uint8Array),
+      );
+      expect(plain.counts.lookup).toBeGreaterThan(0);
+    } finally {
+      reader.release();
+    }
+  });
+});

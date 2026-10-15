@@ -1,18 +1,150 @@
+import {
+  createTeam,
+  listCollaborators,
+  listTeams,
+  removeCollaborator,
+  removeTeamMembership,
+  removeTeamRepo,
+  setCollaborator,
+  setTeamMembership,
+  setTeamRepo,
+} from "../ops/access.js";
 import { createToken, createUser } from "../ops/admin.js";
+import {
+  createAgent,
+  createAgentToken,
+  disableAgent,
+  getAgent,
+  listAgents,
+  listAgentTokens,
+  revokeAgentToken,
+} from "../ops/agents.js";
+import { getArchive } from "../ops/archives.js";
+import {
+  compareCommits,
+  getBranch,
+  getCommit,
+  listBranches,
+  listCommits,
+  listTags,
+} from "../ops/browse.js";
+import { getContents, getReadme, getRootContents, getTree } from "../ops/contents.js";
+import { createFileCommit, deleteContents, putContents } from "../ops/file-writes.js";
+import { createGrant, listGrants, revokeGrant } from "../ops/grants.js";
 import { createImport, getImport } from "../ops/imports.js";
-import { whoami } from "../ops/meta.js";
-import { createRepo, forkRepo, getRepo } from "../ops/repos.js";
+import { listSigningKeys, whoami } from "../ops/meta.js";
+import { createOrg, listMembers, removeMembership, setMembership, updateOrg } from "../ops/orgs.js";
+import { getOrgQuota, getUserQuota, setQuota } from "../ops/quotas.js";
+import {
+  createOrgRepo,
+  createRepo,
+  deleteRepo,
+  deleteRepos,
+  forkRepo,
+  generateRepo,
+  getRepo,
+  listForks,
+  listOrgRepos,
+  listRepos,
+  transferRepo,
+  updateRepo,
+} from "../ops/repos.js";
+import {
+  createRuleset,
+  deleteRuleset,
+  getRuleset,
+  listRuleSuites,
+  listRulesets,
+  updateRuleset,
+} from "../ops/rulesets.js";
+import {
+  createSshSigningKey,
+  deleteSshSigningKey,
+  getSshSigningKey,
+  listSshSigningKeys,
+} from "../ops/signing-keys.js";
+import { listStarred, starRepo, unstarRepo } from "../ops/stars.js";
+import { createGitToken, createUserToken, listUserTokens, revokeUserToken } from "../ops/tokens.js";
 import { abortUpload, completeUpload, createUpload, getUpload } from "../ops/uploads.js";
 import { defineRegistry } from "./op.js";
 
 /** Every operation Fyrden exposes. Order is the order in OpenAPI and MCP listings. */
 export const registry = defineRegistry([
   whoami,
+  listSigningKeys,
+  listSshSigningKeys,
+  createSshSigningKey,
+  getSshSigningKey,
+  deleteSshSigningKey,
+  listUserTokens,
+  createUserToken,
+  revokeUserToken,
+  createGitToken,
   createUser,
   createToken,
+  createAgent,
+  listAgents,
+  getAgent,
+  disableAgent,
+  createAgentToken,
+  listAgentTokens,
+  revokeAgentToken,
+  createGrant,
+  listGrants,
+  revokeGrant,
+  createOrg,
+  updateOrg,
   createRepo,
+  listRepos,
   getRepo,
+  updateRepo,
+  deleteRepo,
+  deleteRepos,
+  transferRepo,
   forkRepo,
+  listForks,
+  generateRepo,
+  listRulesets,
+  // Before `getRuleset`, whose `{ruleset_id}` would take `rule-suites`.
+  listRuleSuites,
+  getRuleset,
+  createRuleset,
+  updateRuleset,
+  deleteRuleset,
+  starRepo,
+  unstarRepo,
+  listStarred,
+  getUserQuota,
+  getOrgQuota,
+  setQuota,
+  listBranches,
+  getBranch,
+  listTags,
+  listCommits,
+  getCommit,
+  compareCommits,
+  getRootContents,
+  getContents,
+  getReadme,
+  getTree,
+  getArchive,
+  putContents,
+  deleteContents,
+  createFileCommit,
+  setMembership,
+  removeMembership,
+  listMembers,
+  createOrgRepo,
+  listOrgRepos,
+  setCollaborator,
+  removeCollaborator,
+  listCollaborators,
+  createTeam,
+  listTeams,
+  setTeamMembership,
+  removeTeamMembership,
+  setTeamRepo,
+  removeTeamRepo,
   createUpload,
   getUpload,
   completeUpload,

@@ -9,6 +9,7 @@ function localWorkers(): { maxWorkers?: number } {
 
 export default defineConfig(async () => {
   const directoryMigrations = await readD1Migrations("./migrations/directory");
+  const orgMigrations = await readD1Migrations("./migrations/org");
   return {
     plugins: [
       cloudflareTest({
@@ -16,7 +17,10 @@ export default defineConfig(async () => {
         miniflare: {
           bindings: {
             DIRECTORY_MIGRATIONS: directoryMigrations,
+            ORG_MIGRATIONS: orgMigrations,
             BOOTSTRAP_SECRET: "test-bootstrap-secret",
+            // A fixed platform signing key (an Ed25519 seed), so server-made commits are signed.
+            SIGNING_KEY: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
           },
         },
       }),
@@ -34,6 +38,7 @@ export default defineConfig(async () => {
         "./test/setup/push-fixtures.ts",
         "./test/setup/chunked-import-fixtures.ts",
         "./test/setup/gc-fixtures.ts",
+        "./test/setup/browse-fixtures.ts",
       ],
       // Most tests here drive a sequence of Durable Object round trips (often
       // with git fixtures and repacks); about twenty files have tests that take
