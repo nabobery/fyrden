@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import type { ArchiveFormat } from "../do/repo/archive.js";
+import { notModified } from "../http/cache.js";
 import { problem } from "../http/problem.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
 import { API_PREFIX } from "./mount.js";
@@ -40,6 +41,11 @@ export function mountArchives(app: Hono<{ Bindings: Env; Variables: AuthVariable
           return c.json({ state: "building", commit: status.commit, bytes: status.bytes }, 202, {
             "Retry-After": String(RETRY_AFTER_SECONDS),
           });
+        const etag = `"${status.commit}.${ext}"`;
+        const caching = { "Cache-Control": "private, no-cache" };
+        // The client has it already: no segment is read.
+        const unchanged = notModified(c.req.raw, etag, caching);
+        if (unchanged) return unchanged;
         let next = 0;
         const bucket = c.env.GIT;
         const body = new ReadableStream<Uint8Array>({
@@ -65,8 +71,8 @@ export function mountArchives(app: Hono<{ Bindings: Env; Variables: AuthVariable
             "Content-Length": String(status.bytes),
             "Content-Disposition": `attachment; filename="${filename.replace(/["\\\r\n]/g, "_")}"`,
             "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "private, no-cache",
-            ETag: `"${status.commit}.${ext}"`,
+            ...caching,
+            ETag: etag,
           },
         });
       });

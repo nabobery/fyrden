@@ -1,5 +1,6 @@
 import type { Context, Hono } from "hono";
 import { repoFor } from "../git/chunked/operations.js";
+import { notModified } from "../http/cache.js";
 import { problem } from "../http/problem.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
 import { hasPermission, type OpContext, OperationError, rateLimitKey } from "../ops/execute.js";
@@ -61,15 +62,20 @@ export function mountRaw(app: Hono<{ Bindings: Env; Variables: AuthVariables }>)
     ctx.metrics.count("do.request", { class: "RepoDO", method: "browseRaw" });
     const file = await c.env.REPO.getByName(repo.id).browseRaw(ref, c.req.param("path"));
     if (!file.ok) return problem(c, file.status, file.code, file.error);
-    return new Response(file.value.bytes, {
-      headers: {
-        "Content-Type": "application/octet-stream",
-        "Content-Length": String(file.value.bytes.length),
-        "X-Content-Type-Options": "nosniff",
-        "Content-Security-Policy": "default-src 'none'; sandbox",
-        "Cache-Control": "private, no-cache",
-        ETag: `"${file.value.sha}"`,
-      },
-    });
+    const etag = `"${file.value.sha}"`;
+    const caching = { "Cache-Control": "private, no-cache" };
+    return (
+      notModified(c.req.raw, etag, caching) ??
+      new Response(file.value.bytes, {
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Content-Length": String(file.value.bytes.length),
+          "X-Content-Type-Options": "nosniff",
+          "Content-Security-Policy": "default-src 'none'; sandbox",
+          ...caching,
+          ETag: etag,
+        },
+      })
+    );
   });
 }

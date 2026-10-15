@@ -46,6 +46,14 @@ export function tarCommitHeader(commitHex: string, mtime: number): Uint8Array {
 
 /** One tar entry: a pax header when a name or target does not fit, the header, the data. */
 export function tarEntry(entry: ArchiveEntry, mtime: number): Uint8Array {
+  return concat(tarEntryParts(entry, mtime));
+}
+
+/**
+ * `tarEntry` unjoined: the headers, the data itself (not copied) and its
+ * padding, so a large file can be compressed straight from its bytes.
+ */
+export function tarEntryParts(entry: ArchiveEntry, mtime: number): Uint8Array[] {
   const isDir = entry.kind === "dir" || entry.kind === "submodule";
   const name = isDir ? concat([entry.path, encoder.encode("/")]) : entry.path;
   const parts: Uint8Array[] = [];
@@ -69,8 +77,8 @@ export function tarEntry(entry: ArchiveEntry, mtime: number): Uint8Array {
       link: link.length <= 100 ? link : link.subarray(0, 100),
     }),
   );
-  if (size > 0) parts.push(pad(entry.data));
-  return concat(parts);
+  if (size > 0) parts.push(entry.data, new Uint8Array((BLOCK - (size % BLOCK)) % BLOCK));
+  return parts;
 }
 
 /** Two zero blocks: the end of a tar. */
@@ -153,6 +161,11 @@ export function deflateRaw(zlib: Zlib, bytes: Uint8Array): Uint8Array {
 
 /** One gzip member (RFC 1952) holding `bytes`. */
 export function gzipMember(zlib: Zlib, bytes: Uint8Array, mtime: number): Uint8Array {
+  return concat(gzipMemberParts(zlib, bytes, mtime));
+}
+
+/** `gzipMember` as its header, compressed data and trailer, not joined. */
+export function gzipMemberParts(zlib: Zlib, bytes: Uint8Array, mtime: number): Uint8Array[] {
   const header = new Uint8Array(10);
   header.set([0x1f, 0x8b, 8, 0]);
   new DataView(header.buffer).setUint32(4, mtime >>> 0, true);
@@ -161,7 +174,7 @@ export function gzipMember(zlib: Zlib, bytes: Uint8Array, mtime: number): Uint8A
   const view = new DataView(trailer.buffer);
   view.setUint32(0, crc32(bytes) >>> 0, true);
   view.setUint32(4, bytes.length >>> 0, true);
-  return concat([header, deflateRaw(zlib, bytes), trailer]);
+  return [header, deflateRaw(zlib, bytes), trailer];
 }
 
 /** What the zip's central directory needs about one entry. */
@@ -214,6 +227,17 @@ export function zipEntry(
   mtime: number,
   offset: number,
 ): { bytes: Uint8Array; record: ZipRecord } {
+  const { parts, record } = zipEntryParts(zlib, entry, mtime, offset);
+  return { bytes: concat(parts), record };
+}
+
+/** `zipEntry` unjoined: its local header, then its (compressed) data. */
+export function zipEntryParts(
+  zlib: Zlib,
+  entry: ArchiveEntry,
+  mtime: number,
+  offset: number,
+): { parts: Uint8Array[]; record: ZipRecord } {
   const isDir = entry.kind === "dir" || entry.kind === "submodule";
   const name = isDir ? concat([entry.path, encoder.encode("/")]) : entry.path;
   if (name.length > ZIP_LIMITS.maxNameBytes)
@@ -242,7 +266,7 @@ export function zipEntry(
   if (offset + header.length + compressed.length > ZIP_LIMITS.maxBytes)
     throw new RangeError("a zip without ZIP64 holds 4 GiB at most");
   return {
-    bytes: concat([header, compressed]),
+    parts: [header, compressed],
     record: {
       name,
       flags,

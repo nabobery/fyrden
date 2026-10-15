@@ -60,6 +60,8 @@ const RulesetBody = {
   actor_types: z
     .array(z.enum(PRINCIPAL_TYPES))
     .min(1)
+    .max(PRINCIPAL_TYPES.length)
+    .refine((types) => new Set(types).size === types.length, "Each type at most once.")
     .optional()
     .describe(
       'Fyrden: the principal types it applies to (all when left out); `["agent"]` makes agents use pull requests.',

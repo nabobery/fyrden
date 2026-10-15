@@ -241,5 +241,19 @@ describe("git tokens", () => {
     const text = await res.text();
     expect(res.status, text).toBe(200);
     expect(text).toContain("fyrden_git_");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("are answered for no cache to keep, as every new token is", async () => {
+    const owner = await user();
+    const minted = await api("POST", "/user/git-tokens", owner.token, {});
+    expect(minted.status).toBe(201);
+    expect(minted.headers.get("Cache-Control")).toBe("no-store");
+    expect(minted.headers.get("Pragma")).toBe("no-cache");
+    const pat = await api("POST", "/user/tokens", owner.token, { name: "t" });
+    expect(pat.status).toBe(201);
+    expect(pat.headers.get("Cache-Control")).toBe("no-store");
+    // An answer holding no secret keeps the default.
+    expect((await api("GET", "/user", owner.token)).headers.get("Cache-Control")).toBeNull();
   });
 });

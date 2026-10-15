@@ -117,6 +117,26 @@ async function delegatedGitToken(): Promise<string> {
 }
 
 describe("rulesets", () => {
+  it("name each actor type once, at most every type", async () => {
+    for (const actor_types of [["agent", "agent"], Array(400).fill("user")])
+      expect(
+        await ruleset({ rules: [{ type: "deletion" }], actor_types }),
+        JSON.stringify(actor_types).slice(0, 40),
+      ).toMatchObject({ status: 422, body: { code: "invalid_input" } });
+    const made = await ruleset({ rules: [{ type: "deletion" }], actor_types: ["agent", "user"] });
+    expect(made.status).toBe(201);
+    const update = (actor_types: string[]) =>
+      api("PUT", `${path}/rulesets/${made.body.id}`, owner.token, {
+        name: uniqueId("rs"),
+        enforcement: "active",
+        conditions: { ref_name: { include: ["refs/heads/stable"] } },
+        rules: [{ type: "deletion" }],
+        actor_types,
+      });
+    expect((await update(["user", "user"])).status).toBe(422);
+    expect((await update(["user"])).status).toBe(200);
+  });
+
   it("are created, read, renamed and deleted by administrators; readers see them", async () => {
     const made = await ruleset({ name: "protect", rules: [{ type: "deletion" }] });
     expect(made.status).toBe(201);

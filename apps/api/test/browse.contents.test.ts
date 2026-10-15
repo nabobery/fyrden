@@ -301,6 +301,30 @@ describe("trees", () => {
 });
 
 describe("raw", () => {
+  it("answers 304 to a matching If-None-Match, and the file otherwise", async () => {
+    const first = await get(`${base}/raw/README.md`);
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("ETag") as string;
+    expect(etag).toMatch(/^"[0-9a-f]{40}"$/);
+    const conditional = (condition: string) =>
+      exports.default.fetch(`${ORIGIN}/api${base}/raw/README.md`, {
+        headers: { Authorization: `Bearer ${pat}`, "If-None-Match": condition },
+      });
+    for (const condition of [etag, `W/${etag}`, `"x", ${etag}`, "*"]) {
+      const res = await conditional(condition);
+      expect(res.status, condition).toBe(304);
+      expect(res.headers.get("ETag")).toBe(etag);
+      expect(await res.text()).toBe("");
+    }
+    expect((await conditional('"0000"')).status).toBe(200);
+    // Not to someone who cannot read it.
+    const stranger = await scopedToken((await pushTarget()).owner.principalId, [], "pat");
+    const hidden = await exports.default.fetch(`${ORIGIN}/api${base}/raw/README.md`, {
+      headers: { Authorization: `Bearer ${stranger}`, "If-None-Match": "*" },
+    });
+    expect(hidden.status).toBe(404);
+  });
+
   it("needs read access, a token, and a file", async () => {
     const stranger = await scopedToken((await pushTarget()).owner.principalId, [], "pat");
     expect((await get(`${base}/raw/README.md`, stranger)).status).toBe(404);

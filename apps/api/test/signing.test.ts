@@ -13,7 +13,7 @@ import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, it } from "vitest";
 import { MAX_SIGNING_KEYS } from "../src/accounts/signing-keys.js";
 import type { CommitView } from "../src/do/repo/browse.js";
-import { checkSignature } from "../src/do/repo/signature.js";
+import { checkSignature, factOf } from "../src/do/repo/signature.js";
 import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { platformKeys, platformSigner } from "../src/signing/platform-key.js";
 import { resolveVerification } from "../src/signing/verification.js";
@@ -155,6 +155,45 @@ describe("commit signing", () => {
       verified_at: null,
     });
     expect((await platformKeys(rotated)).map((k) => k.current)).toEqual([true, false]);
+  });
+
+  it("gives the rulesets the same verdict from bytes alone, a large message's included", async () => {
+    const pgp = new TextEncoder().encode(
+      "tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor A <a@example.com> 1700000000 +0000\ncommitter A <a@example.com> 1700000000 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n abc\n -----END PGP SIGNATURE-----\n\nx\n",
+    );
+    const signed = await signedBody(seed(5), "b@example.com");
+    const changed = new TextEncoder().encode(
+      new TextDecoder().decode(signed).replace("signed\n", "changed\n"),
+    );
+    for (const body of [signed, changed, pgp])
+      expect(await factOf(body)).toEqual({
+        ...(({ reason, key }) => ({ reason, key }))(await checkSignature(body)),
+        committerEmail: expect.any(String),
+      });
+    expect(await factOf(signed)).toMatchObject({
+      reason: "signed",
+      committerEmail: "b@example.com",
+    });
+    // A signed commit whose 8 MiB message is not UTF-8 at all.
+    const head = `tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904
+author A <c@example.com> 1700000000 +0000
+committer A <c@example.com> 1700000000 +0000
+
+`;
+    const unsigned = new Uint8Array(head.length + 8 * 1024 * 1024).fill(0xff);
+    unsigned.set(new TextEncoder().encode(head));
+    const signer = sshCommitSigner(await ed25519FromSeed(seed(6)));
+    const armored = new TextDecoder().decode(await signer.sign(unsigned));
+    const header = new TextEncoder().encode(`gpgsig ${armored.split("\n").join("\n ")}\n`);
+    const at = head.indexOf("\n\n") + 1;
+    const large = new Uint8Array(unsigned.length + header.length);
+    large.set(unsigned.subarray(0, at));
+    large.set(header, at);
+    large.set(unsigned.subarray(at), at + header.length);
+    expect(await factOf(large)).toMatchObject({
+      reason: "signed",
+      committerEmail: "c@example.com",
+    });
   });
 
   it("reports a changed commit as invalid", async () => {

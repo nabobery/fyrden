@@ -139,6 +139,40 @@ describe("FyrdenClient", () => {
     expect(sent).toEqual([]);
   });
 
+  it("follows no redirect: a write's body and proof never go elsewhere", async () => {
+    const followed: string[] = [];
+    // As fetch behaves: it follows a redirect unless told not to.
+    const fetchFn = (async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.redirect !== "manual") {
+        followed.push(String(init?.body));
+        return new Response("{}", { status: 200 });
+      }
+      return new Response(null, { status: 307, headers: { Location: "https://evil.test/x" } });
+    }) as unknown as typeof fetch;
+    const client = new FyrdenClient({
+      baseUrl: "https://f.test/api",
+      token: "fyrden_pat_x",
+      fetch: fetchFn,
+    });
+    const error = await client
+      .call("repos.update", { owner: "me", repo: "r", description: "secret" })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(FyrdenError);
+    expect(error).toMatchObject({ status: 307, code: "redirected" });
+    expect(followed).toEqual([]);
+    // A browser's manual redirect is opaque, with status 0.
+    const opaque = new FyrdenClient({
+      baseUrl: "https://f.test/api",
+      fetch: (async () =>
+        Object.defineProperty(new Response(null, { status: 200 }), "type", {
+          value: "opaqueredirect",
+        })) as unknown as typeof fetch,
+    });
+    expect(await opaque.call("meta.whoami", {}).catch((e: unknown) => e)).toMatchObject({
+      code: "redirected",
+    });
+  });
+
   it("keeps the status of an error whatever its body", async () => {
     for (const body of ["<html>502</html>", "{not json", "null", ""]) {
       const fetchFn = (async () =>

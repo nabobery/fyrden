@@ -90,6 +90,8 @@ export function pushCommitter(
   cap?: PushCapGate,
   /** A last refusal checked in the transaction (the rulesets are still the ones checked). */
   fence?: () => string | undefined,
+  /** Runs in the transaction that commits the upload, after its refs. */
+  inCommit?: () => void,
 ): (request: PushCommitRequest) => Promise<PushCommitResult> {
   const authorize = ({ now }: { now: number }, removing: readonly PackId[]): string | undefined => {
     if (!git.locks.isHeld(lock)) return "the push lost its turn to commit; try the push again";
@@ -147,6 +149,7 @@ export function pushCommitter(
         authorize: (context) => authorize(context, removePacks),
         onCommitted: (context) => {
           committed.push({ version: context.version, updates: request.updates });
+          if (request.withUpload) inCommit?.();
         },
       });
       if (result.ok) return { ok: true };

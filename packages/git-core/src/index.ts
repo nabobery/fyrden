@@ -416,13 +416,16 @@ export {
   type ArchiveEntryKind,
   deflateRaw,
   gzipMember,
+  gzipMemberParts,
   tarCommitHeader,
   tarEnd,
   tarEntry,
+  tarEntryParts,
   ZIP_LIMITS,
   type ZipRecord,
   zipEnd,
   zipEntry,
+  zipEntryParts,
 } from "./write/archive.js";
 export {
   type BuildCommitInput,

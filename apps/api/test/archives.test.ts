@@ -6,7 +6,12 @@
 import { exports } from "cloudflare:workers";
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
 import { beforeAll, describe, expect, inject, it } from "vitest";
-import { type ArchiveFormat, archiveJobId, RepoArchives } from "../src/do/repo/archive.js";
+import {
+  ARCHIVE_POLICY,
+  type ArchiveFormat,
+  archiveJobId,
+  RepoArchives,
+} from "../src/do/repo/archive.js";
 import { type ArchivedEntry, untarGz, unzip } from "./helpers/archive-read.js";
 import type { TreeLine } from "./helpers/browse-fixtures.js";
 import { ORIGIN } from "./helpers/git-http.js";
@@ -89,6 +94,19 @@ describe("archives", () => {
     checkContents(entries, prefix);
   });
 
+  it("answer 304 to a matching If-None-Match, without reading a segment", async () => {
+    const first = await get(`${base}/tarball`);
+    expect(first.status).toBe(200);
+    await first.arrayBuffer();
+    const etag = first.headers.get("ETag") as string;
+    const again = await exports.default.fetch(`${ORIGIN}/api${base}/tarball`, {
+      headers: { Authorization: `Bearer ${pat}`, "If-None-Match": etag },
+    });
+    expect(again.status).toBe(304);
+    expect(again.headers.get("ETag")).toBe(etag);
+    expect(await again.text()).toBe("");
+  });
+
   it("serve a .zip of a tag, and the same archive again from its segments", async () => {
     const first = await get(`${base}/zipball/v1`);
     expect(first.status).toBe(200);
@@ -160,6 +178,108 @@ describe("archives", () => {
       expect(shape(entries), format).toEqual(expectedEntries(prefix));
       checkContents(entries, prefix);
     }
+  });
+
+  it("start a new slice before a file that would take one past its bytes", async () => {
+    const sizes = [...new Set(Object.values(fx.files).map((f) => bytesOf(f.base64).length))];
+    for (const sliceBytes of sizes) {
+      const segments = await inRepo(target.repo.stub, async ({ git }) => {
+        const archives = new RepoArchives({
+          git,
+          memoryBlocks: createClockBlockCache(),
+          policy: { sliceBytes },
+        });
+        const status = await archives.request({
+          commit: fx.revs.main as string,
+          mtime: 0,
+          format: "tar.gz",
+          prefix: `bounded-${sliceBytes}`,
+          budgetMs: 60_000,
+        });
+        if (!status.ok || status.value.state !== "ready") throw new Error(JSON.stringify(status));
+        const parts: Uint8Array[] = [];
+        for (const key of status.value.keys) {
+          const object = await git.bucket.get(key);
+          parts.push(new Uint8Array(await (object as R2ObjectBody).arrayBuffer()));
+        }
+        return parts;
+      });
+      // A segment holds one file, or files within the slice's bytes together.
+      for (const segment of segments) {
+        const files = untarGz(segment).entries.filter((e) => e.type === "file");
+        const bytes = files.reduce((n, e) => n + (e.data?.length ?? 0), 0);
+        if (files.length > 1)
+          expect(bytes, `slice of ${sliceBytes}`).toBeLessThanOrEqual(sliceBytes);
+      }
+    }
+  });
+
+  it("refuse a symbolic link whose target is too long to archive, and say so", async () => {
+    const outcome = await inRepo(target.repo.stub, async ({ git }) => {
+      const archives = new RepoArchives({
+        git,
+        memoryBlocks: createClockBlockCache(),
+        policy: { maxLinkBytes: 4 },
+      });
+      return archives.request({
+        commit: fx.revs.main as string,
+        mtime: 0,
+        format: "tar.gz",
+        prefix: "long-link",
+        budgetMs: 60_000,
+      });
+    });
+    expect(outcome).toMatchObject({ ok: false, status: 422 });
+    expect(JSON.stringify(outcome)).toContain("symbolic link");
+  });
+
+  it("hold a large file's bytes reserved, and wait for them rather than overrun the pool or fail", async () => {
+    const large = Math.max(...Object.values(fx.files).map((f) => bytesOf(f.base64).length));
+    expect(large).toBeGreaterThanOrEqual(1024 * 1024);
+    const outcome = await inRepo(target.repo.stub, async ({ git }) => {
+      // One segment allowed: a slice that gave up for memory must not count as one.
+      const archives = new RepoArchives({
+        git,
+        memoryBlocks: createClockBlockCache(),
+        policy: { maxSegments: 1, sliceBytes: 1024 * 1024 * 1024, sliceEntries: 100_000 },
+      });
+      const input = {
+        commit: fx.revs.main as string,
+        mtime: 0,
+        format: "tar.gz" as const,
+        prefix: "reserved",
+        budgetMs: 2_000,
+      };
+      // All is taken but the slice's own memory, the reader's cache, and less than the
+      // large file's bytes.
+      const free = git.memory.stats().totalBytes - git.memory.stats().reservedBytes;
+      const readerCache = 4 * 1024 * 1024;
+      const taken = git.memory.tryReserve(
+        free - ARCHIVE_POLICY.sliceMemoryBytes - readerCache - large + 1,
+      );
+      if (!taken) throw new Error("the pool is in use");
+      let status: Awaited<ReturnType<typeof archives.request>>;
+      try {
+        status = await archives.request(input);
+      } finally {
+        taken.release();
+      }
+      const whileTaken = status.ok ? status.value.state : "failed";
+      for (let i = 0; i < 50 && status.ok && status.value.state === "building"; i++) {
+        const runId = git.context.storage.sql
+          .exec<{ run_id: string }>("SELECT run_id FROM archives WHERE prefix = ?", input.prefix)
+          .one().run_id;
+        await git.jobs.runJob(
+          archiveJobId(runId),
+          archives.handler(),
+          git.memory,
+          Date.now() + 2_000,
+        );
+        status = await archives.request(input);
+      }
+      return { whileTaken, after: status.ok ? status.value.state : "failed" };
+    });
+    expect(outcome).toEqual({ whileTaken: "building", after: "ready" });
   });
 
   it("bound every slice by its entries, not only by the bytes of files", async () => {

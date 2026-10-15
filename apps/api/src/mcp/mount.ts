@@ -11,6 +11,7 @@ import {
 } from "@modelcontextprotocol/server";
 import type { Hono } from "hono";
 import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
+import { NO_STORE } from "../http/cache.js";
 import { problem } from "../http/problem.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
 import { executeOperation, type OpContext } from "../ops/execute.js";
@@ -315,7 +316,7 @@ export function mountMcp(app: Hono<{ Bindings: Env; Variables: AuthVariables }>)
     const handler = createMcpHandler(() => buildServer(ctx), {
       maxRequestBodySize: MAX_JSON_BODY_BYTES,
     });
-    return handler.fetch(request, {
+    const answer = await handler.fetch(request, {
       // The token id, not the token: the SDK never needs the secret.
       authInfo: {
         token: auth.id,
@@ -324,5 +325,9 @@ export function mountMcp(app: Hono<{ Bindings: Env; Variables: AuthVariables }>)
         expiresAt: Math.floor(auth.expiresAt / 1000),
       },
     });
+    // Any answer may hold a secret (a git token) or private content: no cache keeps one.
+    const response = new Response(answer.body, answer);
+    for (const [name, value] of Object.entries(NO_STORE)) response.headers.set(name, value);
+    return response;
   });
 }

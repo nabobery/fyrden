@@ -2,6 +2,7 @@ import { type OperationDef, openApiDocument, registry } from "@fyrden/api-contra
 import type { Context, Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
+import { NO_STORE } from "../http/cache.js";
 import { problem, problemResponse } from "../http/problem.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
 import { executeOperation, type OpContext, type OpHandler, type OpResult } from "../ops/execute.js";
@@ -88,10 +89,11 @@ function respond(c: AppContext, op: OperationDef, result: OpResult): Response {
           : {};
     return problemResponse(c, result.problem, { ...retry, ...replayed });
   }
+  // A secret (a new token) is shown once: no cache keeps it.
   return c.json(
     result.output as Record<string, unknown>,
     (result.status ?? op.successStatus ?? 200) as ContentfulStatusCode,
-    replayed,
+    op.secretResponse ? { ...NO_STORE, ...replayed } : replayed,
   );
 }
 

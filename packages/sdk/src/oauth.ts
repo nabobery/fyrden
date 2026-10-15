@@ -7,7 +7,7 @@
  */
 
 import { base64url } from "./base64url.js";
-import { FyrdenError } from "./client.js";
+import { FyrdenError, refuseRedirect } from "./client.js";
 import type { DpopKey } from "./dpop.js";
 
 export interface TokenResponse {
@@ -171,18 +171,7 @@ async function tokenRequest<T extends TokenResponse = TokenResponse>(
     redirect: "manual",
     ...(options.signal && { signal: options.signal }),
   });
-  // A browser shows a manual redirect as an opaque one (status 0).
-  if (
-    (response.type as string) === "opaqueredirect" ||
-    (response.status >= 300 && response.status < 400)
-  )
-    throw new FyrdenError(
-      response.status,
-      "redirected",
-      "The token endpoint redirected; its request was not sent on.",
-      undefined,
-      undefined,
-    );
+  refuseRedirect(response);
   const body = parseObject(await response.text());
   if (!response.ok)
     // An OAuth error (RFC 6749 §5.2): its code and description; anything else, its status.

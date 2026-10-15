@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { readBoundedBody } from "../http/body.js";
+import { NO_STORE } from "../http/cache.js";
 import type { AuthVariables } from "../middleware/auth.js";
 import { SESSION_COOKIE, type SessionUser, sessionUser, startSession } from "../oauth/session.js";
 import { clock, tokenStore } from "../services.js";
@@ -31,8 +32,6 @@ export const LOGIN_POLICY = {
   maxPasskeysPerUser: 20,
   maxBodyBytes: 16 * 1024,
 };
-
-const NO_STORE = { "Cache-Control": "no-store" };
 
 const refuse = (
   c: Ctx,

@@ -13,20 +13,22 @@ import {
   type BlockCache,
   FILE_MODES,
   GitObjectError,
-  gzipMember,
+  gzipMemberParts,
   isTreeMode,
+  type MemoryReservation,
   oidFromHex,
   oidToHex,
   tarCommitHeader,
   tarEnd,
-  tarEntry,
+  tarEntryParts,
   treeEntries,
   ZIP_LIMITS,
   type ZipRecord,
   zipEnd,
-  zipEntry,
+  zipEntryParts,
 } from "@fyrden/git-core";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
+import { putChunks } from "../../git/put-chunks.js";
 import { type Browsed, fail } from "./browse.js";
 
 /*
@@ -65,6 +67,8 @@ export interface ArchivePolicy {
   readonly sliceReads: number;
   /** Memory one slice reserves: its segment, the file and the trees it holds, compression. */
   readonly sliceMemoryBytes: number;
+  /** Longest symbolic link target archived (its pax record copies it). */
+  readonly maxLinkBytes: number;
   /** Tree bodies one slice keeps while it walks below them (beyond it, a parent is read again). */
   readonly heldTreeBytes: number;
   /** Segments one archive has at most: a download reads each from R2. */
@@ -84,6 +88,12 @@ export interface ArchivePolicy {
   readonly leaseMs: number;
 }
 
+/**
+ * A file at least this large goes into a tar.gz as a gzip member of its own,
+ * and its bytes are reserved while they are.
+ */
+const DIRECT_FILE_BYTES = 1024 * 1024;
+
 /** Limits of archives. Proposed. */
 export const ARCHIVE_POLICY: ArchivePolicy = {
   maxBytes: 1024 * 1024 * 1024,
@@ -91,7 +101,11 @@ export const ARCHIVE_POLICY: ArchivePolicy = {
   sliceBytes: 8 * 1024 * 1024,
   sliceEntries: 5_000,
   sliceReads: 400,
+  // A slice's encoded and compressed bytes (a largest file's compressed copy, or
+  // `sliceBytes` of small ones), the trees held and the reader's cache; a large file's
+  // own bytes are reserved beside it while it is compressed.
   sliceMemoryBytes: 40 * 1024 * 1024,
+  maxLinkBytes: 64 * 1024,
   heldTreeBytes: 8 * 1024 * 1024,
   maxSegments: 300,
   maxZipDirectoryBytes: 16 * 1024 * 1024,
@@ -263,7 +277,7 @@ export class RepoArchives {
           git.context.now(),
           cursor.runId,
         );
-        let next: Cursor | "done" | "wait";
+        let next: Cursor | "done" | "wait" | "short";
         try {
           next = await this.#slice(cursor, job);
         } catch (error) {
@@ -276,6 +290,7 @@ export class RepoArchives {
         if (next === "done") return { done: true };
         // Too few calls left in this invocation: the next one goes on.
         if (next === "wait") return { done: false, cursor: job.cursor, runAfterMs: 0 };
+        if (next === "short") return { done: false, cursor: job.cursor, runAfterMs: 1_000 };
         return { done: false, cursor: encoder.encode(JSON.stringify(next)) };
       },
     };
@@ -329,9 +344,10 @@ export class RepoArchives {
 
   /**
    * One slice: walks on from `cursor`, writes one segment, and says where
-   * to go on ("wait": too few calls left in this invocation).
+   * to go on ("wait": too few calls left in this invocation; "short": the
+   * memory for a large file is taken now, so the slice runs again later).
    */
-  async #slice(cursor: Cursor, job: Job): Promise<Cursor | "done" | "wait"> {
+  async #slice(cursor: Cursor, job: Job): Promise<Cursor | "done" | "wait" | "short"> {
     const { git } = this.deps;
     const policy = this.#policy;
     const spent = currentInvocation()?.tally.internal ?? 0;
@@ -348,7 +364,14 @@ export class RepoArchives {
     const zlib = createWorkersZlib();
     const stack = cursor.stack.map((f) => ({ ...f }));
     const names = stack.map((f) => fromBase64(f.name));
+    /** What this slice stores: a zip's entries as they are, a tar's as gzip members. */
     const parts: Uint8Array[] = [];
+    /** A tar's bytes not compressed yet. */
+    const raw: Uint8Array[] = [];
+    const compress = () => {
+      if (raw.length > 0)
+        parts.push(...gzipMemberParts(zlib, concatAll(raw.splice(0)), cursor.mtime));
+    };
     const records: ZipRecord[] = [];
     let offset = cursor.format === "zip" ? cursor.written : 0;
     let content = cursor.content;
@@ -359,12 +382,14 @@ export class RepoArchives {
     let done = 0;
     /** Directories finished: progress too, though they write nothing. */
     let left = 0;
+    /** The memory for a large file was taken: the slice runs again later, its work dropped. */
+    let short = false;
     const emit = (entry: ArchiveEntry) => {
-      let bytes: Uint8Array;
+      let pieces: Uint8Array[];
       if (cursor.format === "zip") {
         let record: ZipRecord;
         try {
-          ({ bytes, record } = zipEntry(zlib, entry, cursor.mtime, offset));
+          ({ parts: pieces, record } = zipEntryParts(zlib, entry, cursor.mtime, offset));
         } catch (error) {
           if (error instanceof RangeError)
             throw new ArchiveRefused(`${error.message}; use tar.gz.`);
@@ -374,10 +399,24 @@ export class RepoArchives {
         if (entries + 1 > ZIP_LIMITS.maxEntries || directory > policy.maxZipDirectoryBytes)
           throw new ArchiveRefused("The commit has too many files for a zip; use tar.gz.");
         records.push(record);
-        offset += bytes.length;
-      } else bytes = tarEntry(entry, cursor.mtime);
-      parts.push(bytes);
-      work += bytes.length;
+        offset += byteLength(pieces);
+        parts.push(...pieces);
+      } else {
+        pieces = tarEntryParts(entry, cursor.mtime);
+        const file = entry.kind === "file" || entry.kind === "executable";
+        if (file && entry.data.length >= DIRECT_FILE_BYTES) {
+          // A large file is compressed straight from its bytes, a gzip member of its own:
+          // never copied into a joined entry or segment.
+          const padding = pieces.pop() as Uint8Array;
+          pieces.pop();
+          raw.push(...pieces);
+          compress();
+          parts.push(...gzipMemberParts(zlib, entry.data, cursor.mtime));
+          raw.push(padding);
+          pieces.push(entry.data, padding);
+        } else raw.push(...pieces);
+      }
+      work += byteLength(pieces);
       entries++;
       done++;
     };
@@ -409,7 +448,7 @@ export class RepoArchives {
     };
     try {
       if (cursor.seq === 0) {
-        if (cursor.format === "tar.gz") parts.push(tarCommitHeader(cursor.commit, cursor.mtime));
+        if (cursor.format === "tar.gz") raw.push(tarCommitHeader(cursor.commit, cursor.mtime));
         emit({ path: fromBase64(cursor.prefix), kind: "dir", data: new Uint8Array(0) });
       }
       walk: while (stack.length > 0) {
@@ -464,11 +503,33 @@ export class RepoArchives {
               throw new ArchiveRefused(
                 `The commit holds more than ${policy.maxBytes} bytes; clone the repository instead.`,
               );
-            const object = await reader.readObject(e.oid);
-            if (object?.type !== "blob")
-              throw new ArchiveRefused("A file of the commit cannot be read.");
-            content += header.size;
-            emit({ path, kind, data: object.bytes });
+            if (kind === "symlink" && header.size > policy.maxLinkBytes)
+              throw new ArchiveRefused(
+                "A symbolic link's target is too long to archive here; clone the repository instead.",
+              );
+            // A file that would take this slice past its bytes starts the next one: a
+            // slice holds one large file, or files within `sliceBytes` together.
+            if (done > 0 && work + header.size > policy.sliceBytes) break walk;
+            // A large file's bytes, held while they are compressed, are reserved beside
+            // the slice's own memory (the reader reserves only its cache).
+            let fileMemory: MemoryReservation | undefined;
+            if (header.size >= DIRECT_FILE_BYTES) {
+              fileMemory = git.memory.tryReserve(header.size);
+              // Not free now: this slice is tried again later, from where it started.
+              if (!fileMemory) {
+                short = true;
+                break walk;
+              }
+            }
+            try {
+              const object = await reader.readObject(e.oid);
+              if (object?.type !== "blob")
+                throw new ArchiveRefused("A file of the commit cannot be read.");
+              content += header.size;
+              emit({ path, kind, data: object.bytes });
+            } finally {
+              fileMemory?.release();
+            }
           }
           frame.offset = e.end;
         }
@@ -488,6 +549,7 @@ export class RepoArchives {
     } finally {
       reader.release();
     }
+    if (short) return "short";
 
     const finished = stack.length === 0;
     if (!finished && cursor.seq + 1 >= policy.maxSegments)
@@ -504,19 +566,23 @@ export class RepoArchives {
       parts.push(
         zipEnd([...this.#records(cursor.runId, cursor.entries), ...records], offset, cursor.mtime),
       );
-    let segment = concatAll(parts);
     if (cursor.format === "tar.gz") {
-      if (finished) segment = concatAll([segment, tarEnd()]);
-      segment = gzipMember(zlib, segment, cursor.mtime);
+      if (finished) raw.push(tarEnd());
+      compress();
+      // A slice that only climbed out of directories still writes a (empty) member.
+      if (parts.length === 0) parts.push(...gzipMemberParts(zlib, new Uint8Array(0), cursor.mtime));
     }
+    // Stored unjoined: no second copy of the segment is made.
+    const segment = parts.splice(0);
+    const segmentBytes = byteLength(segment);
     // A key of this attempt's own: what another attempt wrote is never touched.
     const key = `${scratchPrefix(cursor.networkId, cursor.runId)}${cursor.seq}-${newUlid()}`;
     git.context.metrics.count("r2.class_a", { bucket: "fyrden-git", op: "put_archive" });
-    await git.bucket.put(key, segment);
-    const written = cursor.written + segment.length;
+    await putChunks(git.bucket, key, segment);
+    const written = cursor.written + segmentBytes;
     const recorded = this.#publish(job, cursor, {
       key,
-      segmentBytes: segment.length,
+      segmentBytes,
       written,
       finished,
       records,
@@ -735,6 +801,10 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
   out.set(a);
   out.set(b, a.length);
   return out;
+}
+
+function byteLength(parts: readonly Uint8Array[]): number {
+  return parts.reduce((n, p) => n + p.length, 0);
 }
 
 function concatAll(parts: readonly Uint8Array[]): Uint8Array {

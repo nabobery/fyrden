@@ -124,8 +124,11 @@ export class FyrdenClient {
       method: op.method,
       headers,
       ...(body !== undefined && { body }),
+      // A redirect would carry the token's proof, and a write's body, elsewhere: never followed.
+      redirect: "manual",
       ...(options.signal && { signal: options.signal }),
     });
+    refuseRedirect(response);
     const text = await response.text();
     if (!response.ok) {
       // A problem document, or anything else (a proxy's HTML page): an error with its status.
@@ -165,6 +168,25 @@ export class FyrdenClient {
       cursor = page.next_cursor as string | null | undefined;
     } while (cursor);
   }
+}
+
+/**
+ * Throws for a redirect a request with `redirect: "manual"` got back (a
+ * browser shows it as an opaque one, with status 0): its request is not
+ * sent on.
+ */
+export function refuseRedirect(response: Response): void {
+  if (
+    (response.type as string) === "opaqueredirect" ||
+    (response.status >= 300 && response.status < 400)
+  )
+    throw new FyrdenError(
+      response.status,
+      "redirected",
+      "The server redirected; the request was not sent on.",
+      undefined,
+      undefined,
+    );
 }
 
 /** `text` as a JSON object, or undefined when it is not one. */

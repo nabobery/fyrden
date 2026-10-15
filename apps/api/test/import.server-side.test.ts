@@ -10,12 +10,14 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import { checkOutboundUrl, type Resolver } from "@fyrden/adapters-cloudflare/net";
 import { type HttpTransport, oidToHex } from "@fyrden/git-core";
 import { afterEach, describe, expect, inject, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { ImportNetwork } from "../src/git/import/network.js";
 import { guardedTransport } from "../src/git/import/network.js";
+import { RepoPush } from "../src/git/push/repo-push.js";
 import { api } from "./helpers/api.js";
 import type { RecordedExchange } from "./helpers/chunked-fixtures.js";
 import { ORIGIN } from "./helpers/git-http.js";
@@ -226,6 +228,33 @@ describe("server-side import", () => {
     expect(record.error).toContain('cannot create this ref (ruleset "default")');
     expect(seen).toHaveLength(2);
     expect(await repoState(target)).toMatchObject({ refs: {}, scratch: 0 });
+  });
+
+  it("sets the default branch in its commit, so no push in between can delete that branch", async () => {
+    const target = await pushTarget();
+    await useNetwork(target, replay(cx.source.exchanges, []));
+    // Right after the import's commit: a push deleting the branch the import makes the
+    // default, refused (as git refuses deleting the current branch) only once HEAD names it.
+    const finalize = RepoPush.prototype.finalize;
+    const spy = vi.spyOn(RepoPush.prototype, "finalize").mockImplementation(async function (
+      this: RepoPush,
+      ...args: Parameters<RepoPush["finalize"]>
+    ) {
+      const response = await finalize.apply(this, args);
+      const { git } = this as unknown as { git: RepoGitStorage };
+      if (git.refStore.readRefsSync().head !== cx.source.head)
+        git.context.storage.sql.exec("DELETE FROM refs WHERE name = ?", cx.source.head);
+      return response;
+    });
+    try {
+      expect((await call(target, "POST", { url: `${SOURCE}/` })).status).toBe(201);
+      expect((await untilImported(target)).state).toBe("committed");
+    } finally {
+      spy.mockRestore();
+    }
+    const state = await repoState(target);
+    expect(state.head).toBe(cx.source.head);
+    expect(Object.keys(state.refs)).toContain(cx.source.head);
   });
 
   it.each([

@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import { readBoundedBody } from "../http/body.js";
+import { NO_STORE } from "../http/cache.js";
 import type { AuthVariables } from "../middleware/auth.js";
 
 /** What the authorization server's endpoints share: their context, answers and request parameters. */
@@ -19,7 +20,7 @@ export type OAuthError =
   | "slow_down";
 
 /** Token responses are never cached (RFC 6749 §5.1). */
-export const NO_STORE = { "Cache-Control": "no-store", Pragma: "no-cache" };
+export { NO_STORE };
 
 /** The largest request body the endpoints read (their requests are a few hundred bytes). */
 export const MAX_OAUTH_BODY_BYTES = 16 * 1024;

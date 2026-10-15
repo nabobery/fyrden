@@ -320,21 +320,23 @@ export class RepoImports {
   async #commit(record: ImportRecord): Promise<ImportRecord> {
     const ownerGen = record.ownerGen ?? this.ownerGen();
     const decision = await reauthorizeByToken(this.env.DIRECTORY, record, this.writerRole);
+    const { head } = record;
     const report = readPushReport(
       await this.push.finalize(record.uploadId, decision, {
         repoId: record.repoId,
         // The rulesets see the default branch the import is about to set.
-        ...(record.head && { head: record.head }),
+        ...(head && {
+          head,
+          // The new default branch (and its snapshot event) commits with the refs, so no
+          // push in between sees the old one; not once the repository was transferred
+          // after the import began (its new owner decides).
+          inCommit: () => {
+            if (this.ownerGen() === ownerGen) this.git.refStore.setHead(head);
+          },
+        }),
       }),
     );
     if (!report.ok) return this.#save({ ...record, state: "failed", error: report.error });
-    // The new default branch and its snapshot event commit together; not once the repository
-    // was transferred after the import began (its new owner decides), also on a resumed job.
-    const { head } = record;
-    if (head)
-      this.git.context.storage.transactionSync(() => {
-        if (this.ownerGen() === ownerGen) this.git.refStore.setHead(head);
-      });
     return this.#save({ ...record, state: "committed" });
   }
 

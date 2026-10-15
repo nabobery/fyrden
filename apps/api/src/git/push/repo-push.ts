@@ -139,6 +139,11 @@ export interface PushLogMeta {
   readonly repoId?: string;
   /** The default branch the push sets as it commits (an import's), for the rulesets. */
   readonly head?: string;
+  /**
+   * Runs in the transaction that commits the upload (an import sets its
+   * default branch there): what it writes commits with the refs, or not at all.
+   */
+  readonly inCommit?: () => void;
 }
 
 export class RepoPush {
@@ -498,6 +503,7 @@ export class RepoPush {
                   : rulesStamp.restamp() !== rulesStamp.stamp
                     ? RULESETS_CHANGED
                     : undefined),
+            meta.inCommit,
           ),
         });
         return { plan, indexed, result };
