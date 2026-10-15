@@ -121,31 +121,30 @@ describe("glob matching", () => {
     );
   });
 
-  it("stops as soon as a pattern can no longer match: every pattern against a page of branches", {
-    timeout: 60_000,
-  }, async () => {
-    const { globMatches } = await import("../../src/rulesets/ruleset.js");
+  it("stops as soon as a pattern can no longer match: every pattern against a page of branches", async () => {
+    const { globMatches, globWalk } = await import("../../src/rulesets/ruleset.js");
     // Patterns that differ from every branch early: their length past that
-    // costs nothing. Timed against patterns ten times as long on the same
-    // machine (a clock's bound fails on a slow or instrumented run; a
-    // matcher that walks whole patterns takes about ten times as long).
+    // costs nothing. Counted, not timed: a matcher that walks whole patterns
+    // visits about ten times as many positions for patterns ten times as long.
     const refs = Array.from({ length: 20 }, (_, i) => `refs/heads/${"b".repeat(226)}${i}`);
-    const timed = (length: number) => {
-      const patterns = Array.from({ length: 1_000 }, (_, i) =>
-        i % 2 === 0
-          ? `refs/heads/f${i}/${"x".repeat(length)}*`
-          : `refs/heads/f${i}/${"x".repeat(length)}`,
-      );
-      const started = performance.now();
-      let matched = 0;
+    const work = (length: number) => {
+      let steps = 0;
       for (const ref of refs)
-        for (const pattern of patterns) if (globMatches(pattern, ref)) matched++;
-      expect(matched).toBe(0);
-      return performance.now() - started;
+        for (let i = 0; i < 1_000; i++) {
+          const pattern =
+            i % 2 === 0
+              ? `refs/heads/f${i}/${"x".repeat(length)}*`
+              : `refs/heads/f${i}/${"x".repeat(length)}`;
+          const walked = globWalk(pattern, ref);
+          expect(walked.matched).toBe(false);
+          steps += walked.steps;
+        }
+      return steps;
     };
-    timed(200); // Warm.
-    const short = timed(200);
-    expect(timed(2_000)).toBeLessThan(3 * short + 50);
+    expect(work(2_000)).toBe(work(200));
+    // A matching wildcard walks at most the pattern's length times the ref's.
+    const ref = `refs/heads/${"b".repeat(240)}`;
+    expect(globWalk("refs/heads/b*", ref).steps).toBeLessThanOrEqual(13 * (ref.length + 1));
     // Still exact where it matters.
     expect(globMatches(`refs/heads/${"b".repeat(5)}`, `refs/heads/${"b".repeat(5)}`)).toBe(true);
     expect(globMatches("refs/heads/b*", `refs/heads/${"b".repeat(240)}`)).toBe(true);

@@ -10,6 +10,8 @@ import { Sha1 } from "../../src/hash/sha1.js";
  *   FYRDEN_BENCH=1 npx vitest run test/hash/sha1-throughput.test.ts
  */
 
+// biome-ignore lint/style/noRestrictedGlobals: a benchmark run on request; it asserts nothing on time.
+const clock = () => performance.now();
 const MIB = 1024 * 1024;
 const SIZE = 16 * MIB;
 const CHUNK = 64 * 1024;
@@ -18,9 +20,9 @@ function megabytesPerSecond(hash: (data: Uint8Array) => void, data: Uint8Array):
   hash(data.subarray(0, 2 * MIB)); // warm up the JIT
   let best = Number.POSITIVE_INFINITY;
   for (let run = 0; run < 3; run++) {
-    const start = performance.now();
+    const start = clock();
     hash(data);
-    best = Math.min(best, performance.now() - start);
+    best = Math.min(best, clock() - start);
   }
   return data.length / MIB / (best / 1000);
 }

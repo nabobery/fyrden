@@ -64,9 +64,11 @@ pnpm audit                      # known advisories (CI fails on high and critica
    code returns), never on sleeps, timed polling or an alarm happening to be
    pending: under a parallel run every step takes several times longer. The
    `apps/api` workerd setup holds the clock a day ahead so no alarm fires on its
-   own; a test runs the alarms it needs. `setTimeout` and the `sleep` helper are lint
-   errors in tests; a deliberate exception carries a `biome-ignore` with its
-   reason. End-to-end tests start `wrangler dev` only through
+   own; a test runs the alarms it needs. Cost bounds are asserted as work
+   (rows, commits walked, steps), never as elapsed time; benchmarks print times
+   only under `FYRDEN_BENCH=1`. `setTimeout`, `performance` and the `sleep`
+   helper are lint errors in tests; a deliberate exception carries a
+   `biome-ignore` with its reason. End-to-end tests start `wrangler dev` only through
    `tools/ci/e2e/wrangler-dev.ts`. A change touching alarms, the outbox or jobs
    runs `pnpm turbo run test:shuffle` before review.
 8. **Dependencies are pinned and reviewed.** Shared tools go in the

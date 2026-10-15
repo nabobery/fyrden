@@ -84,8 +84,18 @@ export function refPatternMatches(
  * ref's, whatever the pattern.
  */
 export function globMatches(pattern: string, ref: string): boolean {
+  return globWalk(pattern, ref).matched;
+}
+
+/**
+ * {@link globMatches} with the work it did: `steps` counts the ref
+ * positions visited, so a test can check the bound without a clock.
+ */
+export function globWalk(pattern: string, ref: string): { matched: boolean; steps: number } {
   // Without a wildcard it is one comparison.
-  if (!pattern.includes("*") && !pattern.includes("?")) return pattern === ref;
+  if (!pattern.includes("*") && !pattern.includes("?"))
+    return { matched: pattern === ref, steps: 1 };
+  let steps = 0;
   const n = ref.length;
   let reach = new Uint8Array(n + 1);
   reach[0] = 1;
@@ -104,6 +114,7 @@ export function globMatches(pattern: string, ref: string): boolean {
       // From each reached position, any run (of non-`/`, for a single `*`).
       let open = false;
       for (let at = lo; at <= n; at++) {
+        steps++;
         if (reach[at]) open = true;
         if (open) {
           next[at] = 1;
@@ -114,17 +125,19 @@ export function globMatches(pattern: string, ref: string): boolean {
         if (!open && at > hi) break;
       }
     } else {
-      for (let at = lo; at <= hi && at < n; at++)
+      for (let at = lo; at <= hi && at < n; at++) {
+        steps++;
         if (reach[at] && (c === "?" ? ref[at] !== "/" : ref[at] === c)) {
           next[at + 1] = 1;
           if (at + 1 < nextLo) nextLo = at + 1;
           nextHi = at + 1;
         }
+      }
     }
-    if (nextHi < 0) return false;
+    if (nextHi < 0) return { matched: false, steps };
     reach = next;
     lo = nextLo;
     hi = nextHi;
   }
-  return reach[n] === 1;
+  return { matched: reach[n] === 1, steps };
 }

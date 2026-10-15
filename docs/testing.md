@@ -67,6 +67,11 @@ a machine short of memory add `--concurrency=1` to heavy runs (`test`,
   lint errors in test files (`biome.json`); a deliberate exception (a test of a
   timeout itself, a yield whose length does not change the outcome) carries a
   `biome-ignore` saying why.
+- Never assert on elapsed time. A cost bound is asserted as work done: rows
+  read or written, commits walked (a walk's `maxCommits`), steps a function
+  reports. A benchmark prints times only when `FYRDEN_BENCH=1` and asserts
+  nothing on them; `performance` is a lint error in test files, so its one
+  clock carries a `biome-ignore` saying so.
 - End-to-end tests start `wrangler dev` only through `startWranglerDev`
   (`tools/ci/e2e/wrangler-dev.ts`): ports the OS reports free, taken right
   before the start, and a fresh pair if one was taken meanwhile.
