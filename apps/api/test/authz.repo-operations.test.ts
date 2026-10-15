@@ -85,6 +85,37 @@ const CASES: Record<
     input: { title: "checked" },
     expected: { status: 404, code: "pull_not_found" },
   },
+  "pulls.reviews.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
+  "pulls.reviews.get": { input: {}, expected: { status: 404, code: "review_not_found" } },
+  "pulls.reviews.create": {
+    input: { commit_id: SHA, event: "COMMENT", body: "checked" },
+    expected: { status: 404, code: "pull_not_found" },
+  },
+  "pulls.reviews.dismiss": {
+    input: { message: "checked" },
+    expected: { status: 404, code: "pull_not_found" },
+  },
+  "pulls.requested_reviewers.list": {
+    input: {},
+    expected: { status: 404, code: "pull_not_found" },
+  },
+  // The owner itself, found by handle: the missing pull request is what answers.
+  "pulls.requested_reviewers.add": {
+    input: {
+      get reviewers() {
+        return [handle];
+      },
+    },
+    expected: { status: 404, code: "pull_not_found" },
+  },
+  "pulls.requested_reviewers.remove": {
+    input: {
+      get reviewers() {
+        return [handle];
+      },
+    },
+    expected: { status: 404, code: "pull_not_found" },
+  },
   // Writes change their own repository: the first commit of an empty one.
   "repos.contents.put": {
     input: { message: "add", content: "aGk=" },
@@ -161,6 +192,7 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{template_repo}", name)
     .replace("{upload_id}", UPLOAD_ID)
     .replace("{pull_number}", "1")
+    .replace("{review_id}", "1")
     .replace("{username}", handle)
     .replace("{branch+}", "main")
     .replace("{ref+}", "main")

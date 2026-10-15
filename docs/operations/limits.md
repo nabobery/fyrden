@@ -632,6 +632,9 @@ merging and pull requests from forks come later.
 | Changes | The author (anyone acting as the same person, such as its agents within their own roles) edits, retargets, drafts, closes and reopens its own pull request with any role that reads; on someone else's, triage closes and reopens, write does the rest. A patch applies as a whole or not at all |
 | Reopening | Needs the head branch and the base branch (unless the same patch retargets onto an existing one); moves `refs/pull/<number>/head` to the head branch's tip |
 | Rulesets | Do not apply to opening or retargeting a pull request (the pull request ref is the server's, not a branch) |
+| Reviews | Anyone who reads the repository may approve, request changes or comment on an open pull request (MCP `submit_review`); the author may only comment. Each review names the head commit it reviewed (`commit_id`, a head the pull request has had) and counts for that commit only. Body 65,536 characters at most, needed to request changes or comment. Whether a review counts toward a merge is decided when merging (see Rulesets) |
+| Dismissing a review | Write access, with a reason of 1-1,024 characters; only a standing approval or request for changes; the review is kept, shown as `DISMISSED` with who and why |
+| Requested reviewers | Users and agents who can read the repository (an agent as its owner allows), never the author; teams not yet. The author or triage and above asks; at most 15 at once; a request ends when that reviewer submits a review |
 
 ## Idempotent requests
 

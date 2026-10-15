@@ -17,6 +17,7 @@ CREATE INDEX pull_requests_state ON pull_requests (state, number);
 CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
 CREATE INDEX refs_oid ON refs (oid);
+CREATE INDEX reviews_pr ON reviews (pr_number, review_id);
 CREATE UNIQUE INDEX rulesets_name ON rulesets (name);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);
 CREATE TABLE acl_snapshot (
@@ -189,6 +190,11 @@ CREATE TABLE pending_commits (
     signature TEXT,
     PRIMARY KEY (upload_id, oid)
   ) STRICT, WITHOUT ROWID;
+CREATE TABLE pull_heads (
+        pr_number INTEGER NOT NULL,
+        sha TEXT NOT NULL,
+        PRIMARY KEY (pr_number, sha)
+      ) STRICT;
 CREATE TABLE pull_requests (
         number INTEGER PRIMARY KEY,
         title TEXT NOT NULL,
@@ -250,6 +256,29 @@ CREATE TABLE repo_meta (
         created_at INTEGER NOT NULL
       , epoch_uuid TEXT, source_seq INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, owner_id TEXT, name TEXT, visibility TEXT
         CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT, next_number INTEGER NOT NULL DEFAULT 1) STRICT;
+CREATE TABLE review_requests (
+        pr_number INTEGER NOT NULL,
+        reviewer_id TEXT NOT NULL,
+        requested_by TEXT NOT NULL,
+        requested_at INTEGER NOT NULL,
+        PRIMARY KEY (pr_number, reviewer_id)
+      ) STRICT;
+CREATE TABLE reviews (
+        review_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_number INTEGER NOT NULL,
+        reviewer_id TEXT NOT NULL,
+        reviewer_root TEXT NOT NULL,
+        by_agent INTEGER NOT NULL CHECK (by_agent IN (0, 1)),
+        act_chain TEXT,
+        state TEXT NOT NULL CHECK (state IN ('APPROVED', 'CHANGES_REQUESTED', 'COMMENTED')),
+        commit_sha TEXT NOT NULL,
+        body TEXT,
+        submitted_at INTEGER NOT NULL,
+        dismissed_at INTEGER,
+        dismissed_by TEXT,
+        dismissal_message TEXT,
+        version INTEGER NOT NULL DEFAULT 1
+      ) STRICT;
 CREATE TABLE rule_suites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         upload_id TEXT NOT NULL,

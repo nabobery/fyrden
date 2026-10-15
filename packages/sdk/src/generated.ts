@@ -1486,6 +1486,284 @@ export type PullsUpdateOutput = {
   closed_at: number | null;
 };
 
+/** Input of `pulls.reviews.list`: List reviews. */
+export type PullsReviewsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.reviews.list`. */
+export type PullsReviewsListOutput = {
+  reviews: ({
+    id: number;
+    /** Who submitted it (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that submitted it for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+    body: string | null;
+    /** The head commit it reviewed: it counts for that commit only. */
+    commit_id: string;
+    /** Unix time in milliseconds. */
+    submitted_at: number;
+    /** Fyrden: who dismissed it, why and when; null unless `state` is DISMISSED. */
+    dismissal: {
+      by: string;
+      message: string;
+      /** Unix time in milliseconds. */
+      at: number;
+    } | null;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `pulls.reviews.get`: Get a review. */
+export type PullsReviewsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The review's id. */
+  review_id: number;
+};
+
+/** Output of `pulls.reviews.get`. */
+export type PullsReviewsGetOutput = {
+  id: number;
+  /** Who submitted it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that submitted it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+  body: string | null;
+  /** The head commit it reviewed: it counts for that commit only. */
+  commit_id: string;
+  /** Unix time in milliseconds. */
+  submitted_at: number;
+  /** Fyrden: who dismissed it, why and when; null unless `state` is DISMISSED. */
+  dismissal: {
+    by: string;
+    message: string;
+    /** Unix time in milliseconds. */
+    at: number;
+  } | null;
+};
+
+/** Input of `pulls.reviews.create`: Submit a review. */
+export type PullsReviewsCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The head commit reviewed: the pull request's `head.sha` when you read it. */
+  commit_id: string;
+  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+  body?: string;
+};
+
+/** Output of `pulls.reviews.create`. */
+export type PullsReviewsCreateOutput = {
+  id: number;
+  /** Who submitted it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that submitted it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+  body: string | null;
+  /** The head commit it reviewed: it counts for that commit only. */
+  commit_id: string;
+  /** Unix time in milliseconds. */
+  submitted_at: number;
+  /** Fyrden: who dismissed it, why and when; null unless `state` is DISMISSED. */
+  dismissal: {
+    by: string;
+    message: string;
+    /** Unix time in milliseconds. */
+    at: number;
+  } | null;
+};
+
+/** Input of `pulls.reviews.dismiss`: Dismiss a review. */
+export type PullsReviewsDismissInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The review's id. */
+  review_id: number;
+  /** Why. */
+  message: string;
+  event?: "DISMISS";
+};
+
+/** Output of `pulls.reviews.dismiss`. */
+export type PullsReviewsDismissOutput = {
+  id: number;
+  /** Who submitted it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that submitted it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+  body: string | null;
+  /** The head commit it reviewed: it counts for that commit only. */
+  commit_id: string;
+  /** Unix time in milliseconds. */
+  submitted_at: number;
+  /** Fyrden: who dismissed it, why and when; null unless `state` is DISMISSED. */
+  dismissal: {
+    by: string;
+    message: string;
+    /** Unix time in milliseconds. */
+    at: number;
+  } | null;
+};
+
+/** Input of `pulls.requested_reviewers.list`: List requested reviewers. */
+export type PullsRequestedReviewersListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+};
+
+/** Output of `pulls.requested_reviewers.list`. */
+export type PullsRequestedReviewersListOutput = {
+  users: {
+    id: string;
+    login: string;
+  }[];
+  teams: unknown[];
+};
+
+/** Input of `pulls.requested_reviewers.add`: Request reviewers. */
+export type PullsRequestedReviewersAddInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Handles of users and agents who can read the repository. */
+  reviewers: string[];
+  /** Team reviewers are not supported yet: empty or left out. */
+  team_reviewers?: unknown[];
+};
+
+/** Output of `pulls.requested_reviewers.add`. */
+export type PullsRequestedReviewersAddOutput = {
+  number: number;
+  state: "open" | "closed";
+  merged: boolean;
+  draft: boolean;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  /** The branch with the changes. `refs/pull/{number}/head` points at `head.sha` and can be fetched. */
+  head: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** The branch the changes are for. */
+  base: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again. */
+  head_ref_deleted: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+};
+
+/** Input of `pulls.requested_reviewers.remove`: Remove requested reviewers. */
+export type PullsRequestedReviewersRemoveInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Handles of users and agents who can read the repository. */
+  reviewers: string[];
+  /** Team reviewers are not supported yet: empty or left out. */
+  team_reviewers?: unknown[];
+};
+
+/** Output of `pulls.requested_reviewers.remove`. */
+export type PullsRequestedReviewersRemoveOutput = {
+  number: number;
+  state: "open" | "closed";
+  merged: boolean;
+  draft: boolean;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  /** The branch with the changes. `refs/pull/{number}/head` points at `head.sha` and can be fetched. */
+  head: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** The branch the changes are for. */
+  base: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again. */
+  head_ref_deleted: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+};
+
 /** Input of `stars.put`: Star a repository. */
 export type StarsPutInput = {
   /** The repository's owner handle. */
@@ -2981,6 +3259,13 @@ export const OPERATIONS = {
   "pulls.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: true },
   "pulls.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: false },
   "pulls.update": { method: "PATCH", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.reviews.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "reviews" },
+  "pulls.reviews.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}", pathParams: ["owner","repo","pull_number","review_id"], idempotent: false },
+  "pulls.reviews.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.reviews.dismiss": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals", pathParams: ["owner","repo","pull_number","review_id"], idempotent: true },
+  "pulls.requested_reviewers.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: false },
+  "pulls.requested_reviewers.add": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.requested_reviewers.remove": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "stars.put": { method: "PUT", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.delete": { method: "DELETE", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.list": { method: "GET", path: "/user/starred", pathParams: [], idempotent: false, items: "repos" },
@@ -3113,6 +3398,20 @@ export interface Operations {
   "pulls.get": { input: PullsGetInput; output: PullsGetOutput };
   /** Update a pull request. Changes the title or body, retargets it onto another base branch, marks it a draft or ready, closes or reopens it; fields left out are kept, and all of it happens or none. The author may do any of it to its own pull request; on anyone else's, triage closes and reopens and write does the rest. Reopening needs the head branch to exist. */
   "pulls.update": { input: PullsUpdateInput; output: PullsUpdateOutput };
+  /** List reviews. A pull request's reviews, in the order submitted. */
+  "pulls.reviews.list": { input: PullsReviewsListInput; output: PullsReviewsListOutput };
+  /** Get a review. One review of a pull request. */
+  "pulls.reviews.get": { input: PullsReviewsGetInput; output: PullsReviewsGetOutput };
+  /** Submit a review. Approves, requests changes or comments on a pull request at `commit_id`, a head it has had: the review counts for that commit only. Anyone who can read the repository may review an open pull request; whether a review counts toward a merge (write access or above, not the author, people only unless the ruleset allows agents) is decided when merging. The author may only comment. Requesting changes or commenting needs a body. */
+  "pulls.reviews.create": { input: PullsReviewsCreateInput; output: PullsReviewsCreateOutput };
+  /** Dismiss a review. Dismisses an approval or a request for changes, with a reason: it no longer counts toward or blocks a merge. Needs write access. */
+  "pulls.reviews.dismiss": { input: PullsReviewsDismissInput; output: PullsReviewsDismissOutput };
+  /** List requested reviewers. Who a review of the pull request is requested of and has not reviewed yet. */
+  "pulls.requested_reviewers.list": { input: PullsRequestedReviewersListInput; output: PullsRequestedReviewersListOutput };
+  /** Request reviewers. Requests a review of users or agents who can read the repository (not the author). The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once; a request ends when that reviewer submits a review. */
+  "pulls.requested_reviewers.add": { input: PullsRequestedReviewersAddInput; output: PullsRequestedReviewersAddOutput };
+  /** Remove requested reviewers. Withdraws review requests; reviewers not requested are ignored. */
+  "pulls.requested_reviewers.remove": { input: PullsRequestedReviewersRemoveInput; output: PullsRequestedReviewersRemoveOutput };
   /** Star a repository. Stars a repository the caller can read. Starring one already starred changes nothing. The token also needs `metadata:read` for the repository. */
   "stars.put": { input: StarsPutInput; output: StarsPutOutput };
   /** Unstar a repository. Takes the caller's star off a repository it can read. Unstarring one not starred changes nothing. */

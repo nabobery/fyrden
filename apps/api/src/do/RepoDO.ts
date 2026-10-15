@@ -26,6 +26,7 @@ import {
   protectsBranch,
   REPO_ROLES,
   type RepoRole,
+  type ReviewEvent,
   rootIdentity,
 } from "@fyrden/domain";
 import {
@@ -144,6 +145,7 @@ import {
 } from "./repo/file-writes.js";
 import {
   type OpenPull,
+  type PullCaller,
   type PullChangeFailure,
   type PullPatch,
   type PullRecord,
@@ -155,6 +157,7 @@ import {
   precheckPushRules,
   type RuleSnapshot,
 } from "./repo/push-rules.js";
+import { RepoReviews } from "./repo/reviews.js";
 import {
   RepoRulesets,
   type RuleSuite,
@@ -169,6 +172,9 @@ import {
   writeTemplate,
 } from "./repo/template.js";
 import { repoSchema } from "./schema/repo.js";
+
+/** Why a change of pull requests or reviews was not attempted. */
+type PullChangeRefusal = "repo_not_found" | "repo_transferring" | "access_lost";
 
 /** What a repository object knows of the repository's details. */
 export interface RepoDetails {
@@ -243,6 +249,9 @@ export class RepoDO extends MigratingDO {
   /** Pull requests between the repository's branches. */
   readonly pulls: RepoPulls;
 
+  /** Reviews of pull requests, and reviews requested. */
+  readonly reviews: RepoReviews;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.metricsDataset = env.METRICS;
@@ -268,6 +277,12 @@ export class RepoDO extends MigratingDO {
     this.pulls = new RepoPulls({
       git: this.git,
       events: this.events,
+      repoId: () => this.#repoId(),
+    });
+    this.reviews = new RepoReviews({
+      git: this.git,
+      events: this.events,
+      pulls: this.pulls,
       repoId: () => this.#repoId(),
     });
     this.pullAcl = async (accountId) => {
@@ -702,15 +717,114 @@ export class RepoDO extends MigratingDO {
     | { ok: false; code: "already_exists"; number: number }
     | {
         ok: false;
-        code:
-          | Exclude<PullChangeFailure, "already_exists">
-          | "repo_not_found"
-          | "repo_transferring"
-          | "access_lost"
-          | "busy";
+        code: Exclude<PullChangeFailure, "already_exists"> | PullChangeRefusal | "busy";
       }
   > {
-    return this.#measured("changePull", async () => {
+    return this.#pullChange("changePull", actor, (caller) => {
+      const changed = this.pulls.change(number, patch, caller);
+      // Nothing awaits between the read and the commit: a conflict means a
+      // concurrent change no retry here could see past.
+      return !changed.ok && changed.code === "version-conflict"
+        ? { ok: false as const, code: "busy" as const }
+        : changed;
+    });
+  }
+
+  /** A pull request's reviews in the order submitted; null when the repository is gone, undefined without the pull request. */
+  listReviews(number: number, after: number, limit: number) {
+    return this.#measured("listReviews", () => {
+      if (this.#refusesReads()) return null;
+      if (!this.pulls.get(number)) return undefined;
+      return this.reviews.list(number, after, limit);
+    });
+  }
+
+  /** One review of a pull request; null when the repository is gone. */
+  getReview(number: number, id: number) {
+    return this.#measured("getReview", () =>
+      this.#refusesReads() ? null : (this.reviews.get(number, id) ?? undefined),
+    );
+  }
+
+  /** Submits a review as the caller, its role and root identity worked out here. */
+  submitReview(
+    number: number,
+    input: {
+      readonly event: ReviewEvent;
+      readonly body: string | null;
+      readonly commitSha: string;
+    },
+    actor: RefActor,
+  ) {
+    return this.#pullChange("submitReview", actor, (caller) =>
+      this.reviews.submit(number, input, caller),
+    );
+  }
+
+  /** Dismisses a review, keeping why. */
+  dismissReview(number: number, id: number, message: string, actor: RefActor) {
+    return this.#pullChange("dismissReview", actor, (caller) =>
+      this.reviews.dismiss(number, id, message, caller),
+    );
+  }
+
+  /** The principals reviews of a pull request are requested of; undefined without it. */
+  requestedReviewers(number: number) {
+    return this.#measured("requestedReviewers", () => {
+      if (this.#refusesReads()) return null;
+      if (!this.pulls.get(number)) return undefined;
+      return this.reviews.requested(number);
+    });
+  }
+
+  /**
+   * Requests reviews of principals (users and agents, found by the
+   * Worker); each one's access is checked here, an agent's capped by its
+   * owner's, before the change.
+   */
+  requestReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
+    return this.#pullChange(
+      "requestReviewers",
+      actor,
+      (caller, ceilings) =>
+        this.reviews.request(
+          number,
+          [...ceilings].map(([id, owners]) => ({
+            id,
+            root: rootIdentity({ principalId: id, grantId: null, ceilingIds: owners }),
+            role: this.#roleNow(id, owners),
+          })),
+          caller,
+        ),
+      async () => {
+        const ceilings = new Map<string, string[]>();
+        for (const id of new Set(reviewerIds)) ceilings.set(id, await this.#rolesPulled(id, null));
+        return ceilings;
+      },
+    );
+  }
+
+  /** Withdraws review requests. */
+  removeRequestedReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
+    return this.#pullChange("removeRequestedReviewers", actor, (caller) =>
+      this.reviews.unrequest(number, reviewerIds, caller),
+    );
+  }
+
+  /**
+   * Runs a change of pull requests or reviews for `actor`, as one measured
+   * invocation (a deletion waits for it): its ceilings and root identity
+   * and anything `prepare` reads are worked out first, then, with no await
+   * before `change`, whether the repository takes changes and the caller's
+   * role now.
+   */
+  #pullChange<R, P = undefined>(
+    method: string,
+    actor: RefActor,
+    change: (caller: PullCaller, prepared: P) => R,
+    prepare?: () => Promise<P>,
+  ): Promise<R | { ok: false; code: PullChangeRefusal }> {
+    return this.#measured(method, async () => {
       await this.checkEpoch();
       const ceilings = await this.#rolesPulled(actor.principal, actor.grantId ?? null);
       const root = rootIdentity({
@@ -718,18 +832,16 @@ export class RepoDO extends MigratingDO {
         grantId: actor.grantId ?? null,
         ceilingIds: ceilings,
       });
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const refused = this.#writeRefusal();
-        if (refused) return { ok: false as const, code: refused.code as "repo_not_found" };
-        const role = this.#roleNow(actor.principal, ceilings);
-        if (role === null) return { ok: false as const, code: "access_lost" as const };
-        const changed = this.pulls.change(number, patch, { actor, root, role });
-        if (!changed.ok && changed.code === "version-conflict") continue;
-        this.#armOutbox();
-        this.#ensureAuditArchive();
-        return changed;
-      }
-      return { ok: false as const, code: "busy" as const };
+      const prepared = (prepare ? await prepare() : undefined) as P;
+      const refused = this.#writeRefusal();
+      if (refused)
+        return { ok: false as const, code: refused.code as "repo_not_found" | "repo_transferring" };
+      const role = this.#roleNow(actor.principal, ceilings);
+      if (role === null) return { ok: false as const, code: "access_lost" as const };
+      const result = change({ actor, root, role }, prepared);
+      this.#armOutbox();
+      this.#ensureAuditArchive();
+      return result;
     });
   }
 

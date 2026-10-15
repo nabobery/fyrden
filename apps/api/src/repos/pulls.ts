@@ -7,6 +7,7 @@ import type {
   Output,
   updatePull,
 } from "@fyrden/api-contract";
+import { MAX_REQUESTED_REVIEWERS } from "@fyrden/domain";
 import type { PullRecord } from "../do/repo/pulls.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
@@ -15,7 +16,8 @@ import type { RepoEntry } from "./directory.js";
 
 type PullOutput = Output<typeof getPull>;
 
-function output(pull: PullRecord): PullOutput {
+/** A pull request as the API returns it. */
+export function pullOutput(pull: PullRecord): PullOutput {
   return {
     number: pull.number,
     state: pull.state === "open" ? "open" : "closed",
@@ -34,7 +36,8 @@ function output(pull: PullRecord): PullOutput {
   };
 }
 
-function actorOf(ctx: OpContext): RefActor {
+/** The caller as the repository object records it. */
+export function actorOf(ctx: OpContext): RefActor {
   return {
     principal: ctx.auth.principalId,
     tokenId: ctx.auth.id,
@@ -55,7 +58,7 @@ const pullNotFound = (number: number) =>
   new OperationError(404, "pull_not_found", `The repository has no pull request ${number}.`);
 
 /** The problem for a refusal the repository object answered with. */
-function failure(entry: RepoEntry, code: string, number?: number): OperationError {
+export function failure(entry: RepoEntry, code: string, number?: number): OperationError {
   switch (code) {
     case "not_found":
       return pullNotFound(number ?? 0);
@@ -105,6 +108,44 @@ function failure(entry: RepoEntry, code: string, number?: number): OperationErro
         "repo_transferring",
         "The repository is being transferred; its pull requests change once it lands.",
       );
+    case "review_not_found":
+      return new OperationError(404, "review_not_found", "The pull request has no such review.");
+    case "own_pull_request":
+      return new OperationError(
+        422,
+        "own_pull_request",
+        "You cannot approve or request changes on your own pull request; comment instead.",
+      );
+    case "body_required":
+      return new OperationError(
+        422,
+        "body_required",
+        "Requesting changes or commenting needs a body.",
+      );
+    case "commit_not_in_pull":
+      return new OperationError(
+        422,
+        "commit_not_in_pull",
+        "commit_id is not a head this pull request has had; read it again for its head.sha.",
+      );
+    case "reviewer_no_access":
+      return new OperationError(
+        422,
+        "reviewer_no_access",
+        "A reviewer cannot read this repository.",
+      );
+    case "reviewer_is_author":
+      return new OperationError(
+        422,
+        "reviewer_is_author",
+        "A review cannot be requested of the pull request's author.",
+      );
+    case "too_many_reviewers":
+      return new OperationError(
+        422,
+        "too_many_reviewers",
+        `A pull request may have at most ${MAX_REQUESTED_REVIEWERS} reviews requested at once.`,
+      );
     case "busy":
       return new OperationError(409, "busy", "The repository is busy; try again.");
     default:
@@ -130,7 +171,7 @@ export async function listPullsOperation(
   const page = pulls.slice(0, input.per_page);
   const last = page.at(-1);
   return {
-    pull_requests: page.map(output),
+    pull_requests: page.map(pullOutput),
     next_cursor: pulls.length > input.per_page && last ? encodeCursor(String(last.number)) : null,
   };
 }
@@ -145,7 +186,7 @@ export async function getPullOperation(
   const pull = await ctx.env.REPO.getByName(entry.id).getPull(input.pull_number);
   if (pull === null) throw repoNotFound(entry);
   if (!pull) throw pullNotFound(input.pull_number);
-  return output(pull);
+  return pullOutput(pull);
 }
 
 /** The `pulls.create` operation. */
@@ -166,7 +207,7 @@ export async function createPullOperation(
     actorOf(ctx),
   );
   if (!result.ok) throw failure(entry, result.code, "number" in result ? result.number : undefined);
-  return output(result.record);
+  return pullOutput(result.record);
 }
 
 /** The `pulls.update` operation. */
@@ -189,5 +230,5 @@ export async function updatePullOperation(
   );
   if (!result.ok)
     throw failure(entry, result.code, "number" in result ? result.number : input.pull_number);
-  return output(result.record);
+  return pullOutput(result.record);
 }

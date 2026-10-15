@@ -51,6 +51,15 @@ import {
   updateRepo,
 } from "../ops/repos.js";
 import {
+  createReview,
+  dismissReview,
+  getReview,
+  listRequestedReviewers,
+  listReviews,
+  removeRequestedReviewers,
+  requestReviewers,
+} from "../ops/reviews.js";
+import {
   createRuleset,
   deleteRuleset,
   getRuleset,
@@ -116,6 +125,13 @@ export const registry = defineRegistry([
   createPull,
   getPull,
   updatePull,
+  listReviews,
+  getReview,
+  createReview,
+  dismissReview,
+  listRequestedReviewers,
+  requestReviewers,
+  removeRequestedReviewers,
   starRepo,
   unstarRepo,
   listStarred,

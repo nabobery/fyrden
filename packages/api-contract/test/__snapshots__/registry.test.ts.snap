@@ -8932,6 +8932,1370 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers": {
+      "delete": {
+        "description": "Withdraws review requests; reviewers not requested are ignored.",
+        "operationId": "pulls.requested_reviewers.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "reviewers": {
+                    "description": "Handles of users and agents who can read the repository.",
+                    "items": {
+                      "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+                      "type": "string",
+                    },
+                    "maxItems": 15,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                  "team_reviewers": {
+                    "description": "Team reviewers are not supported yet: empty or left out.",
+                    "items": {
+                      "not": {},
+                    },
+                    "maxItems": 0,
+                    "type": "array",
+                  },
+                },
+                "required": [
+                  "reviewers",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "base": {
+                      "additionalProperties": false,
+                      "description": "The branch the changes are for.",
+                      "properties": {
+                        "ref": {
+                          "description": "The branch, without refs/heads/.",
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "Its commit when last recorded.",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "ref",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                    "body": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "closed_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Unix time in milliseconds.",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "draft": {
+                      "type": "boolean",
+                    },
+                    "head": {
+                      "additionalProperties": false,
+                      "description": "The branch with the changes. \`refs/pull/{number}/head\` points at \`head.sha\` and can be fetched.",
+                      "properties": {
+                        "ref": {
+                          "description": "The branch, without refs/heads/.",
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "Its commit when last recorded.",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "ref",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                    "head_ref_deleted": {
+                      "description": "Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again.",
+                      "type": "boolean",
+                    },
+                    "merged": {
+                      "type": "boolean",
+                    },
+                    "number": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that opened it for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "state": {
+                      "enum": [
+                        "open",
+                        "closed",
+                      ],
+                      "type": "string",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who opened it (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "number",
+                    "state",
+                    "merged",
+                    "draft",
+                    "title",
+                    "body",
+                    "user",
+                    "performed_via_agents",
+                    "head",
+                    "base",
+                    "head_ref_deleted",
+                    "created_at",
+                    "updated_at",
+                    "closed_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Remove requested reviewers",
+        "x-fyrden-permission": "pull_requests:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "Who a review of the pull request is requested of and has not reviewed yet.",
+        "operationId": "pulls.requested_reviewers.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "teams": {
+                      "items": {
+                        "not": {},
+                      },
+                      "type": "array",
+                    },
+                    "users": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                          },
+                          "login": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "login",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "users",
+                    "teams",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List requested reviewers",
+        "x-fyrden-permission": "pull_requests:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Requests a review of users or agents who can read the repository (not the author). The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once; a request ends when that reviewer submits a review.",
+        "operationId": "pulls.requested_reviewers.add",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "reviewers": {
+                    "description": "Handles of users and agents who can read the repository.",
+                    "items": {
+                      "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+                      "type": "string",
+                    },
+                    "maxItems": 15,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                  "team_reviewers": {
+                    "description": "Team reviewers are not supported yet: empty or left out.",
+                    "items": {
+                      "not": {},
+                    },
+                    "maxItems": 0,
+                    "type": "array",
+                  },
+                },
+                "required": [
+                  "reviewers",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "base": {
+                      "additionalProperties": false,
+                      "description": "The branch the changes are for.",
+                      "properties": {
+                        "ref": {
+                          "description": "The branch, without refs/heads/.",
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "Its commit when last recorded.",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "ref",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                    "body": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "closed_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Unix time in milliseconds.",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "draft": {
+                      "type": "boolean",
+                    },
+                    "head": {
+                      "additionalProperties": false,
+                      "description": "The branch with the changes. \`refs/pull/{number}/head\` points at \`head.sha\` and can be fetched.",
+                      "properties": {
+                        "ref": {
+                          "description": "The branch, without refs/heads/.",
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "Its commit when last recorded.",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "ref",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                    "head_ref_deleted": {
+                      "description": "Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again.",
+                      "type": "boolean",
+                    },
+                    "merged": {
+                      "type": "boolean",
+                    },
+                    "number": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that opened it for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "state": {
+                      "enum": [
+                        "open",
+                        "closed",
+                      ],
+                      "type": "string",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who opened it (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "number",
+                    "state",
+                    "merged",
+                    "draft",
+                    "title",
+                    "body",
+                    "user",
+                    "performed_via_agents",
+                    "head",
+                    "base",
+                    "head_ref_deleted",
+                    "created_at",
+                    "updated_at",
+                    "closed_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Request reviewers",
+        "x-fyrden-permission": "pull_requests:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/pulls/{pull_number}/reviews": {
+      "get": {
+        "description": "A pull request's reviews, in the order submitted.",
+        "operationId": "pulls.reviews.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "reviews": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "body": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "commit_id": {
+                            "description": "The head commit it reviewed: it counts for that commit only.",
+                            "type": "string",
+                          },
+                          "dismissal": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "at": {
+                                    "description": "Unix time in milliseconds.",
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                  "by": {
+                                    "type": "string",
+                                  },
+                                  "message": {
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "by",
+                                  "message",
+                                  "at",
+                                ],
+                                "type": "object",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Fyrden: who dismissed it, why and when; null unless \`state\` is DISMISSED.",
+                          },
+                          "id": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "performed_via_agents": {
+                            "description": "Fyrden: the agents that submitted it for \`user\`, the acting one first; empty if none.",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "state": {
+                            "enum": [
+                              "APPROVED",
+                              "CHANGES_REQUESTED",
+                              "COMMENTED",
+                              "DISMISSED",
+                            ],
+                            "type": "string",
+                          },
+                          "submitted_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "user": {
+                            "additionalProperties": false,
+                            "description": "Who submitted it (the user, when agents acted for one).",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                            ],
+                            "type": "object",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "user",
+                          "performed_via_agents",
+                          "state",
+                          "body",
+                          "commit_id",
+                          "submitted_at",
+                          "dismissal",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "reviews",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List reviews",
+        "x-fyrden-permission": "pull_requests:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Approves, requests changes or comments on a pull request at \`commit_id\`, a head it has had: the review counts for that commit only. Anyone who can read the repository may review an open pull request; whether a review counts toward a merge (write access or above, not the author, people only unless the ruleset allows agents) is decided when merging. The author may only comment. Requesting changes or commenting needs a body.",
+        "operationId": "pulls.reviews.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "body": {
+                    "maxLength": 65536,
+                    "type": "string",
+                  },
+                  "commit_id": {
+                    "description": "The head commit reviewed: the pull request's \`head.sha\` when you read it.",
+                    "pattern": "^[0-9a-f]{40}$",
+                    "type": "string",
+                  },
+                  "event": {
+                    "enum": [
+                      "APPROVE",
+                      "REQUEST_CHANGES",
+                      "COMMENT",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "commit_id",
+                  "event",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "body": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "commit_id": {
+                      "description": "The head commit it reviewed: it counts for that commit only.",
+                      "type": "string",
+                    },
+                    "dismissal": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "at": {
+                              "description": "Unix time in milliseconds.",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            "by": {
+                              "type": "string",
+                            },
+                            "message": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "by",
+                            "message",
+                            "at",
+                          ],
+                          "type": "object",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: who dismissed it, why and when; null unless \`state\` is DISMISSED.",
+                    },
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that submitted it for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "state": {
+                      "enum": [
+                        "APPROVED",
+                        "CHANGES_REQUESTED",
+                        "COMMENTED",
+                        "DISMISSED",
+                      ],
+                      "type": "string",
+                    },
+                    "submitted_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who submitted it (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "user",
+                    "performed_via_agents",
+                    "state",
+                    "body",
+                    "commit_id",
+                    "submitted_at",
+                    "dismissal",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Submit a review",
+        "x-fyrden-permission": "pull_requests:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}": {
+      "get": {
+        "description": "One review of a pull request.",
+        "operationId": "pulls.reviews.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "path",
+            "name": "review_id",
+            "required": true,
+            "schema": {
+              "description": "The review's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "body": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "commit_id": {
+                      "description": "The head commit it reviewed: it counts for that commit only.",
+                      "type": "string",
+                    },
+                    "dismissal": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "at": {
+                              "description": "Unix time in milliseconds.",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            "by": {
+                              "type": "string",
+                            },
+                            "message": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "by",
+                            "message",
+                            "at",
+                          ],
+                          "type": "object",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: who dismissed it, why and when; null unless \`state\` is DISMISSED.",
+                    },
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that submitted it for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "state": {
+                      "enum": [
+                        "APPROVED",
+                        "CHANGES_REQUESTED",
+                        "COMMENTED",
+                        "DISMISSED",
+                      ],
+                      "type": "string",
+                    },
+                    "submitted_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who submitted it (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "user",
+                    "performed_via_agents",
+                    "state",
+                    "body",
+                    "commit_id",
+                    "submitted_at",
+                    "dismissal",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a review",
+        "x-fyrden-permission": "pull_requests:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals": {
+      "put": {
+        "description": "Dismisses an approval or a request for changes, with a reason: it no longer counts toward or blocks a merge. Needs write access.",
+        "operationId": "pulls.reviews.dismiss",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "path",
+            "name": "review_id",
+            "required": true,
+            "schema": {
+              "description": "The review's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "event": {
+                    "const": "DISMISS",
+                    "type": "string",
+                  },
+                  "message": {
+                    "description": "Why.",
+                    "maxLength": 1024,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "message",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "body": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "commit_id": {
+                      "description": "The head commit it reviewed: it counts for that commit only.",
+                      "type": "string",
+                    },
+                    "dismissal": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "at": {
+                              "description": "Unix time in milliseconds.",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            "by": {
+                              "type": "string",
+                            },
+                            "message": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "by",
+                            "message",
+                            "at",
+                          ],
+                          "type": "object",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: who dismissed it, why and when; null unless \`state\` is DISMISSED.",
+                    },
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that submitted it for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "state": {
+                      "enum": [
+                        "APPROVED",
+                        "CHANGES_REQUESTED",
+                        "COMMENTED",
+                        "DISMISSED",
+                      ],
+                      "type": "string",
+                    },
+                    "submitted_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who submitted it (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "user",
+                    "performed_via_agents",
+                    "state",
+                    "body",
+                    "commit_id",
+                    "submitted_at",
+                    "dismissal",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Dismiss a review",
+        "x-fyrden-permission": "pull_requests:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}/readme": {
       "get": {
         "description": "The README file in the root directory at a branch, tag or commit (\`README.md\` first, then other README files).",

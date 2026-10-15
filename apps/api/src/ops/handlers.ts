@@ -90,6 +90,15 @@ import {
   updatePullOperation,
 } from "../repos/pulls.js";
 import {
+  createReviewOperation,
+  dismissReviewOperation,
+  getReviewOperation,
+  listRequestedReviewersOperation,
+  listReviewsOperation,
+  removeRequestedReviewersOperation,
+  requestReviewersOperation,
+} from "../repos/reviews.js";
+import {
   createRulesetOperation,
   deleteRulesetOperation,
   getRulesetOperation,
@@ -303,6 +312,13 @@ export const handlers: Handlers = {
   "pulls.create": createPullOperation,
   "pulls.get": getPullOperation,
   "pulls.update": updatePullOperation,
+  "pulls.reviews.list": listReviewsOperation,
+  "pulls.reviews.get": getReviewOperation,
+  "pulls.reviews.create": createReviewOperation,
+  "pulls.reviews.dismiss": dismissReviewOperation,
+  "pulls.requested_reviewers.list": listRequestedReviewersOperation,
+  "pulls.requested_reviewers.add": requestReviewersOperation,
+  "pulls.requested_reviewers.remove": removeRequestedReviewersOperation,
 
   // Stars are the caller's own, of repositories it can read (repos/stars).
   "stars.put": starRepoOperation,

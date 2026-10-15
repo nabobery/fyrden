@@ -12,6 +12,7 @@ export * from "../ops/orgs.js";
 export * from "../ops/pulls.js";
 export * from "../ops/quotas.js";
 export * from "../ops/repos.js";
+export * from "../ops/reviews.js";
 export * from "../ops/rulesets.js";
 export * from "../ops/signing-keys.js";
 export * from "../ops/stars.js";

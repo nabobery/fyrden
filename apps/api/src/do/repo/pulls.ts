@@ -179,6 +179,17 @@ export class RepoPulls {
     }
   }
 
+  /** Whether the pull request's head has been `sha`, now or before. */
+  hadHead(number: number, sha: string): boolean {
+    return (
+      this.#rows<{ one: number }>(
+        "SELECT 1 AS one FROM pull_heads WHERE pr_number = ? AND sha = ?",
+        number,
+        sha,
+      ).length > 0
+    );
+  }
+
   /** The open pull request from `head` into `base`, if there is one. */
   openBetween(head: string, base: string): number | undefined {
     return this.#rows<{ number: number }>(
@@ -412,6 +423,12 @@ export class RepoPulls {
     actor: RefActor | null,
     data: Record<string, unknown> | null = null,
   ): void {
+    // Every change passes here: the head it leaves is one the pull request has had.
+    this.#rows(
+      "INSERT OR IGNORE INTO pull_heads (pr_number, sha) VALUES (?, ?)",
+      pull.number,
+      pull.headSha,
+    );
     const { authorAct: _act, version, ...row } = pull;
     this.deps.events.emitEntity(
       `pull_request.${event}`,

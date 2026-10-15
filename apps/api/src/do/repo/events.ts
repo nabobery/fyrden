@@ -626,16 +626,35 @@ export class RepoEvents {
     entity: Omit<EntitySnapshot, "deleted">,
     data: Record<string, unknown> | null = null,
   ): void {
-    const meta = this.#meta();
-    this.#assertWritable(meta);
-    if (!meta) throw new Error("the repository has no identity yet");
-    if (!this.#epochChecked)
-      throw new Error("the repository's epoch must be checked before it changes");
+    this.#assertCanEmit();
     this.#emit(
       type,
       { actor: actor?.principal ?? null, actChain: [...(actor?.actChain ?? [])], data },
       { ...entity, deleted: false },
     );
+  }
+
+  /**
+   * In the caller's transaction: an activity event with no entity (a review
+   * requested of someone). The repository must be writable, with its epoch
+   * checked.
+   */
+  emitActivity(type: string, actor: RefActor | null, data: Record<string, unknown>): void {
+    this.#assertCanEmit();
+    this.#emit(type, {
+      actor: actor?.principal ?? null,
+      actChain: [...(actor?.actChain ?? [])],
+      data,
+    });
+  }
+
+  /** An event about the repository's entities needs it writable, with an identity and its epoch checked. */
+  #assertCanEmit(): void {
+    const meta = this.#meta();
+    this.#assertWritable(meta);
+    if (!meta) throw new Error("the repository has no identity yet");
+    if (!this.#epochChecked)
+      throw new Error("the repository's epoch must be checked before it changes");
   }
 
   /**

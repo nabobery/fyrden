@@ -357,4 +357,48 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX pull_requests_state ON pull_requests (state, number);
     `,
   },
+  {
+    version: 17,
+    // Reviews of pull requests (each bound to the head commit it reviewed;
+    // a dismissal keeps the review and records who dismissed it and why),
+    // the reviews requested of people and agents, and every head each pull
+    // request has had (a review may name an earlier one; kept with the pull
+    // request, unlike the reflog).
+    name: "pull_request_reviews",
+    sql: `
+      CREATE TABLE reviews (
+        review_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_number INTEGER NOT NULL,
+        reviewer_id TEXT NOT NULL,
+        reviewer_root TEXT NOT NULL,
+        by_agent INTEGER NOT NULL CHECK (by_agent IN (0, 1)),
+        act_chain TEXT,
+        state TEXT NOT NULL CHECK (state IN ('APPROVED', 'CHANGES_REQUESTED', 'COMMENTED')),
+        commit_sha TEXT NOT NULL,
+        body TEXT,
+        submitted_at INTEGER NOT NULL,
+        dismissed_at INTEGER,
+        dismissed_by TEXT,
+        dismissal_message TEXT,
+        version INTEGER NOT NULL DEFAULT 1
+      ) STRICT;
+      CREATE INDEX reviews_pr ON reviews (pr_number, review_id);
+
+      CREATE TABLE pull_heads (
+        pr_number INTEGER NOT NULL,
+        sha TEXT NOT NULL,
+        PRIMARY KEY (pr_number, sha)
+      ) STRICT;
+
+      INSERT INTO pull_heads (pr_number, sha) SELECT number, head_sha FROM pull_requests;
+
+      CREATE TABLE review_requests (
+        pr_number INTEGER NOT NULL,
+        reviewer_id TEXT NOT NULL,
+        requested_by TEXT NOT NULL,
+        requested_at INTEGER NOT NULL,
+        PRIMARY KEY (pr_number, reviewer_id)
+      ) STRICT;
+    `,
+  },
 ];
