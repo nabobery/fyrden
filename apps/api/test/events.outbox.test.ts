@@ -9,7 +9,7 @@ import {
   secureRandomBytes,
 } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   MAX_MESSAGE_BYTES,
   type NewEvent,
@@ -563,6 +563,13 @@ describe("repository events", () => {
   });
 
   it("drains through the alarm, which it shares with the job queue", async () => {
+    // Every clock in this isolate runs a day ahead, so the alarm the creation arms never
+    // fires on its own before the test drives it.
+    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
+    vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const { stub } = await newRepoWithEvents();
     const before = await runInDurableObject(stub, async (repo: RepoDO, state) => {
       const due = repo.outbox.dueAt();

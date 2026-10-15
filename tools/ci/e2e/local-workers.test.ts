@@ -2,20 +2,15 @@
 // Worker's API service binding is real) and smoke-tests the web Worker:
 // its page and its /healthz both go through the binding into fyrden-api.
 // Needs `pnpm --filter @fyrden/web build` first (turbo does it).
-import { type ChildProcess, spawn } from "node:child_process";
-import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import type { ChildProcess } from "node:child_process";
+import { join, resolve } from "node:path";
 import { generateToken, mentionsToken, secureRandomBytes } from "@fyrden/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runSmoke, webChecks } from "../src/smoke.ts";
+import { startWranglerDev } from "./wrangler-dev.js";
 
 const root = resolve(import.meta.dirname, "../../..");
-const wranglerBin = join(
-  dirname(createRequire(import.meta.url).resolve("wrangler/package.json")),
-  "bin",
-  "wrangler.js",
-);
-const port = 40_000 + Math.floor(Math.random() * 10_000);
+let port = 0;
 let dev: ChildProcess | undefined;
 // Resolves when wrangler dev has exited and its output pipes have closed.
 let closed: Promise<void> = Promise.resolve();
@@ -23,47 +18,21 @@ let closed: Promise<void> = Promise.resolve();
 let output = "";
 
 beforeAll(async () => {
-  dev = spawn(
-    process.execPath,
-    [
-      wranglerBin,
-      "dev",
+  const server = await startWranglerDev({
+    args: [
       "-c",
       join(root, "apps/web/build/server/wrangler.json"),
       "-c",
       join(root, "apps/api/wrangler.jsonc"),
-      "--ip",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      // Its own inspector port: concurrent servers each probing up from
-      // 9229 can pick the same one, and the later fails to bind.
-      "--inspector-port",
-      String(port + 1),
     ],
-    {
-      cwd: join(root, "apps/web"),
-      env: { ...process.env, NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" },
+    cwd: join(root, "apps/web"),
+    onOutput: (text) => {
+      output += text;
     },
-  );
-  const child = dev;
-  closed = new Promise((done) => child.once("close", () => done()));
-  await new Promise<void>((ready, fail) => {
-    const timer = setTimeout(
-      () => fail(new Error(`wrangler dev did not start:\n${output}`)),
-      60_000,
-    );
-    const onData = (d: Buffer) => {
-      output += d;
-      if (/Ready on/.test(output)) {
-        clearTimeout(timer);
-        ready();
-      }
-    };
-    dev?.stdout?.on("data", onData);
-    dev?.stderr?.on("data", onData);
-    dev?.on("exit", (code) => fail(new Error(`wrangler dev exited (${code}):\n${output}`)));
   });
+  dev = server.child;
+  closed = server.closed;
+  port = server.port;
 }, 90_000);
 
 /**

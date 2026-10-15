@@ -23,6 +23,7 @@ import {
   exchangeToken,
 } from "@fyrden/sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { startWranglerDev } from "./wrangler-dev.js";
 
 const root = resolve(import.meta.dirname, "../../..");
 const apiConfig = join(root, "apps/api/wrangler.jsonc");
@@ -31,8 +32,8 @@ const wranglerBin = join(
   "bin",
   "wrangler.js",
 );
-const port = 40_000 + Math.floor(Math.random() * 10_000);
-const origin = `http://127.0.0.1:${port}`;
+let port = 0;
+let origin = "";
 const bootstrapSecret = `e2e-${crypto.randomUUID()}`;
 const signingSeed = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64");
 const REDIRECT = "http://127.0.0.1:8765/callback";
@@ -287,11 +288,8 @@ beforeAll(async () => {
     );
     expect(migrate.code, migrate.stdout + migrate.stderr).toBe(0);
   }
-  dev = spawn(
-    process.execPath,
-    [
-      wranglerBin,
-      "dev",
+  const server = await startWranglerDev({
+    args: [
       "-c",
       apiConfig,
       "--persist-to",
@@ -300,36 +298,16 @@ beforeAll(async () => {
       envFile,
       // The cron (the expiry reaper) runs when the test asks (`/__scheduled`).
       "--test-scheduled",
-      "--ip",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      "--inspector-port",
-      String(port + 1),
     ],
-    {
-      cwd: join(root, "apps/api"),
-      env: { ...process.env, NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" },
+    cwd: join(root, "apps/api"),
+    onOutput: (text) => {
+      output += text;
     },
-  );
-  const child = dev;
-  closed = new Promise((done) => child.once("close", () => done()));
-  await new Promise<void>((ready, fail) => {
-    const timer = setTimeout(
-      () => fail(new Error(`wrangler dev did not start:\n${output}`)),
-      60_000,
-    );
-    const onData = (d: Buffer) => {
-      output += d;
-      if (/Ready on/.test(output)) {
-        clearTimeout(timer);
-        ready();
-      }
-    };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-    child.on("exit", (code) => fail(new Error(`wrangler dev exited (${code}):\n${output}`)));
   });
+  dev = server.child;
+  closed = server.closed;
+  port = server.port;
+  origin = `http://127.0.0.1:${port}`;
   handle = `e2eagent${Date.now().toString(36)}`;
   const boot = await fetch(`${origin}/v0/admin/bootstrap`, {
     method: "POST",
