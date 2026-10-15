@@ -11,7 +11,7 @@ import {
 } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { recordedAccount } from "../src/accounts/grants.js";
 import { createApp } from "../src/app.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
@@ -495,6 +495,13 @@ describe("delegation grants", () => {
 
 describe("what a delegated token changes in a repository", () => {
   it("names the agents acting and the request, in its audit rows and its events", async () => {
+    // Every clock in this isolate runs a day ahead, so the outbox's own drain (an alarm a
+    // second after each change) never fires before the test reads it.
+    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
+    vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const owner = await user();
     const repo = await repoOf(owner);
     const agent = await agentOf(owner);

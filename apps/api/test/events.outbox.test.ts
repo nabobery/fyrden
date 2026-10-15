@@ -9,7 +9,7 @@ import {
   secureRandomBytes,
 } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_MESSAGE_BYTES,
   type NewEvent,
@@ -377,6 +377,17 @@ const commit = (repo: RepoDO, n: number, extra: { onCommitted?: () => void } = {
   });
 
 describe("repository events", () => {
+  // Every clock in this isolate runs a day ahead, so the alarm a repository's creation arms
+  // never fires on its own (sending, and so emptying, the outbox these tests read); a test
+  // that drains it drives the alarm itself.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
+    vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("emits the creation with the repository's identity and the allocated epoch", async () => {
     const { stub, owner, repoId } = await newRepoWithEvents();
     const events = await inRepo(stub, outboxEvents);
@@ -563,13 +574,6 @@ describe("repository events", () => {
   });
 
   it("drains through the alarm, which it shares with the job queue", async () => {
-    // Every clock in this isolate runs a day ahead, so the alarm the creation arms never
-    // fires on its own before the test drives it.
-    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
-    vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
     const { stub } = await newRepoWithEvents();
     const before = await runInDurableObject(stub, async (repo: RepoDO, state) => {
       const due = repo.outbox.dueAt();
