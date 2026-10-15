@@ -26,6 +26,17 @@ export const PullRequest = z.object({
   number: z.number().int(),
   state: z.enum(["open", "closed"]),
   merged: z.boolean(),
+  mergeable: z
+    .boolean()
+    .nullable()
+    .describe(
+      "Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging.",
+    ),
+  mergeable_state: z
+    .enum(["clean", "dirty", "draft", "unknown"])
+    .describe(
+      "`clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here.",
+    ),
   draft: z.boolean(),
   title: z.string(),
   body: z.string().nullable(),

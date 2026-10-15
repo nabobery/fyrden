@@ -8832,6 +8832,23 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "mergeable": {
+                            "description": "Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging.",
+                            "type": [
+                              "boolean",
+                              "null",
+                            ],
+                          },
+                          "mergeable_state": {
+                            "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not worked out yet, or too large to work out here.",
+                            "enum": [
+                              "clean",
+                              "dirty",
+                              "draft",
+                              "unknown",
+                            ],
+                            "type": "string",
+                          },
                           "merged": {
                             "type": "boolean",
                           },
@@ -8914,6 +8931,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "number",
                           "state",
                           "merged",
+                          "mergeable",
+                          "mergeable_state",
                           "draft",
                           "title",
                           "body",
@@ -9119,6 +9138,23 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "mergeable": {
+                      "description": "Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging.",
+                      "type": [
+                        "boolean",
+                        "null",
+                      ],
+                    },
+                    "mergeable_state": {
+                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not worked out yet, or too large to work out here.",
+                      "enum": [
+                        "clean",
+                        "dirty",
+                        "draft",
+                        "unknown",
+                      ],
+                      "type": "string",
+                    },
                     "merged": {
                       "type": "boolean",
                     },
@@ -9201,6 +9237,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "number",
                     "state",
                     "merged",
+                    "mergeable",
+                    "mergeable_state",
                     "draft",
                     "title",
                     "body",
@@ -9368,6 +9406,23 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "mergeable": {
+                      "description": "Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging.",
+                      "type": [
+                        "boolean",
+                        "null",
+                      ],
+                    },
+                    "mergeable_state": {
+                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not worked out yet, or too large to work out here.",
+                      "enum": [
+                        "clean",
+                        "dirty",
+                        "draft",
+                        "unknown",
+                      ],
+                      "type": "string",
+                    },
                     "merged": {
                       "type": "boolean",
                     },
@@ -9450,6 +9505,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "number",
                     "state",
                     "merged",
+                    "mergeable",
+                    "mergeable_state",
                     "draft",
                     "title",
                     "body",
@@ -9661,6 +9718,23 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "mergeable": {
+                      "description": "Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging.",
+                      "type": [
+                        "boolean",
+                        "null",
+                      ],
+                    },
+                    "mergeable_state": {
+                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not worked out yet, or too large to work out here.",
+                      "enum": [
+                        "clean",
+                        "dirty",
+                        "draft",
+                        "unknown",
+                      ],
+                      "type": "string",
+                    },
                     "merged": {
                       "type": "boolean",
                     },
@@ -9743,6 +9817,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "number",
                     "state",
                     "merged",
+                    "mergeable",
+                    "mergeable_state",
                     "draft",
                     "title",
                     "body",
@@ -10518,6 +10594,23 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "mergeable": {
+                      "description": "Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging.",
+                      "type": [
+                        "boolean",
+                        "null",
+                      ],
+                    },
+                    "mergeable_state": {
+                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not worked out yet, or too large to work out here.",
+                      "enum": [
+                        "clean",
+                        "dirty",
+                        "draft",
+                        "unknown",
+                      ],
+                      "type": "string",
+                    },
                     "merged": {
                       "type": "boolean",
                     },
@@ -10600,6 +10693,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "number",
                     "state",
                     "merged",
+                    "mergeable",
+                    "mergeable_state",
                     "draft",
                     "title",
                     "body",
@@ -10900,6 +10995,23 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "mergeable": {
+                      "description": "Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging.",
+                      "type": [
+                        "boolean",
+                        "null",
+                      ],
+                    },
+                    "mergeable_state": {
+                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not worked out yet, or too large to work out here.",
+                      "enum": [
+                        "clean",
+                        "dirty",
+                        "draft",
+                        "unknown",
+                      ],
+                      "type": "string",
+                    },
                     "merged": {
                       "type": "boolean",
                     },
@@ -10982,6 +11094,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "number",
                     "state",
                     "merged",
+                    "mergeable",
+                    "mergeable_state",
                     "draft",
                     "title",
                     "body",

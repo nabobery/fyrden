@@ -11,7 +11,7 @@ import type {
   updatePull,
 } from "@fyrden/api-contract";
 import { MAX_REQUESTED_REVIEWERS } from "@fyrden/domain";
-import type { PullRecord } from "../do/repo/pulls.js";
+import type { PullView } from "../do/repo/mergeability.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, decodeCursor, encodeBytesCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
@@ -22,11 +22,13 @@ import { commitIdentityFor, commitIdentityOf } from "./file-writes.js";
 type PullOutput = Output<typeof getPull>;
 
 /** A pull request as the API returns it. */
-export function pullOutput(pull: PullRecord): PullOutput {
+export function pullOutput(pull: PullView): PullOutput {
   return {
     number: pull.number,
     state: pull.state === "open" ? "open" : "closed",
     merged: pull.state === "merged",
+    mergeable: pull.mergeable,
+    mergeable_state: pull.mergeableState,
     draft: pull.draft,
     title: pull.title,
     body: pull.body,

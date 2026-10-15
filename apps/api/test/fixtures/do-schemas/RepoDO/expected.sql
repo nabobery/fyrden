@@ -11,11 +11,13 @@ CREATE INDEX comments_number ON comments (number, comment_id);
 CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
 CREATE INDEX leases_pack ON leases (pack_id, expires_at);
+CREATE INDEX mergeability_jobs_waiting ON mergeability_jobs (requested_at, pr_number);
 CREATE INDEX packs_state ON packs (state, created_at);
 CREATE INDEX packs_unit ON packs (unit_id) WHERE unit_id IS NOT NULL;
 CREATE INDEX pull_listings_comparison
         ON pull_listings (pr_number, kind, base_sha, head_sha, created_at);
 CREATE INDEX pull_listings_created ON pull_listings (created_at);
+CREATE INDEX pull_requests_base ON pull_requests (base_ref, state);
 CREATE INDEX pull_requests_head ON pull_requests (head_ref, state);
 CREATE INDEX pull_requests_state ON pull_requests (state, number);
 CREATE INDEX reflog_at ON reflog (at);
@@ -157,6 +159,18 @@ CREATE TABLE locks (
     acquired_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
   ) STRICT;
+CREATE TABLE mergeability (
+        pr_number INTEGER PRIMARY KEY,
+        base_sha TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('clean', 'conflicts', 'manual', 'unknown', 'error')),
+        computed_at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE mergeability_jobs (
+        pr_number INTEGER PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        requested_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE networks (
         network_id TEXT PRIMARY KEY,
         recorded_at INTEGER NOT NULL

@@ -121,6 +121,11 @@ export class RepoPulls {
       readonly git: RepoGitStorage;
       readonly events: RepoEvents;
       readonly repoId: () => string;
+      /**
+       * In the transaction of a change: whether the pull request merges must
+       * be worked out again (open), or no longer (closed or merged).
+       */
+      readonly stale?: (number: number, open: boolean) => void;
     },
   ) {}
 
@@ -174,6 +179,12 @@ export class RepoPulls {
     for (const update of request.refUpdates) {
       if (!update.name.startsWith(BRANCHES)) continue;
       const branch = update.name.slice(BRANCHES.length);
+      // The base branch moved: whether its pull requests merge changes with it.
+      for (const { number } of this.#rows<{ number: number }>(
+        "SELECT number FROM pull_requests WHERE base_ref = ? AND state = 'open'",
+        branch,
+      ))
+        this.deps.stale?.(number, true);
       const deleted = update.newOid === null;
       if (!deleted && update.oldOid !== null) continue;
       for (const row of this.#rows(
@@ -572,12 +583,14 @@ export class RepoPulls {
     actor: RefActor | null,
     data: Record<string, unknown> | null = null,
   ): void {
-    // Every change passes here: the head it leaves is one the pull request has had.
+    // Every change passes here: the head it leaves is one the pull request has had, and
+    // whether it merges is worked out again (only when its base tip or head moved, in fact).
     this.#rows(
       "INSERT OR IGNORE INTO pull_heads (pr_number, sha) VALUES (?, ?)",
       pull.number,
       pull.headSha,
     );
+    this.deps.stale?.(pull.number, pull.state === "open");
     const {
       authorAct: _act,
       lastPusher: _pusher,

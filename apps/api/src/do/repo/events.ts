@@ -650,6 +650,12 @@ export class RepoEvents {
     });
   }
 
+  /** Whether an event about the repository's entities may be emitted now (see `#assertCanEmit`). */
+  canEmit(): boolean {
+    const meta = this.#meta();
+    return meta !== undefined && frozenReason(meta) === undefined && this.#epochChecked;
+  }
+
   /** An event about the repository's entities needs it writable, with an identity and its epoch checked. */
   #assertCanEmit(): void {
     const meta = this.#meta();

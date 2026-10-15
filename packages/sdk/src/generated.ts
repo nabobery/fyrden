@@ -1292,6 +1292,10 @@ export type PullsListOutput = {
     number: number;
     state: "open" | "closed";
     merged: boolean;
+    /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
+    mergeable: boolean | null;
+    /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+    mergeable_state: "clean" | "dirty" | "draft" | "unknown";
     draft: boolean;
     title: string;
     body: string | null;
@@ -1357,6 +1361,10 @@ export type PullsCreateOutput = {
   number: number;
   state: "open" | "closed";
   merged: boolean;
+  /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
+  mergeable: boolean | null;
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  mergeable_state: "clean" | "dirty" | "draft" | "unknown";
   draft: boolean;
   title: string;
   body: string | null;
@@ -1413,6 +1421,10 @@ export type PullsGetOutput = {
   number: number;
   state: "open" | "closed";
   merged: boolean;
+  /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
+  mergeable: boolean | null;
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  mergeable_state: "clean" | "dirty" | "draft" | "unknown";
   draft: boolean;
   title: string;
   body: string | null;
@@ -1477,6 +1489,10 @@ export type PullsUpdateOutput = {
   number: number;
   state: "open" | "closed";
   merged: boolean;
+  /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
+  mergeable: boolean | null;
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  mergeable_state: "clean" | "dirty" | "draft" | "unknown";
   draft: boolean;
   title: string;
   body: string | null;
@@ -1835,6 +1851,10 @@ export type PullsRequestedReviewersAddOutput = {
   number: number;
   state: "open" | "closed";
   merged: boolean;
+  /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
+  mergeable: boolean | null;
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  mergeable_state: "clean" | "dirty" | "draft" | "unknown";
   draft: boolean;
   title: string;
   body: string | null;
@@ -1895,6 +1915,10 @@ export type PullsRequestedReviewersRemoveOutput = {
   number: number;
   state: "open" | "closed";
   merged: boolean;
+  /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
+  mergeable: boolean | null;
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  mergeable_state: "clean" | "dirty" | "draft" | "unknown";
   draft: boolean;
   title: string;
   body: string | null;

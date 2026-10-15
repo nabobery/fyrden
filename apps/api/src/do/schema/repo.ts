@@ -460,4 +460,30 @@ export const repoSchema: readonly DoMigration[] = [
       ALTER TABLE pull_requests ADD COLUMN merged_at INTEGER;
     `,
   },
+  {
+    version: 21,
+    // Whether each open pull request merges cleanly, for the pair of base
+    // tip and head it was worked out for, and the pull requests waiting for
+    // it (one row each: a newer request replaces an older one, keeping its
+    // place in the queue).
+    name: "mergeability",
+    sql: `
+      CREATE TABLE mergeability (
+        pr_number INTEGER PRIMARY KEY,
+        base_sha TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('clean', 'conflicts', 'manual', 'unknown', 'error')),
+        computed_at INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE mergeability_jobs (
+        pr_number INTEGER PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        requested_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX mergeability_jobs_waiting ON mergeability_jobs (requested_at, pr_number);
+      -- Each branch update finds the open pull requests it is the base of.
+      CREATE INDEX pull_requests_base ON pull_requests (base_ref, state);
+    `,
+  },
 ];

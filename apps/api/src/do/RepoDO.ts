@@ -158,6 +158,7 @@ import {
   mergePull,
   PULL_CHANGED,
 } from "./repo/merge.js";
+import { MERGEABILITY_POLICY, type PullView, RepoMergeability } from "./repo/mergeability.js";
 import { mergeBaseOf, type PullFilesPage, pullCommits, pullFiles } from "./repo/pull-files.js";
 import {
   type OpenPull,
@@ -173,7 +174,7 @@ import {
   precheckPushRules,
   type RuleSnapshot,
 } from "./repo/push-rules.js";
-import { RepoReviews } from "./repo/reviews.js";
+import { RepoReviews, type ReviewFailure } from "./repo/reviews.js";
 import {
   RepoRulesets,
   type RuleSuite,
@@ -307,6 +308,9 @@ export class RepoDO extends MigratingDO {
   /** Conversation comments on pull requests. */
   readonly comments: RepoComments;
 
+  /** Whether open pull requests merge cleanly, worked out in the background. */
+  readonly mergeability: RepoMergeability;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.metricsDataset = env.METRICS;
@@ -333,6 +337,21 @@ export class RepoDO extends MigratingDO {
       git: this.git,
       events: this.events,
       repoId: () => this.#repoId(),
+      stale: (number, open) => this.mergeability.stale(number, open),
+    });
+    this.mergeability = new RepoMergeability({
+      git: this.git,
+      events: this.events,
+      pulls: this.pulls,
+      memoryBlocks: () => {
+        this.#blocks ??= createClockBlockCache();
+        return this.#blocks;
+      },
+      policy: () => this.mergeabilityPolicy,
+      log: () => this.#log(),
+      takesChanges: () => this.#writeRefusal() === undefined,
+      writable: () => this.#writeRefusal() === undefined && this.events.canEmit(),
+      beforeWrite: () => this.mergeabilityHooks.beforeWrite?.(),
     });
     this.reviews = new RepoReviews({
       git: this.git,
@@ -689,13 +708,35 @@ export class RepoDO extends MigratingDO {
   /** The repository's pull requests, newest first, below `before` (a number) when given. */
   listPulls(state: PullRecord["state"] | "all", before: number | undefined, limit: number) {
     return this.#measured("listPulls", () =>
-      this.#refusesReads() ? null : this.pulls.list(state, before, limit),
+      this.#refusesReads()
+        ? null
+        : this.pulls.list(state, before, limit).map((p) => this.#viewed(p)),
     );
+  }
+
+  /** A change's pull request with whether it merges. */
+  #withView(
+    result: { ok: true; pull: PullRecord } | { ok: false; code: ReviewFailure },
+  ): { ok: true; pull: PullView } | { ok: false; code: ReviewFailure } {
+    return result.ok ? { ok: true, pull: this.#viewed(result.pull) } : result;
+  }
+
+  /** A pull request with whether it merges, as far as that is known now. */
+  #viewed(pull: PullRecord): PullView {
+    return { ...pull, ...this.mergeability.view(pull) };
   }
 
   /** One pull request; undefined when there is none with that number. */
   getPull(number: number) {
-    return this.#measured("getPull", () => (this.#refusesReads() ? null : this.pulls.get(number)));
+    return this.#measured("getPull", () => {
+      if (this.#refusesReads()) return null;
+      const pull = this.pulls.get(number);
+      if (!pull) return undefined;
+      const viewed = this.#viewed(pull);
+      // Asked for and not known: worked out (a pull request from before results were kept).
+      if (viewed.mergeable === null) this.mergeability.request(pull);
+      return viewed;
+    });
   }
 
   /**
@@ -707,7 +748,7 @@ export class RepoDO extends MigratingDO {
     input: Omit<OpenPull, "baseSha" | "headSha">,
     actor: RefActor,
   ): Promise<
-    | { ok: true; record: PullRecord }
+    | { ok: true; record: PullView }
     | {
         ok: false;
         code:
@@ -759,7 +800,7 @@ export class RepoDO extends MigratingDO {
         if (!opened.ok && opened.code === "version-conflict") continue;
         this.#armOutbox();
         this.#ensureAuditArchive();
-        return opened;
+        return opened.ok ? { ok: true as const, record: this.#viewed(opened.record) } : opened;
       }
       return { ok: false as const, code: "busy" as const };
     });
@@ -774,7 +815,7 @@ export class RepoDO extends MigratingDO {
     patch: PullPatch,
     actor: RefActor,
   ): Promise<
-    | { ok: true; record: PullRecord }
+    | { ok: true; record: PullView }
     | { ok: false; code: "already_exists"; number: number }
     | {
         ok: false;
@@ -785,7 +826,8 @@ export class RepoDO extends MigratingDO {
       const changed = this.pulls.change(number, patch, caller);
       // Nothing awaits between the read and the commit: a conflict means a
       // concurrent change no retry here could see past.
-      return !changed.ok && changed.code === "version-conflict"
+      if (changed.ok) return { ok: true as const, record: this.#viewed(changed.record) };
+      return changed.code === "version-conflict"
         ? { ok: false as const, code: "busy" as const }
         : changed;
     });
@@ -1098,14 +1140,16 @@ export class RepoDO extends MigratingDO {
       "requestReviewers",
       actor,
       (caller, ceilings) =>
-        this.reviews.request(
-          number,
-          [...ceilings].map(([id, owners]) => ({
-            id,
-            root: rootIdentity({ principalId: id, grantId: null, ceilingIds: owners }),
-            role: this.#roleNow(id, owners),
-          })),
-          caller,
+        this.#withView(
+          this.reviews.request(
+            number,
+            [...ceilings].map(([id, owners]) => ({
+              id,
+              root: rootIdentity({ principalId: id, grantId: null, ceilingIds: owners }),
+              role: this.#roleNow(id, owners),
+            })),
+            caller,
+          ),
         ),
       async () => {
         const ceilings = new Map<string, string[]>();
@@ -1148,7 +1192,7 @@ export class RepoDO extends MigratingDO {
   /** Withdraws review requests. */
   removeRequestedReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
     return this.#pullChange("removeRequestedReviewers", actor, (caller) =>
-      this.reviews.unrequest(number, reviewerIds, caller),
+      this.#withView(this.reviews.unrequest(number, reviewerIds, caller)),
     );
   }
 
@@ -2192,6 +2236,7 @@ export class RepoDO extends MigratingDO {
   #jobHandlers() {
     return {
       storage_confirm: this.#storageConfirmHandler(),
+      mergeability: this.mergeability.handler(),
       reflog_prune: reflogPruneHandler(
         this.git.context,
         REFLOG_PRUNE_BATCH,
@@ -2232,6 +2277,12 @@ export class RepoDO extends MigratingDO {
 
   /** A merge's budgets. Tests may replace them. */
   mergePolicy: MergePolicy = MERGE_POLICY;
+
+  /** A mergeability slice's budgets. Tests may replace them. */
+  mergeabilityPolicy: MergePolicy = MERGEABILITY_POLICY;
+
+  /** Hooks into working out mergeability. For tests. */
+  mergeabilityHooks: { beforeWrite?: () => Promise<void> } = {};
 
   #networkOps: RepoNetwork | undefined;
 

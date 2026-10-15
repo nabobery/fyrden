@@ -21,7 +21,7 @@ import {
   WalkLimitError,
 } from "@fyrden/git-core";
 import type { PushReportSummary } from "../../git/chunked/head.js";
-import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
+import { type LiveReaderDeps, openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
 import { BROWSE_POLICY, type Browsed, fail } from "./browse.js";
 import {
   BUSY,
@@ -206,15 +206,29 @@ const TOO_EXPENSIVE = fail(
   "The pull request is too large to merge here; merge it locally and push.",
 );
 
+/** What merging a base tip and a head comes to, before any commit is made. */
+export type TreeOutcome =
+  | { readonly kind: "clean"; readonly tree: Oid; readonly objects: readonly NewObject[] }
+  | { readonly kind: "conflicts"; readonly conflicts: readonly MergeConflict[] }
+  /** The merge bases conflict among themselves: a merge by hand. */
+  | { readonly kind: "manual" }
+  /** The two share no history. */
+  | { readonly kind: "unrelated" }
+  /** Past the policy's budgets. */
+  | { readonly kind: "too_expensive" }
+  /** An object it needs cannot be read. */
+  | { readonly kind: "unreadable" };
+
 /**
- * The tree the merge commit has: the head's when it contains the base tip,
- * else the three-way merge of the base tip and the head.
+ * The tree a merge of `head` into `baseTip` has: the head's when it
+ * contains the base tip (`upToDate`), else the three-way merge of the two,
+ * from a virtual base when they have several merge bases.
  */
-async function mergedTree(
-  deps: FileWriteDeps,
-  run: MergeRun,
+export async function mergeOutcome(
+  deps: LiveReaderDeps,
+  at: { readonly baseTip: Oid; readonly head: Oid; readonly upToDate: boolean },
   policy: MergePolicy,
-): Promise<Browsed<{ tree: Oid; objects: readonly NewObject[] }>> {
+): Promise<TreeOutcome> {
   const graph: SqliteCommitGraph = deps.git.commitGraph;
   const treeOf = async (commit: Oid): Promise<Oid> => {
     const row = graph.readSync([commit], "verified")[0];
@@ -222,12 +236,11 @@ async function mergedTree(
     return row.tree;
   };
   try {
-    if (run.upToDate) return { ok: true, value: { tree: await treeOf(run.head), objects: [] } };
+    if (at.upToDate) return { kind: "clean", tree: await treeOf(at.head), objects: [] };
     const walk = { maxCommits: policy.maxCommits };
-    const bases = await mergeBases(graph, "verified", run.baseTip, [run.head], walk);
-    if (bases.length === 0)
-      return fail(405, "not_mergeable", "The base branch and the head share no history.");
-    return await withSource(deps, policy, async (source) => {
+    const bases = await mergeBases(graph, "verified", at.baseTip, [at.head], walk);
+    if (bases.length === 0) return { kind: "unrelated" };
+    return await withSource(deps, policy, async (source): Promise<TreeOutcome> => {
       const history: History = {
         mergeBases: (one, others) => mergeBases(graph, "verified", one, others, walk),
         treeOf,
@@ -237,12 +250,7 @@ async function mergedTree(
         budget: new MergeBudget(policy.maxTrees, policy.maxFileMerges, policy.maxOutputBytes),
       };
       const under = await baseTreeOf(source, history, bases, options);
-      if (under.kind === "manual")
-        return fail(
-          405,
-          "merge_conflict",
-          "The pull request's history needs a merge made by hand (its merge bases conflict); merge it locally and push.",
-        );
+      if (under.kind === "manual") return { kind: "manual" };
       // What the virtual base was made of is read from here: it is in no store.
       const made = new Map(under.objects.map((o) => [oidToHex(o.oid), o]));
       const overlay: ObjectSource = {
@@ -259,12 +267,13 @@ async function mergedTree(
       const result = await mergeTrees(
         overlay,
         under.tree,
-        await treeOf(run.baseTip),
-        await treeOf(run.head),
+        await treeOf(at.baseTip),
+        await treeOf(at.head),
         options,
       );
-      if (result.kind === "conflicts") return conflicted(result.conflicts, policy);
-      return { ok: true, value: { tree: result.tree, objects: result.objects } };
+      return result.kind === "conflicts"
+        ? { kind: "conflicts", conflicts: result.conflicts }
+        : { kind: "clean", tree: result.tree, objects: result.objects };
     });
   } catch (error) {
     if (
@@ -273,9 +282,36 @@ async function mergedTree(
       error instanceof MergeTooLargeError ||
       error instanceof ReadBudgetError
     )
-      return TOO_EXPENSIVE;
-    if (error instanceof UnreadableObjectError) return UNREADABLE;
+      return { kind: "too_expensive" };
+    if (error instanceof UnreadableObjectError) return { kind: "unreadable" };
     throw error;
+  }
+}
+
+/** The tree a merge commit has, or why there is none, as the API answers it. */
+async function mergedTree(
+  deps: FileWriteDeps,
+  run: MergeRun,
+  policy: MergePolicy,
+): Promise<Browsed<{ tree: Oid; objects: readonly NewObject[] }>> {
+  const outcome = await mergeOutcome(deps, run, policy);
+  switch (outcome.kind) {
+    case "clean":
+      return { ok: true, value: { tree: outcome.tree, objects: outcome.objects } };
+    case "conflicts":
+      return conflicted(outcome.conflicts, policy);
+    case "manual":
+      return fail(
+        405,
+        "merge_conflict",
+        "The pull request's history needs a merge made by hand (its merge bases conflict); merge it locally and push.",
+      );
+    case "unrelated":
+      return fail(405, "not_mergeable", "The base branch and the head share no history.");
+    case "too_expensive":
+      return TOO_EXPENSIVE;
+    case "unreadable":
+      return UNREADABLE;
   }
 }
 
@@ -285,7 +321,7 @@ async function mergedTree(
  * once are kept for its other reads.
  */
 async function withSource<T>(
-  deps: FileWriteDeps,
+  deps: LiveReaderDeps,
   policy: MergePolicy,
   use: (source: ObjectSource) => Promise<T>,
 ): Promise<T> {
