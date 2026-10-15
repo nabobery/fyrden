@@ -7,6 +7,7 @@ export * from "./ids.js";
 export * from "./principals/principal.js";
 export * from "./principals/root.js";
 export * from "./principals/token.js";
+export * from "./pulls/approvals.js";
 export * from "./pulls/lifecycle.js";
 export * from "./pulls/pull.js";
 export * from "./repos/expiry.js";

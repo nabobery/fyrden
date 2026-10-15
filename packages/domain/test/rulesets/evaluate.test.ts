@@ -1,7 +1,17 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { protectsBranch, type RuleActor, ruleViolations } from "../../src/rulesets/evaluate.js";
-import { type Ruleset, refPatternMatches } from "../../src/rulesets/ruleset.js";
+import {
+  type MergeContext,
+  protectsBranch,
+  type RuleActor,
+  ruleViolations,
+} from "../../src/rulesets/evaluate.js";
+import {
+  pullRequestParameters,
+  type Rule,
+  type Ruleset,
+  refPatternMatches,
+} from "../../src/rulesets/ruleset.js";
 
 const ruleset = (over: Partial<Ruleset>): Ruleset => ({
   id: 1,
@@ -254,5 +264,95 @@ describe("principal types by id", () => {
     expect(principalTypeOf("ins_01ABC")).toBe("installation");
     expect(principalTypeOf("rep_01ABC")).toBeUndefined();
     expect(principalTypeOf("nonsense")).toBeUndefined();
+  });
+});
+
+describe("pull request merges", () => {
+  const head = "h".repeat(40);
+  const merge = (over: Partial<MergeContext> = {}): MergeContext => ({
+    number: 7,
+    method: "merge",
+    approvals: {
+      reviews: [],
+      headSha: head,
+      authorRoot: "author",
+      lastPush: null,
+      eligibleRoots: new Set(["alice", "bob"]),
+    },
+    unresolvedThreads: 0,
+    upToDate: true,
+    ...over,
+  });
+  const approved = (roots: string[]) =>
+    merge({
+      approvals: {
+        ...merge().approvals,
+        reviews: roots.map((reviewerRoot, i) => ({
+          reviewerRoot,
+          byAgent: false,
+          commitSha: head,
+          state: "APPROVED" as const,
+          submittedAt: i + 1,
+          dismissed: false,
+        })),
+      },
+    });
+  const protect = (parameters: Rule["parameters"], extra: Rule[] = []) => [
+    ruleset({ rules: [{ type: "pull_request", ...(parameters && { parameters }) }, ...extra] }),
+  ];
+  const violations = (rulesets: Ruleset[], pullRequest?: MergeContext) =>
+    ruleViolations(
+      rulesets,
+      {
+        ref: "refs/heads/main",
+        kind: "update",
+        fastForward: true,
+        ...(pullRequest && { pullRequest }),
+      },
+      human,
+      "main",
+      "commit",
+    ).map((v) => v.message);
+
+  it("refuses a direct update, and lets a merge through with no requirements set (stored before parameters existed)", () => {
+    expect(violations(protect(undefined))).toEqual([
+      'changes must be made through a pull request (ruleset "protect main")',
+    ]);
+    expect(violations(protect(undefined), merge())).toEqual([]);
+  });
+
+  it("counts approvals against each ruleset's own requirement", () => {
+    const rulesets = protect({ required_approving_review_count: 2 });
+    expect(violations(rulesets, approved(["alice"]))).toEqual([
+      'pull request #7: 2 approving reviews are required (1 given) (ruleset "protect main")',
+    ]);
+    expect(violations(rulesets, approved(["alice", "bob"]))).toEqual([]);
+  });
+
+  it("checks the merge method, unresolved threads and being up to date", () => {
+    expect(violations(protect({ allowed_merge_methods: ["squash"] }), merge())).toEqual([
+      'pull request #7 cannot be merged by merge (allowed: squash) (ruleset "protect main")',
+    ]);
+    expect(
+      violations(
+        protect({ required_review_thread_resolution: true }),
+        merge({ unresolvedThreads: 2 }),
+      ),
+    ).toEqual(['pull request #7: 2 review threads are unresolved (ruleset "protect main")']);
+    const upToDate = [ruleset({ rules: [{ type: "require_up_to_date" }] })];
+    expect(violations(upToDate, merge({ upToDate: false }))).toEqual([
+      'pull request #7 must include the latest commit of the branch it merges into (ruleset "protect main")',
+    ]);
+    // Not a merge: the rule has nothing to check.
+    expect(violations(upToDate)).toEqual([]);
+  });
+
+  it("never reads a code-owner requirement from stored parameters", () => {
+    const stored = { require_code_owner_review: true } as unknown as NonNullable<
+      Rule["parameters"]
+    >;
+    expect(
+      pullRequestParameters({ type: "pull_request", parameters: stored }).require_code_owner_review,
+    ).toBe(false);
   });
 });

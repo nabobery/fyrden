@@ -920,8 +920,26 @@ export type ReposRulesetsListOutput = {
       };
     };
     rules: ({
-      /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests). */
-      type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request";
+      /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+      type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+      /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
+      parameters?: {
+        /** Approving reviews a merge needs, from people with write access other than the author. */
+        required_approving_review_count: number;
+        /** A push makes earlier reviews stop counting. */
+        dismiss_stale_reviews_on_push: boolean;
+        /** Someone other than the last pusher must approve after the last push. */
+        require_last_push_approval: boolean;
+        /** Every review thread must be resolved. */
+        required_review_thread_resolution: boolean;
+        /** Code owners are not supported yet: must be false. */
+        require_code_owner_review: false;
+        allowed_merge_methods: ("merge" | "squash" | "rebase")[];
+        /** Reviews required from specific teams are not supported yet: empty or left out. */
+        required_reviewers?: unknown[];
+        /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
+        allow_agent_approvals: boolean;
+      };
     })[];
     bypass_actors: ({
       actor_type: "RepositoryRole";
@@ -1007,8 +1025,26 @@ export type ReposRulesetsGetOutput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
+    parameters?: {
+      /** Approving reviews a merge needs, from people with write access other than the author. */
+      required_approving_review_count: number;
+      /** A push makes earlier reviews stop counting. */
+      dismiss_stale_reviews_on_push: boolean;
+      /** Someone other than the last pusher must approve after the last push. */
+      require_last_push_approval: boolean;
+      /** Every review thread must be resolved. */
+      required_review_thread_resolution: boolean;
+      /** Code owners are not supported yet: must be false. */
+      require_code_owner_review: false;
+      allowed_merge_methods: ("merge" | "squash" | "rebase")[];
+      /** Reviews required from specific teams are not supported yet: empty or left out. */
+      required_reviewers?: unknown[];
+      /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
+      allow_agent_approvals: boolean;
+    };
   })[];
   bypass_actors: ({
     actor_type: "RepositoryRole";
@@ -1041,8 +1077,26 @@ export type ReposRulesetsCreateInput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
+    parameters?: {
+      /** Approving reviews a merge needs, from people with write access other than the author. */
+      required_approving_review_count?: number;
+      /** A push makes earlier reviews stop counting. */
+      dismiss_stale_reviews_on_push?: boolean;
+      /** Someone other than the last pusher must approve after the last push. */
+      require_last_push_approval?: boolean;
+      /** Every review thread must be resolved. */
+      required_review_thread_resolution?: boolean;
+      /** Code owners are not supported yet: must be false. */
+      require_code_owner_review?: false;
+      allowed_merge_methods?: ("merge" | "squash" | "rebase")[];
+      /** Reviews required from specific teams are not supported yet: empty or left out. */
+      required_reviewers?: unknown[];
+      /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
+      allow_agent_approvals?: boolean;
+    };
   })[];
   bypass_actors?: ({
     actor_type: "RepositoryRole";
@@ -1069,8 +1123,26 @@ export type ReposRulesetsCreateOutput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
+    parameters?: {
+      /** Approving reviews a merge needs, from people with write access other than the author. */
+      required_approving_review_count: number;
+      /** A push makes earlier reviews stop counting. */
+      dismiss_stale_reviews_on_push: boolean;
+      /** Someone other than the last pusher must approve after the last push. */
+      require_last_push_approval: boolean;
+      /** Every review thread must be resolved. */
+      required_review_thread_resolution: boolean;
+      /** Code owners are not supported yet: must be false. */
+      require_code_owner_review: false;
+      allowed_merge_methods: ("merge" | "squash" | "rebase")[];
+      /** Reviews required from specific teams are not supported yet: empty or left out. */
+      required_reviewers?: unknown[];
+      /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
+      allow_agent_approvals: boolean;
+    };
   })[];
   bypass_actors: ({
     actor_type: "RepositoryRole";
@@ -1105,8 +1177,26 @@ export type ReposRulesetsUpdateInput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
+    parameters?: {
+      /** Approving reviews a merge needs, from people with write access other than the author. */
+      required_approving_review_count?: number;
+      /** A push makes earlier reviews stop counting. */
+      dismiss_stale_reviews_on_push?: boolean;
+      /** Someone other than the last pusher must approve after the last push. */
+      require_last_push_approval?: boolean;
+      /** Every review thread must be resolved. */
+      required_review_thread_resolution?: boolean;
+      /** Code owners are not supported yet: must be false. */
+      require_code_owner_review?: false;
+      allowed_merge_methods?: ("merge" | "squash" | "rebase")[];
+      /** Reviews required from specific teams are not supported yet: empty or left out. */
+      required_reviewers?: unknown[];
+      /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
+      allow_agent_approvals?: boolean;
+    };
   })[];
   bypass_actors?: ({
     actor_type: "RepositoryRole";
@@ -1133,8 +1223,26 @@ export type ReposRulesetsUpdateOutput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
+    parameters?: {
+      /** Approving reviews a merge needs, from people with write access other than the author. */
+      required_approving_review_count: number;
+      /** A push makes earlier reviews stop counting. */
+      dismiss_stale_reviews_on_push: boolean;
+      /** Someone other than the last pusher must approve after the last push. */
+      require_last_push_approval: boolean;
+      /** Every review thread must be resolved. */
+      required_review_thread_resolution: boolean;
+      /** Code owners are not supported yet: must be false. */
+      require_code_owner_review: false;
+      allowed_merge_methods: ("merge" | "squash" | "rebase")[];
+      /** Reviews required from specific teams are not supported yet: empty or left out. */
+      required_reviewers?: unknown[];
+      /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
+      allow_agent_approvals: boolean;
+    };
   })[];
   bypass_actors: ({
     actor_type: "RepositoryRole";

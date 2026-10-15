@@ -593,9 +593,12 @@ the API carries GitHub's `verification` object.
 Repository rulesets (`/repos/{owner}/{repo}/rulesets`, GitHub's shape) hold
 rules on the branches or tags whose full names match: `creation`, `update`,
 `deletion`, `non_fast_forward`, `required_signatures`, `pull_request` (no
-direct change at all; changes come through pull requests). Bypass is by
-repository role; Fyrden's `actor_types` limits a ruleset to principal types
-(`["agent"]` with `pull_request`: agents must use pull requests).
+direct change at all; changes come through pull requests), and Fyrden's
+`require_up_to_date` (a pull request merged into the branch must already
+contain its latest commit; GitHub ties this to required status checks, which
+Fyrden does not have yet). Bypass is by repository role; Fyrden's
+`actor_types` limits a ruleset to principal types (`["agent"]` with
+`pull_request`: agents must use pull requests).
 
 | What | Value |
 |---|---|
@@ -608,6 +611,8 @@ repository role; Fyrden's `actor_types` limits a ruleset to principal types
 | Refusals | `ng <ref> <reason> (ruleset "<name>")`; an atomic push fails as a whole |
 | `evaluate` | Does not block; what it would have refused at a push's commit point (its signatures too) is listed at `GET /repos/{owner}/{repo}/rulesets/rule-suites` (MCP `list_rule_suites`): one suite per ref update one of them objected to, the newest 1,000 kept, nothing for an update they all let through |
 | Actor types | Each principal type at most once |
+| `pull_request` parameters | GitHub's: `required_approving_review_count` 0-10, `dismiss_stale_reviews_on_push`, `require_last_push_approval`, `required_review_thread_resolution`, `allowed_merge_methods` (`merge`, `squash`, `rebase`; each once); `require_code_owner_review` must be false and `required_reviewers` empty (code owners and team reviews come later); any other parameter is refused, never stored unenforced. Fyrden's `allow_agent_approvals` (default false): reviews submitted by agents count, a person's own agents as that person. A rule stored without parameters reads as all defaults (no requirement beyond the pull request) |
+| Approvals | One vote per person (an agent acting for a person, or a person's own agent, is that person); the author's never counts; only people with write access or above count, checked when merging; a person's latest review that is not a comment and not dismissed stands; an eligible request for changes blocks until that person approves or it is dismissed |
 
 ## Pull requests
 

@@ -8,6 +8,7 @@ import type {
   Output,
   updateRuleset,
 } from "@fyrden/api-contract";
+import { pullRequestParameters } from "@fyrden/domain";
 import type { RulesetInput, RulesetRecord } from "../do/repo/rulesets.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
@@ -29,7 +30,15 @@ function output(record: RulesetRecord): RulesetOutput {
         exclude: [...ruleset.conditions.ref_name.exclude],
       },
     },
-    rules: ruleset.rules.map((r) => ({ type: r.type })),
+    rules: ruleset.rules.map((r) => {
+      if (r.type !== "pull_request") return { type: r.type };
+      // Stored before parameters existed, or partly: the defaults fill in.
+      const parameters = pullRequestParameters(r);
+      return {
+        type: r.type,
+        parameters: { ...parameters, allowed_merge_methods: [...parameters.allowed_merge_methods] },
+      };
+    }),
     bypass_actors: ruleset.bypass_actors.map((b) => ({ ...b })),
     actor_types: ruleset.actor_types ? [...ruleset.actor_types] : null,
     created_at: record.createdAt,
@@ -43,7 +52,12 @@ function inputOf(input: Input<typeof createRuleset>): RulesetInput {
     target: input.target,
     enforcement: input.enforcement,
     conditions: input.conditions,
-    rules: input.rules,
+    rules: input.rules.map(({ type, parameters }) => {
+      if (!parameters) return { type };
+      // An empty `required_reviewers` (sent by GitHub clients) requires nothing: not stored.
+      const { required_reviewers: _none, ...kept } = parameters;
+      return { type, parameters: kept };
+    }),
     bypass_actors: input.bypass_actors,
     ...(input.actor_types && { actor_types: input.actor_types }),
   };

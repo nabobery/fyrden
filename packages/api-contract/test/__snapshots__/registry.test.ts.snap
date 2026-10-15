@@ -9365,8 +9365,83 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "items": {
                               "additionalProperties": false,
                               "properties": {
+                                "parameters": {
+                                  "additionalProperties": false,
+                                  "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                                  "properties": {
+                                    "allow_agent_approvals": {
+                                      "default": false,
+                                      "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
+                                      "type": "boolean",
+                                    },
+                                    "allowed_merge_methods": {
+                                      "default": [
+                                        "merge",
+                                        "squash",
+                                        "rebase",
+                                      ],
+                                      "items": {
+                                        "enum": [
+                                          "merge",
+                                          "squash",
+                                          "rebase",
+                                        ],
+                                        "type": "string",
+                                      },
+                                      "maxItems": 3,
+                                      "minItems": 1,
+                                      "type": "array",
+                                    },
+                                    "dismiss_stale_reviews_on_push": {
+                                      "default": false,
+                                      "description": "A push makes earlier reviews stop counting.",
+                                      "type": "boolean",
+                                    },
+                                    "require_code_owner_review": {
+                                      "const": false,
+                                      "default": false,
+                                      "description": "Code owners are not supported yet: must be false.",
+                                      "type": "boolean",
+                                    },
+                                    "require_last_push_approval": {
+                                      "default": false,
+                                      "description": "Someone other than the last pusher must approve after the last push.",
+                                      "type": "boolean",
+                                    },
+                                    "required_approving_review_count": {
+                                      "default": 0,
+                                      "description": "Approving reviews a merge needs, from people with write access other than the author.",
+                                      "maximum": 10,
+                                      "minimum": 0,
+                                      "type": "integer",
+                                    },
+                                    "required_review_thread_resolution": {
+                                      "default": false,
+                                      "description": "Every review thread must be resolved.",
+                                      "type": "boolean",
+                                    },
+                                    "required_reviewers": {
+                                      "description": "Reviews required from specific teams are not supported yet: empty or left out.",
+                                      "items": {
+                                        "not": {},
+                                      },
+                                      "maxItems": 0,
+                                      "type": "array",
+                                    },
+                                  },
+                                  "required": [
+                                    "required_approving_review_count",
+                                    "dismiss_stale_reviews_on_push",
+                                    "require_last_push_approval",
+                                    "required_review_thread_resolution",
+                                    "require_code_owner_review",
+                                    "allowed_merge_methods",
+                                    "allow_agent_approvals",
+                                  ],
+                                  "type": "object",
+                                },
                                 "type": {
-                                  "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests).",
+                                  "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
                                   "enum": [
                                     "creation",
                                     "update",
@@ -9374,6 +9449,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                     "non_fast_forward",
                                     "required_signatures",
                                     "pull_request",
+                                    "require_up_to_date",
                                   ],
                                   "type": "string",
                                 },
@@ -9383,7 +9459,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               ],
                               "type": "object",
                             },
-                            "maxItems": 6,
+                            "maxItems": 7,
                             "minItems": 1,
                             "type": "array",
                           },
@@ -9585,8 +9661,74 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                   "rules": {
                     "items": {
                       "properties": {
+                        "parameters": {
+                          "additionalProperties": false,
+                          "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                          "properties": {
+                            "allow_agent_approvals": {
+                              "default": false,
+                              "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
+                              "type": "boolean",
+                            },
+                            "allowed_merge_methods": {
+                              "default": [
+                                "merge",
+                                "squash",
+                                "rebase",
+                              ],
+                              "items": {
+                                "enum": [
+                                  "merge",
+                                  "squash",
+                                  "rebase",
+                                ],
+                                "type": "string",
+                              },
+                              "maxItems": 3,
+                              "minItems": 1,
+                              "type": "array",
+                            },
+                            "dismiss_stale_reviews_on_push": {
+                              "default": false,
+                              "description": "A push makes earlier reviews stop counting.",
+                              "type": "boolean",
+                            },
+                            "require_code_owner_review": {
+                              "const": false,
+                              "default": false,
+                              "description": "Code owners are not supported yet: must be false.",
+                              "type": "boolean",
+                            },
+                            "require_last_push_approval": {
+                              "default": false,
+                              "description": "Someone other than the last pusher must approve after the last push.",
+                              "type": "boolean",
+                            },
+                            "required_approving_review_count": {
+                              "default": 0,
+                              "description": "Approving reviews a merge needs, from people with write access other than the author.",
+                              "maximum": 10,
+                              "minimum": 0,
+                              "type": "integer",
+                            },
+                            "required_review_thread_resolution": {
+                              "default": false,
+                              "description": "Every review thread must be resolved.",
+                              "type": "boolean",
+                            },
+                            "required_reviewers": {
+                              "description": "Reviews required from specific teams are not supported yet: empty or left out.",
+                              "items": {
+                                "not": {},
+                              },
+                              "maxItems": 0,
+                              "type": "array",
+                            },
+                          },
+                          "type": "object",
+                        },
                         "type": {
-                          "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests).",
+                          "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
                           "enum": [
                             "creation",
                             "update",
@@ -9594,6 +9736,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "non_fast_forward",
                             "required_signatures",
                             "pull_request",
+                            "require_up_to_date",
                           ],
                           "type": "string",
                         },
@@ -9603,7 +9746,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
-                    "maxItems": 6,
+                    "maxItems": 7,
                     "minItems": 1,
                     "type": "array",
                   },
@@ -9764,8 +9907,83 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "items": {
                         "additionalProperties": false,
                         "properties": {
+                          "parameters": {
+                            "additionalProperties": false,
+                            "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                            "properties": {
+                              "allow_agent_approvals": {
+                                "default": false,
+                                "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
+                                "type": "boolean",
+                              },
+                              "allowed_merge_methods": {
+                                "default": [
+                                  "merge",
+                                  "squash",
+                                  "rebase",
+                                ],
+                                "items": {
+                                  "enum": [
+                                    "merge",
+                                    "squash",
+                                    "rebase",
+                                  ],
+                                  "type": "string",
+                                },
+                                "maxItems": 3,
+                                "minItems": 1,
+                                "type": "array",
+                              },
+                              "dismiss_stale_reviews_on_push": {
+                                "default": false,
+                                "description": "A push makes earlier reviews stop counting.",
+                                "type": "boolean",
+                              },
+                              "require_code_owner_review": {
+                                "const": false,
+                                "default": false,
+                                "description": "Code owners are not supported yet: must be false.",
+                                "type": "boolean",
+                              },
+                              "require_last_push_approval": {
+                                "default": false,
+                                "description": "Someone other than the last pusher must approve after the last push.",
+                                "type": "boolean",
+                              },
+                              "required_approving_review_count": {
+                                "default": 0,
+                                "description": "Approving reviews a merge needs, from people with write access other than the author.",
+                                "maximum": 10,
+                                "minimum": 0,
+                                "type": "integer",
+                              },
+                              "required_review_thread_resolution": {
+                                "default": false,
+                                "description": "Every review thread must be resolved.",
+                                "type": "boolean",
+                              },
+                              "required_reviewers": {
+                                "description": "Reviews required from specific teams are not supported yet: empty or left out.",
+                                "items": {
+                                  "not": {},
+                                },
+                                "maxItems": 0,
+                                "type": "array",
+                              },
+                            },
+                            "required": [
+                              "required_approving_review_count",
+                              "dismiss_stale_reviews_on_push",
+                              "require_last_push_approval",
+                              "required_review_thread_resolution",
+                              "require_code_owner_review",
+                              "allowed_merge_methods",
+                              "allow_agent_approvals",
+                            ],
+                            "type": "object",
+                          },
                           "type": {
-                            "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests).",
+                            "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
                             "enum": [
                               "creation",
                               "update",
@@ -9773,6 +9991,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "non_fast_forward",
                               "required_signatures",
                               "pull_request",
+                              "require_up_to_date",
                             ],
                             "type": "string",
                           },
@@ -9782,7 +10001,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         ],
                         "type": "object",
                       },
-                      "maxItems": 6,
+                      "maxItems": 7,
                       "minItems": 1,
                       "type": "array",
                     },
@@ -10318,8 +10537,83 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "items": {
                         "additionalProperties": false,
                         "properties": {
+                          "parameters": {
+                            "additionalProperties": false,
+                            "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                            "properties": {
+                              "allow_agent_approvals": {
+                                "default": false,
+                                "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
+                                "type": "boolean",
+                              },
+                              "allowed_merge_methods": {
+                                "default": [
+                                  "merge",
+                                  "squash",
+                                  "rebase",
+                                ],
+                                "items": {
+                                  "enum": [
+                                    "merge",
+                                    "squash",
+                                    "rebase",
+                                  ],
+                                  "type": "string",
+                                },
+                                "maxItems": 3,
+                                "minItems": 1,
+                                "type": "array",
+                              },
+                              "dismiss_stale_reviews_on_push": {
+                                "default": false,
+                                "description": "A push makes earlier reviews stop counting.",
+                                "type": "boolean",
+                              },
+                              "require_code_owner_review": {
+                                "const": false,
+                                "default": false,
+                                "description": "Code owners are not supported yet: must be false.",
+                                "type": "boolean",
+                              },
+                              "require_last_push_approval": {
+                                "default": false,
+                                "description": "Someone other than the last pusher must approve after the last push.",
+                                "type": "boolean",
+                              },
+                              "required_approving_review_count": {
+                                "default": 0,
+                                "description": "Approving reviews a merge needs, from people with write access other than the author.",
+                                "maximum": 10,
+                                "minimum": 0,
+                                "type": "integer",
+                              },
+                              "required_review_thread_resolution": {
+                                "default": false,
+                                "description": "Every review thread must be resolved.",
+                                "type": "boolean",
+                              },
+                              "required_reviewers": {
+                                "description": "Reviews required from specific teams are not supported yet: empty or left out.",
+                                "items": {
+                                  "not": {},
+                                },
+                                "maxItems": 0,
+                                "type": "array",
+                              },
+                            },
+                            "required": [
+                              "required_approving_review_count",
+                              "dismiss_stale_reviews_on_push",
+                              "require_last_push_approval",
+                              "required_review_thread_resolution",
+                              "require_code_owner_review",
+                              "allowed_merge_methods",
+                              "allow_agent_approvals",
+                            ],
+                            "type": "object",
+                          },
                           "type": {
-                            "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests).",
+                            "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
                             "enum": [
                               "creation",
                               "update",
@@ -10327,6 +10621,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "non_fast_forward",
                               "required_signatures",
                               "pull_request",
+                              "require_up_to_date",
                             ],
                             "type": "string",
                           },
@@ -10336,7 +10631,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         ],
                         "type": "object",
                       },
-                      "maxItems": 6,
+                      "maxItems": 7,
                       "minItems": 1,
                       "type": "array",
                     },
@@ -10541,8 +10836,74 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                   "rules": {
                     "items": {
                       "properties": {
+                        "parameters": {
+                          "additionalProperties": false,
+                          "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                          "properties": {
+                            "allow_agent_approvals": {
+                              "default": false,
+                              "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
+                              "type": "boolean",
+                            },
+                            "allowed_merge_methods": {
+                              "default": [
+                                "merge",
+                                "squash",
+                                "rebase",
+                              ],
+                              "items": {
+                                "enum": [
+                                  "merge",
+                                  "squash",
+                                  "rebase",
+                                ],
+                                "type": "string",
+                              },
+                              "maxItems": 3,
+                              "minItems": 1,
+                              "type": "array",
+                            },
+                            "dismiss_stale_reviews_on_push": {
+                              "default": false,
+                              "description": "A push makes earlier reviews stop counting.",
+                              "type": "boolean",
+                            },
+                            "require_code_owner_review": {
+                              "const": false,
+                              "default": false,
+                              "description": "Code owners are not supported yet: must be false.",
+                              "type": "boolean",
+                            },
+                            "require_last_push_approval": {
+                              "default": false,
+                              "description": "Someone other than the last pusher must approve after the last push.",
+                              "type": "boolean",
+                            },
+                            "required_approving_review_count": {
+                              "default": 0,
+                              "description": "Approving reviews a merge needs, from people with write access other than the author.",
+                              "maximum": 10,
+                              "minimum": 0,
+                              "type": "integer",
+                            },
+                            "required_review_thread_resolution": {
+                              "default": false,
+                              "description": "Every review thread must be resolved.",
+                              "type": "boolean",
+                            },
+                            "required_reviewers": {
+                              "description": "Reviews required from specific teams are not supported yet: empty or left out.",
+                              "items": {
+                                "not": {},
+                              },
+                              "maxItems": 0,
+                              "type": "array",
+                            },
+                          },
+                          "type": "object",
+                        },
                         "type": {
-                          "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests).",
+                          "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
                           "enum": [
                             "creation",
                             "update",
@@ -10550,6 +10911,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "non_fast_forward",
                             "required_signatures",
                             "pull_request",
+                            "require_up_to_date",
                           ],
                           "type": "string",
                         },
@@ -10559,7 +10921,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
-                    "maxItems": 6,
+                    "maxItems": 7,
                     "minItems": 1,
                     "type": "array",
                   },
@@ -10720,8 +11082,83 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "items": {
                         "additionalProperties": false,
                         "properties": {
+                          "parameters": {
+                            "additionalProperties": false,
+                            "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                            "properties": {
+                              "allow_agent_approvals": {
+                                "default": false,
+                                "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
+                                "type": "boolean",
+                              },
+                              "allowed_merge_methods": {
+                                "default": [
+                                  "merge",
+                                  "squash",
+                                  "rebase",
+                                ],
+                                "items": {
+                                  "enum": [
+                                    "merge",
+                                    "squash",
+                                    "rebase",
+                                  ],
+                                  "type": "string",
+                                },
+                                "maxItems": 3,
+                                "minItems": 1,
+                                "type": "array",
+                              },
+                              "dismiss_stale_reviews_on_push": {
+                                "default": false,
+                                "description": "A push makes earlier reviews stop counting.",
+                                "type": "boolean",
+                              },
+                              "require_code_owner_review": {
+                                "const": false,
+                                "default": false,
+                                "description": "Code owners are not supported yet: must be false.",
+                                "type": "boolean",
+                              },
+                              "require_last_push_approval": {
+                                "default": false,
+                                "description": "Someone other than the last pusher must approve after the last push.",
+                                "type": "boolean",
+                              },
+                              "required_approving_review_count": {
+                                "default": 0,
+                                "description": "Approving reviews a merge needs, from people with write access other than the author.",
+                                "maximum": 10,
+                                "minimum": 0,
+                                "type": "integer",
+                              },
+                              "required_review_thread_resolution": {
+                                "default": false,
+                                "description": "Every review thread must be resolved.",
+                                "type": "boolean",
+                              },
+                              "required_reviewers": {
+                                "description": "Reviews required from specific teams are not supported yet: empty or left out.",
+                                "items": {
+                                  "not": {},
+                                },
+                                "maxItems": 0,
+                                "type": "array",
+                              },
+                            },
+                            "required": [
+                              "required_approving_review_count",
+                              "dismiss_stale_reviews_on_push",
+                              "require_last_push_approval",
+                              "required_review_thread_resolution",
+                              "require_code_owner_review",
+                              "allowed_merge_methods",
+                              "allow_agent_approvals",
+                            ],
+                            "type": "object",
+                          },
                           "type": {
-                            "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests).",
+                            "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
                             "enum": [
                               "creation",
                               "update",
@@ -10729,6 +11166,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "non_fast_forward",
                               "required_signatures",
                               "pull_request",
+                              "require_up_to_date",
                             ],
                             "type": "string",
                           },
@@ -10738,7 +11176,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         ],
                         "type": "object",
                       },
-                      "maxItems": 6,
+                      "maxItems": 7,
                       "minItems": 1,
                       "type": "array",
                     },

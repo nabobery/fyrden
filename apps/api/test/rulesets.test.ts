@@ -636,6 +636,85 @@ describe("rulesets", () => {
   });
 });
 
+describe("pull request rule parameters", () => {
+  type Rules = { rules: { type: string; parameters?: Record<string, unknown> }[]; code?: string };
+
+  it("are kept as given, defaults filled in, and read back in GitHub's shape", async () => {
+    const created = await ruleset({
+      rules: [
+        {
+          type: "pull_request",
+          parameters: { required_approving_review_count: 2, allow_agent_approvals: true },
+        },
+        { type: "require_up_to_date" },
+      ],
+    });
+    expect(created.status).toBe(201);
+    const read = await json<Rules>(api("GET", `${path}/rulesets/${created.body.id}`, owner.token));
+    expect(read.body.rules).toEqual([
+      {
+        type: "pull_request",
+        parameters: {
+          required_approving_review_count: 2,
+          dismiss_stale_reviews_on_push: false,
+          require_last_push_approval: false,
+          required_review_thread_resolution: false,
+          require_code_owner_review: false,
+          allowed_merge_methods: ["merge", "squash", "rebase"],
+          allow_agent_approvals: true,
+        },
+      },
+      { type: "require_up_to_date" },
+    ]);
+  });
+
+  it("accept an empty required_reviewers, as GitHub clients send it", async () => {
+    const created = await ruleset({
+      rules: [{ type: "pull_request", parameters: { required_reviewers: [] } }],
+    });
+    expect(created.status).toBe(201);
+  });
+
+  it("take their defaults for a ruleset stored before they existed", async () => {
+    const created = await ruleset({ rules: [{ type: "pull_request" }] });
+    // As an earlier build stored it: the rule without parameters.
+    await inRepo(env.REPO.getByName(repo.id), (r) => {
+      r.git.context.storage.sql.exec(
+        "UPDATE rulesets SET body = json_set(body, '$.rules', json('[{\"type\":\"pull_request\"}]')) WHERE id = ?",
+        created.body.id,
+      );
+    });
+    const read = await json<Rules>(api("GET", `${path}/rulesets/${created.body.id}`, owner.token));
+    expect(read.body.rules[0]?.parameters).toMatchObject({
+      required_approving_review_count: 0,
+      allowed_merge_methods: ["merge", "squash", "rebase"],
+      allow_agent_approvals: false,
+    });
+  });
+
+  it("refuse code owners, parameters on another rule, and a method twice", async () => {
+    for (const rules of [
+      [{ type: "pull_request", parameters: { require_code_owner_review: true } }],
+      [{ type: "deletion", parameters: { required_approving_review_count: 1 } }],
+      [{ type: "pull_request", parameters: { allowed_merge_methods: ["squash", "squash"] } }],
+      [{ type: "pull_request", parameters: { required_approving_review_count: 11 } }],
+      // A requirement Fyrden does not enforce is refused, not dropped.
+      [{ type: "pull_request", parameters: { required_reviewers: [{ reviewer: { id: 1 } }] } }],
+      [{ type: "pull_request", parameters: { automatic_copilot_code_review_enabled: true } }],
+    ])
+      expect((await ruleset({ rules })).status).toBe(422);
+  });
+
+  it("leave direct pushes to a branch that only must be up to date alone", async () => {
+    expect((await ruleset({ rules: [{ type: "require_up_to_date" }] })).status).toBe(201);
+    const pushed = await postPush(
+      await target(owner),
+      pushBody([{ old: fx.c2, new: ZERO, ref: "refs/heads/stable" }]),
+    );
+    expect(pushed.report).toContain("ok refs/heads/stable\n");
+  });
+});
+
 describe("rule checks", () => {
   it("ask for each commit's signature and each signature's verdict once a push", async () => {
     const asked: string[][] = [];

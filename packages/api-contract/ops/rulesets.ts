@@ -1,4 +1,10 @@
-import { HANDLE_PATTERN, PRINCIPAL_TYPES, REPO_ROLES, RULE_TYPES } from "@fyrden/domain";
+import {
+  HANDLE_PATTERN,
+  MERGE_METHODS,
+  PRINCIPAL_TYPES,
+  REPO_ROLES,
+  RULE_TYPES,
+} from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
@@ -13,6 +19,56 @@ const Pattern = z
   .max(255)
   .describe(
     "A full ref name pattern (`refs/heads/main`, `refs/heads/release/*`, `refs/tags/**`), `~DEFAULT_BRANCH` or `~ALL`. `*` stays within a path segment; `**` crosses them.",
+  );
+
+// Strict: a requirement Fyrden does not enforce is refused, never stored as if it held.
+const PullRequestParameters = z
+  .strictObject({
+    required_approving_review_count: z
+      .number()
+      .int()
+      .min(0)
+      .max(10)
+      .default(0)
+      .describe(
+        "Approving reviews a merge needs, from people with write access other than the author.",
+      ),
+    dismiss_stale_reviews_on_push: z
+      .boolean()
+      .default(false)
+      .describe("A push makes earlier reviews stop counting."),
+    require_last_push_approval: z
+      .boolean()
+      .default(false)
+      .describe("Someone other than the last pusher must approve after the last push."),
+    required_review_thread_resolution: z
+      .boolean()
+      .default(false)
+      .describe("Every review thread must be resolved."),
+    require_code_owner_review: z
+      .literal(false)
+      .default(false)
+      .describe("Code owners are not supported yet: must be false."),
+    allowed_merge_methods: z
+      .array(z.enum(MERGE_METHODS))
+      .min(1)
+      .max(MERGE_METHODS.length)
+      .refine((methods) => new Set(methods).size === methods.length, "A method is given twice.")
+      .default([...MERGE_METHODS]),
+    required_reviewers: z
+      .array(z.never())
+      .max(0)
+      .optional()
+      .describe("Reviews required from specific teams are not supported yet: empty or left out."),
+    allow_agent_approvals: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
+      ),
+  })
+  .describe(
+    "For `pull_request` only: what a merge needs; left out, nothing beyond the pull request.",
   );
 
 const RulesetBody = {
@@ -31,13 +87,19 @@ const RulesetBody = {
   }),
   rules: z
     .array(
-      z.object({
-        type: z
-          .enum(RULE_TYPES)
-          .describe(
-            "`creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests).",
-          ),
-      }),
+      z
+        .object({
+          type: z
+            .enum(RULE_TYPES)
+            .describe(
+              "`creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit).",
+            ),
+          parameters: PullRequestParameters.optional(),
+        })
+        .refine(
+          (rule) => rule.parameters === undefined || rule.type === "pull_request",
+          "Only a pull_request rule takes parameters.",
+        ),
     )
     .min(1)
     .max(RULE_TYPES.length)
