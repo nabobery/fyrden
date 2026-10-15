@@ -16,7 +16,7 @@ import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, decodeCursor, encodeBytesCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { resolveVerification } from "../signing/verification.js";
-import type { RepoEntry } from "./directory.js";
+import { authorize, networkReposOf, type RepoEntry } from "./directory.js";
 import { commitIdentityFor, commitIdentityOf } from "./file-writes.js";
 
 type PullOutput = Output<typeof getPull>;
@@ -27,6 +27,7 @@ export function pullOutput(pull: PullView): PullOutput {
     number: pull.number,
     state: pull.state === "open" ? "open" : "closed",
     merged: pull.state === "merged",
+    head_repo_id: pull.headRepoId,
     mergeable: pull.mergeable,
     mergeable_state: pull.mergeableState,
     draft: pull.draft,
@@ -81,6 +82,12 @@ export function failure(entry: RepoEntry, code: string, number?: number): Operat
         422,
         "same_branches",
         "The head and base must be different branches.",
+      );
+    case "too_expensive":
+      return new OperationError(
+        422,
+        "too_expensive",
+        "The head's history is too far from the base's to import here.",
       );
     case "no_commits":
       return new OperationError(
@@ -205,19 +212,67 @@ export async function createPullOperation(
   input: Input<typeof createPull>,
 ): Promise<Output<typeof createPull>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:write");
-  ctx.metrics.count("do.request", { class: "RepoDO", method: "createPull" });
-  const result = await ctx.env.REPO.getByName(entry.id).createPull(
-    {
-      title: input.title,
-      body: input.body ? input.body : null,
-      draft: input.draft,
-      baseRef: input.base,
-      headRef: input.head,
-    },
-    actorOf(ctx),
-  );
+  const fields = {
+    title: input.title,
+    body: input.body ? input.body : null,
+    draft: input.draft,
+    baseRef: input.base,
+  };
+  const repo = ctx.env.REPO.getByName(entry.id);
+  const head = await headRepoOf(ctx, entry, input.head, input.head_repo);
+  let result:
+    | Awaited<ReturnType<typeof repo.createPull>>
+    | Awaited<ReturnType<typeof repo.createForkPull>>;
+  if (head.repo === null) {
+    ctx.metrics.count("do.request", { class: "RepoDO", method: "createPull" });
+    result = await repo.createPull({ ...fields, headRef: head.branch }, actorOf(ctx));
+  } else {
+    ctx.metrics.count("do.request", { class: "RepoDO", method: "createForkPull" });
+    result = await repo.createForkPull(
+      { ...fields, headRef: head.branch, headRepoId: head.repo.id },
+      actorOf(ctx),
+    );
+  }
   if (!result.ok) throw failure(entry, result.code, "number" in result ? result.number : undefined);
   return pullOutput(result.record);
+}
+
+/**
+ * The repository and branch `head` names: a branch of the base itself, or
+ * GitHub's `owner:branch`, a branch of that owner's repository in the
+ * base's fork network (`headRepo` names it when the owner has several),
+ * which the caller must be able to read.
+ */
+async function headRepoOf(
+  ctx: OpContext,
+  base: RepoEntry,
+  head: string,
+  headRepo: string | undefined,
+): Promise<{ repo: RepoEntry | null; branch: string }> {
+  const colon = head.indexOf(":");
+  if (colon < 0) return { repo: null, branch: head };
+  const owner = head.slice(0, colon);
+  const branch = head.slice(colon + 1);
+  if (branch === "")
+    throw new OperationError(422, "invalid_input", "head names no branch after its owner.");
+  const candidates = await networkReposOf(ctx.env, base.networkId, owner, headRepo, ctx.metrics);
+  const notFound = new OperationError(
+    422,
+    "head_not_found",
+    `${owner} has no repository in this repository's fork network to open a pull request from.`,
+  );
+  if (candidates.length === 0) throw notFound;
+  if (candidates.length > 1)
+    throw new OperationError(
+      422,
+      "head_repo_required",
+      `${owner} has several repositories in this fork network; name one with head_repo.`,
+    );
+  const found = candidates[0] as RepoEntry;
+  if (found.id === base.id) return { repo: null, branch };
+  // The caller must read the head's repository (a private sibling it cannot read is not found).
+  if (!(await authorize(ctx.env, ctx.auth, found, "contents:read", ctx.metrics))) throw notFound;
+  return { repo: found, branch };
 }
 
 /** The `pulls.update` operation. */

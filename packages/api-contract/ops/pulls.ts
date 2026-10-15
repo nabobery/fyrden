@@ -26,6 +26,12 @@ export const PullRequest = z.object({
   number: z.number().int(),
   state: z.enum(["open", "closed"]),
   merged: z.boolean(),
+  head_repo_id: z
+    .string()
+    .nullable()
+    .describe(
+      "Fyrden: the repository the head branch is in (a fork in the same network); null for this one.",
+    ),
   mergeable: z
     .boolean()
     .nullable()
@@ -106,12 +112,25 @@ export const createPull = defineOperation({
   path: "/repos/{owner}/{repo}/pulls",
   summary: "Create a pull request",
   description:
-    "Proposes merging one branch of the repository into another. Anyone who can read the repository may open one. Refused when the head has no commits the base lacks, or when a pull request between the two branches is already open. While open, `refs/pull/{number}/head` follows the head branch.",
+    "Proposes merging one branch of the repository into another. Anyone who can read the repository may open one. Refused when the head has no commits the base lacks, or when a pull request between the two branches is already open. While open, `refs/pull/{number}/head` follows the head branch. The head may be a branch of a fork in the same network (`owner:branch`): its revision is imported first, and later pushes to it reach the pull request shortly after.",
   input: z.object({
     ...RepoInput,
     title: Title,
     body: Body.optional(),
-    head: Branch.describe("The branch with the changes, without refs/heads/."),
+    head: z
+      .string()
+      .min(1)
+      .max(1024)
+      .describe(
+        "The branch with the changes, without refs/heads/; `owner:branch` for a branch of that owner's repository in the base's fork network (a fork), which the caller must be able to read.",
+      ),
+    head_repo: z
+      .string()
+      .regex(REPO_NAME_PATTERN)
+      .optional()
+      .describe(
+        "With `owner:branch`, the repository's name, when the owner has several in the network.",
+      ),
     base: Branch.describe("The branch to merge into, without refs/heads/."),
     draft: z.boolean().default(false).describe("Open it as a draft."),
   }),

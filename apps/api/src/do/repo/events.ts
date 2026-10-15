@@ -380,6 +380,11 @@ export class RepoEvents {
     if (reason) throw new Error(reason);
   }
 
+  /** The repository's visibility; null before its identity is recorded. */
+  visibility(): RepoRow["visibility"] | null {
+    return (this.#meta()?.visibility as RepoRow["visibility"] | undefined) ?? null;
+  }
+
   /** Why nothing may change the repository now, if anything stops it. */
   frozen(): string | undefined {
     return frozenReason(this.#meta());

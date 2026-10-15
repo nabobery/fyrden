@@ -137,8 +137,13 @@ export async function deleteScratch(
 }
 
 /** Deletes every scratch object of a run (paged). */
-export async function deleteRun(git: RepoGitStorage, runId: string): Promise<void> {
-  const prefix = scratchPrefix(git.networkId(), runId);
+export async function deleteRun(
+  git: RepoGitStorage,
+  runId: string,
+  /** The network its scratch objects were written under (the repository's, by default). */
+  networkId: string = git.networkId(),
+): Promise<void> {
+  const prefix = scratchPrefix(networkId, runId);
   for (;;) {
     const page = await git.bucket.list({ prefix, limit: 1_000 });
     const keys = page.objects.map((o) => o.key);

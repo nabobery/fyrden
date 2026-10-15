@@ -8825,6 +8825,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "description": "Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again.",
                             "type": "boolean",
                           },
+                          "head_repo_id": {
+                            "description": "Fyrden: the repository the head branch is in (a fork in the same network); null for this one.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
                           "merge_commit_sha": {
                             "description": "Once merged, the commit the base branch moved to.",
                             "type": [
@@ -8931,6 +8938,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "number",
                           "state",
                           "merged",
+                          "head_repo_id",
                           "mergeable",
                           "mergeable_state",
                           "draft",
@@ -8987,7 +8995,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "post": {
-        "description": "Proposes merging one branch of the repository into another. Anyone who can read the repository may open one. Refused when the head has no commits the base lacks, or when a pull request between the two branches is already open. While open, \`refs/pull/{number}/head\` follows the head branch.",
+        "description": "Proposes merging one branch of the repository into another. Anyone who can read the repository may open one. Refused when the head has no commits the base lacks, or when a pull request between the two branches is already open. While open, \`refs/pull/{number}/head\` follows the head branch. The head may be a branch of a fork in the same network (\`owner:branch\`): its revision is imported first, and later pushes to it reach the pull request shortly after.",
         "operationId": "pulls.create",
         "parameters": [
           {
@@ -9032,9 +9040,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "type": "boolean",
                   },
                   "head": {
-                    "description": "The branch with the changes, without refs/heads/.",
-                    "maxLength": 1013,
+                    "description": "The branch with the changes, without refs/heads/; \`owner:branch\` for a branch of that owner's repository in the base's fork network (a fork), which the caller must be able to read.",
+                    "maxLength": 1024,
                     "minLength": 1,
+                    "type": "string",
+                  },
+                  "head_repo": {
+                    "description": "With \`owner:branch\`, the repository's name, when the owner has several in the network.",
+                    "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
                     "type": "string",
                   },
                   "title": {
@@ -9130,6 +9143,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "head_ref_deleted": {
                       "description": "Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again.",
                       "type": "boolean",
+                    },
+                    "head_repo_id": {
+                      "description": "Fyrden: the repository the head branch is in (a fork in the same network); null for this one.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
                     },
                     "merge_commit_sha": {
                       "description": "Once merged, the commit the base branch moved to.",
@@ -9237,6 +9257,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "number",
                     "state",
                     "merged",
+                    "head_repo_id",
                     "mergeable",
                     "mergeable_state",
                     "draft",
@@ -9966,6 +9987,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "description": "Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again.",
                       "type": "boolean",
                     },
+                    "head_repo_id": {
+                      "description": "Fyrden: the repository the head branch is in (a fork in the same network); null for this one.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
                     "merge_commit_sha": {
                       "description": "Once merged, the commit the base branch moved to.",
                       "type": [
@@ -10072,6 +10100,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "number",
                     "state",
                     "merged",
+                    "head_repo_id",
                     "mergeable",
                     "mergeable_state",
                     "draft",
@@ -10278,6 +10307,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "description": "Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again.",
                       "type": "boolean",
                     },
+                    "head_repo_id": {
+                      "description": "Fyrden: the repository the head branch is in (a fork in the same network); null for this one.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
                     "merge_commit_sha": {
                       "description": "Once merged, the commit the base branch moved to.",
                       "type": [
@@ -10384,6 +10420,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "number",
                     "state",
                     "merged",
+                    "head_repo_id",
                     "mergeable",
                     "mergeable_state",
                     "draft",
@@ -11721,6 +11758,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "description": "Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again.",
                       "type": "boolean",
                     },
+                    "head_repo_id": {
+                      "description": "Fyrden: the repository the head branch is in (a fork in the same network); null for this one.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
                     "merge_commit_sha": {
                       "description": "Once merged, the commit the base branch moved to.",
                       "type": [
@@ -11827,6 +11871,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "number",
                     "state",
                     "merged",
+                    "head_repo_id",
                     "mergeable",
                     "mergeable_state",
                     "draft",
@@ -12122,6 +12167,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "description": "Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again.",
                       "type": "boolean",
                     },
+                    "head_repo_id": {
+                      "description": "Fyrden: the repository the head branch is in (a fork in the same network); null for this one.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
                     "merge_commit_sha": {
                       "description": "Once merged, the commit the base branch moved to.",
                       "type": [
@@ -12228,6 +12280,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "number",
                     "state",
                     "merged",
+                    "head_repo_id",
                     "mergeable",
                     "mergeable_state",
                     "draft",

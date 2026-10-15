@@ -33,6 +33,8 @@ export const PullRequestRowSchema = z.strictObject({
   /** Branch names, without `refs/heads/`. */
   baseRef: branch,
   headRef: branch,
+  /** The repository the head branch is in, another member of the fork network; null for this one. */
+  headRepoId: z.string().nullable(),
   baseSha: sha,
   headSha: sha,
   /** The head branch was deleted: the pull request stays at its last head revision. */

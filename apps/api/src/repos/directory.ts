@@ -208,6 +208,34 @@ export async function findReposById(
   return results.map(entryOf);
 }
 
+/**
+ * The active repositories of fork network `networkId` that the principal
+ * with `handle` owns (a pull request's head is a branch of one), named
+ * `name` when given; at most two (enough to tell one from several). From
+ * the D1 primary, so a fork made a moment ago is found.
+ */
+export async function networkReposOf(
+  env: Env,
+  networkId: string,
+  handle: string,
+  name: string | undefined,
+  metrics?: Metrics,
+): Promise<RepoEntry[]> {
+  if (!isValidHandle(handle) || (name !== undefined && !isValidRepoName(name))) return [];
+  metrics?.count("d1.query", { db: "directory", op: "network_repos" });
+  const { results } = await env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT ${REPO_COLUMNS}
+       FROM repos r JOIN principals p ON p.id = r.owner_id
+       WHERE r.network_id = ? AND p.handle = ? COLLATE NOCASE AND r.state = 'active'
+         AND p.disabled_at IS NULL AND (?3 IS NULL OR r.name = ?3 COLLATE NOCASE)
+       ORDER BY r.name LIMIT 2`,
+    )
+    .bind(networkId, handle, name ?? null)
+    .all<RepoRow>();
+  return results.map(entryOf);
+}
+
 /** The active repository fork network `networkId` grew from (forked from none), if any. */
 export async function findNetworkSource(
   env: Env,

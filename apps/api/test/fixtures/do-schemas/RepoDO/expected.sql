@@ -9,9 +9,11 @@ CREATE INDEX audit_segments_pending ON audit_segments (from_seq) WHERE state = '
 CREATE INDEX audit_segments_to ON audit_segments (to_seq);
 CREATE INDEX comments_number ON comments (number, comment_id);
 CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
+CREATE INDEX import_commits_staged ON import_commits (staged_at);
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
 CREATE INDEX leases_pack ON leases (pack_id, expires_at);
 CREATE INDEX mergeability_jobs_waiting ON mergeability_jobs (requested_at, pr_number);
+CREATE INDEX outgoing_pulls_head ON outgoing_pulls (head_ref);
 CREATE INDEX packs_state ON packs (state, created_at);
 CREATE INDEX packs_unit ON packs (unit_id) WHERE unit_id IS NOT NULL;
 CREATE INDEX pull_listings_comparison
@@ -27,6 +29,7 @@ CREATE INDEX review_comments_pr ON review_comments (pr_number, comment_id);
 CREATE INDEX review_comments_thread ON review_comments (thread_id, comment_id);
 CREATE INDEX review_threads_pr ON review_threads (pr_number, thread_id);
 CREATE INDEX reviews_pr ON reviews (pr_number, review_id);
+CREATE INDEX revision_imports_waiting ON revision_imports (requested_at, pr_number);
 CREATE UNIQUE INDEX rulesets_name ON rulesets (name);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);
 CREATE TABLE acl_snapshot (
@@ -92,6 +95,10 @@ CREATE TABLE audit_segments (
         created_at INTEGER NOT NULL,
         archived_at INTEGER
       ) STRICT;
+CREATE TABLE collect_requests (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        due_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE comments (
         comment_id INTEGER PRIMARY KEY AUTOINCREMENT,
         number INTEGER NOT NULL,
@@ -133,6 +140,28 @@ CREATE TABLE git_meta (
     network_id TEXT NOT NULL,
     updated_at INTEGER NOT NULL
   ) STRICT;
+CREATE TABLE head_follows (
+        pr_number INTEGER PRIMARY KEY,
+        head_repo_id TEXT NOT NULL,
+        head_ref TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        follow INTEGER NOT NULL CHECK (follow IN (0, 1)),
+        known_sha TEXT,
+        requested_at INTEGER NOT NULL,
+        next_at INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+CREATE TABLE import_commits (
+        import_id TEXT NOT NULL,
+        oid BLOB NOT NULL,
+        tree BLOB NOT NULL,
+        parents BLOB NOT NULL,
+        commit_time INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        level INTEGER NOT NULL,
+        signature TEXT,
+        staged_at INTEGER NOT NULL,
+        PRIMARY KEY (import_id, oid)
+      ) STRICT;
 CREATE TABLE jobs (
     job_id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -189,6 +218,13 @@ CREATE TABLE outbox_state (
         next_drain_at INTEGER,
         attempts INTEGER NOT NULL DEFAULT 0,
         last_error TEXT
+      ) STRICT;
+CREATE TABLE outgoing_pulls (
+        base_repo_id TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        head_ref TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        PRIMARY KEY (base_repo_id, pr_number)
       ) STRICT;
 CREATE TABLE packs (
     pack_id TEXT PRIMARY KEY,
@@ -254,7 +290,7 @@ CREATE TABLE pull_requests (
         closed_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
-      , last_pusher TEXT, last_pusher_grant TEXT, last_push_at INTEGER, merge_commit_sha TEXT, merged_by TEXT, merged_at INTEGER) STRICT;
+      , last_pusher TEXT, last_pusher_grant TEXT, last_push_at INTEGER, merge_commit_sha TEXT, merged_by TEXT, merged_at INTEGER, head_repo_id TEXT, head_ref_version INTEGER) STRICT;
 CREATE TABLE ref_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL,
@@ -343,6 +379,33 @@ CREATE TABLE reviews (
         dismissed_by TEXT,
         dismissal_message TEXT,
         version INTEGER NOT NULL DEFAULT 1
+      ) STRICT;
+CREATE TABLE revision_imports (
+        pr_number INTEGER PRIMARY KEY,
+        head_repo_id TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        ref_version INTEGER NOT NULL,
+        sha TEXT NOT NULL,
+        pusher TEXT,
+        pusher_grant TEXT,
+        step TEXT NOT NULL CHECK (step IN ('snapshot', 'share', 'adopt', 'graph', 'publish')),
+        lease_id TEXT,
+        state TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        requested_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE revision_notices (
+        base_repo_id TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        ref_version INTEGER NOT NULL,
+        sha TEXT,
+        pusher TEXT,
+        pusher_grant TEXT,
+        pushed INTEGER NOT NULL CHECK (pushed IN (0, 1)),
+        next_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (base_repo_id, pr_number)
       ) STRICT;
 CREATE TABLE rule_suites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

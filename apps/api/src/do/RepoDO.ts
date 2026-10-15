@@ -86,6 +86,22 @@ import {
   RepoPush,
 } from "../git/push/repo-push.js";
 import type { DetachHooks } from "../network/detach.js";
+import {
+  collectLater,
+  discardImport,
+  IMPORT_POLICY,
+  ImportBusy,
+  type ImportDeps,
+  ImportFailed,
+  type ImportPolicy,
+  type ImportWork,
+  PullImports,
+  publishStaged,
+  readyToPublish,
+  releaseLease,
+  runImportStep,
+} from "../network/pull-import.js";
+import { type NoticeAnswer, PullSource, type RevisionNotice } from "../network/pull-source.js";
 import { networkRetire, soleNetworkMember } from "../network/repo-client.js";
 import { type CopyStep, type CopyStepInput, RepoNetwork } from "../network/repo-network.js";
 import type {
@@ -96,7 +112,7 @@ import type {
   MemberPack,
   ViewPack,
 } from "../network/types.js";
-import type { CompactSliceInput } from "../network/view-cap.js";
+import { type CompactSliceInput, VIEW_CAP, viewCompactionHandler } from "../network/view-cap.js";
 import { platformSigner } from "../signing/platform-key.js";
 import { type SignedFact, verdicts } from "../signing/verification.js";
 import {
@@ -239,6 +255,19 @@ export interface ApplySuggestionsInput {
   readonly author: GitPerson;
 }
 
+/** Heads' repositories told per slice of the `pull_follow` job. Proposed. */
+const FOLLOWS_PER_SLICE = 20;
+/** When to try again after a head's repository could not be told. Proposed. */
+const FOLLOW_RETRY_MS = 30_000;
+/** The one job telling heads' repositories which branches to follow. */
+const PULL_FOLLOW_JOB = "pull-follow";
+
+/** Calls to other objects opening a pull request from another repository may make. Proposed. */
+const OPEN_IMPORT_CALLS = 600;
+
+/** Import steps opening a pull request from another repository may take before it gives up. */
+const OPEN_IMPORT_STEPS = 40;
+
 /** The largest file a diff comment's anchor is checked against. */
 const ANCHOR_MAX_BYTES = 1024 * 1024;
 
@@ -353,6 +382,12 @@ export class RepoDO extends MigratingDO {
   /** Whether open pull requests merge cleanly, worked out in the background. */
   readonly mergeability: RepoMergeability;
 
+  /** This repository's branches that are heads of pull requests into other members of its network. */
+  readonly pullSource: PullSource;
+
+  /** Revisions of pull requests' heads in other repositories, being imported. */
+  readonly pullImports: PullImports;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.metricsDataset = env.METRICS;
@@ -380,6 +415,24 @@ export class RepoDO extends MigratingDO {
       events: this.events,
       repoId: () => this.#repoId(),
       stale: (number, open) => this.mergeability.stale(number, open),
+      follow: (pull) => this.#follow(pull),
+    });
+    this.pullSource = new PullSource({
+      git: this.git,
+      repoId: () => this.#repoId(),
+      tell: (baseRepoId, notice) => this.env.REPO.getByName(baseRepoId).receiveRevision(notice),
+      log: () => this.#log(),
+    });
+    this.pullImports = new PullImports({
+      ...this.#importDeps(),
+      policy: () => this.importPolicy,
+      publish: (number, work, row) =>
+        this.pulls.publishRevision(number, row, () => publishStaged(this.git, work.importId)),
+      writable: () => this.#writeRefusal() === undefined && this.events.canEmit(),
+      authorReads: async (row) => {
+        const pull = this.pulls.get(row.number);
+        return pull !== undefined && (await this.#headReadable(row.headRepoId, pull.authorRoot));
+      },
     });
     this.mergeability = new RepoMergeability({
       git: this.git,
@@ -443,6 +496,7 @@ export class RepoDO extends MigratingDO {
     this.git.refStore.inCommit = (context) => {
       this.events.onCommit(context);
       this.pulls.onCommit(context);
+      this.pullSource.onCommit(context);
     };
     this.git.refStore.onHeadChanged = () => this.events.onHeadChanged();
     // Every commit (push, import, merge) schedules the maintenance it calls
@@ -852,6 +906,238 @@ export class RepoDO extends MigratingDO {
       }
       return { ok: false as const, code: "busy" as const };
     });
+  }
+
+  /**
+   * Opens a pull request whose head is a branch of another repository of
+   * the network (`headRepoId`, which the Worker found the caller reads):
+   * the head's revision is imported first (its packs borrowed, its commit
+   * graph copied), then the pull request is opened on it, its rows joining
+   * the graph in the same transaction; the head's repository then tells of
+   * each later revision.
+   */
+  createForkPull(
+    input: Omit<OpenPull, "baseSha" | "headSha" | "headRefVersion"> & {
+      readonly headRepoId: string;
+    },
+    actor: RefActor,
+  ): Promise<
+    | { ok: true; record: PullView }
+    | {
+        ok: false;
+        code:
+          | "repo_not_found"
+          | "repo_transferring"
+          | "access_lost"
+          | "base_not_found"
+          | "head_not_found"
+          | "no_commits"
+          | "already_exists"
+          | "too_expensive"
+          | "busy";
+        number?: number;
+      }
+  > {
+    return this.#measured("createForkPull", async () => {
+      await this.checkEpoch();
+      const ceilings = await this.#rolesPulled(actor.principal, actor.grantId ?? null);
+      const root = rootIdentity({
+        principalId: actor.principal,
+        grantId: actor.grantId ?? null,
+        ceilingIds: ceilings,
+      });
+      // What can be refused without importing anything is refused first.
+      const refusedEarly = this.#writeRefusal();
+      if (refusedEarly) return { ok: false as const, code: refusedEarly.code as "repo_not_found" };
+      if (this.#roleNow(actor.principal, ceilings) === null)
+        return { ok: false as const, code: "access_lost" as const };
+      if (!this.pulls.branchTip(input.baseRef))
+        return { ok: false as const, code: "base_not_found" as const };
+      const existing = this.pulls.openBetween(input.headRef, input.baseRef, input.headRepoId);
+      if (existing !== undefined)
+        return { ok: false as const, code: "already_exists" as const, number: existing };
+      const head = this.env.REPO.getByName(input.headRepoId);
+      const tip = await head.pullHeadTip(input.headRef);
+      if (!tip.sha) return { ok: false as const, code: "head_not_found" as const };
+      const importId = `open:${crypto.randomUUID()}`;
+      // Calls this invocation makes to other objects: within Free's 1,000, with room to spare.
+      const budget = { used: 2, max: OPEN_IMPORT_CALLS };
+      let work: ImportWork = {
+        importId,
+        headRepoId: input.headRepoId,
+        sha: tip.sha,
+        step: "snapshot",
+        leaseId: null,
+        state: {},
+      };
+      let opened: Awaited<ReturnType<RepoPulls["open"]>> | undefined;
+      try {
+        for (let steps = 0; work.step !== "publish"; steps++) {
+          if (steps >= OPEN_IMPORT_STEPS || budget.used >= budget.max)
+            return { ok: false as const, code: "too_expensive" as const };
+          work = await runImportStep(this.#importDeps(), work, this.importPolicy, budget);
+        }
+        await this.forkPullHooks.beforePublish?.();
+        // Published, the revision becomes readable through the base: the opener must read the
+        // head's repository still (the Worker checked it before the import began).
+        if (!(await this.#headReadable(input.headRepoId, root)))
+          return { ok: false as const, code: "head_not_found" as const };
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const refused = this.#writeRefusal();
+          if (refused) return { ok: false as const, code: refused.code as "repo_not_found" };
+          if (this.#roleNow(actor.principal, ceilings) === null)
+            return { ok: false as const, code: "access_lost" as const };
+          const { version } = this.git.refStore.state();
+          const baseSha = this.pulls.branchTip(input.baseRef);
+          if (!baseSha) return { ok: false as const, code: "base_not_found" as const };
+          const headSha = oidFromHex(tip.sha);
+          // A head the base's graph has already is in its history unless it is ahead of the base.
+          if (this.git.commitGraph.readSync([headSha], "verified")[0]) {
+            let merged: boolean;
+            try {
+              merged = await isAncestor(this.git.commitGraph, "verified", headSha, baseSha, {
+                maxCommits: 3 * BROWSE_POLICY.compareMaxCommits,
+              });
+            } catch (error) {
+              if (!(error instanceof WalkLimitError)) throw error;
+              merged = false;
+            }
+            if (merged) return { ok: false as const, code: "no_commits" as const };
+          }
+          if (this.git.refStore.state().version !== version) continue;
+          if (!this.ctx.storage.transactionSync(() => readyToPublish(this.git, work)))
+            return { ok: false as const, code: "busy" as const };
+          opened = this.pulls.open(
+            { ...input, baseSha, headSha, headRefVersion: tip.refVersion },
+            version,
+            { actor, root },
+            () => {
+              // Checked again in the ref transaction: the base's collection may have run.
+              if (!readyToPublish(this.git, work)) throw new ImportBusy("the import changed");
+              publishStaged(this.git, importId);
+            },
+          );
+          if (!opened.ok && opened.code === "version-conflict") continue;
+          break;
+        }
+      } catch (error) {
+        if (error instanceof ImportFailed)
+          return error.code === "too_large"
+            ? { ok: false as const, code: "too_expensive" as const }
+            : error.code === "unknown_commit"
+              ? { ok: false as const, code: "head_not_found" as const }
+              : { ok: false as const, code: "busy" as const };
+        if (error instanceof ImportBusy) return { ok: false as const, code: "busy" as const };
+        throw error;
+      } finally {
+        if (opened?.ok) {
+          // All the head's packs were borrowed: those no ref reaches go with a later collection.
+          if ((work.state.packs?.length ?? 0) > 0) collectLater(this.git);
+          await releaseLease(this.#importDeps(), work);
+        } else await discardImport(this.#importDeps(), work);
+      }
+      if (!opened) return { ok: false as const, code: "busy" as const };
+      if (!opened.ok) return opened as { ok: false; code: "already_exists"; number: number };
+      this.#armOutbox();
+      this.#ensureAuditArchive();
+      return { ok: true as const, record: this.#viewed(opened.record) };
+    });
+  }
+
+  /**
+   * In the transaction of a change of a pull request whose head is in
+   * another repository (opened, closed, reopened, merged): that repository
+   * must follow the branch for it, or no longer. Recorded here and told by
+   * the `pull_follow` job until it is told; closed, its import is dropped.
+   */
+  #follow(pull: PullRecord): void {
+    const follow = pull.state === "open";
+    if (!follow) this.pullImports.drop(pull.number);
+    this.ctx.storage.sql.exec(
+      `INSERT INTO head_follows (pr_number, head_repo_id, head_ref, generation, follow, known_sha,
+         requested_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (pr_number) DO UPDATE SET head_repo_id = excluded.head_repo_id,
+         head_ref = excluded.head_ref, generation = excluded.generation, follow = excluded.follow,
+         known_sha = excluded.known_sha, requested_at = excluded.requested_at, next_at = 0`,
+      pull.number,
+      pull.headRepoId as string,
+      pull.headRef,
+      pull.generation,
+      follow ? 1 : 0,
+      pull.headSha,
+      this.git.context.now(),
+    );
+    this.git.jobs.ensure("pull_follow", PULL_FOLLOW_JOB);
+  }
+
+  /** The job telling heads' repositories which branches to follow; one not reached is tried later. */
+  #followHandler(): JobHandler {
+    return {
+      runSlice: async () => {
+        const sql = this.ctx.storage.sql;
+        const rows = sql
+          .exec<{
+            pr_number: number;
+            head_repo_id: string;
+            head_ref: string;
+            generation: number;
+            follow: number;
+            known_sha: string | null;
+            requested_at: number;
+          }>(
+            "SELECT * FROM head_follows WHERE next_at <= ? ORDER BY requested_at LIMIT ?",
+            this.git.context.now(),
+            FOLLOWS_PER_SLICE,
+          )
+          .toArray();
+        for (const row of rows) {
+          const head = this.env.REPO.getByName(row.head_repo_id);
+          try {
+            if (row.follow === 1)
+              await head.registerOutgoingPull({
+                baseRepoId: this.#repoId(),
+                number: row.pr_number,
+                headRef: row.head_ref,
+                generation: row.generation,
+                knownSha: row.known_sha,
+              });
+            else await head.unregisterOutgoingPull(this.#repoId(), row.pr_number, row.generation);
+          } catch (error) {
+            this.#log().warn("telling a pull request's head repository failed", {
+              number: row.pr_number,
+              error,
+            });
+            // Tried again later; the others go on meanwhile.
+            sql.exec(
+              "UPDATE head_follows SET next_at = ? WHERE pr_number = ? AND requested_at = ?",
+              this.git.context.now() + FOLLOW_RETRY_MS,
+              row.pr_number,
+              row.requested_at,
+            );
+            continue;
+          }
+          // Told: gone unless the pull request changed again meanwhile.
+          sql.exec(
+            `DELETE FROM head_follows WHERE pr_number = ? AND generation = ? AND follow = ?
+               AND requested_at = ?`,
+            row.pr_number,
+            row.generation,
+            row.follow,
+            row.requested_at,
+          );
+        }
+        const next = sql
+          .exec<{ at: number | null }>("SELECT min(next_at) AS at FROM head_follows")
+          .one().at;
+        if (next === null) return { done: true };
+        return {
+          done: false,
+          cursor: null,
+          runAfterMs: Math.max(0, next - this.git.context.now()),
+        };
+      },
+    };
   }
 
   /**
@@ -1394,6 +1680,12 @@ export class RepoDO extends MigratingDO {
         return fail(404, "pull_not_found", `The repository has no pull request ${input.number}.`);
       if (pull.state !== "open")
         return fail(422, "wrong_state", `Pull request ${input.number} is not open.`);
+      if (pull.headRepoId)
+        return fail(
+          422,
+          "not_applicable",
+          "The head branch is in another repository; push the changes there.",
+        );
       const ids = [...new Set(input.commentIds)];
       const comments = ids.map((id) => this.reviewComments.get(id));
       this.#blocks ??= createClockBlockCache();
@@ -2510,6 +2802,25 @@ export class RepoDO extends MigratingDO {
     return {
       storage_confirm: this.#storageConfirmHandler(),
       mergeability: this.mergeability.handler(),
+      pull_notices: this.pullSource.noticesHandler(),
+      revision_import: this.pullImports.handler(),
+      pull_follow: this.#followHandler(),
+      view_compact: viewCompactionHandler({
+        git: this.git,
+        policy: () => this.maintenance,
+        blocks: () => {
+          this.#blocks ??= createClockBlockCache();
+          return this.#blocks;
+        },
+        limit: () => VIEW_CAP - this.packCap.cap,
+        record: async (output) => {
+          await this.env.NETWORK.getByName(this.git.networkId()).recordCompaction({
+            networkId: this.git.networkId(),
+            forkRepoId: this.#repoId(),
+            output,
+          });
+        },
+      }),
       reflog_prune: reflogPruneHandler(
         this.git.context,
         REFLOG_PRUNE_BATCH,
@@ -2545,6 +2856,9 @@ export class RepoDO extends MigratingDO {
   /** Hooks into a generation from a template. For tests. */
   generationHooks: { beforeWrite?: () => Promise<void> } = {};
 
+  /** Hooks into opening a pull request from another repository. For tests. */
+  forkPullHooks: { beforePublish?: () => Promise<void> } = {};
+
   /** Hooks into a merge of a pull request. For tests. */
   mergeHooks: { beforeFinish?: () => Promise<void> } = {};
 
@@ -2553,6 +2867,9 @@ export class RepoDO extends MigratingDO {
 
   /** A merge's budgets. Tests may replace them. */
   mergePolicy: MergePolicy = MERGE_POLICY;
+
+  /** A revision import's budgets. Tests may replace them. */
+  importPolicy: ImportPolicy = IMPORT_POLICY;
 
   /** A mergeability slice's budgets. Tests may replace them. */
   mergeabilityPolicy: MergePolicy = MERGEABILITY_POLICY;
@@ -2588,6 +2905,118 @@ export class RepoDO extends MigratingDO {
   /** One page of the commit-graph closure from `frontier` (a fork's graph copy). */
   forkCommitPage(frontier: readonly string[], limit: number): CommitPage {
     return this.#network().commitPage(frontier, limit);
+  }
+
+  /** What an import of a pull request's head works with. */
+  #importDeps(): ImportDeps {
+    return {
+      git: this.git,
+      env: this.env,
+      repoId: () => this.#repoId(),
+      ownCap: () => this.packCap.cap,
+      log: () => this.#log(),
+    };
+  }
+
+  /**
+   * Whether `root` reads `headRepoId` (a repository of the network), asked
+   * of its object; a failure to ask is thrown (tried again later), never a
+   * refusal.
+   */
+  #headReadable(headRepoId: string, root: string): Promise<boolean> {
+    return this.env.REPO.getByName(headRepoId).readableBy(root);
+  }
+
+  /** Whether `principalId` may read this repository (public, or a role here). */
+  async readableBy(principalId: string): Promise<boolean> {
+    if (this.#refusesReads()) return false;
+    if (this.events.visibility() === "public") return true;
+    const ceilings = await this.#rolesPulled(principalId, null);
+    return this.#roleNow(principalId, ceilings) !== null;
+  }
+
+  /** Where branch `headRef` is, for a pull request's base. */
+  pullHeadTip(headRef: string): { sha: string | null; refVersion: number } {
+    return this.pullSource.tip(headRef);
+  }
+
+  /** A pull request of `baseRepoId` follows branch `headRef` here (see `PullSource.register`). */
+  registerOutgoingPull(input: {
+    readonly baseRepoId: string;
+    readonly number: number;
+    readonly headRef: string;
+    readonly generation: number;
+    readonly knownSha: string | null;
+  }): { sha: string | null; refVersion: number } {
+    return this.pullSource.register(input);
+  }
+
+  /** A pull request of `baseRepoId` no longer follows a branch here (as of `generation`). */
+  unregisterOutgoingPull(baseRepoId: string, number: number, generation: number): void {
+    this.pullSource.unregister(baseRepoId, number, generation);
+  }
+
+  /** A revision a pull request's base imports: the live packs, leased, if `sha` is a commit here. */
+  exportRevision(input: { readonly sha: string; readonly holder: string; readonly ttlMs: number }) {
+    return this.pullSource.exportRevision(input);
+  }
+
+  /**
+   * A revision of a pull request's head in another repository of the
+   * network (told by that repository's object): applied when it needs no
+   * import, else queued for import. `closed` when the pull request no
+   * longer follows that repository's branch.
+   */
+  receiveRevision(notice: RevisionNotice): Promise<NoticeAnswer> {
+    return this.#measured("receiveRevision", async () => {
+      if (this.#refusesReads()) return "closed";
+      await this.checkEpoch();
+      // Taking no changes now (a transfer): the head's repository tells it again later.
+      if (this.#writeRefusal()) throw new Error("the repository takes no changes now");
+      const pull = this.pulls.get(notice.number);
+      if (pull?.state !== "open" || pull.headRepoId !== notice.headRepoId) return "closed";
+      if (notice.generation !== pull.generation) return "stale";
+      // Later than the revision applied, and than any queued: an older one never replaces them.
+      const queued = this.pullImports.get(notice.number);
+      const latest = Math.max(
+        pull.headRefVersion ?? -1,
+        queued?.generation === pull.generation ? queued.refVersion : -1,
+      );
+      if (latest >= notice.refVersion) return "stale";
+      const actor: RefActor | null = notice.pusher
+        ? { principal: notice.pusher, grantId: notice.pusherGrant, via: "push" }
+        : null;
+      const outcome = this.ctx.storage.transactionSync(() => {
+        if (notice.sha === null || notice.sha === pull.headSha) {
+          // Deleted, or back where it was: nothing to import, and no older import applies.
+          const dropped = this.pullImports.drop(notice.number);
+          this.pulls.noteRevision(
+            notice.number,
+            {
+              refVersion: notice.refVersion,
+              deleted: notice.sha === null,
+              pushed: notice.pushed && notice.sha !== null,
+            },
+            actor,
+          );
+          return { answer: "applied" as const, release: dropped };
+        }
+        const { replaced } = this.pullImports.queue({
+          number: notice.number,
+          headRepoId: notice.headRepoId,
+          generation: notice.generation,
+          refVersion: notice.refVersion,
+          sha: notice.sha,
+          pusher: notice.pusher,
+          pusherGrant: notice.pusherGrant,
+        });
+        return { answer: "queued" as const, release: replaced };
+      });
+      if (outcome.release) await releaseLease(this.#importDeps(), outcome.release);
+      this.#armOutbox();
+      this.#ensureAuditArchive();
+      return outcome.answer;
+    });
   }
 
   /** A new fork's storage: its network, HEAD and borrowed packs. */

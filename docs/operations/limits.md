@@ -619,13 +619,14 @@ Fyrden does not have yet). Bypass is by repository role; Fyrden's
 Pull requests between branches of one repository
 (`/repos/{owner}/{repo}/pulls`, GitHub's shape; MCP `create_pull_request`,
 `list_pull_requests`, `get_pull_request`, `update_pull_request`,
-`merge_pull_request`). Pull requests from forks come later.
+`merge_pull_request`). The head may be a branch of a fork in the same network (`owner:branch`).
 
 | What | Value |
 |---|---|
 | Title | 1-256 characters |
 | Body | 65,536 characters at most |
 | Numbers | Per repository, from 1, in order; shared with issues once they exist |
+| Heads in forks | `head` is `owner:branch`: a branch of that owner's repository in the base's fork network (`head_repo` names it when the owner has several), which the caller must be able to read. Its revision is imported before the pull request opens (no pack byte copied: the fork's packs are borrowed, recorded by the network; its commits the base lacks are copied, 50,000 at most, else 422 `too_expensive`). Each later push to that branch is told to the base and imported in the background, in order (a late notice of an earlier revision is ignored); a deleted branch shows `head_ref_deleted`, the pull request staying at its last revision. Closed or merged, the branch is no longer followed; reopened, it is again. Only the pull request's revisions become readable through the base (`refs/pull/<number>/head`): nothing else of the fork is served. The pull request's author must still read the fork for revisions to be imported. Suggestions and branch updates to heads in forks come later |
 | Opening | Anyone who reads the repository (`pull_requests:write`). Refused when the head has no commits the base lacks (decided within 30,000 commits walked; past that the head is taken to have some), when head and base are the same branch, and when a pull request between the two branches is already open |
 | `refs/pull/<number>/head` | Created at the head when the pull request opens; while it is open, moves with the head branch in the same ref transaction (pushes, atomic or not, and file writes); fetchable, never pushable |
 | Head branch deleted | The pull request keeps its last head (`head_ref_deleted: true`) and stays open; it cannot be reopened until the branch exists again, and follows the branch again once it does |

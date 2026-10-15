@@ -49,10 +49,17 @@ type RawViewPack = {
 
 /** The live packs of the repository's view (own and borrowed), oldest first. */
 export function liveViewPacks(git: RepoGitStorage): ViewPack[] {
+  return viewPacks(git, ["live"]);
+}
+
+/** The repository's packs in `states` (own and borrowed), oldest first. */
+export function viewPacks(git: RepoGitStorage, states: readonly string[]): ViewPack[] {
   return git.context.storage.sql
     .exec<RawViewPack>(
       `SELECT pack_id, network_id, r2_key, kind, origin, bytes, object_count, unit_id, created_at
-       FROM packs WHERE state = 'live' AND bytes IS NOT NULL ORDER BY created_at, pack_id`,
+       FROM packs WHERE state IN (SELECT value FROM json_each(?)) AND bytes IS NOT NULL
+       ORDER BY created_at, pack_id`,
+      JSON.stringify(states),
     )
     .toArray()
     .map((r) => ({

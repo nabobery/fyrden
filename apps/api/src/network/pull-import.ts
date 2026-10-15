@@ -1,0 +1,811 @@
+import type { JobHandler, RepoGitStorage, SliceResult } from "@fyrden/adapters-cloudflare/git";
+import type { Logger } from "@fyrden/adapters-cloudflare/obs";
+import { oidFromBytes, oidFromHex, oidToHex } from "@fyrden/git-core";
+import { GC_JOB_ID, inProgress, scheduleGc } from "../git/maintenance/schedule.js";
+import { liveViewPacks } from "./member.js";
+import type { CommitRowData, ViewPack } from "./types.js";
+import { chooseBaseCompaction, isDetaching, scheduleViewCompaction, VIEW_CAP } from "./view-cap.js";
+
+/*
+ * A pull request's base importing a revision of its head from another
+ * member of the fork network. No pack byte is copied, as for a fork:
+ *
+ * 1. snapshot: the head's repository leases the packs that may hold the
+ *    revision and names them; all are borrowed (one live in the base's view
+ *    already too, so the import checks it is still there when it publishes).
+ * 2. share: the network records them as shared, claimed by the base.
+ * 3. adopt: they join the base's view as borrowed packs (one the base's
+ *    collection dropped is taken back); a view over its cap gets a
+ *    compaction of its oldest borrowed packs, on its own job.
+ * 4. graph: the head's verified commit rows the base lacks are copied page
+ *    by page, kept apart under the revision's own key until it publishes:
+ *    the base's commit graph only ever holds whole histories, so a page
+ *    stops at commits the base has.
+ * 5. publish: in one transaction, the borrowed packs are checked live
+ *    (taken back from the collection if it dropped them meanwhile), the
+ *    copied history is checked whole, its rows join the graph and the
+ *    caller points the pull request at the revision. A failed check starts
+ *    the import again.
+ *
+ * Each step is idempotent and its progress is stored, so an import evicted
+ * at any point goes on from its step; rows of an import that was replaced
+ * or abandoned are reaped. The lease is released once published or given
+ * up (else it expires).
+ */
+
+export const IMPORT_POLICY = {
+  /** How long the head's packs stay leased for an import. Proposed. */
+  leaseMs: 10 * 60_000,
+  /** Commit rows per page of the graph copy. Proposed. */
+  pageSize: 2_000,
+  /** Pages (calls to the head's object) one slice makes. Proposed, within Free's 1,000 calls. */
+  pagesPerSlice: 100,
+  /** Commit rows one import copies at most; more is too far apart to import. Proposed. */
+  maxCommits: 50_000,
+  /** Attempts before the import is given up. Proposed. */
+  maxAttempts: 5,
+  /** Delay before a failed step is tried again; doubles per attempt. Proposed. */
+  retryMs: 10_000,
+  /** Age after which staged rows no import owns are reaped. Proposed. */
+  reapStagedMs: 60 * 60_000,
+} as const;
+export type ImportPolicy = { readonly [K in keyof typeof IMPORT_POLICY]: number };
+
+export type ImportStep = "snapshot" | "share" | "adopt" | "graph" | "publish";
+
+/** What an import has done so far: stored between slices. */
+export interface ImportState {
+  /** The packs it borrows (kept until it publishes, to check them live then). */
+  readonly packs?: readonly ViewPack[];
+  /** When the head's lease on them ends: past it they may be gone, so the import starts again. */
+  readonly leaseUntil?: number;
+  /** The base's network when it began: a detach since leaves the head's packs behind. */
+  readonly networkId?: string;
+  readonly frontier?: readonly string[];
+  readonly staged?: number;
+}
+
+/** One import's progress. */
+export interface ImportWork {
+  /** Its staged commit rows' key: one per revision. */
+  readonly importId: string;
+  readonly headRepoId: string;
+  readonly sha: string;
+  readonly step: ImportStep;
+  readonly leaseId: string | null;
+  readonly state: ImportState;
+}
+
+/** An import that cannot go on (it is given up; the pull request keeps its revision). */
+export class ImportFailed extends Error {
+  constructor(
+    readonly code: "unknown_commit" | "too_large" | "packs_gone" | "not_member",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ImportFailed";
+  }
+}
+
+/** A step that cannot go on now but will later (the network or the base's collection is busy). */
+export class ImportBusy extends Error {
+  override name = "ImportBusy";
+}
+
+export interface ImportDeps {
+  readonly git: RepoGitStorage;
+  readonly env: Env;
+  readonly repoId: () => string;
+  /** Own packs a view may have (the pack-count cap). */
+  readonly ownCap: () => number;
+  readonly log: () => Logger;
+}
+
+/** Calls to other objects an invocation may make for imports, and how many it has made. */
+export interface CallBudget {
+  used: number;
+  readonly max: number;
+}
+
+/**
+ * Runs one step of `work` (not `publish`, which is the caller's) and
+ * answers the next; with `budget`, its calls to other objects count
+ * against it (a graph step stops when it is spent).
+ */
+export async function runImportStep(
+  deps: ImportDeps,
+  work: ImportWork,
+  policy: ImportPolicy = IMPORT_POLICY,
+  budget: CallBudget = { used: 0, max: Number.POSITIVE_INFINITY },
+): Promise<ImportWork> {
+  const { git, env } = deps;
+  const head = env.REPO.getByName(work.headRepoId);
+  switch (work.step) {
+    case "snapshot": {
+      if (isDetaching(git))
+        throw new ImportFailed("not_member", "the base is leaving its fork network");
+      budget.used++;
+      const exported = await head.exportRevision({
+        sha: work.sha,
+        holder: `pull:${deps.repoId()}:${work.importId}`,
+        ttlMs: policy.leaseMs,
+      });
+      if (!exported.ok)
+        throw new ImportFailed("unknown_commit", "the head's revision is no longer stored");
+      return {
+        ...work,
+        leaseId: exported.leaseId,
+        step: "share",
+        // Its own clock may differ from the head's: a margin of half the lease.
+        state: {
+          packs: exported.packs,
+          leaseUntil: git.context.now() + policy.leaseMs / 2,
+          networkId: git.networkId(),
+        },
+      };
+    }
+    case "share": {
+      // The lease may have ended (the import waited out a freeze or an outage): the head may have
+      // retired packs since, so they are leased again from the start.
+      if ((work.state.leaseUntil ?? 0) <= git.context.now())
+        return { ...work, step: "snapshot", leaseId: null, state: {} };
+      budget.used++;
+      const shared = await env.NETWORK.getByName(git.networkId()).sharePacks({
+        networkId: git.networkId(),
+        writerRepoId: work.headRepoId,
+        claimantRepoId: deps.repoId(),
+        packs: work.state.packs ?? [],
+      });
+      if (!shared.ok) {
+        if (shared.code === "network_busy") throw new ImportBusy(shared.error);
+        throw new ImportFailed("not_member", shared.error);
+      }
+      if (shared.gone.length > 0)
+        throw new ImportFailed("packs_gone", "packs of the head were deleted meanwhile");
+      return { ...work, step: "adopt" };
+    }
+    case "adopt": {
+      if (leftNetwork(git, work))
+        throw new ImportFailed("not_member", "the base left its fork network meanwhile");
+      // Past the lease (paused after sharing), a pack may have been deleted since: from the start.
+      if ((work.state.leaseUntil ?? 0) <= git.context.now())
+        return { ...work, step: "snapshot", leaseId: null, state: {} };
+      adoptPacks(git, work.state.packs ?? []);
+      const borrowed = liveViewPacks(git).filter((p) => p.origin === "borrowed");
+      const sources = chooseBaseCompaction(borrowed, Math.max(1, VIEW_CAP - deps.ownCap()));
+      // Over the cap: compacted on the view's own job; the import goes on meanwhile.
+      if (sources.length > 0) scheduleViewCompaction(git);
+      return { ...work, step: "graph" };
+    }
+    case "graph": {
+      // The base's graph holds whole histories: a commit it has needs no more copying.
+      let frontier = (work.state.frontier ?? [work.sha]).filter((hex) => !hasCommit(git, hex));
+      let staged = work.state.staged ?? 0;
+      for (
+        let pages = 0;
+        frontier.length > 0 && pages < policy.pagesPerSlice && budget.used < budget.max;
+        pages++
+      ) {
+        budget.used++;
+        const page = await head.forkCommitPage(frontier, policy.pageSize);
+        stage(git, work.importId, page.rows);
+        // Counted from what is stored: a page staged before a retry counts once.
+        staged = stagedCount(git, work.importId);
+        if (staged > policy.maxCommits)
+          throw new ImportFailed(
+            "too_large",
+            `the head is more than ${policy.maxCommits} commits away from the base's history`,
+          );
+        frontier = page.frontier.filter((hex) => !hasCommit(git, hex));
+      }
+      return frontier.length > 0
+        ? { ...work, state: { ...work.state, frontier, staged } }
+        : { ...work, step: "publish", state: { ...work.state, frontier: [], staged } };
+    }
+    case "publish":
+      return work;
+  }
+}
+
+/** The rows staged for an import. */
+function stagedCount(git: RepoGitStorage, importId: string): number {
+  return git.context.storage.sql
+    .exec<{ n: number }>("SELECT count(*) AS n FROM import_commits WHERE import_id = ?", importId)
+    .one().n;
+}
+
+/** Whether the base left (or is leaving) the network the import began in. */
+function leftNetwork(git: RepoGitStorage, work: ImportWork): boolean {
+  return (
+    isDetaching(git) ||
+    (work.state.networkId !== undefined && work.state.networkId !== git.networkId())
+  );
+}
+
+/** Whether the base's commit graph has `hex` (and so, its whole history). */
+function hasCommit(git: RepoGitStorage, hex: string): boolean {
+  return git.commitGraph.readSync([oidFromHex(hex)], "verified")[0] !== undefined;
+}
+
+/** Registry states of a pack not finished yet: waited out. */
+const SETTLING = new Set(["pending", "indexing", "indexed"]);
+/**
+ * Registry states of a pack the base no longer reads but still holds:
+ * taken back live. Its bytes stay while the network shares it (a shared
+ * pack is deleted only once every member's view refuses it no more, and a
+ * live row refuses), and a retire that released the base's claim meanwhile
+ * is undone by the network's next collection, which claims what views hold.
+ */
+const HELD = ["garbage", "superseded", "condemned"] as const;
+
+/**
+ * The packs join the base's view, borrowed (no byte is copied): a pack the
+ * base held but no longer read (dropped by its collection, or replaced by
+ * its own repack while the head's repository still reads it) is taken
+ * back, one it is done with (deleted, discarded) is registered again; one
+ * not finished yet is waited for. Safe to repeat.
+ */
+function adoptPacks(git: RepoGitStorage, packs: readonly ViewPack[]): void {
+  const { storage } = git.context;
+  const now = git.context.now();
+  storage.transactionSync(() => {
+    // With the packs: their collection, should the import never end (an interrupted opening).
+    if (packs.length > 0) collectLater(git);
+    for (const pack of packs) {
+      const state = storage.sql
+        .exec<{ state: string }>("SELECT state FROM packs WHERE pack_id = ?", pack.packId)
+        .toArray()[0]?.state;
+      if (state === "live") continue;
+      if (state !== undefined && (HELD as readonly string[]).includes(state)) {
+        git.registry.transition(pack.packId as never, HELD, "live");
+        continue;
+      }
+      if (state !== undefined && SETTLING.has(state))
+        throw new ImportBusy(`pack ${pack.packId} is being retired; try again later`);
+      if (state !== undefined) storage.sql.exec("DELETE FROM packs WHERE pack_id = ?", pack.packId);
+      storage.sql.exec(
+        `INSERT INTO packs (pack_id, network_id, r2_key, origin, kind, state, object_count,
+           bytes, all_reachable, unit_id, created_at, last_touched_at)
+         VALUES (?, ?, ?, 'borrowed', ?, 'live', ?, ?, 0, ?, ?, ?)`,
+        pack.packId,
+        pack.networkId,
+        pack.r2Key,
+        pack.kind,
+        pack.objectCount,
+        pack.bytes,
+        pack.unitId,
+        pack.createdAt,
+        now,
+      );
+    }
+  });
+}
+
+/**
+ * Keeps the rows the base's graph lacks for the import; answers how many it
+ * kept. In the same transaction, the import job is due when they would be
+ * reaped, so rows of an import that never ends are reaped all the same.
+ */
+function stage(git: RepoGitStorage, importId: string, rows: readonly CommitRowData[]): number {
+  const { storage } = git.context;
+  const now = git.context.now();
+  return storage.transactionSync(() => {
+    git.jobs.ensure("revision_import", REVISION_IMPORT_JOB, {
+      runAt: now + IMPORT_POLICY.reapStagedMs,
+    });
+    let kept = 0;
+    for (const row of rows) {
+      const oid = oidFromBytes(new Uint8Array(row.oid));
+      if (git.commitGraph.readSync([oid], "verified")[0]) continue;
+      const cursor = storage.sql.exec(
+        `INSERT INTO import_commits (import_id, oid, tree, parents, commit_time, generation,
+           level, signature, staged_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (import_id, oid) DO NOTHING`,
+        importId,
+        new Uint8Array(row.oid).buffer,
+        new Uint8Array(row.tree).buffer,
+        new Uint8Array(row.parents).buffer,
+        row.commitTime,
+        row.generation,
+        row.level,
+        row.signature,
+        now,
+      );
+      cursor.toArray();
+      kept += cursor.rowsWritten;
+    }
+    return kept;
+  });
+}
+
+/**
+ * In the publishing transaction: whether the import may publish, taking
+ * back borrowed packs the base's collection dropped meanwhile. False when a
+ * pack is gone from the view or the copied history is not whole (the head's
+ * graph changed under the copy): the import starts again.
+ */
+export function readyToPublish(git: RepoGitStorage, work: ImportWork): boolean {
+  // Left (or leaving) the network: the head's packs are not the base's to read any more.
+  if (leftNetwork(git, work)) throw new ImportFailed("not_member", "the base left its network");
+  const sql = git.context.storage.sql;
+  let tookBack = false;
+  for (const pack of work.state.packs ?? []) {
+    const state = sql
+      .exec<{ state: string }>("SELECT state FROM packs WHERE pack_id = ?", pack.packId)
+      .toArray()[0]?.state;
+    if (state !== undefined && (HELD as readonly string[]).includes(state)) {
+      git.registry.transition(pack.packId as never, HELD, "live");
+      tookBack = true;
+    } else if (state !== "live") return false;
+  }
+  // Packs taken back may put the view over its cap again (a compaction replaced them meanwhile).
+  if (tookBack) scheduleViewCompaction(git);
+  // Every staged commit's parents are staged or in the graph, and the revision is one of them.
+  const staged = sql
+    .exec<{ oid: ArrayBuffer; parents: ArrayBuffer }>(
+      "SELECT oid, parents FROM import_commits WHERE import_id = ?",
+      work.importId,
+    )
+    .toArray();
+  const have = new Set(staged.map((r) => oidToHex(oidFromBytes(new Uint8Array(r.oid)))));
+  const known = (hex: string) => have.has(hex) || hasCommit(git, hex);
+  if (!known(work.sha)) return false;
+  for (const row of staged) {
+    const parents = new Uint8Array(row.parents);
+    for (let at = 0; at < parents.length; at += 20)
+      if (!known(oidToHex(oidFromBytes(parents, at)))) return false;
+  }
+  return true;
+}
+
+/** In the publishing transaction: the import's rows join the commit graph. */
+export function publishStaged(git: RepoGitStorage, importId: string): void {
+  const sql = git.context.storage.sql;
+  sql.exec(
+    `INSERT INTO commits (oid, tree, parents, commit_time, generation, level, signature)
+     SELECT oid, tree, parents, commit_time, generation, level, signature FROM import_commits
+     WHERE import_id = ? ON CONFLICT (oid) DO NOTHING`,
+    importId,
+  );
+  sql.exec("DELETE FROM import_commits WHERE import_id = ?", importId);
+}
+
+/**
+ * An import given up or replaced: its rows go, and its lease is released
+ * (best effort). Packs it borrowed that nothing reaches are left to the
+ * base's collection, which is asked for (it drops them from the view, and
+ * the network's claims with them).
+ */
+export async function discardImport(
+  deps: Pick<ImportDeps, "git" | "env" | "log">,
+  work: Pick<ImportWork, "importId" | "headRepoId" | "leaseId" | "state">,
+): Promise<void> {
+  const { git } = deps;
+  git.context.storage.sql.exec("DELETE FROM import_commits WHERE import_id = ?", work.importId);
+  if ((work.state.packs?.length ?? 0) > 0) collectLater(git);
+  await releaseLease(deps, work);
+}
+
+/** Delay before the base's collection drops borrowed packs no ref reaches. Proposed. */
+export const COLLECT_AFTER_IMPORT_MS = 60 * 60_000;
+
+/**
+ * In the caller's transaction: an import borrowed packs that may hold more
+ * than any ref reaches (all the head's packs are borrowed), so the base's
+ * collection must drop those, and the network's claims with them, a while
+ * later (one run for many imports). Recorded, and turned into a run of the
+ * collection by the import job once none is under way (a run that started
+ * before the packs were borrowed would not see them).
+ */
+export function collectLater(git: RepoGitStorage): void {
+  const due = git.context.now() + COLLECT_AFTER_IMPORT_MS;
+  git.context.storage.sql.exec(
+    `INSERT INTO collect_requests (id, due_at) VALUES (1, ?)
+     ON CONFLICT (id) DO UPDATE SET due_at = min(due_at, excluded.due_at)`,
+    due,
+  );
+  git.jobs.ensure("revision_import", REVISION_IMPORT_JOB, { runAt: due });
+}
+
+/** When to look again at a due collection request while a run of the collection is under way. */
+const COLLECT_RECHECK_MS = 10 * 60_000;
+
+/**
+ * A due collection request becomes a run of the collection, unless one is
+ * under way (then later); answers when to look again (null: no request).
+ */
+function collectDue(git: RepoGitStorage): number | null {
+  const sql = git.context.storage.sql;
+  const due = sql
+    .exec<{ due_at: number }>("SELECT due_at FROM collect_requests")
+    .toArray()[0]?.due_at;
+  if (due === undefined) return null;
+  const now = git.context.now();
+  if (due > now) return due;
+  if (inProgress(git, GC_JOB_ID)) return now + COLLECT_RECHECK_MS;
+  scheduleGc(git, now);
+  sql.exec("DELETE FROM collect_requests");
+  return null;
+}
+
+/** Releases an import's lease on the head's packs (best effort: it expires anyway). */
+export async function releaseLease(
+  deps: Pick<ImportDeps, "env" | "log">,
+  work: Pick<ImportWork, "headRepoId" | "leaseId">,
+): Promise<void> {
+  if (!work.leaseId) return;
+  await deps.env.REPO.getByName(work.headRepoId)
+    .releaseFetchLease(work.leaseId)
+    .catch((error: unknown) => deps.log().warn("releasing an import's lease failed", { error }));
+}
+
+/** The base's queue of imports: one per pull request, the latest revision. */
+export class PullImports {
+  constructor(
+    private readonly deps: ImportDeps & {
+      /** Publishes a checked import (moves the pull request's head); false when it no longer applies. */
+      readonly publish: (number: number, work: ImportWork, row: ImportRow) => boolean;
+      /** Whether the pull request's author still reads the head's repository (else nothing is imported). */
+      readonly authorReads: (row: ImportRow) => Promise<boolean>;
+      /** Whether the repository takes changes now (a transfer freezes it: imports wait). */
+      readonly writable: () => boolean;
+      readonly policy: () => ImportPolicy;
+    },
+  ) {}
+
+  /** The import of a pull request's head, if one is waiting. */
+  get(number: number): ImportRow | undefined {
+    return this.deps.git.context.storage.sql
+      .exec<RawImport>("SELECT * FROM revision_imports WHERE pr_number = ?", number)
+      .toArray()
+      .map(importRow)[0];
+  }
+
+  /**
+   * Queues the import of `sha` for pull request `number` (a revision later
+   * than any queued for it replaces it). Answers the replaced import, to
+   * release its lease.
+   */
+  queue(input: {
+    readonly number: number;
+    readonly headRepoId: string;
+    readonly generation: number;
+    readonly refVersion: number;
+    readonly sha: string;
+    readonly pusher: string | null;
+    readonly pusherGrant: string | null;
+  }): { replaced: ImportRow | undefined } {
+    const { git } = this.deps;
+    const sql = git.context.storage.sql;
+    const replaced = this.get(input.number);
+    if (
+      replaced &&
+      replaced.generation === input.generation &&
+      replaced.refVersion >= input.refVersion
+    )
+      return { replaced: undefined };
+    const now = git.context.now();
+    if (replaced) sql.exec("DELETE FROM import_commits WHERE import_id = ?", importIdOf(replaced));
+    sql.exec(
+      `INSERT INTO revision_imports (pr_number, head_repo_id, generation, ref_version, sha, pusher,
+         pusher_grant, step, lease_id, state, attempts, requested_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'snapshot', NULL, NULL, 0, ?, ?)
+       ON CONFLICT (pr_number) DO UPDATE SET head_repo_id = excluded.head_repo_id,
+         generation = excluded.generation, ref_version = excluded.ref_version, sha = excluded.sha,
+         pusher = excluded.pusher, pusher_grant = excluded.pusher_grant, step = 'snapshot',
+         lease_id = NULL, state = NULL, attempts = 0, updated_at = excluded.updated_at`,
+      input.number,
+      input.headRepoId,
+      input.generation,
+      input.refVersion,
+      input.sha,
+      input.pusher,
+      input.pusherGrant,
+      now,
+      now,
+    );
+    git.jobs.ensure("revision_import", REVISION_IMPORT_JOB);
+    return { replaced };
+  }
+
+  /**
+   * In the caller's transaction: drops a pull request's import (closed,
+   * merged, replaced by a revision that needs none); answers it, to release
+   * its lease. Packs it borrowed are left to the base's collection.
+   */
+  drop(number: number): ImportRow | undefined {
+    const row = this.get(number);
+    if (!row) return undefined;
+    const sql = this.deps.git.context.storage.sql;
+    sql.exec("DELETE FROM revision_imports WHERE pr_number = ?", number);
+    sql.exec("DELETE FROM import_commits WHERE import_id = ?", importIdOf(row));
+    if ((row.state.packs?.length ?? 0) > 0) collectLater(this.deps.git);
+    return row;
+  }
+
+  /** The job: one step of the longest-waiting import per slice, and the reaping of orphan rows. */
+  handler(): JobHandler {
+    return {
+      runSlice: async (): Promise<SliceResult> => {
+        const { git } = this.deps;
+        const sql = git.context.storage.sql;
+        this.#reap();
+        // Longest waiting first; one tried again waits out its delay.
+        const row = sql
+          .exec<RawImport>(
+            `SELECT * FROM revision_imports WHERE requested_at <= ?
+             ORDER BY requested_at, pr_number LIMIT 1`,
+            git.context.now(),
+          )
+          .toArray()
+          .map(importRow)[0];
+        if (row) await this.#advance(row);
+        // Read after the step: an opening may have borrowed packs (and asked for this) meanwhile.
+        const collectAt = collectDue(git);
+        // Judged with no wait before the answer: an import queued meanwhile found this job
+        // running and left it to this one.
+        const imports = sql
+          .exec<{ at: number | null }>("SELECT min(requested_at) AS at FROM revision_imports")
+          .one().at;
+        // Rows no queued import owns (an opening under way, or one abandoned) are reaped once old.
+        const staged = sql
+          .exec<{ at: number | null }>(
+            `SELECT min(staged_at) AS at FROM import_commits
+             WHERE import_id NOT IN (SELECT value FROM json_each(?))`,
+            JSON.stringify(this.#owned()),
+          )
+          .one().at;
+        const times = [
+          imports,
+          staged === null ? null : staged + this.deps.policy().reapStagedMs,
+          collectAt,
+        ].filter((t): t is number => t !== null);
+        if (times.length === 0) return { done: true };
+        return {
+          done: false,
+          cursor: null,
+          runAfterMs: Math.max(0, Math.min(...times) - git.context.now()),
+        };
+      },
+    };
+  }
+
+  /** The staging keys of the queued imports. */
+  #owned(): string[] {
+    return this.deps.git.context.storage.sql
+      .exec<RawImport>("SELECT * FROM revision_imports")
+      .toArray()
+      .map((raw) => importIdOf(importRow(raw)));
+  }
+
+  /** Staged rows no queued import owns, old: an import replaced meanwhile, or an opening abandoned. */
+  #reap(): void {
+    const { git } = this.deps;
+    git.context.storage.sql.exec(
+      `DELETE FROM import_commits WHERE staged_at < ?
+         AND import_id NOT IN (SELECT value FROM json_each(?))`,
+      git.context.now() - this.deps.policy().reapStagedMs,
+      JSON.stringify(this.#owned()),
+    );
+  }
+
+  async #advance(row: ImportRow): Promise<void> {
+    const { git } = this.deps;
+    const sql = git.context.storage.sql;
+    const work: ImportWork = {
+      importId: importIdOf(row),
+      headRepoId: row.headRepoId,
+      sha: row.sha,
+      step: row.step,
+      leaseId: row.leaseId,
+      state: row.state,
+    };
+    // Frozen (a transfer): the import waits, its attempts unspent.
+    if (!this.deps.writable()) {
+      this.#save(row, work, { requestedAt: git.context.now() + this.deps.policy().retryMs });
+      return;
+    }
+    let next: ImportWork;
+    try {
+      if (row.step === "snapshot" && !(await this.deps.authorReads(row)))
+        throw new ImportFailed("not_member", "the pull request's author no longer reads its head");
+      next =
+        row.step === "publish" ? work : await runImportStep(this.deps, work, this.deps.policy());
+    } catch (error) {
+      if (!this.#unchanged(row)) return void (await discardImport(this.deps, work));
+      const busy = error instanceof ImportBusy;
+      const attempts = row.attempts + (busy ? 0 : 1);
+      if (error instanceof ImportFailed || attempts >= this.deps.policy().maxAttempts) {
+        this.deps.log().warn("a pull request's head could not be imported", {
+          number: row.number,
+          error,
+        });
+        this.drop(row.number);
+        await discardImport(this.deps, work);
+        return;
+      }
+      // Tried again later, behind the others.
+      this.#save(row, work, {
+        attempts,
+        requestedAt: git.context.now() + this.deps.policy().retryMs * 2 ** attempts,
+      });
+      return;
+    }
+    if (next.step !== "publish") {
+      // Replaced meanwhile: this one's rows and lease go.
+      if (!this.#save(row, next)) await discardImport(this.deps, next);
+      return;
+    }
+    // Published, the revision becomes readable through the base: its author must read the head
+    // still (asked again now; a failure to ask is tried again later, a refusal ends the import).
+    let reads: boolean;
+    try {
+      reads = await this.deps.authorReads(row);
+    } catch (error) {
+      this.deps.log().warn("asking for a head's access failed", { number: row.number, error });
+      const attempts = row.attempts + 1;
+      const saved =
+        attempts < this.deps.policy().maxAttempts &&
+        this.#save(row, next, {
+          attempts,
+          requestedAt: git.context.now() + this.deps.policy().retryMs * 2 ** attempts,
+        });
+      if (!saved) {
+        if (this.#unchanged(row)) this.drop(row.number);
+        await discardImport(this.deps, next);
+      }
+      return;
+    }
+    if (!reads) {
+      if (this.#unchanged(row)) this.drop(row.number);
+      await discardImport(this.deps, next);
+      return;
+    }
+    let outcome: "published" | "stale" | "restart";
+    try {
+      outcome = git.context.storage.transactionSync((): typeof outcome => {
+        if (!this.#unchanged(row)) return "stale";
+        if (!readyToPublish(git, next)) return "restart";
+        const done = this.deps.publish(row.number, next, row);
+        sql.exec("DELETE FROM revision_imports WHERE pr_number = ?", row.number);
+        sql.exec("DELETE FROM import_commits WHERE import_id = ?", next.importId);
+        return done ? "published" : "stale";
+      });
+    } catch (error) {
+      // Left its network meanwhile: nothing of the head can be published any more.
+      if (error instanceof ImportFailed) {
+        this.deps.log().warn("a pull request's head could not be imported", {
+          number: row.number,
+          error,
+        });
+        this.drop(row.number);
+        await discardImport(this.deps, next);
+        return;
+      }
+      // Frozen meanwhile: it waits, unspent.
+      if (!this.deps.writable()) {
+        this.#save(row, next, { requestedAt: git.context.now() + this.deps.policy().retryMs });
+        return;
+      }
+      // Its ref transaction refused (the repository changed under it): from the start, counted.
+      this.deps
+        .log()
+        .warn("publishing a pull request's head failed", { number: row.number, error });
+      outcome = "restart";
+    }
+    if (outcome === "restart") {
+      // A pack left the view, or the head's graph changed under the copy: from the start.
+      sql.exec("DELETE FROM import_commits WHERE import_id = ?", next.importId);
+      if (!this.#unchanged(row)) return void (await discardImport(this.deps, next));
+      if (row.attempts + 1 >= this.deps.policy().maxAttempts) {
+        this.drop(row.number);
+        if ((next.state.packs?.length ?? 0) > 0) collectLater(git);
+        this.deps.log().warn("a pull request's head could not be imported", {
+          number: row.number,
+          error: "its packs or history kept changing",
+        });
+      } else
+        this.#save(
+          row,
+          { ...next, step: "snapshot", leaseId: null, state: {} },
+          {
+            attempts: row.attempts + 1,
+          },
+        );
+      await releaseLease(this.deps, next);
+      return;
+    }
+    if (outcome === "stale") await discardImport(this.deps, next);
+    else {
+      if ((next.state.packs?.length ?? 0) > 0) collectLater(git);
+      await releaseLease(this.deps, next);
+    }
+  }
+
+  /** Stores the import's progress, if it is still the one `row` read; false when it was replaced. */
+  #save(
+    row: ImportRow,
+    work: ImportWork,
+    extra: { readonly attempts?: number; readonly requestedAt?: number } = {},
+  ): boolean {
+    const { git } = this.deps;
+    const cursor = git.context.storage.sql.exec(
+      `UPDATE revision_imports SET step = ?, lease_id = ?, state = ?, attempts = ?,
+         requested_at = ?, updated_at = ?
+       WHERE pr_number = ? AND ref_version = ? AND generation = ?`,
+      work.step,
+      work.leaseId,
+      JSON.stringify(work.state),
+      extra.attempts ?? row.attempts,
+      extra.requestedAt ?? row.requestedAt,
+      git.context.now(),
+      row.number,
+      row.refVersion,
+      row.generation,
+    );
+    cursor.toArray();
+    return cursor.rowsWritten > 0;
+  }
+
+  /** Whether the queued import is still the one `row` read. */
+  #unchanged(row: ImportRow): boolean {
+    const now = this.get(row.number);
+    return (
+      now !== undefined && now.refVersion === row.refVersion && now.generation === row.generation
+    );
+  }
+}
+
+/** The one job running imports. */
+export const REVISION_IMPORT_JOB = "revision-import";
+
+/** The staged rows' key of an import: one per revision of a pull request. */
+export const importIdOf = (row: Pick<ImportRow, "number" | "generation" | "refVersion">) =>
+  `pr:${row.number}:${row.generation}:${row.refVersion}`;
+
+type RawImport = {
+  pr_number: number;
+  head_repo_id: string;
+  generation: number;
+  ref_version: number;
+  sha: string;
+  pusher: string | null;
+  pusher_grant: string | null;
+  step: ImportStep;
+  lease_id: string | null;
+  state: string | null;
+  attempts: number;
+  requested_at: number;
+};
+
+export interface ImportRow {
+  readonly number: number;
+  readonly headRepoId: string;
+  readonly generation: number;
+  readonly refVersion: number;
+  readonly sha: string;
+  readonly pusher: string | null;
+  readonly pusherGrant: string | null;
+  readonly step: ImportStep;
+  readonly leaseId: string | null;
+  readonly state: ImportState;
+  readonly attempts: number;
+  readonly requestedAt: number;
+}
+
+function importRow(raw: RawImport): ImportRow {
+  return {
+    number: raw.pr_number,
+    headRepoId: raw.head_repo_id,
+    generation: raw.generation,
+    refVersion: raw.ref_version,
+    sha: raw.sha,
+    pusher: raw.pusher,
+    pusherGrant: raw.pusher_grant,
+    step: raw.step,
+    leaseId: raw.lease_id,
+    state: raw.state ? (JSON.parse(raw.state) as ImportState) : {},
+    attempts: raw.attempts,
+    requestedAt: raw.requested_at,
+  };
+}

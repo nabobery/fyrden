@@ -1292,6 +1292,8 @@ export type PullsListOutput = {
     number: number;
     state: "open" | "closed";
     merged: boolean;
+    /** Fyrden: the repository the head branch is in (a fork in the same network); null for this one. */
+    head_repo_id: string | null;
     /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
     mergeable: boolean | null;
     /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
@@ -1348,8 +1350,10 @@ export type PullsCreateInput = {
   repo: string;
   title: string;
   body?: string;
-  /** The branch with the changes, without refs/heads/. */
+  /** The branch with the changes, without refs/heads/; `owner:branch` for a branch of that owner's repository in the base's fork network (a fork), which the caller must be able to read. */
   head: string;
+  /** With `owner:branch`, the repository's name, when the owner has several in the network. */
+  head_repo?: string;
   /** The branch to merge into, without refs/heads/. */
   base: string;
   /** Open it as a draft. */
@@ -1361,6 +1365,8 @@ export type PullsCreateOutput = {
   number: number;
   state: "open" | "closed";
   merged: boolean;
+  /** Fyrden: the repository the head branch is in (a fork in the same network); null for this one. */
+  head_repo_id: string | null;
   /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
   mergeable: boolean | null;
   /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
@@ -1421,6 +1427,8 @@ export type PullsGetOutput = {
   number: number;
   state: "open" | "closed";
   merged: boolean;
+  /** Fyrden: the repository the head branch is in (a fork in the same network); null for this one. */
+  head_repo_id: string | null;
   /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
   mergeable: boolean | null;
   /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
@@ -1489,6 +1497,8 @@ export type PullsUpdateOutput = {
   number: number;
   state: "open" | "closed";
   merged: boolean;
+  /** Fyrden: the repository the head branch is in (a fork in the same network); null for this one. */
+  head_repo_id: string | null;
   /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
   mergeable: boolean | null;
   /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
@@ -2235,6 +2245,8 @@ export type PullsRequestedReviewersAddOutput = {
   number: number;
   state: "open" | "closed";
   merged: boolean;
+  /** Fyrden: the repository the head branch is in (a fork in the same network); null for this one. */
+  head_repo_id: string | null;
   /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
   mergeable: boolean | null;
   /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
@@ -2299,6 +2311,8 @@ export type PullsRequestedReviewersRemoveOutput = {
   number: number;
   state: "open" | "closed";
   merged: boolean;
+  /** Fyrden: the repository the head branch is in (a fork in the same network); null for this one. */
+  head_repo_id: string | null;
   /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
   mergeable: boolean | null;
   /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
@@ -4127,7 +4141,7 @@ export interface Operations {
   "repos.rulesets.delete": { input: ReposRulesetsDeleteInput; output: ReposRulesetsDeleteOutput };
   /** List pull requests. The repository's pull requests, newest first. */
   "pulls.list": { input: PullsListInput; output: PullsListOutput };
-  /** Create a pull request. Proposes merging one branch of the repository into another. Anyone who can read the repository may open one. Refused when the head has no commits the base lacks, or when a pull request between the two branches is already open. While open, `refs/pull/{number}/head` follows the head branch. */
+  /** Create a pull request. Proposes merging one branch of the repository into another. Anyone who can read the repository may open one. Refused when the head has no commits the base lacks, or when a pull request between the two branches is already open. While open, `refs/pull/{number}/head` follows the head branch. The head may be a branch of a fork in the same network (`owner:branch`): its revision is imported first, and later pushes to it reach the pull request shortly after. */
   "pulls.create": { input: PullsCreateInput; output: PullsCreateOutput };
   /** Get a pull request. One pull request. */
   "pulls.get": { input: PullsGetInput; output: PullsGetOutput };

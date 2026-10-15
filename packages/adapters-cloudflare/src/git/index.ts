@@ -32,7 +32,12 @@ export {
   type LockHandle,
   RepoLocks,
 } from "./locks.js";
-export { type PackSwap, type PackSwapResult, swapPacks } from "./maintenance-swap.js";
+export {
+  type PackSwap,
+  type PackSwapResult,
+  replaceUploadDependencies,
+  swapPacks,
+} from "./maintenance-swap.js";
 export {
   createDoMemoryBudget,
   DO_MEMORY,

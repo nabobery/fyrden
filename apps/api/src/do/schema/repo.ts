@@ -525,4 +525,96 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX review_comments_thread ON review_comments (thread_id, comment_id);
     `,
   },
+  {
+    version: 23,
+    // Pull requests between repositories of a fork network.
+    //
+    // In the base: the repository a pull request's head branch is in (null:
+    // this one) and the last revision of it applied (its ref-state version
+    // there), the imports of a head's revision (its packs borrowed, its
+    // commit graph copied, then published as the pull request's head), and
+    // the commit rows an import has copied so far (kept apart until the
+    // import publishes, so the commit graph only ever holds whole histories).
+    //
+    // The base tells the head's repository to follow the branch (opened,
+    // reopened) or not (closed, merged), from the transaction of the change
+    // until it is told.
+    //
+    // In the head's repository: the pull requests its branches are heads
+    // of, and the revisions of them still to be told to the base.
+    name: "fork_pulls",
+    sql: `
+      ALTER TABLE pull_requests ADD COLUMN head_repo_id TEXT;
+      ALTER TABLE pull_requests ADD COLUMN head_ref_version INTEGER;
+
+      CREATE TABLE revision_imports (
+        pr_number INTEGER PRIMARY KEY,
+        head_repo_id TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        ref_version INTEGER NOT NULL,
+        sha TEXT NOT NULL,
+        pusher TEXT,
+        pusher_grant TEXT,
+        step TEXT NOT NULL CHECK (step IN ('snapshot', 'share', 'adopt', 'graph', 'publish')),
+        lease_id TEXT,
+        state TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        requested_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX revision_imports_waiting ON revision_imports (requested_at, pr_number);
+
+      CREATE TABLE import_commits (
+        import_id TEXT NOT NULL,
+        oid BLOB NOT NULL,
+        tree BLOB NOT NULL,
+        parents BLOB NOT NULL,
+        commit_time INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        level INTEGER NOT NULL,
+        signature TEXT,
+        staged_at INTEGER NOT NULL,
+        PRIMARY KEY (import_id, oid)
+      ) STRICT;
+      CREATE INDEX import_commits_staged ON import_commits (staged_at);
+
+      CREATE TABLE collect_requests (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        due_at INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE head_follows (
+        pr_number INTEGER PRIMARY KEY,
+        head_repo_id TEXT NOT NULL,
+        head_ref TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        follow INTEGER NOT NULL CHECK (follow IN (0, 1)),
+        known_sha TEXT,
+        requested_at INTEGER NOT NULL,
+        next_at INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+
+      CREATE TABLE outgoing_pulls (
+        base_repo_id TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        head_ref TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        PRIMARY KEY (base_repo_id, pr_number)
+      ) STRICT;
+      CREATE INDEX outgoing_pulls_head ON outgoing_pulls (head_ref);
+
+      CREATE TABLE revision_notices (
+        base_repo_id TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        ref_version INTEGER NOT NULL,
+        sha TEXT,
+        pusher TEXT,
+        pusher_grant TEXT,
+        pushed INTEGER NOT NULL CHECK (pushed IN (0, 1)),
+        next_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (base_repo_id, pr_number)
+      ) STRICT;
+    `,
+  },
 ];

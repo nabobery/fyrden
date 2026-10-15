@@ -15,7 +15,14 @@ import {
   pullHeadRef,
   type RepoRole,
 } from "@fyrden/domain";
-import { type Oid, oidEquals, oidFromBytes, oidToHex, type RefUpdate } from "@fyrden/git-core";
+import {
+  type Oid,
+  oidEquals,
+  oidFromBytes,
+  oidFromHex,
+  oidToHex,
+  type RefUpdate,
+} from "@fyrden/git-core";
 import type { RepoEvents } from "./events.js";
 
 const BRANCHES = "refs/heads/";
@@ -42,6 +49,8 @@ export interface PullRecord extends PullRequestRow {
   readonly lastPusher: string | null;
   readonly lastPusherGrant: string | null;
   readonly lastPushAt: number | null;
+  /** For a head in another repository: the ref-state version there of the revision applied last. */
+  readonly headRefVersion: number | null;
   /** Bumped on every change. */
   readonly version: number;
 }
@@ -60,6 +69,8 @@ type Row = {
   head_ref: string;
   head_sha: string;
   head_ref_deleted: number;
+  head_repo_id: string | null;
+  head_ref_version: number | null;
   last_pusher: string | null;
   last_pusher_grant: string | null;
   last_push_at: number | null;
@@ -83,6 +94,9 @@ export interface OpenPull {
   readonly headRef: string;
   readonly baseSha: Oid;
   readonly headSha: Oid;
+  /** For a head in another repository of the network: it, and its ref-state version at `headSha`. */
+  readonly headRepoId?: string;
+  readonly headRefVersion?: number;
 }
 
 /** A change asked of a pull request; a field left out stays as it is. */
@@ -126,6 +140,12 @@ export class RepoPulls {
        * be worked out again (open), or no longer (closed or merged).
        */
       readonly stale?: (number: number, open: boolean) => void;
+      /**
+       * In the transaction of a change of a pull request whose head is in
+       * another repository: it opened, closed or reopened, so that
+       * repository must follow the branch for it, or no longer.
+       */
+      readonly follow?: (pull: PullRecord) => void;
     },
   ) {}
 
@@ -161,7 +181,8 @@ export class RepoPulls {
     for (const update of updates) {
       if (update.newOid === null || !update.name.startsWith(BRANCHES)) continue;
       for (const { number } of this.#rows<{ number: number }>(
-        "SELECT number FROM pull_requests WHERE head_ref = ? AND state = 'open'",
+        `SELECT number FROM pull_requests
+         WHERE head_ref = ? AND state = 'open' AND head_repo_id IS NULL`,
         update.name.slice(BRANCHES.length),
       ))
         derived.push({ name: pullHeadRef(number), newOid: update.newOid, follows: update.name });
@@ -189,7 +210,8 @@ export class RepoPulls {
       if (!deleted && update.oldOid !== null) continue;
       for (const row of this.#rows(
         `UPDATE pull_requests SET head_ref_deleted = ?, version = version + 1, updated_at = ?
-         WHERE head_ref = ? AND state != 'merged' AND head_ref_deleted = ? RETURNING *`,
+         WHERE head_ref = ? AND state != 'merged' AND head_ref_deleted = ?
+           AND head_repo_id IS NULL RETURNING *`,
         deleted ? 1 : 0,
         now,
         branch,
@@ -262,6 +284,122 @@ export class RepoPulls {
     if (!row) throw new Error(`pull request ${number} is not open to merge`);
     this.#emit(rule.event, record(row), actor);
     this.deps.events.auditChange(rule.audit, actor, { number, sha: oidToHex(sha), method });
+  }
+
+  /**
+   * In the publishing transaction: a revision of a head in another
+   * repository becomes the pull request's head (its ref moves, from where
+   * it is), when the pull request is still open in `generation` and the
+   * revision is later than the one applied; `inCommit` runs in the same
+   * transaction first (the import's commit rows join the graph). False
+   * when it no longer applies.
+   */
+  publishRevision(
+    number: number,
+    revision: {
+      readonly headRepoId: string;
+      readonly generation: number;
+      readonly refVersion: number;
+      readonly sha: string;
+      readonly pusher: string | null;
+      readonly pusherGrant: string | null;
+    },
+    inCommit: () => void,
+  ): boolean {
+    const current = this.get(number);
+    if (
+      current?.state !== "open" ||
+      current.headRepoId !== revision.headRepoId ||
+      current.generation !== revision.generation ||
+      (current.headRefVersion ?? -1) >= revision.refVersion
+    )
+      return false;
+    const ref = pullHeadRef(number);
+    // The ref is the server's to move (the pusher pushed to the other repository, and may not
+    // even read this one); the event names the pusher.
+    const actor: RefActor | null = revision.pusher
+      ? { principal: revision.pusher, grantId: revision.pusherGrant, via: "push" }
+      : null;
+    let moved = false;
+    const result = this.deps.git.refStore.commitSync({
+      addPacks: [],
+      removePacks: [],
+      refUpdates: [{ name: ref, oldOid: this.#read(ref), newOid: oidFromHex(revision.sha) }],
+      expectedVersion: this.deps.git.refStore.state().version,
+      onCommitted: ({ now }) => {
+        inCommit();
+        const [row] = this.#rows(
+          `UPDATE pull_requests SET head_sha = ?, head_ref_version = ?, head_ref_deleted = 0,
+             last_pusher = ?, last_pusher_grant = ?, last_push_at = ?, version = version + 1,
+             updated_at = ?
+           WHERE number = ? RETURNING *`,
+          revision.sha,
+          revision.refVersion,
+          revision.pusher,
+          revision.pusherGrant,
+          now,
+          now,
+          number,
+        );
+        this.#emit("synchronize", record(row as Row), actor, {
+          before: current.headSha,
+          after: revision.sha,
+        });
+        moved = true;
+      },
+    });
+    if (!result.ok)
+      throw new Error(`moving pull request ${number}'s head failed: ${result.reason}`);
+    return moved;
+  }
+
+  /**
+   * A revision of a head in another repository that needs no import: its
+   * branch was deleted (`sha` null), or is back at the head the pull
+   * request has. Records the version, and whether the branch exists.
+   */
+  noteRevision(
+    number: number,
+    revision: {
+      readonly refVersion: number;
+      readonly deleted: boolean;
+      /** A push (moved away and back to the same commit), not a following only started. */
+      readonly pushed: boolean;
+    },
+    actor: RefActor | null,
+  ): void {
+    const current = this.get(number);
+    if (!current) return;
+    const now = this.deps.git.context.now();
+    // Back at the same commit by a push: its pusher is the last pusher now (unknown when the
+    // notice names none), so earlier approvals do not answer it.
+    const [row] = !revision.pushed
+      ? this.#rows(
+          `UPDATE pull_requests SET head_ref_version = ?, head_ref_deleted = ?,
+             version = version + 1, updated_at = ?
+           WHERE number = ? RETURNING *`,
+          revision.refVersion,
+          revision.deleted ? 1 : 0,
+          now,
+          number,
+        )
+      : this.#rows(
+          `UPDATE pull_requests SET head_ref_version = ?, head_ref_deleted = 0, last_pusher = ?,
+             last_pusher_grant = ?, last_push_at = ?, version = version + 1, updated_at = ?
+           WHERE number = ? RETURNING *`,
+          revision.refVersion,
+          actor?.principal ?? null,
+          actor?.grantId ?? null,
+          now,
+          now,
+          number,
+        );
+    if (current.headRefDeleted !== revision.deleted)
+      this.#emit(
+        revision.deleted ? "head_ref_deleted" : "head_ref_restored",
+        record(row as Row),
+        actor,
+      );
   }
 
   /** Whether the pull request's head has been `sha`, now or before. */
@@ -340,12 +478,14 @@ export class RepoPulls {
     return { base: row.base_sha, head: row.head_sha };
   }
 
-  /** The open pull request from `head` into `base`, if there is one. */
-  openBetween(head: string, base: string): number | undefined {
+  /** The open pull request from `head` (in `headRepoId`, null for this repository) into `base`, if there is one. */
+  openBetween(head: string, base: string, headRepoId: string | null = null): number | undefined {
     return this.#rows<{ number: number }>(
-      "SELECT number FROM pull_requests WHERE head_ref = ? AND base_ref = ? AND state = 'open'",
+      `SELECT number FROM pull_requests
+       WHERE head_ref = ? AND base_ref = ? AND state = 'open' AND head_repo_id IS ?`,
       head,
       base,
+      headRepoId,
     )[0]?.number;
   }
 
@@ -359,12 +499,14 @@ export class RepoPulls {
     input: OpenPull,
     expectedVersion: number,
     caller: Omit<PullCaller, "role">,
+    /** Runs in the ref transaction, before the row is written (an import's commit rows join the graph). */
+    inCommit?: () => void,
   ):
     | { ok: true; record: PullRecord }
     | { ok: false; code: "version-conflict" }
     | { ok: false; code: "already_exists"; number: number }
     | { ok: false; code: "access_lost" } {
-    const existing = this.openBetween(input.headRef, input.baseRef);
+    const existing = this.openBetween(input.headRef, input.baseRef, input.headRepoId ?? null);
     if (existing !== undefined) return { ok: false, code: "already_exists", number: existing };
     const { storage } = this.deps.git.context;
     const number = storage.sql
@@ -378,12 +520,13 @@ export class RepoPulls {
       expectedVersion,
       actor: { ...caller.actor, via: "api" },
       onCommitted: ({ now }) => {
+        inCommit?.();
         storage.sql.exec("UPDATE repo_meta SET next_number = ? WHERE id = 1", number + 1);
         const [row] = this.#rows(
           `INSERT INTO pull_requests (number, title, body, state, draft, author_id, author_root,
              author_act, base_ref, base_sha, head_ref, head_sha, last_pusher, last_pusher_grant,
-             last_push_at, created_at, updated_at)
-           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+             last_push_at, created_at, updated_at, head_repo_id, head_ref_version)
+           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
           number,
           input.title,
           input.body,
@@ -400,6 +543,8 @@ export class RepoPulls {
           now,
           now,
           now,
+          input.headRepoId ?? null,
+          input.headRefVersion ?? null,
         );
         opened = record(row as Row);
         this.#emit("opened", opened, caller.actor);
@@ -436,7 +581,11 @@ export class RepoPulls {
     const actions = plannedActions(current, patch);
     if (actions.length === 0) return { ok: true, record: current };
     const refs = this.deps.git.refStore;
-    const headTip = this.branchTip(current.headRef);
+    // A head in another repository is where its last revision left it (told of each move);
+    // whether its branch exists now is that repository's to tell once it follows it again.
+    const headTip = current.headRepoId
+      ? oidFromHex(current.headSha)
+      : this.branchTip(current.headRef);
     let state = current.state;
     for (const action of actions) {
       const decision = decidePullAction(action, {
@@ -453,8 +602,9 @@ export class RepoPulls {
     if (actions.includes("retarget") || actions.includes("reopen")) {
       baseTip = this.branchTip(base);
       if (baseTip === null) return { ok: false, code: "base_not_found" };
-      if (base === current.headRef) return { ok: false, code: "same_branches" };
-      const other = this.openBetween(current.headRef, base);
+      if (base === current.headRef && !current.headRepoId)
+        return { ok: false, code: "same_branches" };
+      const other = this.openBetween(current.headRef, base, current.headRepoId);
       if (other !== undefined && other !== number)
         return { ok: false, code: "already_exists", number: other };
     }
@@ -536,7 +686,9 @@ export class RepoPulls {
         break;
       case "reopen": {
         // The base it had until then: a retarget in the same patch comes after.
-        const head = this.branchTip(current.headRef) as Oid;
+        const head = (
+          current.headRepoId ? oidFromHex(current.headSha) : this.branchTip(current.headRef)
+        ) as Oid;
         const base = this.branchTip(current.baseRef);
         // A head pushed while it was closed is the reopener's to answer for.
         const pushed = oidToHex(head) !== current.headSha;
@@ -591,11 +743,14 @@ export class RepoPulls {
       pull.headSha,
     );
     this.deps.stale?.(pull.number, pull.state === "open");
+    if (pull.headRepoId && (event === "opened" || event === "closed" || event === "reopened"))
+      this.deps.follow?.(pull);
     const {
       authorAct: _act,
       lastPusher: _pusher,
       lastPusherGrant: _grant,
       lastPushAt: _at,
+      headRefVersion: _headVersion,
       version,
       ...row
     } = pull;
@@ -654,6 +809,8 @@ function record(row: Row): PullRecord {
     authorAct: row.author_act ? (JSON.parse(row.author_act) as string[]) : [],
     baseRef: row.base_ref,
     headRef: row.head_ref,
+    headRepoId: row.head_repo_id,
+    headRefVersion: row.head_ref_version,
     baseSha: row.base_sha,
     headSha: row.head_sha,
     headRefDeleted: row.head_ref_deleted === 1,
