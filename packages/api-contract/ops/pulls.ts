@@ -1,6 +1,7 @@
 import { HANDLE_PATTERN, MAX_PULL_BODY_LENGTH, MAX_PULL_TITLE_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
+import { CommitObject } from "./browse.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 
 const RepoInput = {
@@ -155,5 +156,100 @@ export const updatePull = defineOperation({
     description:
       "Edit, retarget, draft, close or reopen a pull request (your own, or others' as your role allows).",
     readOnly: false,
+  },
+});
+
+const PullFile = z.object({
+  sha: z.string().describe("The file's blob on the head side (the removed blob for a removal)."),
+  filename: z.string(),
+  previous_filename: z.string().optional().describe("For a renamed file, where it was."),
+  status: z
+    .enum(["added", "removed", "modified", "renamed", "changed"])
+    .describe("`changed` is a change of mode or kind only."),
+  additions: z.number().int(),
+  deletions: z.number().int(),
+  changes: z.number().int(),
+  patch: z
+    .string()
+    .optional()
+    .describe("The file's hunks as unified diff text; left out when `patch_omitted` says why."),
+  patch_omitted: z
+    .enum(["binary", "too_large", "patch_too_large", "submodule", "budget"])
+    .optional()
+    .describe(
+      "Fyrden: why there is no patch: a binary file, a side over 1 MiB (or too many lines), a patch over 64 KiB, a submodule, or this page's read budget (ask for a smaller page).",
+    ),
+  approximate: z
+    .boolean()
+    .optional()
+    .describe(
+      "Fyrden: true when the hunks are right but not the shortest (comparing cost too much).",
+    ),
+});
+
+export const listPullFiles = defineOperation({
+  id: "pulls.files.list",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/pulls/{pull_number}/files",
+  summary: "List pull request files",
+  description:
+    "The files a pull request changes, compared from the merge base of its base branch and head to its head (as GitHub's three-dot comparison), in path order, with each file's patch. At most 3,000 files are listed; renames with unchanged content are found. Pages keep the comparison they started with: the cursor carries `merge_base_sha` and `head_sha`.",
+  input: z.object({
+    ...RepoInput,
+    pull_number: PullNumber,
+    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+    cursor: z.string().max(400).optional().describe("From a previous page's `next_cursor`."),
+  }),
+  output: z.object({
+    files: z.array(PullFile),
+    merge_base_sha: z.string(),
+    head_sha: z.string(),
+    truncated: z.boolean().describe("More than 3,000 files changed: the listing stops there."),
+    next_cursor: z
+      .string()
+      .nullable()
+      .describe("Pass as `cursor` for the next page; null on the last page."),
+  }),
+  permission: "pull_requests:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "list_pull_request_files",
+    title: "List pull request files",
+    description: "List the files a pull request changes, with each file's diff.",
+    readOnly: true,
+  },
+});
+
+export const listPullCommits = defineOperation({
+  id: "pulls.commits.list",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/pulls/{pull_number}/commits",
+  summary: "List pull request commits",
+  description:
+    "The commits a pull request's head has that its base branch does not, oldest first; at most 250 (GitHub's limit).",
+  input: z.object({
+    ...RepoInput,
+    pull_number: PullNumber,
+    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+    cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
+  }),
+  output: z.object({
+    commits: z.array(CommitObject),
+    next_cursor: z
+      .string()
+      .nullable()
+      .describe("Pass as `cursor` for the next page; null on the last page."),
+  }),
+  permission: "pull_requests:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "list_pull_request_commits",
+    title: "List pull request commits",
+    description: "List the commits of a pull request, oldest first.",
+    readOnly: true,
   },
 });

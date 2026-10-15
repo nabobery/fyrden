@@ -93,6 +93,8 @@ import { networkSource, repoOutput, starCounts, visibleParents } from "../repos/
 import {
   createPullOperation,
   getPullOperation,
+  listPullCommitsOperation,
+  listPullFilesOperation,
   listPullsOperation,
   updatePullOperation,
 } from "../repos/pulls.js";
@@ -319,6 +321,8 @@ export const handlers: Handlers = {
   "pulls.create": createPullOperation,
   "pulls.get": getPullOperation,
   "pulls.update": updatePullOperation,
+  "pulls.files.list": listPullFilesOperation,
+  "pulls.commits.list": listPullCommitsOperation,
   "pulls.reviews.list": listReviewsOperation,
   "pulls.reviews.get": getReviewOperation,
   "pulls.reviews.create": createReviewOperation,

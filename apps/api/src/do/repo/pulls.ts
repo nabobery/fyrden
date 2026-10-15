@@ -21,6 +21,15 @@ import type { RepoEvents } from "./events.js";
 const BRANCHES = "refs/heads/";
 const PULL_HEAD = /^refs\/pull\/([1-9][0-9]*)\/head$/;
 
+/** What a pull request listing pages through. */
+export type ListingKind = "files" | "commits";
+
+/** How long a listing's later pages keep its comparison. Proposed. */
+export const LISTING_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Listings a repository keeps at most (the oldest go first). Proposed. */
+export const MAX_LISTINGS = 1_000;
+
 /** A pull request as the repository keeps it. */
 export interface PullRecord extends PullRequestRow {
   /** The agents that opened it for `authorId`, the current one first; empty when it acted itself. */
@@ -188,6 +197,71 @@ export class RepoPulls {
         sha,
       ).length > 0
     );
+  }
+
+  /**
+   * Records the comparison a listing of a pull request's files or commits
+   * started on, for its later pages, and returns the listing's id (random:
+   * the only way to name it is a cursor this repository gave). Listings
+   * older than {@link LISTING_TTL_MS} are dropped as new ones start.
+   */
+  startListing(number: number, kind: ListingKind, base: string, head: string): string {
+    const now = this.deps.git.context.now();
+    return this.deps.git.context.storage.transactionSync(() => {
+      // The same comparison started within the day: its listing serves.
+      const [same] = this.#rows<{ listing_id: string }>(
+        `SELECT listing_id FROM pull_listings
+         WHERE pr_number = ? AND kind = ? AND base_sha = ? AND head_sha = ? AND created_at >= ?
+         ORDER BY created_at DESC LIMIT 1`,
+        number,
+        kind,
+        base,
+        head,
+        now - LISTING_TTL_MS,
+      );
+      if (same) return same.listing_id;
+      // A bounded amount of tidying each time: the expired, then the oldest past the cap.
+      this.#rows(
+        `DELETE FROM pull_listings WHERE listing_id IN (
+           SELECT listing_id FROM pull_listings WHERE created_at < ? ORDER BY created_at LIMIT 100)`,
+        now - LISTING_TTL_MS,
+      );
+      this.#rows(
+        `DELETE FROM pull_listings WHERE listing_id IN (
+           SELECT listing_id FROM pull_listings ORDER BY created_at
+           LIMIT max(0, (SELECT count(*) FROM pull_listings) - ? + 1))`,
+        MAX_LISTINGS,
+      );
+      const id = [...crypto.getRandomValues(new Uint8Array(16))]
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+      this.#rows(
+        "INSERT INTO pull_listings (listing_id, pr_number, kind, base_sha, head_sha, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        id,
+        number,
+        kind,
+        base,
+        head,
+        now,
+      );
+      return id;
+    });
+  }
+
+  /** A listing's comparison, if `id` names one of this pull request's, of `kind`, still kept. */
+  listing(
+    number: number,
+    kind: ListingKind,
+    id: string,
+  ): { base: string; head: string } | undefined {
+    const [row] = this.#rows<{ base_sha: string; head_sha: string; created_at: number }>(
+      "SELECT base_sha, head_sha, created_at FROM pull_listings WHERE listing_id = ? AND pr_number = ? AND kind = ?",
+      id,
+      number,
+      kind,
+    );
+    if (!row || row.created_at < this.deps.git.context.now() - LISTING_TTL_MS) return undefined;
+    return { base: row.base_sha, head: row.head_sha };
   }
 
   /** The open pull request from `head` into `base`, if there is one. */

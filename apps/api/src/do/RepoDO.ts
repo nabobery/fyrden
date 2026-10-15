@@ -38,6 +38,7 @@ import {
   type LsRefsArgs,
   liveCommands,
   type Oid,
+  oidFromHex,
   oidToHex,
   type PackId,
   planPush,
@@ -144,6 +145,7 @@ import {
   type FileWriteResult,
   writeFiles,
 } from "./repo/file-writes.js";
+import { mergeBaseOf, type PullFilesPage, pullCommits, pullFiles } from "./repo/pull-files.js";
 import {
   type OpenPull,
   type PullCaller,
@@ -173,6 +175,13 @@ import {
   writeTemplate,
 } from "./repo/template.js";
 import { repoSchema } from "./schema/repo.js";
+
+/** A listing's cursor that names none this repository keeps for that pull request. */
+const INVALID_LISTING = fail(
+  422,
+  "invalid_cursor",
+  "The cursor is not one this API returned, or its listing has expired: start again.",
+);
 
 /** Why a change of pull requests or reviews was not attempted. */
 type PullChangeRefusal = "repo_not_found" | "repo_transferring" | "access_lost";
@@ -737,6 +746,94 @@ export class RepoDO extends MigratingDO {
       return !changed.ok && changed.code === "version-conflict"
         ? { ok: false as const, code: "busy" as const }
         : changed;
+    });
+  }
+
+  /**
+   * A page of the files a pull request changes. Without `from`, a listing
+   * starts: the merge base of the base branch's tip (else the recorded
+   * base) and the recorded head is worked out now, and kept for the later
+   * pages when there are any; `from` names such a listing (a cursor this
+   * repository gave) and where its next page starts.
+   */
+  listPullFiles(
+    number: number,
+    from: { readonly listing: string; readonly start: number } | null,
+    limit: number,
+  ) {
+    return this.#browse(
+      "listPullFiles",
+      async (browse): Promise<Browsed<PullFilesPage & { listing: string | null }>> => {
+        if (this.#refusesReads()) return fail(404, "repo_not_found", REPO_DELETED);
+        const pull = this.pulls.get(number);
+        if (!pull)
+          return fail(404, "pull_not_found", `The repository has no pull request ${number}.`);
+        let listing = from?.listing ?? null;
+        let mergeBase: Oid;
+        let head: Oid;
+        if (from) {
+          const kept = this.pulls.listing(number, "files", from.listing);
+          if (!kept) return INVALID_LISTING;
+          mergeBase = oidFromHex(kept.base);
+          head = oidFromHex(kept.head);
+        } else {
+          head = oidFromHex(pull.headSha);
+          const base = this.pulls.branchTip(pull.baseRef) ?? oidFromHex(pull.baseSha);
+          const found = await mergeBaseOf(this.git.commitGraph, base, head);
+          if (!found.ok) return found;
+          mergeBase = found.value;
+        }
+        const page = await pullFiles(browse, this.git.commitGraph, {
+          mergeBase,
+          head,
+          start: from?.start ?? 0,
+          limit,
+        });
+        if (!page.ok) return page;
+        if (!listing && page.value.next !== null)
+          listing = this.pulls.startListing(number, "files", page.value.mergeBase, page.value.head);
+        return { ok: true, value: { ...page.value, listing } };
+      },
+    );
+  }
+
+  /**
+   * A page of a pull request's commits, oldest first: from the base
+   * branch's tip (else the recorded base) to the recorded head, kept for
+   * the later pages as a file listing is.
+   */
+  listPullCommits(
+    number: number,
+    from: { readonly listing: string; readonly start: number } | null,
+    limit: number,
+  ) {
+    return this.#browse("listPullCommits", async (browse) => {
+      if (this.#refusesReads()) return fail(404, "repo_not_found", REPO_DELETED);
+      const pull = this.pulls.get(number);
+      if (!pull)
+        return fail(404, "pull_not_found", `The repository has no pull request ${number}.`);
+      let listing = from?.listing ?? null;
+      let base: Oid;
+      let head: Oid;
+      if (from) {
+        const kept = this.pulls.listing(number, "commits", from.listing);
+        if (!kept) return INVALID_LISTING;
+        base = oidFromHex(kept.base);
+        head = oidFromHex(kept.head);
+      } else {
+        base = this.pulls.branchTip(pull.baseRef) ?? oidFromHex(pull.baseSha);
+        head = oidFromHex(pull.headSha);
+      }
+      const page = await pullCommits(browse, this.git.commitGraph, {
+        base,
+        head,
+        start: from?.start ?? 0,
+        limit,
+      });
+      if (!page.ok) return page;
+      if (!listing && page.value.next !== null)
+        listing = this.pulls.startListing(number, "commits", oidToHex(base), oidToHex(head));
+      return { ok: true as const, value: { ...page.value, listing } };
     });
   }
 

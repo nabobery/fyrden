@@ -13,6 +13,9 @@ CREATE INDEX jobs_due ON jobs (state, next_run_at);
 CREATE INDEX leases_pack ON leases (pack_id, expires_at);
 CREATE INDEX packs_state ON packs (state, created_at);
 CREATE INDEX packs_unit ON packs (unit_id) WHERE unit_id IS NOT NULL;
+CREATE INDEX pull_listings_comparison
+        ON pull_listings (pr_number, kind, base_sha, head_sha, created_at);
+CREATE INDEX pull_listings_created ON pull_listings (created_at);
 CREATE INDEX pull_requests_head ON pull_requests (head_ref, state);
 CREATE INDEX pull_requests_state ON pull_requests (state, number);
 CREATE INDEX reflog_at ON reflog (at);
@@ -206,6 +209,14 @@ CREATE TABLE pull_heads (
         pr_number INTEGER NOT NULL,
         sha TEXT NOT NULL,
         PRIMARY KEY (pr_number, sha)
+      ) STRICT;
+CREATE TABLE pull_listings (
+        listing_id TEXT PRIMARY KEY,
+        pr_number INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('files', 'commits')),
+        base_sha TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        created_at INTEGER NOT NULL
       ) STRICT;
 CREATE TABLE pull_requests (
         number INTEGER PRIMARY KEY,

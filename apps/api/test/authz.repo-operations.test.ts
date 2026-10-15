@@ -85,6 +85,8 @@ const CASES: Record<
     input: { title: "checked" },
     expected: { status: 404, code: "pull_not_found" },
   },
+  "pulls.files.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
+  "pulls.commits.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
   "pulls.reviews.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
   "pulls.reviews.get": { input: {}, expected: { status: 404, code: "review_not_found" } },
   "pulls.reviews.create": {

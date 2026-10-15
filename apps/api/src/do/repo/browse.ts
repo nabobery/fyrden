@@ -375,6 +375,11 @@ export class RepoBrowse {
     return this.#withReader(use);
   }
 
+  /** Views of commits `oids`, in order: as many as the read and response budgets allow (at least one, or it throws). */
+  async commitViews(oids: readonly Oid[]): Promise<CommitView[]> {
+    return this.#views(await this.reader(), oids);
+  }
+
   /** R2 reads this request has made. */
   get reads(): number {
     return this.#counts.reads;

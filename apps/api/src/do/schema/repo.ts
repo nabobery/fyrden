@@ -421,4 +421,26 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX comments_number ON comments (number, comment_id);
     `,
   },
+  {
+    version: 19,
+    // Comparisons a pull request's file or commit listing was started on,
+    // so its later pages compare the same commits: a page's cursor names
+    // one by a random id the server made (a cursor cannot name commits of
+    // its own choosing). Kept a day; a listing of the same comparison is
+    // reused, and the repository keeps a bounded number.
+    name: "pull_listings",
+    sql: `
+      CREATE TABLE pull_listings (
+        listing_id TEXT PRIMARY KEY,
+        pr_number INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('files', 'commits')),
+        base_sha TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX pull_listings_created ON pull_listings (created_at);
+      CREATE INDEX pull_listings_comparison
+        ON pull_listings (pr_number, kind, base_sha, head_sha, created_at);
+    `,
+  },
 ];

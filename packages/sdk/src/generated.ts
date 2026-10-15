@@ -1486,6 +1486,105 @@ export type PullsUpdateOutput = {
   closed_at: number | null;
 };
 
+/** Input of `pulls.files.list`: List pull request files. */
+export type PullsFilesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.files.list`. */
+export type PullsFilesListOutput = {
+  files: ({
+    /** The file's blob on the head side (the removed blob for a removal). */
+    sha: string;
+    filename: string;
+    /** For a renamed file, where it was. */
+    previous_filename?: string;
+    /** `changed` is a change of mode or kind only. */
+    status: "added" | "removed" | "modified" | "renamed" | "changed";
+    additions: number;
+    deletions: number;
+    changes: number;
+    /** The file's hunks as unified diff text; left out when `patch_omitted` says why. */
+    patch?: string;
+    /** Fyrden: why there is no patch: a binary file, a side over 1 MiB (or too many lines), a patch over 64 KiB, a submodule, or this page's read budget (ask for a smaller page). */
+    patch_omitted?: "binary" | "too_large" | "patch_too_large" | "submodule" | "budget";
+    /** Fyrden: true when the hunks are right but not the shortest (comparing cost too much). */
+    approximate?: boolean;
+  })[];
+  merge_base_sha: string;
+  head_sha: string;
+  /** More than 3,000 files changed: the listing stops there. */
+  truncated: boolean;
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `pulls.commits.list`: List pull request commits. */
+export type PullsCommitsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.commits.list`. */
+export type PullsCommitsListOutput = {
+  commits: ({
+    /** A full commit SHA (40 hex digits). */
+    sha: string;
+    commit: {
+      message: string;
+      author: {
+        name: string;
+        email: string;
+        /** ISO 8601, UTC. */
+        date: string;
+      };
+      committer: {
+        name: string;
+        email: string;
+        /** ISO 8601, UTC. */
+        date: string;
+      };
+      tree: {
+        sha: string;
+      };
+      /** Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address. */
+      verification: {
+        verified: boolean;
+        /** `valid` (signed by a known key), `unsigned`, `unknown_key`, `bad_email` (a user's key, on a commit whose committer is not that user), `invalid`, `malformed_signature` or `unknown_signature_type`, as GitHub names them. */
+        reason: string;
+        /** The armored signature. */
+        signature: string | null;
+        /** What the signature covers: the commit without it. */
+        payload: string | null;
+        verified_at: string | null;
+      };
+    };
+    parents: {
+      /** A full commit SHA (40 hex digits). */
+      sha: string;
+    }[];
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
 /** Input of `pulls.reviews.list`: List reviews. */
 export type PullsReviewsListInput = {
   /** The owner's handle. */
@@ -3397,6 +3496,8 @@ export const OPERATIONS = {
   "pulls.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: true },
   "pulls.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: false },
   "pulls.update": { method: "PATCH", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.files.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/files", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "files" },
+  "pulls.commits.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/commits", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "commits" },
   "pulls.reviews.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "reviews" },
   "pulls.reviews.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}", pathParams: ["owner","repo","pull_number","review_id"], idempotent: false },
   "pulls.reviews.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews", pathParams: ["owner","repo","pull_number"], idempotent: true },
@@ -3541,6 +3642,10 @@ export interface Operations {
   "pulls.get": { input: PullsGetInput; output: PullsGetOutput };
   /** Update a pull request. Changes the title or body, retargets it onto another base branch, marks it a draft or ready, closes or reopens it; fields left out are kept, and all of it happens or none. The author may do any of it to its own pull request; on anyone else's, triage closes and reopens and write does the rest. Reopening needs the head branch to exist. */
   "pulls.update": { input: PullsUpdateInput; output: PullsUpdateOutput };
+  /** List pull request files. The files a pull request changes, compared from the merge base of its base branch and head to its head (as GitHub's three-dot comparison), in path order, with each file's patch. At most 3,000 files are listed; renames with unchanged content are found. Pages keep the comparison they started with: the cursor carries `merge_base_sha` and `head_sha`. */
+  "pulls.files.list": { input: PullsFilesListInput; output: PullsFilesListOutput };
+  /** List pull request commits. The commits a pull request's head has that its base branch does not, oldest first; at most 250 (GitHub's limit). */
+  "pulls.commits.list": { input: PullsCommitsListInput; output: PullsCommitsListOutput };
   /** List reviews. A pull request's reviews, in the order submitted. */
   "pulls.reviews.list": { input: PullsReviewsListInput; output: PullsReviewsListOutput };
   /** Get a review. One review of a pull request. */

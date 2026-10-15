@@ -3,6 +3,8 @@ import type {
   createPull,
   getPull,
   Input,
+  listPullCommits,
+  listPullFiles,
   listPulls,
   Output,
   updatePull,
@@ -10,8 +12,9 @@ import type {
 import { MAX_REQUESTED_REVIEWERS } from "@fyrden/domain";
 import type { PullRecord } from "../do/repo/pulls.js";
 import { repoFor } from "../git/chunked/operations.js";
-import { decodeCursor, encodeCursor } from "../ops/cursor.js";
+import { decodeBytesCursor, decodeCursor, encodeBytesCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { resolveVerification } from "../signing/verification.js";
 import type { RepoEntry } from "./directory.js";
 
 type PullOutput = Output<typeof getPull>;
@@ -231,4 +234,76 @@ export async function updatePullOperation(
   if (!result.ok)
     throw failure(entry, result.code, "number" in result ? result.number : input.pull_number);
   return pullOutput(result.record);
+}
+
+/** A listing's cursor: the listing (an id the repository made) and where the next page starts. */
+function decodeListingCursor(
+  cursor: string | undefined,
+): { listing: string; start: number } | null {
+  if (cursor === undefined) return null;
+  const bytes = decodeBytesCursor(cursor);
+  const [listing = "", start = ""] = bytes ? new TextDecoder().decode(bytes).split(" ") : [];
+  if (!/^[0-9a-f]{32}$/.test(listing) || !/^[1-9][0-9]{0,5}$/.test(start))
+    throw new OperationError(422, "invalid_cursor", "The cursor is not one this API returned.");
+  return { listing, start: Number(start) };
+}
+
+const encodeListingCursor = (listing: string | null, next: number | null) =>
+  listing === null || next === null
+    ? null
+    : encodeBytesCursor(new TextEncoder().encode(`${listing} ${next}`));
+
+/** The `pulls.files.list` operation. */
+export async function listPullFilesOperation(
+  ctx: OpContext,
+  input: Input<typeof listPullFiles>,
+): Promise<Output<typeof listPullFiles>> {
+  const from = decodeListingCursor(input.cursor);
+  const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:read");
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "listPullFiles" });
+  const result = await ctx.env.REPO.getByName(entry.id).listPullFiles(
+    input.pull_number,
+    from,
+    input.per_page,
+  );
+  if (!result.ok) throw new OperationError(result.status, result.code, result.error);
+  const page = result.value;
+  return {
+    files: page.files.map((f) => ({
+      sha: f.sha,
+      filename: f.filename,
+      ...(f.previousFilename !== null && { previous_filename: f.previousFilename }),
+      status: f.status,
+      additions: f.additions,
+      deletions: f.deletions,
+      changes: f.additions + f.deletions,
+      ...(f.patch !== null && { patch: f.patch }),
+      ...(f.patchOmitted !== null && { patch_omitted: f.patchOmitted }),
+      ...(f.approximate && { approximate: true }),
+    })),
+    merge_base_sha: page.mergeBase,
+    head_sha: page.head,
+    truncated: page.truncated,
+    next_cursor: encodeListingCursor(page.listing, page.next),
+  };
+}
+
+/** The `pulls.commits.list` operation. */
+export async function listPullCommitsOperation(
+  ctx: OpContext,
+  input: Input<typeof listPullCommits>,
+): Promise<Output<typeof listPullCommits>> {
+  const from = decodeListingCursor(input.cursor);
+  const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:read");
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "listPullCommits" });
+  const result = await ctx.env.REPO.getByName(entry.id).listPullCommits(
+    input.pull_number,
+    from,
+    input.per_page,
+  );
+  if (!result.ok) throw new OperationError(result.status, result.code, result.error);
+  return {
+    commits: await resolveVerification(ctx, result.value.commits),
+    next_cursor: encodeListingCursor(result.value.listing, result.value.next),
+  };
 }
