@@ -7,11 +7,14 @@ import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test"
 import { env, exports } from "cloudflare:workers";
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
 import { createLogger } from "@fyrden/adapters-cloudflare/obs";
+import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { writeFiles } from "../src/do/repo/file-writes.js";
 import { RepoPush } from "../src/git/push/repo-push.js";
+import { agentFor } from "./helpers/agents.js";
+import { api, user } from "./helpers/api.js";
 import { createRepo, ORIGIN, type TestRepo } from "./helpers/git-http.js";
 import { principalWithToken, scopedToken } from "./helpers/principals.js";
 import { inRepo } from "./helpers/repo-git.js";
@@ -65,7 +68,11 @@ describe("one file", () => {
       commit: {
         sha: string;
         parents: unknown[];
-        commit: { message: string; committer: { name: string; email: string } };
+        commit: {
+          message: string;
+          author: { name: string; email: string };
+          committer: { name: string; email: string };
+        };
       };
     }>(
       call("PUT", `${base}/contents/docs/hello.md`, {
@@ -77,10 +84,14 @@ describe("one file", () => {
     expect(created.body.content).toMatchObject({ path: "docs/hello.md", size: 6 });
     expect(created.body.commit.parents).toEqual([]);
     expect(created.body.commit.commit.message).toBe("Add hello");
-    // The caller commits, with a no-reply address.
-    expect(created.body.commit.commit.committer.email).toBe(
+    // The caller authors, with a no-reply address; the platform, which signs, commits.
+    expect(created.body.commit.commit.author.email).toBe(
       `${owner.principalId}@users.noreply.fyrden.test`,
     );
+    expect(created.body.commit.commit.committer).toMatchObject({
+      name: "Fyrden",
+      email: "noreply@fyrden.test",
+    });
     expect(await readFile("docs/hello.md")).toEqual({
       text: "hello\n",
       sha: created.body.content.sha,
@@ -384,6 +395,63 @@ async function raceWrites() {
     return writeFiles({ ...deps, push: racing }, write("x.txt"));
   });
 }
+
+describe("identity", () => {
+  it("makes an agent acting for a user the author, naming the user as co-author", async () => {
+    const person = await user();
+    const name = uniqueId("r");
+    expect((await api("POST", "/user/repos", person.token, { name })).status).toBe(201);
+    const agent = await agentFor(person, ["contents:write"]);
+    const written = await api(
+      "PUT",
+      `/repos/${person.handle}/${name}/contents/a.txt`,
+      agent.delegated,
+      {
+        message: "Add a",
+        content: btoa("a"),
+      },
+    );
+    expect(written.status).toBe(200);
+    const { commit } = (await written.json()) as {
+      commit: {
+        commit: {
+          message: string;
+          author: { name: string; email: string };
+          committer: { name: string };
+        };
+      };
+    };
+    expect(commit.commit.author.email).toBe(`${agent.id}@users.noreply.fyrden.test`);
+    expect(commit.commit.committer.name).toBe("Fyrden");
+    expect(commit.commit.message).toBe(
+      `Add a\n\nCo-authored-by: ${person.handle} <${person.principalId}@users.noreply.fyrden.test>\n`,
+    );
+  });
+
+  it("refuses a blank message before adding the trailer that would hide it", async () => {
+    const person = await user();
+    const name = uniqueId("r");
+    await api("POST", "/user/repos", person.token, { name });
+    const agent = await agentFor(person, ["contents:write"]);
+    const written = await api(
+      "PUT",
+      `/repos/${person.handle}/${name}/contents/a.txt`,
+      agent.delegated,
+      {
+        message: "   \r\n",
+        content: btoa("a"),
+      },
+    );
+    expect(written.status).toBe(422);
+  });
+
+  it("refuses a message with a NUL", async () => {
+    const written = await json<{ code: string }>(
+      call("PUT", `${base}/contents/nul.txt`, { message: "Add\u0000", content: b64("a") }),
+    );
+    expect(written).toMatchObject({ status: 422, body: { code: "invalid_input" } });
+  });
+});
 
 describe("access", () => {
   it("needs contents:write on the repository", async () => {

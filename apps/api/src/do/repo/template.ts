@@ -120,7 +120,7 @@ export function templateTree(
 export interface TemplateWriteInput
   extends Pick<
     FileWriteInput,
-    "principal" | "tokenId" | "repoId" | "committer" | "message" | "requestId"
+    "principal" | "tokenId" | "repoId" | "committer" | "author" | "message" | "requestId"
   > {}
 
 /**
@@ -163,7 +163,7 @@ export async function writeTemplate(
     const unsigned = {
       tree: tree.oid,
       parents: [],
-      author: committer,
+      author: input.author ? ident(input.author, now) : committer,
       committer,
       headers: [],
       message: new TextEncoder().encode(input.message),

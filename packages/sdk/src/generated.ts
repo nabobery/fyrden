@@ -2638,7 +2638,7 @@ export type ReposContentsPutInput = {
   sha?: string;
   /** The branch to commit to; the default branch when absent. */
   branch?: string;
-  /** The commit's author; the authenticated principal when absent (always the committer). */
+  /** The commit's author; when absent, the agent acting for you, or you. The committer is always the platform, which signs the commit; an agent acting for a user adds a Co-authored-by trailer naming the user. */
   author?: {
     name: string;
     email: string;
@@ -2708,7 +2708,7 @@ export type ReposContentsDeleteInput = {
   sha: string;
   /** The branch to commit to; the default branch when absent. */
   branch?: string;
-  /** The commit's author; the authenticated principal when absent (always the committer). */
+  /** The commit's author; when absent, the agent acting for you, or you. The committer is always the platform, which signs the commit; an agent acting for a user adds a Co-authored-by trailer naming the user. */
   author?: {
     name: string;
     email: string;
@@ -2769,7 +2769,7 @@ export type ReposFileCommitsCreateInput = {
   expected_head?: string;
   /** The commit message. */
   message: string;
-  /** The commit's author; the authenticated principal when absent (always the committer). */
+  /** The commit's author; when absent, the agent acting for you, or you. The committer is always the platform, which signs the commit; an agent acting for a user adds a Co-authored-by trailer naming the user. */
   author?: {
     name: string;
     email: string;

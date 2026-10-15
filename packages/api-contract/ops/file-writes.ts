@@ -28,7 +28,9 @@ const Person = z
     email: z.string().min(1).max(256),
   })
   .optional()
-  .describe("The commit's author; the authenticated principal when absent (always the committer).");
+  .describe(
+    "The commit's author; when absent, the agent acting for you, or you. The committer is always the platform, which signs the commit; an agent acting for a user adds a Co-authored-by trailer naming the user.",
+  );
 
 const WrittenFile = z.object({
   type: z.literal("file"),

@@ -365,7 +365,7 @@ branch moves, and the branch moves only from the head the commit was built on.
 | Content one write carries | 4 MiB (all files together), checked before it is decoded |
 | Commit message | 64 KiB |
 | Branch | Must exist; an empty repository takes a first commit on its default branch |
-| Committer | The caller, as `<handle> <id@users.noreply.host>`; `author` may name someone else |
+| Identity | Committer: the platform, `Fyrden <noreply@host>` (it signs). Author: the agent acting, else the caller, as `<handle> <id@users.noreply.host>`; `author` may name someone else. An agent acting for a user (a delegated token) adds `Co-authored-by: <user>` to the message, unless it already names the user; an agent with its own token acts for no one and adds none. Trailers are not authenticated: the audit log records who acted for whom. Repositories generated from a template take the same identity |
 | Branch moved meanwhile | 409 `head_moved`; read again and retry |
 | File changed meanwhile (`sha` given) | 409 `sha_mismatch` |
 | Token revoked during the write | 403 `token_revoked`; nothing is committed |

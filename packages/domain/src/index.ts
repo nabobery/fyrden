@@ -4,6 +4,7 @@ export * from "./authz/roles.js";
 export * from "./events/envelope.js";
 export * from "./events/snapshots.js";
 export * from "./ids.js";
+export * from "./principals/commit-identity.js";
 export * from "./principals/principal.js";
 export * from "./principals/root.js";
 export * from "./principals/token.js";

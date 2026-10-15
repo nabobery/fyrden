@@ -1,13 +1,14 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { generateRepo, Input, Output } from "@fyrden/api-contract";
-import { orgRepoRole, type RepoRole } from "@fyrden/domain";
+import { coAuthorTrailers, orgRepoRole, type RepoRole } from "@fyrden/domain";
+import { appendTrailers } from "@fyrden/git-core";
 import { actingRoleIn, canUseAccount, findAccount } from "../accounts/account.js";
 import { BASE_ROLE } from "../do/OrgDO.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { checkedExpiry, createRepository } from "./create.js";
 import { advanceDeletion, markDeletions } from "./deletion.js";
 import { allowedWithRole, authorize, resolveRepo } from "./directory.js";
-import { committerOf } from "./file-writes.js";
+import { commitIdentityOf } from "./file-writes.js";
 
 /** Proposed. */
 export const GENERATION_POLICY = {
@@ -62,6 +63,8 @@ export async function generateRepoOperation(
       "Generating a repository writes to it: the token needs contents:write, without a repository list.",
     );
 
+  // Before the repository exists: nothing is left behind if this fails.
+  const identity = await commitIdentityOf(ctx);
   const created = await createRepository(env, owner, input.name, {
     actorId: auth.principalId,
     requestId: ctx.requestId,
@@ -77,8 +80,12 @@ export async function generateRepoOperation(
       principal: auth.principalId,
       tokenId: auth.id,
       repoId: created.id,
-      committer: committerOf(ctx),
-      message: "Initial commit",
+      committer: identity.committer,
+      author: identity.author,
+      message: appendTrailers(
+        "Initial commit",
+        coAuthorTrailers("Initial commit", identity.coAuthors),
+      ),
       requestId: ctx.requestId ?? null,
     })
     .catch((error: unknown) => {
