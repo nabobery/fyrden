@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import { RepoHeader } from "../components/repo-header.js";
-import { apiGet } from "../lib/api.server.js";
+import { apiCall, apiGet, bodyOf, type Problem } from "../lib/api.server.js";
 import type { Commit, Repo } from "../lib/types.js";
 import type { Route } from "./+types/repo.commits";
 
@@ -13,11 +13,17 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const repo = await apiGet<Repo>(context, request, base);
   const cursor = url.searchParams.get("cursor");
-  const page = await apiGet<{ commits: Commit[]; next_cursor: string | null } | Commit[]>(
+  const result = await apiCall<{ commits: Commit[]; next_cursor: string | null } | Commit[]>(
     context,
     request,
+    "GET",
     `${base}/commits?per_page=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
-  ).catch(() => ({ commits: [], next_cursor: null }));
+  );
+  // An empty repository has no history; any other failure is shown as one.
+  const page =
+    result.status === 409 && (result.body as unknown as Problem | null)?.code === "repo_empty"
+      ? { commits: [], next_cursor: null }
+      : bodyOf(result, request);
   const commits = Array.isArray(page) ? page : page.commits;
   const next = Array.isArray(page) ? null : page.next_cursor;
   return { repo, origin: url.origin, commits, next };

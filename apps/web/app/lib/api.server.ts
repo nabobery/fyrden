@@ -96,7 +96,11 @@ export async function apiGet<T>(
   request: Request,
   path: string,
 ): Promise<T> {
-  const result = await apiCall<T>(context, request, "GET", path);
+  return bodyOf(await apiCall<T>(context, request, "GET", path), request);
+}
+
+/** A call's body when it succeeded; signed out, a redirect to sign in; else its status. */
+export function bodyOf<T>(result: ApiResult<T>, request: Request): T {
   // Signed out: sign in, then come back.
   if (result.status === 401) throw redirect(signInUrl(request));
   if (result.status >= 400) {

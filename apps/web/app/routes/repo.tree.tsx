@@ -1,18 +1,19 @@
 import { Link } from "react-router";
 import { Listing } from "../components/listing.js";
 import { apiGet } from "../lib/api.server.js";
+import { refAndPath } from "../lib/target.js";
 import { type Contents, encodePath } from "../lib/types.js";
 import type { Route } from "./+types/repo.tree";
 
-export function meta({ params }: Route.MetaArgs): Route.MetaDescriptors {
-  return [{ title: `${params["*"] || "/"} · ${params.owner}/${params.repo} · Fyrden` }];
+export function meta({ params, loaderData }: Route.MetaArgs): Route.MetaDescriptors {
+  return [{ title: `${loaderData?.path || "/"} · ${params.owner}/${params.repo} · Fyrden` }];
 }
 
 export async function loader({ request, context, params }: Route.LoaderArgs) {
-  const path = params["*"] ?? "";
+  const { ref, path } = refAndPath(request);
   const base = `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}`;
   const cursor = new URL(request.url).searchParams.get("cursor");
-  const at = `ref=${encodeURIComponent(params.ref)}&per_page=1000${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+  const at = `ref=${encodeURIComponent(ref)}&per_page=1000${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
   const contents = await apiGet<Contents>(
     context,
     request,
@@ -22,7 +23,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   return {
     owner: params.owner,
     repo: params.repo,
-    ref: params.ref,
+    ref,
     path,
     entries: contents.entries,
     next: contents.next_cursor,

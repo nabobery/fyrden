@@ -31,6 +31,15 @@ function contentSecurityPolicy(nonce: string): string {
   ].join("; ");
 }
 
+/**
+ * The data a page navigates with (React Router's `.data` requests) holds
+ * what the page shows: no cache keeps it either.
+ */
+export function handleDataRequest(response: Response): Response {
+  response.headers.set("Cache-Control", "private, no-store");
+  return response;
+}
+
 export const handleError: HandleErrorFunction = (error, { request }) => {
   logServerError(error, request);
 };

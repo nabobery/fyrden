@@ -1,23 +1,28 @@
-import { Link } from "react-router";
+import { Link, redirect } from "react-router";
 import { Markdown } from "../components/markdown.js";
 import { apiGet } from "../lib/api.server.js";
 import { dirOf, renderMarkdown } from "../lib/markdown.js";
+import { refAndPath } from "../lib/target.js";
 import { type Contents, decodeText, encodePath } from "../lib/types.js";
 import type { Route } from "./+types/repo.blob";
 
-export function meta({ params }: Route.MetaArgs): Route.MetaDescriptors {
-  return [{ title: `${params["*"]} · ${params.owner}/${params.repo} · Fyrden` }];
+export function meta({ params, loaderData }: Route.MetaArgs): Route.MetaDescriptors {
+  return [{ title: `${loaderData?.path} · ${params.owner}/${params.repo} · Fyrden` }];
 }
 
 export async function loader({ request, context, params }: Route.LoaderArgs) {
-  const path = params["*"] ?? "";
+  const { ref, path } = refAndPath(request);
   const base = `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}`;
   const contents = await apiGet<Contents>(
     context,
     request,
-    `${base}/contents/${encodePath(path)}?ref=${encodeURIComponent(params.ref)}`,
+    `${base}/contents/${encodePath(path)}?ref=${encodeURIComponent(ref)}`,
   );
-  if (contents.type === "dir") throw new Response("A directory", { status: 404 });
+  // A directory (a README's link without a trailing slash): its listing.
+  if (contents.type === "dir")
+    throw redirect(
+      `/${params.owner}/${params.repo}/tree/${encodeURIComponent(ref)}/${encodePath(path)}`,
+    );
   const text =
     contents.type === "file" && contents.encoding === "base64"
       ? decodeText(contents.content)
@@ -25,7 +30,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   return {
     owner: params.owner,
     repo: params.repo,
-    ref: params.ref,
+    ref,
     path,
     kind: contents.type,
     size: contents.type === "file" ? contents.size : null,
@@ -35,7 +40,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       text !== undefined && /\.(md|markdown)$/i.test(path)
         ? renderMarkdown(text, {
             base: `/${params.owner}/${params.repo}`,
-            ref: encodeURIComponent(params.ref),
+            ref: encodeURIComponent(ref),
             dir: dirOf(path),
           })
         : null,

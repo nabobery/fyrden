@@ -3,8 +3,9 @@
 // in, creates a repository, adds a README (GitHub-flavored Markdown with a
 // Mermaid diagram) and sees it rendered, sees the commit signed and
 // verified, copies the clone URL, edits the README into hostile Markdown that
-// stays inert, follows its relative link, downloads an archive, creates a
-// git token and an agent; no form takes a post from another origin. Every
+// stays inert, follows its relative link, downloads an archive, opens a file
+// whose name ends in `.data`, creates a git token and an agent; no form takes
+// a post from another origin and no page's data is cached. Every
 // page it visits is checked with axe for WCAG 2.x A and AA. Needs `pnpm
 // --filter @fyrden/web build` first (turbo does it).
 import { type ChildProcess, spawn } from "node:child_process";
@@ -288,6 +289,30 @@ describe("the web UI", () => {
     await page.goto(`${origin}/ada/demo/settings`);
     await see(page.getByLabel("Description")).toHaveValue("A demonstration");
     await accessible("repository settings");
+  });
+
+  it("opens a file whose name ends in .data, and keeps the pages' data out of caches", async () => {
+    const put = await fetch(`${origin}/api/repos/ada/demo/contents/notes.data`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({
+        message: "Add notes.data",
+        content: Buffer.from("plain notes\n").toString("base64"),
+      }),
+    });
+    expect(put.status).toBe(200);
+    // React Router would take the path for its own data request: opened with a slash.
+    await page.goto(`${origin}/ada/demo/blob/main/notes.data`);
+    await see(page).toHaveURL(`${origin}/ada/demo/blob/main/notes.data/`);
+    await see(page.getByText("plain notes")).toBeVisible();
+    // The data a page navigates with, as the signed-in browser fetches it.
+    const data = await page.request.get(`${origin}/ada/demo.data`);
+    expect(data.status()).toBe(200);
+    expect(data.headers()["cache-control"]).toBe("private, no-store");
   });
 
   it("takes no form post from another origin, and changes nothing", async () => {

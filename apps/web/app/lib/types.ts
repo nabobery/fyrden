@@ -77,7 +77,10 @@ export function decodeText(base64: string): string | undefined {
 
 /** Text to base64 (UTF-8). */
 export function encodeText(text: string): string {
-  let binary = "";
-  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
-  return btoa(binary);
+  const bytes = new TextEncoder().encode(text);
+  // A chunk at a time: a string grown a byte at a time holds millions of pieces.
+  const chunks: string[] = [];
+  for (let at = 0; at < bytes.length; at += 0x8000)
+    chunks.push(String.fromCharCode(...bytes.subarray(at, at + 0x8000)));
+  return btoa(chunks.join(""));
 }

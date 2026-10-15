@@ -30,10 +30,31 @@ export function isApiPath(path: string): boolean {
   );
 }
 
+/**
+ * Where a browser opening `url` must go instead: React Router takes any
+ * path ending in `.data` for its own data request (it strips the suffix),
+ * so a page whose last segment ends so (a file `notes.data`, a repository
+ * `demo.data`) is opened with a trailing slash, which the pages ignore.
+ * Its own data requests are fetches, never navigations.
+ */
+export function dataSuffixRedirect(request: Request): Response | undefined {
+  const url = new URL(request.url);
+  if (
+    request.method !== "GET" ||
+    request.headers.get("Sec-Fetch-Mode") !== "navigate" ||
+    !url.pathname.endsWith(".data")
+  )
+    return undefined;
+  url.pathname = `${url.pathname}/`;
+  return Response.redirect(url.toString(), 308);
+}
+
 export default {
   fetch(request, env, ctx) {
     if (isApiPath(new URL(request.url).pathname))
       return (env.API as unknown as Fetcher).fetch(request);
+    const moved = dataSuffixRedirect(request);
+    if (moved) return moved;
     const context = new RouterContextProvider();
     context.set(cloudflareContext, { env, ctx });
     return requestHandler(request, context);

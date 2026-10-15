@@ -1,7 +1,7 @@
 import { isReservedHandle } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
 import routes from "../app/routes.js";
-import { API_PREFIXES, isApiPath } from "../workers/app.js";
+import { API_PREFIXES, dataSuffixRedirect, isApiPath } from "../workers/app.js";
 
 describe("the web Worker's routing", () => {
   it("hands the API's paths to fyrden-api and keeps its own pages", () => {
@@ -34,6 +34,24 @@ describe("the web Worker's routing", () => {
       "/mcpx",
     ])
       expect(isApiPath(path), path).toBe(false);
+  });
+
+  it("opens a page whose path ends in .data with a trailing slash, leaving data requests alone", () => {
+    const navigate = (path: string, mode = "navigate") =>
+      dataSuffixRedirect(
+        new Request(`https://fyrden.test${path}?x=1`, { headers: { "Sec-Fetch-Mode": mode } }),
+      );
+    const moved = navigate("/ada/demo/blob/main/notes.data");
+    expect(moved?.status).toBe(308);
+    expect(moved?.headers.get("Location")).toBe(
+      "https://fyrden.test/ada/demo/blob/main/notes.data/?x=1",
+    );
+    expect(navigate("/ada/demo.data")?.headers.get("Location")).toBe(
+      "https://fyrden.test/ada/demo.data/?x=1",
+    );
+    // React Router's own data requests are fetches.
+    expect(navigate("/ada/demo/blob/main/notes.data", "cors")).toBeUndefined();
+    expect(navigate("/ada/demo")).toBeUndefined();
   });
 
   it("reserves, as handles, every name an API path or a page takes at the top", () => {

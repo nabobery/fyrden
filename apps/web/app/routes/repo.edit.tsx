@@ -7,6 +7,7 @@ import {
   signedInUser,
   signInUrl,
 } from "../lib/api.server.js";
+import { refAndPath } from "../lib/target.js";
 import {
   type Contents,
   decodeText,
@@ -16,8 +17,8 @@ import {
 } from "../lib/types.js";
 import type { Route } from "./+types/repo.edit";
 
-export function meta({ params }: Route.MetaArgs): Route.MetaDescriptors {
-  return [{ title: `Edit ${params["*"]} · ${params.owner}/${params.repo} · Fyrden` }];
+export function meta({ params, loaderData }: Route.MetaArgs): Route.MetaDescriptors {
+  return [{ title: `Edit ${loaderData?.path} · ${params.owner}/${params.repo} · Fyrden` }];
 }
 
 /** Content one write carries at most (the API's limit), in UTF-8 bytes. */
@@ -33,13 +34,13 @@ const repoPath = (owner: string, repo: string) =>
  * path): one commit through the API's file write, signed by Fyrden.
  */
 export async function loader({ request, context, params }: Route.LoaderArgs) {
-  const path = params["*"] ?? "";
+  const { ref, path } = refAndPath(request);
   const adding = new URL(request.url).searchParams.get("new") === "1";
   if (adding)
     return {
       owner: params.owner,
       repo: params.repo,
-      ref: params.ref,
+      ref,
       path,
       adding,
       text: "",
@@ -48,7 +49,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   const contents = await apiGet<Contents>(
     context,
     request,
-    `${repoPath(params.owner, params.repo)}/contents/${encodePath(path)}?ref=${encodeURIComponent(params.ref)}`,
+    `${repoPath(params.owner, params.repo)}/contents/${encodePath(path)}?ref=${encodeURIComponent(ref)}`,
   );
   const text =
     contents.type === "file" && contents.encoding === "base64"
@@ -59,7 +60,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   return {
     owner: params.owner,
     repo: params.repo,
-    ref: params.ref,
+    ref,
     path,
     adding,
     text,
@@ -72,7 +73,7 @@ export async function action({ request, context, params }: Route.ActionArgs) {
   // Signed in before a large form is read.
   if (!(await signedInUser(context, request))) throw redirect(signInUrl(request));
   const form = await readForm(request, EDIT_FORM_MAX_BYTES);
-  const dir = params["*"] ?? "";
+  const { ref, path: dir } = refAndPath(request);
   const adding = form.get("adding") === "1";
   const name = String(form.get("name") ?? "").trim();
   const path = adding ? [withoutTrailingSlashes(dir), name].filter(Boolean).join("/") : dir;
@@ -84,7 +85,7 @@ export async function action({ request, context, params }: Route.ActionArgs) {
     const removed = await apiCall<{ detail?: string }>(context, request, "DELETE", base, {
       message: `Delete ${path}`,
       sha,
-      branch: params.ref,
+      branch: ref,
     });
     if (removed.status !== 200)
       return { error: removed.body?.detail ?? "The file was not deleted." };
@@ -101,13 +102,13 @@ export async function action({ request, context, params }: Route.ActionArgs) {
   const written = await apiCall<{ detail?: string }>(context, request, "PUT", base, {
     message,
     content: encodeText(content),
-    branch: params.ref,
+    branch: ref,
     ...(sha && { sha }),
   });
   if (written.status !== 200 && written.status !== 201)
     return { error: written.body?.detail ?? "The file was not saved." };
   return redirect(
-    `/${params.owner}/${params.repo}/blob/${encodeURIComponent(params.ref)}/${encodePath(path)}`,
+    `/${params.owner}/${params.repo}/blob/${encodeURIComponent(ref)}/${encodePath(path)}`,
   );
 }
 
