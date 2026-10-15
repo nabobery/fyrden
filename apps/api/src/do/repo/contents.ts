@@ -297,7 +297,7 @@ export function rawFile(
   path: string,
   /** The largest file read; a larger one answers 422 `too_large`. */
   maxBytes: number = CONTENTS_POLICY.maxRawBytes,
-): Promise<Browsed<{ sha: string; bytes: Uint8Array }>> {
+): Promise<Browsed<{ sha: string; bytes: Uint8Array; mode: number }>> {
   return guarded(async () => {
     const at = await browse.resolveTree(ref);
     if (!at.ok) return at;
@@ -318,7 +318,10 @@ export function rawFile(
         );
       const object = await reader.readObject(found.oid);
       if (object?.type !== "blob") return notFound(path);
-      return { ok: true, value: { sha: oidToHex(found.oid), bytes: object.bytes } };
+      return {
+        ok: true,
+        value: { sha: oidToHex(found.oid), bytes: object.bytes, mode: found.mode },
+      };
     });
   });
 }

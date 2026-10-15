@@ -52,12 +52,19 @@ export function serverCommitIdentity(input: {
 
 /**
  * `Co-authored-by` trailer lines for the people `message` does not name
- * yet (by email, ignoring case). Where they go in the message is git's
+ * yet (by email, ignoring case), each once. Where they go in the message is git's
  * trailer rules' business (git-core `appendTrailers`).
  */
 export function coAuthorTrailers(message: string, coAuthors: readonly GitPerson[]): string[] {
   const named = message.toLowerCase();
+  // Each person once, whichever way they came to be named twice.
+  const seen = new Set<string>();
   return coAuthors
-    .filter((p) => !named.includes(`<${p.email.toLowerCase()}>`))
+    .filter((p) => {
+      const email = p.email.toLowerCase();
+      if (named.includes(`<${email}>`) || seen.has(email)) return false;
+      seen.add(email);
+      return true;
+    })
     .map((p) => `Co-authored-by: ${p.name} <${p.email}>`);
 }

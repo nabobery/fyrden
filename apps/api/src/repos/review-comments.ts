@@ -1,4 +1,5 @@
 import type {
+  applySuggestions,
   createReviewComment,
   deleteReviewComment,
   getReviewComment,
@@ -10,11 +11,15 @@ import type {
   unresolveReviewThread,
   updateReviewComment,
 } from "@fyrden/api-contract";
+import { coAuthorTrailers } from "@fyrden/domain";
+import { appendTrailers } from "@fyrden/git-core";
 import type { ReviewCommentRecord, ThreadRecord } from "../do/repo/review-comments.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { resolveOne } from "../signing/verification.js";
 import type { RepoEntry } from "./directory.js";
+import { commitIdentityOf, noReplyPeople } from "./file-writes.js";
 import { actorOf, failure } from "./pulls.js";
 
 /** A diff comment as the API returns it; `headSha` is its pull request's head now. */
@@ -261,3 +266,47 @@ export const unresolveReviewThreadOperation = (
   ctx: OpContext,
   input: Input<typeof unresolveReviewThread>,
 ) => resolution(ctx, input, false);
+
+/** GitHub's message for applied suggestions. */
+const SUGGESTIONS_MESSAGE = "Apply suggestions from code review";
+
+/** The `pulls.suggestions.apply` operation. */
+export async function applySuggestionsOperation(
+  ctx: OpContext,
+  input: Input<typeof applySuggestions>,
+): Promise<Output<typeof applySuggestions>> {
+  const message = input.commit_message ?? SUGGESTIONS_MESSAGE;
+  if (message.trim() === "")
+    throw new OperationError(422, "invalid_input", "A commit needs a message.");
+  // git stops reading a message at a NUL (and fsck warns of one).
+  if (message.includes("\0"))
+    throw new OperationError(422, "invalid_input", "A commit message must not contain NUL.");
+  const entry = await repoFor(ctx, input.owner, input.repo, "contents:write");
+  const stub = repo(ctx, entry, "applySuggestions");
+  const authors = await stub.reviewCommentAuthors(input.comment_ids);
+  if (authors === null) throw failure(entry, "repo_not_found");
+  // The suggestions' authors are co-authors (the one applying them is the author).
+  const identity = await commitIdentityOf(ctx);
+  const suggesters = (
+    await noReplyPeople(ctx, [...new Set(authors.map((a) => a.authorId))])
+  ).filter((p) => p.email !== identity.author.email);
+  const result = await stub.applySuggestions(
+    {
+      number: input.pull_number,
+      commentIds: input.comment_ids,
+      message: appendTrailers(
+        message,
+        coAuthorTrailers(message, [...identity.coAuthors, ...suggesters]),
+      ),
+      committer: identity.committer,
+      author: identity.author,
+    },
+    actorOf(ctx),
+  );
+  if (!result.ok) throw new OperationError(result.status, result.code, result.error);
+  return {
+    branch: result.value.branch,
+    commit: await resolveOne(ctx, result.value.commit),
+    files: result.value.paths.map((path, i) => ({ path, sha: result.value.blobs[i] ?? null })),
+  };
+}

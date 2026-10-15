@@ -36,6 +36,12 @@ describe("serverCommitIdentity", () => {
 describe("coAuthorTrailers", () => {
   const ada = { name: "ada", email: "usr_ada@users.noreply.fyrden.test" };
 
+  it("names a person given twice once, whatever the case of the email", () => {
+    expect(coAuthorTrailers("Fix", [ada, { ...ada, email: ada.email.toUpperCase() }, ada])).toEqual(
+      ["Co-authored-by: ada <usr_ada@users.noreply.fyrden.test>"],
+    );
+  });
+
   it("names each person not yet named, by email whatever its case", () => {
     expect(coAuthorTrailers("Fix", [ada])).toEqual([
       "Co-authored-by: ada <usr_ada@users.noreply.fyrden.test>",

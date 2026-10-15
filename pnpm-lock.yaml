@@ -437,6 +437,12 @@ importers:
       fast-check:
         specifier: 'catalog:'
         version: 4.10.2
+      micromark:
+        specifier: 4.0.2
+        version: 4.0.2(supports-color@10.2.2)
+      micromark-extension-gfm:
+        specifier: 3.0.0
+        version: 3.0.0
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

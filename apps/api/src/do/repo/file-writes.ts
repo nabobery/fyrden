@@ -136,6 +136,11 @@ const ZERO_ID = "0".repeat(40);
 export async function writeFiles(
   deps: FileWriteDeps,
   input: FileWriteInput,
+  /** The caller's part of the commit point (a last check, writes in its transaction), and how a refusal reads. */
+  commitPoint: {
+    readonly meta?: Omit<PushLogMeta, "repoId" | "requestId">;
+    readonly onRefused?: (report: PushReportSummary) => Browsed<never>;
+  } = {},
 ): Promise<Browsed<FileWriteResult>> {
   const invalid = check(input);
   if (invalid) return invalid;
@@ -165,7 +170,13 @@ export async function writeFiles(
   const made = await build(deps, input, { ref, head, baseTree, now });
   if (!made.ok) return made;
   const { built, upload } = made.value;
-  const committed = await finishUpload(deps, input, upload);
+  const committed = await finishUpload(
+    deps,
+    input,
+    upload,
+    commitPoint.meta,
+    commitPoint.onRefused,
+  );
   if (!committed.ok) return committed;
   return {
     ok: true,

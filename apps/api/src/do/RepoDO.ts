@@ -28,6 +28,7 @@ import {
   coAuthorTrailers,
   decidePullAction,
   type Envelope,
+  type GitPerson,
   lineCount,
   type MergeContext,
   principalTypeOf,
@@ -154,6 +155,7 @@ import {
   type FileWriteInput,
   type FileWriteResult,
   writeFiles,
+  refused as writeRefused,
 } from "./repo/file-writes.js";
 import {
   MERGE_POLICY,
@@ -192,6 +194,7 @@ import {
   type RulesetRecord,
 } from "./repo/rulesets.js";
 import { factOf } from "./repo/signature.js";
+import { suggestedChanges } from "./repo/suggestions.js";
 import {
   type TemplateTree,
   type TemplateWriteInput,
@@ -222,6 +225,19 @@ const OWNER_BATCH = 50;
 
 /** Stands for a commit not made yet in a ruleset precheck (only the update's kind matters there). */
 const ZERO_ID = "0".repeat(40);
+
+/** Why applying suggestions was refused at the commit point. */
+const SUGGESTIONS_CHANGED =
+  "the pull request or its comments changed while the suggestions were applied";
+
+/** Suggestions to apply to a pull request's head, as the Worker asks for it. */
+export interface ApplySuggestionsInput {
+  readonly number: number;
+  readonly commentIds: readonly number[];
+  readonly message: string;
+  readonly committer: GitPerson;
+  readonly author: GitPerson;
+}
 
 /** The largest file a diff comment's anchor is checked against. */
 const ANCHOR_MAX_BYTES = 1024 * 1024;
@@ -1343,6 +1359,109 @@ export class RepoDO extends MigratingDO {
     });
   }
 
+  /** Who wrote the diff comments `ids` (missing ones left out): a suggestion's author is credited. */
+  reviewCommentAuthors(ids: readonly number[]) {
+    return this.#measured("reviewCommentAuthors", () => {
+      if (this.#refusesReads()) return null;
+      return ids.flatMap((id) => {
+        const comment = this.reviewComments.get(id);
+        return comment ? [{ id, authorId: comment.authorId }] : [];
+      });
+    });
+  }
+
+  /**
+   * Applies the suggestions of diff comments to a pull request's head
+   * branch as one commit, through the file-write path (the branch moves
+   * only from the head the comments are on; the writer's token is checked
+   * again at the commit point), for a caller with write access; their
+   * threads are resolved then.
+   */
+  applySuggestions(
+    input: ApplySuggestionsInput,
+    actor: RefActor,
+  ): Promise<Browsed<FileWriteResult & { readonly paths: readonly string[] }>> {
+    return this.#measured("applySuggestions", async () => {
+      await this.checkEpoch();
+      const ceilings = await this.#rolesPulled(actor.principal, actor.grantId ?? null);
+      const refusedWrite = this.#writeRefusal();
+      if (refusedWrite) return fail(refusedWrite.status, refusedWrite.code, refusedWrite.error);
+      const role = this.#roleNow(actor.principal, ceilings);
+      if (!atLeast(role, "write"))
+        return fail(403, "forbidden", "Applying suggestions takes write access.");
+      const pull = this.pulls.get(input.number);
+      if (!pull)
+        return fail(404, "pull_not_found", `The repository has no pull request ${input.number}.`);
+      if (pull.state !== "open")
+        return fail(422, "wrong_state", `Pull request ${input.number} is not open.`);
+      const ids = [...new Set(input.commentIds)];
+      const comments = ids.map((id) => this.reviewComments.get(id));
+      this.#blocks ??= createClockBlockCache();
+      const browse = new RepoBrowse({ git: this.git, memoryBlocks: this.#blocks });
+      let changes: Awaited<ReturnType<typeof suggestedChanges>>;
+      try {
+        changes = await suggestedChanges(browse, pull, comments, ids);
+      } finally {
+        browse.close();
+      }
+      if (!changes.ok) return changes;
+      const caller = {
+        actor,
+        root: rootIdentity({
+          principalId: actor.principal,
+          grantId: actor.grantId ?? null,
+          ceilingIds: ceilings,
+        }),
+        role,
+      };
+      const applied = comments as ReviewCommentRecord[];
+      await this.suggestionHooks.beforeWrite?.();
+      const written = await writeFiles(
+        await this.#writeDeps(),
+        {
+          principal: actor.principal,
+          tokenId: actor.tokenId ?? "",
+          grantId: actor.grantId ?? null,
+          repoId: this.#repoId(),
+          requestId: actor.requestId ?? null,
+          committer: input.committer,
+          author: input.author,
+          branch: pull.headRef,
+          expectedHead: pull.headSha,
+          message: input.message,
+          changes: changes.value,
+        },
+        {
+          meta: {
+            // Committed only while the pull request is open and the comments read as they were.
+            fence: () =>
+              this.pulls.get(input.number)?.state === "open" &&
+              applied.every((c) => this.reviewComments.get(c.id)?.version === c.version)
+                ? undefined
+                : SUGGESTIONS_CHANGED,
+            // With the commit: their threads are resolved, as GitHub's are.
+            inCommit: () => {
+              for (const threadId of new Set(applied.map((c) => c.threadId)))
+                this.reviewComments.resolve(input.number, threadId, true, caller);
+            },
+          },
+          onRefused: (report) =>
+            !report.ok && report.error.includes(SUGGESTIONS_CHANGED)
+              ? fail(
+                  409,
+                  "pull_changed",
+                  "The pull request or its comments changed while the suggestions were applied; try again.",
+                )
+              : writeRefused(report),
+        },
+      );
+      if (!written.ok) return written;
+      this.#armOutbox();
+      this.#ensureAuditArchive();
+      return { ok: true, value: { ...written.value, paths: changes.value.map((c) => c.path) } };
+    });
+  }
+
   /** Withdraws review requests. */
   removeRequestedReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
     return this.#pullChange("removeRequestedReviewers", actor, (caller) =>
@@ -2428,6 +2547,9 @@ export class RepoDO extends MigratingDO {
 
   /** Hooks into a merge of a pull request. For tests. */
   mergeHooks: { beforeFinish?: () => Promise<void> } = {};
+
+  /** Hooks into applying suggestions. For tests. */
+  suggestionHooks: { beforeWrite?: () => Promise<void> } = {};
 
   /** A merge's budgets. Tests may replace them. */
   mergePolicy: MergePolicy = MERGE_POLICY;

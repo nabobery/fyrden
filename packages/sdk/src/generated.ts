@@ -1982,6 +1982,66 @@ export type PullsThreadsUnresolveOutput = {
   comments: number;
 };
 
+/** Input of `pulls.suggestions.apply`: Apply suggestions. */
+export type PullsSuggestionsApplyInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The comments whose suggestions to apply, 1-50. */
+  comment_ids: number[];
+  /** By default `Apply suggestions from code review`. */
+  commit_message?: string;
+};
+
+/** Output of `pulls.suggestions.apply`. */
+export type PullsSuggestionsApplyOutput = {
+  branch: string;
+  commit: {
+    /** A full commit SHA (40 hex digits). */
+    sha: string;
+    commit: {
+      message: string;
+      author: {
+        name: string;
+        email: string;
+        /** ISO 8601, UTC. */
+        date: string;
+      };
+      committer: {
+        name: string;
+        email: string;
+        /** ISO 8601, UTC. */
+        date: string;
+      };
+      tree: {
+        sha: string;
+      };
+      /** Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address. */
+      verification: {
+        verified: boolean;
+        /** `valid` (signed by a known key), `unsigned`, `unknown_key`, `bad_email` (a user's key, on a commit whose committer is not that user), `invalid`, `malformed_signature` or `unknown_signature_type`, as GitHub names them. */
+        reason: string;
+        /** The armored signature. */
+        signature: string | null;
+        /** What the signature covers: the commit without it. */
+        payload: string | null;
+        verified_at: string | null;
+      };
+    };
+    parents: {
+      /** A full commit SHA (40 hex digits). */
+      sha: string;
+    }[];
+  };
+  files: ({
+    path: string;
+    sha: string | null;
+  })[];
+};
+
 /** Input of `pulls.reviews.list`: List reviews. */
 export type PullsReviewsListInput = {
   /** The owner's handle. */
@@ -3928,6 +3988,7 @@ export const OPERATIONS = {
   "pulls.threads.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/threads", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "threads" },
   "pulls.threads.resolve": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/threads/{thread_id}/resolution", pathParams: ["owner","repo","pull_number","thread_id"], idempotent: true },
   "pulls.threads.unresolve": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/{pull_number}/threads/{thread_id}/resolution", pathParams: ["owner","repo","pull_number","thread_id"], idempotent: true },
+  "pulls.suggestions.apply": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/suggestions/apply", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.reviews.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "reviews" },
   "pulls.reviews.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}", pathParams: ["owner","repo","pull_number","review_id"], idempotent: false },
   "pulls.reviews.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews", pathParams: ["owner","repo","pull_number"], idempotent: true },
@@ -4094,6 +4155,8 @@ export interface Operations {
   "pulls.threads.resolve": { input: PullsThreadsResolveInput; output: PullsThreadsResolveOutput };
   /** Unresolve a review thread. Fyrden: marks a review thread unresolved (nothing changes when it already is). The pull request's author, or write access and above. A ruleset may require every thread resolved before a merge. */
   "pulls.threads.unresolve": { input: PullsThreadsUnresolveInput; output: PullsThreadsUnresolveOutput };
+  /** Apply suggestions. Fyrden: applies the suggested changes of diff comments (a ```suggestion block each) to the pull request's head branch as one commit, made and signed by the server, with the suggestions' authors as co-authors; their threads are resolved. Each comment must be on the head side at the current head; suggestions to one file must not overlap; files of 1 MiB at most. Write access; the branch's rulesets apply, and it moves only from the head the comments are on (409 `head_moved`). */
+  "pulls.suggestions.apply": { input: PullsSuggestionsApplyInput; output: PullsSuggestionsApplyOutput };
   /** List reviews. A pull request's reviews, in the order submitted. */
   "pulls.reviews.list": { input: PullsReviewsListInput; output: PullsReviewsListOutput };
   /** Get a review. One review of a pull request. */

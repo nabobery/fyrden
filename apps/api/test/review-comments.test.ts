@@ -324,3 +324,119 @@ describe("threads", () => {
     expect(merged.body.code).toBe("pull_changed");
   });
 });
+
+describe("suggestions", () => {
+  const suggest = (who: Who, lines: string, at: Record<string, unknown> = {}) =>
+    onHead(who, { body: `Better:\n\`\`\`suggestion\n${lines}\n\`\`\``, ...at });
+  const apply = (who: Who, ids: number[], extra: Record<string, unknown> = {}) =>
+    json<{
+      commit: { sha: string; commit: { message: string } };
+      files: { path: string }[];
+      code?: string;
+    }>(api("POST", `${path}/pulls/1/suggestions/apply`, who.token, { comment_ids: ids, ...extra }));
+  const file = async (name: string) =>
+    atob(
+      (
+        await json<{ content: string }>(
+          api("GET", `${path}/contents/${name}?ref=feature`, owner.token),
+        )
+      ).body.content.replace(/\n/g, ""),
+    );
+
+  it("are applied as one commit on the head, crediting their authors, and resolve their threads", async () => {
+    const reviewer = await collaborator("pull");
+    const first = (await suggest(reviewer, "TWO", { line: 2 })).body;
+    const second = (await suggest(owner, "3a\n3b", { line: 3 })).body;
+    const applied = await apply(owner, [first.id, second.id]);
+    expect(applied.status).toBe(201);
+    expect(applied.body.files.map((f) => f.path)).toEqual(["a.txt"]);
+    expect(await file("a.txt")).toBe("one\nTWO\n3a\n3b\nfour\n");
+    expect(applied.body.commit.commit.message).toMatch(
+      new RegExp(
+        `^Apply suggestions from code review\\n\\nCo-authored-by: ${reviewer.handle} <${reviewer.principalId}@[^>]+>\\n$`,
+      ),
+    );
+    const pull = await json<{ head: { sha: string } }>(api("GET", `${path}/pulls/1`, owner.token));
+    expect(pull.body.head.sha).toBe(applied.body.commit.sha);
+    expect((await threads()).every((t) => t.resolved)).toBe(true);
+  });
+
+  it("refuse what is not a suggestion on the head's current lines", async () => {
+    const plain = (await onHead(owner)).body;
+    expect((await apply(owner, [plain.id])).body.code).toBe("not_a_suggestion");
+    const left = (await suggest(owner, "x", { side: "LEFT", line: 1 })).body;
+    expect((await apply(owner, [left.id])).body.code).toBe("not_applicable");
+    const a = (await suggest(owner, "x", { start_line: 1, line: 2 })).body;
+    const b = (await suggest(owner, "y", { line: 2 })).body;
+    expect((await apply(owner, [a.id, b.id])).body.code).toBe("overlapping");
+    expect((await apply(owner, [999_999])).body.code).toBe("comment_not_found");
+    await commitOn("feature", [{ path: "b.txt", content: "b\n" }]);
+    expect((await apply(owner, [b.id])).body.code).toBe("outdated");
+  });
+
+  const during = (action: () => Promise<unknown>) =>
+    inRepo(env.REPO.getByName(repo.id), (r: RepoDO) => {
+      r.suggestionHooks = {
+        beforeWrite: async () => {
+          r.suggestionHooks = {};
+          await action();
+        },
+      };
+    });
+
+  it("are not applied once the pull request is merged meanwhile", async () => {
+    const made = (await suggest(owner, "TWO", { line: 2 })).body;
+    await during(() => api("PUT", `${path}/pulls/1/merge`, owner.token));
+    const head = (await json<{ head: { sha: string } }>(api("GET", `${path}/pulls/1`, owner.token)))
+      .body.head.sha;
+    expect((await apply(owner, [made.id])).body.code).toBe("pull_changed");
+    expect(
+      (await json<{ head: { sha: string } }>(api("GET", `${path}/pulls/1`, owner.token))).body.head
+        .sha,
+    ).toBe(head);
+    expect((await threads()).map((t) => t.resolved)).toEqual([false]);
+  });
+
+  it("are not applied when a comment is edited meanwhile", async () => {
+    const made = (await suggest(owner, "TWO", { line: 2 })).body;
+    await during(() =>
+      api("PATCH", `${path}/pulls/comments/${made.id}`, owner.token, {
+        body: "```suggestion\nOTHER\n```",
+      }),
+    );
+    expect((await apply(owner, [made.id])).body.code).toBe("pull_changed");
+    expect(await file("a.txt")).toBe("one\ntwo\nthree\nfour\n");
+  });
+
+  it("stop at what one write may carry", async () => {
+    const mib = `${"x".repeat(1023)}\n`.repeat(1024);
+    await commitOn("feature", [
+      { path: "f1.txt", content: mib },
+      { path: "f2.txt", content: mib },
+    ]);
+    const tip = await commitOn("feature", [
+      { path: "f3.txt", content: mib },
+      { path: "f4.txt", content: mib },
+      { path: "f5.txt", content: mib },
+    ]);
+    const ids: number[] = [];
+    for (const name of ["f1", "f2", "f3", "f4", "f5"])
+      ids.push(
+        (
+          await comment(owner, {
+            commit_id: tip,
+            path: `${name}.txt`,
+            line: 1,
+            body: "```suggestion\ny\n```",
+          })
+        ).body.id,
+      );
+    expect((await apply(owner, ids)).body.code).toBe("too_large");
+  });
+
+  it("need write access", async () => {
+    const reader = await collaborator("pull");
+    const own = (await suggest(reader, "x")).body;
+    expect((await apply(reader, [own.id])).body.code).toBe("repo_not_found");
+  });
+});

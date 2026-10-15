@@ -10,6 +10,8 @@ import {
   type CommitIdentity,
   type CommitParty,
   coAuthorTrailers,
+  type GitPerson,
+  noReplyPerson,
   serverCommitIdentity,
 } from "@fyrden/domain";
 import { appendTrailers } from "@fyrden/git-core";
@@ -105,6 +107,23 @@ export async function commitIdentityOf(ctx: OpContext): Promise<CommitIdentity> 
     principal: { id: ctx.auth.principalId, handle: ctx.auth.principalHandle },
     actingAgent,
   });
+}
+
+/** The no-reply identities of `ids` (as co-authors), in one directory query. */
+export async function noReplyPeople(ctx: OpContext, ids: readonly string[]): Promise<GitPerson[]> {
+  if (ids.length === 0) return [];
+  ctx.metrics.count("d1.query", { db: "directory", op: "principal_handle" });
+  const { results } = await ctx.env.DIRECTORY.prepare(
+    `SELECT id, handle FROM principals WHERE id IN (${ids.map(() => "?").join(", ")})`,
+  )
+    .bind(...ids)
+    .all<{ id: string; handle: string | null }>();
+  return ids.map((id) =>
+    noReplyPerson(
+      { id, handle: results.find((r) => r.id === id)?.handle ?? null },
+      ctx.requestHost,
+    ),
+  );
 }
 
 /**

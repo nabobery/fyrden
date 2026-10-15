@@ -1,6 +1,7 @@
 import { HANDLE_PATTERN, MAX_COMMENT_BODY_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
+import { CommitObject } from "./browse.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 
 const RepoInput = {
@@ -233,4 +234,44 @@ export const unresolveReviewThread = defineOperation({
   summary: "Unresolve a review thread",
   ...resolution(false),
   mcp: false,
+});
+
+export const applySuggestions = defineOperation({
+  id: "pulls.suggestions.apply",
+  method: "POST",
+  path: "/repos/{owner}/{repo}/pulls/{pull_number}/suggestions/apply",
+  summary: "Apply suggestions",
+  description:
+    "Fyrden: applies the suggested changes of diff comments (a ```suggestion block each) to the pull request's head branch as one commit, made and signed by the server, with the suggestions' authors as co-authors; their threads are resolved. Each comment must be on the head side at the current head; suggestions to one file must not overlap; files of 1 MiB at most. Write access; the branch's rulesets apply, and it moves only from the head the comments are on (409 `head_moved`).",
+  input: z.object({
+    ...RepoInput,
+    pull_number: PullNumber,
+    comment_ids: z
+      .array(z.number().int().positive())
+      .min(1)
+      .max(50)
+      .describe("The comments whose suggestions to apply, 1-50."),
+    commit_message: z
+      .string()
+      .max(65_536)
+      .optional()
+      .describe("By default `Apply suggestions from code review`."),
+  }),
+  output: z.object({
+    branch: z.string(),
+    commit: CommitObject,
+    files: z.array(z.object({ path: z.string(), sha: z.string().nullable() })),
+  }),
+  permission: "contents:write",
+  principals: ["user", "agent"],
+  rateLimit: "write",
+  idempotency: "key",
+  successStatus: 201,
+  mcp: {
+    tool: "apply_suggestions",
+    title: "Apply suggestions",
+    description:
+      "Apply suggested changes from a pull request's diff comments to its head branch as one commit.",
+    readOnly: false,
+  },
 });

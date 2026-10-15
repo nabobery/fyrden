@@ -20,6 +20,8 @@
     "typescript": "catalog:",
     "vitest": "catalog:",
     "fast-check": "catalog:",
-    "@vitest/coverage-istanbul": "catalog:"
+    "@vitest/coverage-istanbul": "catalog:",
+    "micromark": "4.0.2",
+    "micromark-extension-gfm": "3.0.0"
   }
 }

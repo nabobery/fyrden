@@ -100,6 +100,7 @@ import {
   updatePullOperation,
 } from "../repos/pulls.js";
 import {
+  applySuggestionsOperation,
   createReviewCommentOperation,
   deleteReviewCommentOperation,
   getReviewCommentOperation,
@@ -341,6 +342,7 @@ export const handlers: Handlers = {
   "pulls.threads.list": listReviewThreadsOperation,
   "pulls.threads.resolve": resolveReviewThreadOperation,
   "pulls.threads.unresolve": unresolveReviewThreadOperation,
+  "pulls.suggestions.apply": applySuggestionsOperation,
   "pulls.files.list": listPullFilesOperation,
   "pulls.commits.list": listPullCommitsOperation,
   "pulls.reviews.list": listReviewsOperation,

@@ -13062,6 +13062,285 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/pulls/{pull_number}/suggestions/apply": {
+      "post": {
+        "description": "Fyrden: applies the suggested changes of diff comments (a \`\`\`suggestion block each) to the pull request's head branch as one commit, made and signed by the server, with the suggestions' authors as co-authors; their threads are resolved. Each comment must be on the head side at the current head; suggestions to one file must not overlap; files of 1 MiB at most. Write access; the branch's rulesets apply, and it moves only from the head the comments are on (409 \`head_moved\`).",
+        "operationId": "pulls.suggestions.apply",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "comment_ids": {
+                    "description": "The comments whose suggestions to apply, 1-50.",
+                    "items": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer",
+                    },
+                    "maxItems": 50,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                  "commit_message": {
+                    "description": "By default \`Apply suggestions from code review\`.",
+                    "maxLength": 65536,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "comment_ids",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "branch": {
+                      "type": "string",
+                    },
+                    "commit": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "commit": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "author": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "date": {
+                                  "description": "ISO 8601, UTC.",
+                                  "type": "string",
+                                },
+                                "email": {
+                                  "type": "string",
+                                },
+                                "name": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "name",
+                                "email",
+                                "date",
+                              ],
+                              "type": "object",
+                            },
+                            "committer": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "date": {
+                                  "description": "ISO 8601, UTC.",
+                                  "type": "string",
+                                },
+                                "email": {
+                                  "type": "string",
+                                },
+                                "name": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "name",
+                                "email",
+                                "date",
+                              ],
+                              "type": "object",
+                            },
+                            "message": {
+                              "type": "string",
+                            },
+                            "tree": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "sha": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "sha",
+                              ],
+                              "type": "object",
+                            },
+                            "verification": {
+                              "additionalProperties": false,
+                              "description": "Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address.",
+                              "properties": {
+                                "payload": {
+                                  "description": "What the signature covers: the commit without it.",
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "reason": {
+                                  "description": "\`valid\` (signed by a known key), \`unsigned\`, \`unknown_key\`, \`bad_email\` (a user's key, on a commit whose committer is not that user), \`invalid\`, \`malformed_signature\` or \`unknown_signature_type\`, as GitHub names them.",
+                                  "type": "string",
+                                },
+                                "signature": {
+                                  "description": "The armored signature.",
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "verified": {
+                                  "type": "boolean",
+                                },
+                                "verified_at": {
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                              },
+                              "required": [
+                                "verified",
+                                "reason",
+                                "signature",
+                                "payload",
+                                "verified_at",
+                              ],
+                              "type": "object",
+                            },
+                          },
+                          "required": [
+                            "message",
+                            "author",
+                            "committer",
+                            "tree",
+                            "verification",
+                          ],
+                          "type": "object",
+                        },
+                        "parents": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "sha": {
+                                "description": "A full commit SHA (40 hex digits).",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "sha",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
+                        "sha": {
+                          "description": "A full commit SHA (40 hex digits).",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "sha",
+                        "commit",
+                        "parents",
+                      ],
+                      "type": "object",
+                    },
+                    "files": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                          },
+                          "sha": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                        },
+                        "required": [
+                          "path",
+                          "sha",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "branch",
+                    "commit",
+                    "files",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Apply suggestions",
+        "x-fyrden-permission": "contents:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}/pulls/{pull_number}/threads": {
       "get": {
         "description": "Fyrden: a pull request's review threads, oldest first, resolved or not.",

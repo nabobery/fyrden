@@ -98,6 +98,10 @@ const CASES: Record<
   },
   "pulls.comments.delete": { input: {}, expected: { status: 404, code: "comment_not_found" } },
   "pulls.threads.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
+  "pulls.suggestions.apply": {
+    input: { comment_ids: [1] },
+    expected: { status: 404, code: "pull_not_found" },
+  },
   "pulls.threads.resolve": { input: {}, expected: { status: 404, code: "pull_not_found" } },
   "pulls.threads.unresolve": { input: {}, expected: { status: 404, code: "pull_not_found" } },
   "pulls.files.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
