@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { mentionsToken } from "@fyrden/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { startWranglerDev } from "./wrangler-dev.js";
 
 const root = resolve(import.meta.dirname, "../../..");
 const apiConfig = join(root, "apps/api/wrangler.jsonc");
@@ -19,8 +20,8 @@ const wranglerBin = join(
   "bin",
   "wrangler.js",
 );
-const port = 40_000 + Math.floor(Math.random() * 10_000);
-const origin = `http://127.0.0.1:${port}`;
+let port = 0;
+let origin = "";
 const bootstrapSecret = `e2e-${crypto.randomUUID()}`;
 /** The Worker's push body limit for this run (a variable), small enough to exceed in a test. */
 const BODY_LIMIT = 6 * 1024 * 1024;
@@ -156,11 +157,8 @@ beforeAll(async () => {
   );
   expect(migrate.code, migrate.stdout + migrate.stderr).toBe(0);
 
-  dev = spawn(
-    process.execPath,
-    [
-      wranglerBin,
-      "dev",
+  const server = await startWranglerDev({
+    args: [
       "-c",
       apiConfig,
       "--persist-to",
@@ -169,37 +167,16 @@ beforeAll(async () => {
       `BOOTSTRAP_SECRET:${bootstrapSecret}`,
       "--var",
       `GIT_PUSH_MAX_BODY_BYTES:${BODY_LIMIT}`,
-      "--ip",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      // Its own inspector port, so it can run beside the other suites' servers.
-      "--inspector-port",
-      String(port + 1),
     ],
-    {
-      cwd: join(root, "apps/api"),
-      env: { ...process.env, NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" },
+    cwd: join(root, "apps/api"),
+    onOutput: (text) => {
+      output += text;
     },
-  );
-  const child = dev;
-  closed = new Promise((done) => child.once("close", () => done()));
-  await new Promise<void>((ready, fail) => {
-    const timer = setTimeout(
-      () => fail(new Error(`wrangler dev did not start:\n${output}`)),
-      60_000,
-    );
-    const onData = (d: Buffer) => {
-      output += d;
-      if (/Ready on/.test(output)) {
-        clearTimeout(timer);
-        ready();
-      }
-    };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-    child.on("exit", (code) => fail(new Error(`wrangler dev exited (${code}):\n${output}`)));
   });
+  dev = server.child;
+  closed = server.closed;
+  port = server.port;
+  origin = `http://127.0.0.1:${port}`;
 
   handle = `e2epush${Date.now().toString(36)}`;
   const boot = await fetch(`${origin}/v0/admin/bootstrap`, {

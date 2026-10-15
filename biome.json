@@ -1,6 +1,10 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
-  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
   "files": {
     "includes": [
       "**",
@@ -11,11 +15,18 @@
       "!**/dist"
     ]
   },
-  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
   "linter": {
     "rules": {
       "preset": "recommended",
-      "style": { "useImportType": "error", "useExportType": "error" }
+      "style": {
+        "useImportType": "error",
+        "useExportType": "error"
+      }
     }
   },
   "overrides": [
@@ -46,6 +57,41 @@
                     "message": "git-core and domain must not reach into adapters or apps by relative path."
                   }
                 ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/*/test/**", "packages/*/test/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedGlobals": {
+              "level": "error",
+              "options": {
+                "deniedGlobals": {
+                  "setTimeout": "Tests wait on explicit signals, never on time: a sleep or a timed wait passes or fails with the runner's speed (docs/testing.md). Pause code at a hook, drive alarms yourself (the clock is held a day ahead), or, for a deliberate yield, add a biome-ignore saying why.",
+                  "setInterval": "Tests wait on explicit signals, never on time: a sleep or a timed wait passes or fails with the runner's speed (docs/testing.md). Pause code at a hook, drive alarms yourself (the clock is held a day ahead), or, for a deliberate yield, add a biome-ignore saying why."
+                }
+              }
+            },
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "./helpers/repo-git.js": {
+                    "importNames": ["sleep"],
+                    "message": "Tests wait on explicit signals, never on time: a sleep or a timed wait passes or fails with the runner's speed (docs/testing.md). Pause code at a hook, drive alarms yourself (the clock is held a day ahead), or, for a deliberate yield, add a biome-ignore saying why."
+                  },
+                  "../helpers/repo-git.js": {
+                    "importNames": ["sleep"],
+                    "message": "Tests wait on explicit signals, never on time: a sleep or a timed wait passes or fails with the runner's speed (docs/testing.md). Pause code at a hook, drive alarms yourself (the clock is held a day ahead), or, for a deliberate yield, add a biome-ignore saying why."
+                  },
+                  "node:timers/promises": "Tests wait on explicit signals, never on time: a sleep or a timed wait passes or fails with the runner's speed (docs/testing.md). Pause code at a hook, drive alarms yourself (the clock is held a day ahead), or, for a deliberate yield, add a biome-ignore saying why.",
+                  "node:timers": "Tests wait on explicit signals, never on time: a sleep or a timed wait passes or fails with the runner's speed (docs/testing.md). Pause code at a hook, drive alarms yourself (the clock is held a day ahead), or, for a deliberate yield, add a biome-ignore saying why."
+                }
               }
             }
           }

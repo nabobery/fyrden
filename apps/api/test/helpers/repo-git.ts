@@ -11,7 +11,9 @@ export const newNetworkId = (): string => createIdFactory(Date.now, secureRandom
 /** A 20-byte object id filled with `n`. */
 export const oid = (n: number): Oid => new Uint8Array(20).fill(n) as Oid;
 
-export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+export const sleep = (ms: number) =>
+  // biome-ignore lint/style/noRestrictedGlobals: the one place a test waits on time: `signal` polls a flag set from another request's context, where no promise of this one can be resolved; other uses need a reason of their own.
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 type Outcome<R> = { ok: true; value: R } | { ok: false; name: string; message: string };
 

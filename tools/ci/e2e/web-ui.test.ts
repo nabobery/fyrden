@@ -17,6 +17,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { mentionsToken } from "@fyrden/domain";
 import { type Browser, chromium, type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { startWranglerDev } from "./wrangler-dev.js";
 
 const root = resolve(import.meta.dirname, "../../..");
 const apiConfig = join(root, "apps/api/wrangler.jsonc");
@@ -26,9 +27,9 @@ const wranglerBin = join(
   "bin",
   "wrangler.js",
 );
-const port = 40_000 + Math.floor(Math.random() * 10_000);
+let port = 0;
 // localhost: a secure context, so the browser keeps the __Host- session cookie over http.
-const origin = `http://localhost:${port}`;
+let origin = "";
 const bootstrapSecret = `web-${crypto.randomUUID()}`;
 const signingSeed = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64");
 
@@ -84,11 +85,8 @@ beforeAll(async () => {
     );
     expect(migrated.code, migrated.output).toBe(0);
   }
-  dev = spawn(
-    process.execPath,
-    [
-      wranglerBin,
-      "dev",
+  const server = await startWranglerDev({
+    args: [
       "-c",
       webConfig,
       "-c",
@@ -98,38 +96,16 @@ beforeAll(async () => {
       // An env file reaches both Workers (`--var` only the first config's).
       "--env-file",
       envFile,
-      "--ip",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      // Its own inspector port: concurrent servers each probing up from
-      // 9229 can pick the same one, and the later fails to bind.
-      "--inspector-port",
-      String(port + 1),
     ],
-    {
-      cwd: join(root, "apps/web"),
-      env: { ...process.env, NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" },
+    cwd: join(root, "apps/web"),
+    onOutput: (text) => {
+      output += text;
     },
-  );
-  const child = dev;
-  closed = new Promise((done) => child.once("close", () => done()));
-  await new Promise<void>((ready, fail) => {
-    const timer = setTimeout(
-      () => fail(new Error(`wrangler dev did not start:\n${output}`)),
-      90_000,
-    );
-    const onData = (d: Buffer) => {
-      output += d;
-      if (/Ready on/.test(output)) {
-        clearTimeout(timer);
-        ready();
-      }
-    };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-    child.on("exit", (code) => fail(new Error(`wrangler dev exited (${code}):\n${output}`)));
   });
+  dev = server.child;
+  closed = server.closed;
+  port = server.port;
+  origin = `http://localhost:${port}`;
   // The first user, through the web origin (the binding carries it to fyrden-api).
   const boot = await fetch(`${origin}/v0/admin/bootstrap`, {
     method: "POST",

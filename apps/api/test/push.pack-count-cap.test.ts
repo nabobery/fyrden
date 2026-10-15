@@ -160,14 +160,6 @@ const snapshot = (stub: Stub) =>
       .one().n as number,
   }));
 
-async function waitFor(check: () => Promise<boolean>, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!(await check())) {
-    if (Date.now() > deadline) throw new Error("condition never held");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
 const jobState = (stub: Stub, jobId: string) =>
   inRepo(stub, ({ git }) => git.jobs.get(jobId)?.state ?? null);
 
@@ -421,8 +413,10 @@ describe("push: pack-count cap", () => {
     // The scheduled compaction, with a budget that fits, makes room below the cap...
     await setPolicy(stub, { cap: 4 });
     await inRepo(stub, ({ git }) => git.jobs.ensure("compact", PACK_CAP_JOB_ID));
-    await runDurableObjectAlarm(stub);
-    await waitFor(async () => (await jobState(stub, PACK_CAP_JOB_ID)) === "done");
+    // Its slices, run one alarm at a time until it is done.
+    for (let i = 0; i < 20 && (await jobState(stub, PACK_CAP_JOB_ID)) !== "done"; i++)
+      await runDurableObjectAlarm(stub);
+    expect(await jobState(stub, PACK_CAP_JOB_ID)).toBe("done");
     const compacted = await snapshot(stub);
     expect(compacted.live.length).toBeLessThanOrEqual(3);
     expect(compacted.main).toBe(before.main);

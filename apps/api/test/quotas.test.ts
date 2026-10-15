@@ -3,11 +3,7 @@
 // stored and charged at its commit; a push that commits nothing gives it
 // back, and a deleted repository's storage is free again.
 
-import {
-  createScheduledController,
-  runDurableObjectAlarm,
-  runInDurableObject,
-} from "cloudflare:test";
+import { createScheduledController, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, inject, it, vi } from "vitest";
@@ -295,27 +291,10 @@ describe("storage quota", () => {
       expect(pushed.report).toContain("ok refs/heads/main\n");
       // Owed, not counted yet; the repository's alarm tells the account.
       expect(await quota(owner)).toMatchObject({ storage_bytes: 0 });
-      const stub = env.REPO.getByName(repo.id);
-      for (let i = 0; i < 5 && (await quota(owner)).storage_bytes === 0; i++) {
-        await inRepo(stub, ({ git }) =>
-          git.context.storage.sql.exec(
-            "UPDATE jobs SET next_run_at = 1 WHERE kind = 'storage_confirm'",
-          ),
-        );
-        await runDurableObjectAlarm(stub);
-      }
-      expect(await quota(owner)).toMatchObject({ storage_bytes: body.length, reserved_bytes: 0 });
       // Told once: nothing is owed any more, and it is counted once.
-      expect(
-        await inRepo(
-          stub,
-          ({ git }) =>
-            git.context.storage.sql
-              .exec<{ n: number }>("SELECT count(*) AS n FROM storage_owed")
-              .one().n,
-        ),
-      ).toBe(0);
-      await runDurableObjectAlarm(stub);
+      expect((await runConfirmJob(repo.id)).owed).toEqual([]);
+      expect(await quota(owner)).toMatchObject({ storage_bytes: body.length, reserved_bytes: 0 });
+      await runConfirmJob(repo.id);
       expect(await quota(owner)).toMatchObject({ storage_bytes: body.length });
     } finally {
       spy.mockRestore();
@@ -323,25 +302,24 @@ describe("storage quota", () => {
   });
 
   /** Runs the repository's confirmation job now; the job's state after. */
-  const runConfirmJob = async (repoId: string) => {
-    const stub = env.REPO.getByName(repoId);
-    await inRepo(stub, ({ git }) =>
-      git.context.storage.sql.exec(
-        "UPDATE jobs SET next_run_at = 1 WHERE kind = 'storage_confirm'",
-      ),
-    );
-    await runDurableObjectAlarm(stub);
-    return inRepo(stub, ({ git }) => ({
-      owed: git.context.storage.sql
-        .exec<{ upload_id: string }>("SELECT upload_id FROM storage_owed ORDER BY upload_id")
-        .toArray()
-        .map((r) => r.upload_id),
-      state:
-        git.context.storage.sql
-          .exec<{ state: string }>("SELECT state FROM jobs WHERE kind = 'storage_confirm'")
-          .toArray()[0]?.state ?? null,
-    }));
-  };
+  const runConfirmJob = (repoId: string) =>
+    // The object's alarm itself, whether or not one is set: run as the test asks, never
+    // depending on what earlier work left scheduled.
+    runInDurableObject(env.REPO.getByName(repoId), async (instance: RepoDO, state) => {
+      const sql = state.storage.sql;
+      sql.exec("UPDATE jobs SET next_run_at = 1 WHERE kind = 'storage_confirm'");
+      await instance.alarm();
+      return {
+        owed: sql
+          .exec<{ upload_id: string }>("SELECT upload_id FROM storage_owed ORDER BY upload_id")
+          .toArray()
+          .map((r) => r.upload_id),
+        state:
+          sql
+            .exec<{ state: string }>("SELECT state FROM jobs WHERE kind = 'storage_confirm'")
+            .toArray()[0]?.state ?? null,
+      };
+    });
 
   /** Owes the account `bytes` for upload `uploadId` (at `at`), with the job to tell it. */
   const owe = (repoId: string, uploadId: string, bytes: number, at = Date.now()) =>

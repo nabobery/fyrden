@@ -67,7 +67,8 @@ function build(prefix: string, maxCursorBytes?: number) {
     let largest = 0;
     for (let rounds = 0; status.ok && status.value.state === "building"; rounds++) {
       if (rounds > 1_000) throw new Error("the archive does not finish");
-      await git.jobs.runJob(jobId, archives.handler(), git.memory, Date.now() + 30);
+      // A deadline already passed: one slice a call, so the cursor is seen after each.
+      await git.jobs.runJob(jobId, archives.handler(), git.memory, git.context.now());
       largest = Math.max(largest, git.jobs.get(jobId)?.cursor?.byteLength ?? 0);
       status = await archives.request(input);
     }

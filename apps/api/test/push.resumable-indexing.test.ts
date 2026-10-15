@@ -17,7 +17,6 @@ import { inRepo } from "./helpers/repo-git.js";
 
 const fx = inject("pushFixtures");
 const MAIN = "refs/heads/main";
-const DAY = 24 * 60 * 60 * 1000;
 /** Past the upload's index lock (5 min). */
 const PAST_INDEX_LOCK_MS = 10 * 60 * 1000;
 
@@ -38,13 +37,6 @@ afterEach(() => {
 
 describe("push: resumable indexing", () => {
   it("continues from its cursor after eviction, on the alarm, and moves the ref only at the commit", async () => {
-    // Every clock in this isolate (the Worker's and the object's, which
-    // survives eviction) runs a day ahead of real time, so the alarms the
-    // job queue arms never fire on their own: only `runDurableObjectAlarm`
-    // runs the job. An alarm firing by itself would race the assertions
-    // below, and an eviction during its slice would leave the job leased.
-    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
-    vi.setSystemTime(Date.now() + DAY);
     const target = await pushTarget();
     const { stub } = target.repo;
     const seeded = await postPush(
@@ -107,8 +99,6 @@ describe("push: resumable indexing", () => {
     expect(await stub.pushStatus(begun.uploadId, 0)).toEqual({ state: "done", response });
   });
   it("publishes nothing from a runner that lost the index lock while its cursor write was under way", async () => {
-    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
-    vi.setSystemTime(Date.now() + DAY);
     const target = await pushTarget();
     const { stub } = target.repo;
     const seeded = await postPush(
@@ -201,8 +191,6 @@ describe("push: resumable indexing", () => {
   });
 
   it("waits for a runner that still holds the index lock without spending the job's attempts", async () => {
-    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
-    vi.setSystemTime(Date.now() + DAY);
     const target = await pushTarget();
     const { stub } = target.repo;
     const seeded = await postPush(
