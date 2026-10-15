@@ -37,6 +37,7 @@ export {
   internLines,
   isBinary,
   type Lines,
+  latin1,
   lineAt,
   splitLines,
 } from "./diff/text.js";
@@ -83,6 +84,26 @@ export {
   Sha1CollisionError,
   type Sha1Options,
 } from "./hash/sha1.js";
+export { type MergeChunk, type MergeResult, merge3 } from "./merge/diff3.js";
+export { type ConflictRegion, type FileMerge, mergeFiles } from "./merge/file-merge.js";
+export {
+  type ConflictKind,
+  MergeBudget,
+  type MergeConflict,
+  MergeLimitError,
+  mergeTrees,
+  type NewObject,
+  type ObjectSource,
+  type Side,
+  type TreeMerge,
+  type TreeMergeOptions,
+} from "./merge/merge-trees.js";
+export {
+  type BaseTree,
+  baseTreeOf,
+  type History,
+  MAX_VIRTUAL_DEPTH,
+} from "./merge/virtual-base.js";
 export { type Commit, encodeCommit, parseCommit } from "./object/commit.js";
 export {
   FSCK_SEVERITY,

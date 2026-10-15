@@ -44,6 +44,7 @@ const SCOPES = {
   },
   reader: { tests: ["test/reader/"], break: 61 },
   diff: { tests: ["test/diff/"], exclude: ["**/*.git-oracle.test.ts"], break: 80 },
+  merge: { tests: ["test/merge/"], exclude: ["**/*.git-oracle.test.ts"], break: 77 },
   "receive-pack": {
     skip: PUSH_FSCK,
     tests: ["test/receive-pack/"],

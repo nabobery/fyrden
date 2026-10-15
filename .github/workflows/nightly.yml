@@ -163,6 +163,7 @@ jobs:
             push-fsck,
             upload-pack,
             diff,
+            merge,
           ]
     env:
       SCOPE: ${{ matrix.scope }}

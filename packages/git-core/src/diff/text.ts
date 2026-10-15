@@ -65,8 +65,8 @@ export function internLines(a: Lines, b: Lines): { a: Uint32Array; b: Uint32Arra
   return { a: idsOf(a), b: idsOf(b) };
 }
 
-/** One character per byte: a key that tells different bytes apart, whatever their encoding. */
-function latin1(bytes: Uint8Array): string {
+/** One character per byte, built in bounded chunks: a key that tells different bytes apart, whatever their encoding. */
+export function latin1(bytes: Uint8Array): string {
   let out = "";
   for (let i = 0; i < bytes.length; i += 0x8000)
     out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
