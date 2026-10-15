@@ -31,20 +31,14 @@ describe("evaluate: roles", () => {
     const allowed = (r: RepoRole | null) =>
       PERMISSION_NAMES.filter((p) => request(p, role(r)).allow);
     expect(allowed(null)).toEqual([]);
-    expect(allowed("read").sort()).toEqual(["contents:read", "metadata:read"]);
-    expect(allowed("triage").sort()).toEqual(["contents:read", "metadata:read"]);
-    expect(allowed("write").sort()).toEqual(["contents:read", "contents:write", "metadata:read"]);
-    expect(allowed("maintain").sort()).toEqual([
-      "contents:read",
-      "contents:write",
-      "metadata:read",
-    ]);
-    expect(allowed("admin").sort()).toEqual([
-      "administration:write",
-      "contents:read",
-      "contents:write",
-      "metadata:read",
-    ]);
+    const pulls = ["pull_requests:read", "pull_requests:write"];
+    const reads = ["contents:read", "metadata:read", ...pulls].sort();
+    const writes = ["contents:read", "contents:write", "metadata:read", ...pulls].sort();
+    expect(allowed("read").sort()).toEqual(reads);
+    expect(allowed("triage").sort()).toEqual(reads);
+    expect(allowed("write").sort()).toEqual(writes);
+    expect(allowed("maintain").sort()).toEqual(writes);
+    expect(allowed("admin").sort()).toEqual(["administration:write", ...writes].sort());
   });
 
   it("names why it denies", () => {

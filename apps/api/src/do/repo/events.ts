@@ -1,5 +1,10 @@
-import type { CommitContext, RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
-import { REPO_ENTITY, type RepoRow } from "@fyrden/domain";
+import {
+  type CommitContext,
+  DERIVED_REF_PREFIX,
+  type RefActor,
+  type RepoGitStorage,
+} from "@fyrden/adapters-cloudflare/git";
+import { type EntitySnapshot, REPO_ENTITY, type RepoRow } from "@fyrden/domain";
 import { oidToHex } from "@fyrden/git-core";
 import type { NewEvent, Outbox } from "../base/outbox.js";
 
@@ -515,15 +520,23 @@ export class RepoEvents {
     );
   }
 
-  /** In a commit's transaction: the new snapshot, the ref updates and the audit row. */
+  /**
+   * In a commit's transaction: the new snapshot, the ref updates and the
+   * audit row. Pull request refs are the server's: their moves are told as
+   * pull request events, not as ref updates.
+   */
   onCommit(context: CommitContext): void {
-    const { refUpdates, actor } = context.request;
-    if (refUpdates.length === 0) return;
+    const { actor } = context.request;
+    if (context.request.refUpdates.length === 0) return;
     const current = this.#meta();
     this.#assertWritable(current);
     if (!current) return;
     if (!this.#epochChecked)
       throw new Error("the repository's epoch must be checked before it commits");
+    const refUpdates = context.request.refUpdates.filter(
+      (u) => !u.name.startsWith(DERIVED_REF_PREFIX),
+    );
+    if (refUpdates.length === 0) return;
     this.#exec("events.pushed_at", "UPDATE repo_meta SET pushed_at = ? WHERE id = 1", context.now);
     const who = { actor: actor?.principal ?? null, actChain: [...(actor?.actChain ?? [])] };
     this.#emit("repo.updated", { ...who, data: null }, true);
@@ -603,6 +616,29 @@ export class RepoEvents {
   }
 
   /**
+   * In the caller's transaction: an event about another of the
+   * repository's entities (a pull request), carrying its snapshot. The
+   * repository must be writable, with its epoch checked.
+   */
+  emitEntity(
+    type: string,
+    actor: RefActor | null,
+    entity: Omit<EntitySnapshot, "deleted">,
+    data: Record<string, unknown> | null = null,
+  ): void {
+    const meta = this.#meta();
+    this.#assertWritable(meta);
+    if (!meta) throw new Error("the repository has no identity yet");
+    if (!this.#epochChecked)
+      throw new Error("the repository's epoch must be checked before it changes");
+    this.#emit(
+      type,
+      { actor: actor?.principal ?? null, actChain: [...(actor?.actChain ?? [])], data },
+      { ...entity, deleted: false },
+    );
+  }
+
+  /**
    * Audits a change of the repository's own settings (rulesets) in the
    * caller's transaction; nothing before the identity is recorded.
    */
@@ -654,18 +690,19 @@ export class RepoEvents {
 
   /**
    * Appends one event, taking the next sequence number; with `snapshot`,
-   * also bumps the entity version and carries the full row. Returns the
-   * metadata after the allocation.
+   * also bumps the repository's version and carries its full row; with
+   * another entity's snapshot, carries that one. Returns the metadata after
+   * the allocation.
    */
   #emit(
     type: string,
     event: Pick<NewEvent, "actor" | "actChain" | "data">,
-    snapshot = false,
+    snapshot: boolean | EntitySnapshot = false,
   ): MetaRow {
     const cursor = this.#storage.sql.exec<MetaRow & { source_seq: number }>(
       `UPDATE repo_meta SET source_seq = source_seq + 1, version = version + ?
        WHERE id = 1 RETURNING source_seq, ${META_COLUMNS}`,
-      snapshot ? 1 : 0,
+      snapshot === true ? 1 : 0,
     );
     const meta = cursor.one();
     this.git.context.metrics.count(
@@ -680,15 +717,18 @@ export class RepoEvents {
         type,
         at: this.git.context.now(),
         ownerGen: meta.owner_gen,
-        entity: snapshot
-          ? {
-              type: REPO_ENTITY,
-              id: meta.repo_id,
-              version: meta.version,
-              deleted: meta.deleting_at !== null,
-              row: meta.deleting_at === null ? this.#row(meta) : null,
-            }
-          : null,
+        entity:
+          typeof snapshot === "object"
+            ? snapshot
+            : snapshot
+              ? {
+                  type: REPO_ENTITY,
+                  id: meta.repo_id,
+                  version: meta.version,
+                  deleted: meta.deleting_at !== null,
+                  row: meta.deleting_at === null ? this.#row(meta) : null,
+                }
+              : null,
       },
     );
     return meta;

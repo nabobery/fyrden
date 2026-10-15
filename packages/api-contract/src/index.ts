@@ -9,6 +9,7 @@ export * from "../ops/grants.js";
 export * from "../ops/imports.js";
 export * from "../ops/meta.js";
 export * from "../ops/orgs.js";
+export * from "../ops/pulls.js";
 export * from "../ops/quotas.js";
 export * from "../ops/repos.js";
 export * from "../ops/rulesets.js";

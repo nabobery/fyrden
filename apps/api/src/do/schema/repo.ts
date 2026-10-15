@@ -323,4 +323,38 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 16,
+    // Pull requests between branches of the repository. Numbers come from
+    // `next_number` (shared with issues), allocated in the transaction that
+    // opens one; `refs/pull/<number>/head` follows the head branch while
+    // the pull request is open.
+    name: "pull_requests",
+    sql: `
+      ALTER TABLE repo_meta ADD COLUMN next_number INTEGER NOT NULL DEFAULT 1;
+
+      CREATE TABLE pull_requests (
+        number INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        body TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'closed', 'merged')),
+        draft INTEGER NOT NULL CHECK (draft IN (0, 1)),
+        author_id TEXT NOT NULL,
+        author_root TEXT NOT NULL,
+        author_act TEXT,
+        base_ref TEXT NOT NULL,
+        base_sha TEXT NOT NULL,
+        head_ref TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        head_ref_deleted INTEGER NOT NULL DEFAULT 0 CHECK (head_ref_deleted IN (0, 1)),
+        generation INTEGER NOT NULL DEFAULT 1,
+        version INTEGER NOT NULL DEFAULT 1,
+        closed_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX pull_requests_head ON pull_requests (head_ref, state);
+      CREATE INDEX pull_requests_state ON pull_requests (state, number);
+    `,
+  },
 ];

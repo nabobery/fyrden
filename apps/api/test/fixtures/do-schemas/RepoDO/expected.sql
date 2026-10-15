@@ -12,6 +12,8 @@ CREATE INDEX jobs_due ON jobs (state, next_run_at);
 CREATE INDEX leases_pack ON leases (pack_id, expires_at);
 CREATE INDEX packs_state ON packs (state, created_at);
 CREATE INDEX packs_unit ON packs (unit_id) WHERE unit_id IS NOT NULL;
+CREATE INDEX pull_requests_head ON pull_requests (head_ref, state);
+CREATE INDEX pull_requests_state ON pull_requests (state, number);
 CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
 CREATE INDEX refs_oid ON refs (oid);
@@ -187,6 +189,26 @@ CREATE TABLE pending_commits (
     signature TEXT,
     PRIMARY KEY (upload_id, oid)
   ) STRICT, WITHOUT ROWID;
+CREATE TABLE pull_requests (
+        number INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        body TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'closed', 'merged')),
+        draft INTEGER NOT NULL CHECK (draft IN (0, 1)),
+        author_id TEXT NOT NULL,
+        author_root TEXT NOT NULL,
+        author_act TEXT,
+        base_ref TEXT NOT NULL,
+        base_sha TEXT NOT NULL,
+        head_ref TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        head_ref_deleted INTEGER NOT NULL DEFAULT 0 CHECK (head_ref_deleted IN (0, 1)),
+        generation INTEGER NOT NULL DEFAULT 1,
+        version INTEGER NOT NULL DEFAULT 1,
+        closed_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE ref_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL,
@@ -227,7 +249,7 @@ CREATE TABLE repo_meta (
         write_frozen INTEGER NOT NULL DEFAULT 0 CHECK (write_frozen IN (0, 1)),
         created_at INTEGER NOT NULL
       , epoch_uuid TEXT, source_seq INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, owner_id TEXT, name TEXT, visibility TEXT
-        CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT) STRICT;
+        CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT, next_number INTEGER NOT NULL DEFAULT 1) STRICT;
 CREATE TABLE rule_suites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         upload_id TEXT NOT NULL,

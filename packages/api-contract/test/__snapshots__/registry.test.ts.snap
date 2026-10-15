@@ -404,6 +404,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "metadata:read",
                         "contents:read",
                         "contents:write",
+                        "pull_requests:read",
+                        "pull_requests:write",
                         "administration:write",
                       ],
                       "type": "string",
@@ -1146,6 +1148,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "metadata:read",
                         "contents:read",
                         "contents:write",
+                        "pull_requests:read",
+                        "pull_requests:write",
                         "administration:write",
                       ],
                       "type": "string",
@@ -1554,6 +1558,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "metadata:read",
                         "contents:read",
                         "contents:write",
+                        "pull_requests:read",
+                        "pull_requests:write",
                         "administration:write",
                       ],
                       "type": "string",
@@ -7984,6 +7990,948 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/pulls": {
+      "get": {
+        "description": "The repository's pull requests, newest first.",
+        "operationId": "pulls.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "default": "open",
+              "enum": [
+                "open",
+                "closed",
+                "all",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "pull_requests": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "base": {
+                            "additionalProperties": false,
+                            "description": "The branch the changes are for.",
+                            "properties": {
+                              "ref": {
+                                "description": "The branch, without refs/heads/.",
+                                "type": "string",
+                              },
+                              "sha": {
+                                "description": "Its commit when last recorded.",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "ref",
+                              "sha",
+                            ],
+                            "type": "object",
+                          },
+                          "body": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "closed_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Unix time in milliseconds.",
+                          },
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "draft": {
+                            "type": "boolean",
+                          },
+                          "head": {
+                            "additionalProperties": false,
+                            "description": "The branch with the changes. \`refs/pull/{number}/head\` points at \`head.sha\` and can be fetched.",
+                            "properties": {
+                              "ref": {
+                                "description": "The branch, without refs/heads/.",
+                                "type": "string",
+                              },
+                              "sha": {
+                                "description": "Its commit when last recorded.",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "ref",
+                              "sha",
+                            ],
+                            "type": "object",
+                          },
+                          "head_ref_deleted": {
+                            "description": "Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again.",
+                            "type": "boolean",
+                          },
+                          "merged": {
+                            "type": "boolean",
+                          },
+                          "number": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "performed_via_agents": {
+                            "description": "Fyrden: the agents that opened it for \`user\`, the acting one first; empty if none.",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "state": {
+                            "enum": [
+                              "open",
+                              "closed",
+                            ],
+                            "type": "string",
+                          },
+                          "title": {
+                            "type": "string",
+                          },
+                          "updated_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "user": {
+                            "additionalProperties": false,
+                            "description": "Who opened it (the user, when agents acted for one).",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                            ],
+                            "type": "object",
+                          },
+                        },
+                        "required": [
+                          "number",
+                          "state",
+                          "merged",
+                          "draft",
+                          "title",
+                          "body",
+                          "user",
+                          "performed_via_agents",
+                          "head",
+                          "base",
+                          "head_ref_deleted",
+                          "created_at",
+                          "updated_at",
+                          "closed_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "pull_requests",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List pull requests",
+        "x-fyrden-permission": "pull_requests:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Proposes merging one branch of the repository into another. Anyone who can read the repository may open one. Refused when the head has no commits the base lacks, or when a pull request between the two branches is already open. While open, \`refs/pull/{number}/head\` follows the head branch.",
+        "operationId": "pulls.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "base": {
+                    "description": "The branch to merge into, without refs/heads/.",
+                    "maxLength": 1013,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "body": {
+                    "maxLength": 65536,
+                    "type": "string",
+                  },
+                  "draft": {
+                    "default": false,
+                    "description": "Open it as a draft.",
+                    "type": "boolean",
+                  },
+                  "head": {
+                    "description": "The branch with the changes, without refs/heads/.",
+                    "maxLength": 1013,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "title": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "title",
+                  "head",
+                  "base",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "base": {
+                      "additionalProperties": false,
+                      "description": "The branch the changes are for.",
+                      "properties": {
+                        "ref": {
+                          "description": "The branch, without refs/heads/.",
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "Its commit when last recorded.",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "ref",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                    "body": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "closed_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Unix time in milliseconds.",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "draft": {
+                      "type": "boolean",
+                    },
+                    "head": {
+                      "additionalProperties": false,
+                      "description": "The branch with the changes. \`refs/pull/{number}/head\` points at \`head.sha\` and can be fetched.",
+                      "properties": {
+                        "ref": {
+                          "description": "The branch, without refs/heads/.",
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "Its commit when last recorded.",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "ref",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                    "head_ref_deleted": {
+                      "description": "Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again.",
+                      "type": "boolean",
+                    },
+                    "merged": {
+                      "type": "boolean",
+                    },
+                    "number": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that opened it for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "state": {
+                      "enum": [
+                        "open",
+                        "closed",
+                      ],
+                      "type": "string",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who opened it (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "number",
+                    "state",
+                    "merged",
+                    "draft",
+                    "title",
+                    "body",
+                    "user",
+                    "performed_via_agents",
+                    "head",
+                    "base",
+                    "head_ref_deleted",
+                    "created_at",
+                    "updated_at",
+                    "closed_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create a pull request",
+        "x-fyrden-permission": "pull_requests:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/pulls/{pull_number}": {
+      "get": {
+        "description": "One pull request.",
+        "operationId": "pulls.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "base": {
+                      "additionalProperties": false,
+                      "description": "The branch the changes are for.",
+                      "properties": {
+                        "ref": {
+                          "description": "The branch, without refs/heads/.",
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "Its commit when last recorded.",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "ref",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                    "body": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "closed_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Unix time in milliseconds.",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "draft": {
+                      "type": "boolean",
+                    },
+                    "head": {
+                      "additionalProperties": false,
+                      "description": "The branch with the changes. \`refs/pull/{number}/head\` points at \`head.sha\` and can be fetched.",
+                      "properties": {
+                        "ref": {
+                          "description": "The branch, without refs/heads/.",
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "Its commit when last recorded.",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "ref",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                    "head_ref_deleted": {
+                      "description": "Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again.",
+                      "type": "boolean",
+                    },
+                    "merged": {
+                      "type": "boolean",
+                    },
+                    "number": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that opened it for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "state": {
+                      "enum": [
+                        "open",
+                        "closed",
+                      ],
+                      "type": "string",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who opened it (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "number",
+                    "state",
+                    "merged",
+                    "draft",
+                    "title",
+                    "body",
+                    "user",
+                    "performed_via_agents",
+                    "head",
+                    "base",
+                    "head_ref_deleted",
+                    "created_at",
+                    "updated_at",
+                    "closed_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a pull request",
+        "x-fyrden-permission": "pull_requests:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "patch": {
+        "description": "Changes the title or body, retargets it onto another base branch, marks it a draft or ready, closes or reopens it; fields left out are kept, and all of it happens or none. The author may do any of it to its own pull request; on anyone else's, triage closes and reopens and write does the rest. Reopening needs the head branch to exist.",
+        "operationId": "pulls.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "base": {
+                    "description": "A new base branch, without refs/heads/.",
+                    "maxLength": 1013,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "body": {
+                    "anyOf": [
+                      {
+                        "maxLength": 65536,
+                        "type": "string",
+                      },
+                      {
+                        "type": "null",
+                      },
+                    ],
+                    "description": "Null clears it.",
+                  },
+                  "draft": {
+                    "description": "Fyrden: mark it a draft, or ready for review.",
+                    "type": "boolean",
+                  },
+                  "state": {
+                    "enum": [
+                      "open",
+                      "closed",
+                    ],
+                    "type": "string",
+                  },
+                  "title": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "base": {
+                      "additionalProperties": false,
+                      "description": "The branch the changes are for.",
+                      "properties": {
+                        "ref": {
+                          "description": "The branch, without refs/heads/.",
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "Its commit when last recorded.",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "ref",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                    "body": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "closed_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Unix time in milliseconds.",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "draft": {
+                      "type": "boolean",
+                    },
+                    "head": {
+                      "additionalProperties": false,
+                      "description": "The branch with the changes. \`refs/pull/{number}/head\` points at \`head.sha\` and can be fetched.",
+                      "properties": {
+                        "ref": {
+                          "description": "The branch, without refs/heads/.",
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "Its commit when last recorded.",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "ref",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                    "head_ref_deleted": {
+                      "description": "Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again.",
+                      "type": "boolean",
+                    },
+                    "merged": {
+                      "type": "boolean",
+                    },
+                    "number": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that opened it for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "state": {
+                      "enum": [
+                        "open",
+                        "closed",
+                      ],
+                      "type": "string",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who opened it (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "number",
+                    "state",
+                    "merged",
+                    "draft",
+                    "title",
+                    "body",
+                    "user",
+                    "performed_via_agents",
+                    "head",
+                    "base",
+                    "head_ref_deleted",
+                    "created_at",
+                    "updated_at",
+                    "closed_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Update a pull request",
+        "x-fyrden-permission": "pull_requests:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}/readme": {
       "get": {
         "description": "The README file in the root directory at a branch, tag or commit (\`README.md\` first, then other README files).",
@@ -12730,6 +13678,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "metadata:read",
                         "contents:read",
                         "contents:write",
+                        "pull_requests:read",
+                        "pull_requests:write",
                         "administration:write",
                       ],
                       "type": "string",

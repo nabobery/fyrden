@@ -50,7 +50,27 @@ export interface CommitContext {
   readonly version: number;
   readonly now: number;
   readonly request: RepoCommitRequest;
+  /** The refs the owner's `deriveUpdates` moves with the request's own, old values read in the transaction. */
+  readonly derived: readonly RefUpdate[];
 }
+
+/**
+ * A ref the server moves because the request moves another (a pull
+ * request's head ref following its branch). Only names under
+ * {@link DERIVED_REF_PREFIX}.
+ */
+export interface DerivedRefUpdate {
+  readonly name: string;
+  readonly newOid: Oid;
+  /**
+   * The request's ref it follows: the move is a fast-forward when that
+   * one's is and both refs had the same old value.
+   */
+  readonly follows: string;
+}
+
+/** The only refs `deriveUpdates` may move. */
+export const DERIVED_REF_PREFIX = "refs/pull/";
 
 /**
  * A ref commit with the repository's extras. Every field beyond the port's
@@ -146,6 +166,21 @@ export class SqliteRefStore implements RefStore {
    * back.
    */
   inCommit: ((context: CommitContext) => void) | undefined;
+
+  /**
+   * The owner's derived updates of every commit: refs that move with the
+   * request's own, in the same transaction and version, or not at all. Runs
+   * after the version check and before the compare-and-set; `readRef` reads
+   * inside the transaction. A derived ref already at its new value is left
+   * alone; a request that names a derived ref is refused. A throw rolls the
+   * commit back.
+   */
+  deriveUpdates:
+    | ((
+        updates: readonly RefUpdate[],
+        readRef: (name: string) => Oid | null,
+      ) => readonly DerivedRefUpdate[])
+    | undefined;
 
   /**
    * The owner's check of every commit, in its transaction before any write,
@@ -269,23 +304,31 @@ export class SqliteRefStore implements RefStore {
       if (request.expectedVersion !== version)
         return { result: { ok: false, reason: "version-conflict", version } as const, written: 0 };
 
-      const current = new Map<string, Oid | null>();
-      for (const { name, oldOid } of request.refUpdates) {
+      const readRef = (name: string): Oid | null => {
         const row = first<RefRow>(
           storage,
           "SELECT name, kind, oid, target FROM refs WHERE name = ?",
           name,
         );
-        const currentOid = row?.oid ? oidFromBytes(bytesOf(row.oid)) : null;
-        const same =
-          currentOid === null || oldOid === null
-            ? currentOid === oldOid
-            : oidEquals(currentOid, oldOid);
-        if (!same)
+        return row?.oid ? oidFromBytes(bytesOf(row.oid)) : null;
+      };
+      const derivation = this.#derive(request, readRef);
+      if (typeof derivation === "string")
+        return {
+          result: { ok: false, reason: "refused", message: derivation } as const,
+          written: 0,
+        };
+      const { derived, follows } = derivation;
+
+      const current = new Map<string, Oid | null>();
+      for (const { name, oldOid } of request.refUpdates) {
+        const currentOid = readRef(name);
+        if (!sameOid(currentOid, oldOid))
           return { result: { ok: false, reason: "ref-conflict", ref: name } as const, written: 0 };
         current.set(name, currentOid);
       }
-      const [collision] = refnameConflicts(request.refUpdates, this.#namespace());
+      const updates = [...request.refUpdates, ...derived];
+      const [collision] = refnameConflicts(updates, this.#namespace());
       if (collision) {
         const { ref, conflictsWith } = collision;
         return {
@@ -354,7 +397,7 @@ export class SqliteRefStore implements RefStore {
 
       const next = version + 1;
       const now = this.context.now();
-      const context: CommitContext = { version: next, now, request };
+      const context: CommitContext = { version: next, now, request, derived };
       const refusal = request.authorize?.(context) ?? this.authorizeCommit?.(context);
       if (refusal !== undefined)
         return { result: { ok: false, reason: "refused", message: refusal } as const, written: 0 };
@@ -362,10 +405,15 @@ export class SqliteRefStore implements RefStore {
       let written = 0;
       let nonFastForward = false;
       const actor = request.actor;
-      for (const { name, newOid } of request.refUpdates) {
-        const oldOid = current.get(name) ?? null;
-        if (oldOid !== null && (newOid === null || !request.fastForward?.has(name)))
-          nonFastForward = true;
+      for (const { name, newOid, oldOid: derivedOld } of updates) {
+        const source = follows.get(name);
+        const oldOid = source === undefined ? (current.get(name) ?? null) : derivedOld;
+        const fastForward =
+          source === undefined
+            ? request.fastForward?.has(name) === true
+            : request.fastForward?.has(source) === true &&
+              sameOid(oldOid, current.get(source) ?? null);
+        if (oldOid !== null && (newOid === null || !fastForward)) nonFastForward = true;
         written +=
           newOid === null
             ? run(storage, "DELETE FROM refs WHERE name = ?", name)
@@ -446,6 +494,40 @@ export class SqliteRefStore implements RefStore {
     return outcome.result;
   }
 
+  /**
+   * The owner's derived updates of `request`, with old values read now, and
+   * the request's ref each follows; or a refusal when the request names one
+   * of them itself.
+   */
+  #derive(
+    request: RepoCommitRequest,
+    readRef: (name: string) => Oid | null,
+  ): { derived: RefUpdate[]; follows: Map<string, string> } | string {
+    const derived: RefUpdate[] = [];
+    const follows = new Map<string, string>();
+    if (!this.deriveUpdates) return { derived, follows };
+    const named = new Set(request.refUpdates.map((u) => u.name));
+    for (const update of this.deriveUpdates(request.refUpdates, readRef)) {
+      if (!update.name.startsWith(DERIVED_REF_PREFIX)) {
+        throw new RangeError(
+          `a derived update may only move ${DERIVED_REF_PREFIX} refs, not ${update.name}`,
+        );
+      }
+      checkRefName(update.name);
+      if (named.has(update.name)) return `${update.name} is moved by the server only`;
+      if (follows.has(update.name)) throw new RangeError(`ref ${update.name} is derived twice`);
+      if (!named.has(update.follows))
+        throw new RangeError(
+          `${update.name} follows ${update.follows}, which the request does not move`,
+        );
+      follows.set(update.name, update.follows);
+      const oldOid = readRef(update.name);
+      if (!sameOid(oldOid, update.newOid))
+        derived.push({ name: update.name, oldOid, newOid: update.newOid });
+    }
+    return { derived, follows };
+  }
+
   /** The current `ref_state` (version and non-fast-forward version). */
   state(): { version: number; nonffVersion: number } {
     const row = first<{ version: number; nonff_version: number }>(
@@ -481,6 +563,10 @@ export class SqliteRefStore implements RefStore {
   #version(): number {
     return this.state().version;
   }
+}
+
+function sameOid(a: Oid | null, b: Oid | null): boolean {
+  return a === null || b === null ? a === b : oidEquals(a, b);
 }
 
 function checkRefName(name: string): void {

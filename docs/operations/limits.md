@@ -609,6 +609,25 @@ repository role; Fyrden's `actor_types` limits a ruleset to principal types
 | `evaluate` | Does not block; what it would have refused at a push's commit point (its signatures too) is listed at `GET /repos/{owner}/{repo}/rulesets/rule-suites` (MCP `list_rule_suites`): one suite per ref update one of them objected to, the newest 1,000 kept, nothing for an update they all let through |
 | Actor types | Each principal type at most once |
 
+## Pull requests
+
+Pull requests between branches of one repository
+(`/repos/{owner}/{repo}/pulls`, GitHub's shape; MCP `create_pull_request`,
+`list_pull_requests`, `get_pull_request`, `update_pull_request`). Reviews,
+merging and pull requests from forks come later.
+
+| What | Value |
+|---|---|
+| Title | 1-256 characters |
+| Body | 65,536 characters at most |
+| Numbers | Per repository, from 1, in order; shared with issues once they exist |
+| Opening | Anyone who reads the repository (`pull_requests:write`). Refused when the head has no commits the base lacks (decided within 30,000 commits walked; past that the head is taken to have some), when head and base are the same branch, and when a pull request between the two branches is already open |
+| `refs/pull/<number>/head` | Created at the head when the pull request opens; while it is open, moves with the head branch in the same ref transaction (pushes, atomic or not, and file writes); fetchable, never pushable |
+| Head branch deleted | The pull request keeps its last head (`head_ref_deleted: true`) and stays open; it cannot be reopened until the branch exists again, and follows the branch again once it does |
+| Changes | The author (anyone acting as the same person, such as its agents within their own roles) edits, retargets, drafts, closes and reopens its own pull request with any role that reads; on someone else's, triage closes and reopens, write does the rest. A patch applies as a whole or not at all |
+| Reopening | Needs the head branch and the base branch (unless the same patch retargets onto an existing one); moves `refs/pull/<number>/head` to the head branch's tip |
+| Rulesets | Do not apply to opening or retargeting a pull request (the pull request ref is the server's, not a branch) |
+
 ## Idempotent requests
 
 A REST write (any method but GET) sent with an `Idempotency-Key` header runs

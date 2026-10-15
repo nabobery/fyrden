@@ -74,6 +74,17 @@ const CASES: Record<
     expected: { status: 404, code: "ruleset_not_found" },
   },
   "repos.rulesets.delete": { input: {}, expected: { status: 404, code: "ruleset_not_found" } },
+  // No pull request exists, and the repository has no branches to open one between.
+  "pulls.list": { input: {}, expected: { status: 200 } },
+  "pulls.get": { input: {}, expected: { status: 404, code: "pull_not_found" } },
+  "pulls.create": {
+    input: { title: "checked", head: "feature", base: "main" },
+    expected: { status: 422, code: "base_not_found" },
+  },
+  "pulls.update": {
+    input: { title: "checked" },
+    expected: { status: 404, code: "pull_not_found" },
+  },
   // Writes change their own repository: the first commit of an empty one.
   "repos.contents.put": {
     input: { message: "add", content: "aGk=" },
@@ -149,6 +160,7 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{template_owner}", handle)
     .replace("{template_repo}", name)
     .replace("{upload_id}", UPLOAD_ID)
+    .replace("{pull_number}", "1")
     .replace("{username}", handle)
     .replace("{branch+}", "main")
     .replace("{ref+}", "main")

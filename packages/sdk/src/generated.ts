@@ -152,7 +152,7 @@ export type UsersTokensListOutput = {
 export type UsersTokensCreateInput = {
   type?: "pat" | "git";
   /** Permissions it is limited to (and what they imply). Empty: your token's. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write")[];
   expires_in_days?: number;
 };
 
@@ -217,7 +217,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write")[];
   expires_in_days?: number;
 };
 
@@ -334,7 +334,7 @@ export type AgentsTokensCreateInput = {
   agent: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write")[];
   expires_in_days?: number;
 };
 
@@ -402,7 +402,7 @@ export type GrantsCreateInput = {
   /** The agent's handle. */
   agent: string;
   /** Permissions the agent may use for you (and what they imply). */
-  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write")[];
   /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
   repositories?: string[];
   expires_in_days?: number;
@@ -1163,6 +1163,219 @@ export type ReposRulesetsDeleteInput = {
 export type ReposRulesetsDeleteOutput = {
   id: number;
   state: "deleted";
+};
+
+/** Input of `pulls.list`: List pull requests. */
+export type PullsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  state?: "open" | "closed" | "all";
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.list`. */
+export type PullsListOutput = {
+  pull_requests: ({
+    number: number;
+    state: "open" | "closed";
+    merged: boolean;
+    draft: boolean;
+    title: string;
+    body: string | null;
+    /** Who opened it (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    /** The branch with the changes. `refs/pull/{number}/head` points at `head.sha` and can be fetched. */
+    head: {
+      /** The branch, without refs/heads/. */
+      ref: string;
+      /** Its commit when last recorded. */
+      sha: string;
+    };
+    /** The branch the changes are for. */
+    base: {
+      /** The branch, without refs/heads/. */
+      ref: string;
+      /** Its commit when last recorded. */
+      sha: string;
+    };
+    /** Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again. */
+    head_ref_deleted: boolean;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `pulls.create`: Create a pull request. */
+export type PullsCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  title: string;
+  body?: string;
+  /** The branch with the changes, without refs/heads/. */
+  head: string;
+  /** The branch to merge into, without refs/heads/. */
+  base: string;
+  /** Open it as a draft. */
+  draft?: boolean;
+};
+
+/** Output of `pulls.create`. */
+export type PullsCreateOutput = {
+  number: number;
+  state: "open" | "closed";
+  merged: boolean;
+  draft: boolean;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  /** The branch with the changes. `refs/pull/{number}/head` points at `head.sha` and can be fetched. */
+  head: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** The branch the changes are for. */
+  base: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again. */
+  head_ref_deleted: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+};
+
+/** Input of `pulls.get`: Get a pull request. */
+export type PullsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+};
+
+/** Output of `pulls.get`. */
+export type PullsGetOutput = {
+  number: number;
+  state: "open" | "closed";
+  merged: boolean;
+  draft: boolean;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  /** The branch with the changes. `refs/pull/{number}/head` points at `head.sha` and can be fetched. */
+  head: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** The branch the changes are for. */
+  base: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again. */
+  head_ref_deleted: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+};
+
+/** Input of `pulls.update`: Update a pull request. */
+export type PullsUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  title?: string;
+  /** Null clears it. */
+  body?: string | null;
+  state?: "open" | "closed";
+  /** A new base branch, without refs/heads/. */
+  base?: string;
+  /** Fyrden: mark it a draft, or ready for review. */
+  draft?: boolean;
+};
+
+/** Output of `pulls.update`. */
+export type PullsUpdateOutput = {
+  number: number;
+  state: "open" | "closed";
+  merged: boolean;
+  draft: boolean;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  /** The branch with the changes. `refs/pull/{number}/head` points at `head.sha` and can be fetched. */
+  head: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** The branch the changes are for. */
+  base: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again. */
+  head_ref_deleted: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
 };
 
 /** Input of `stars.put`: Star a repository. */
@@ -2656,6 +2869,10 @@ export const OPERATIONS = {
   "repos.rulesets.create": { method: "POST", path: "/repos/{owner}/{repo}/rulesets", pathParams: ["owner","repo"], idempotent: true },
   "repos.rulesets.update": { method: "PUT", path: "/repos/{owner}/{repo}/rulesets/{ruleset_id}", pathParams: ["owner","repo","ruleset_id"], idempotent: true },
   "repos.rulesets.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/rulesets/{ruleset_id}", pathParams: ["owner","repo","ruleset_id"], idempotent: true },
+  "pulls.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: false, items: "pull_requests" },
+  "pulls.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: true },
+  "pulls.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: false },
+  "pulls.update": { method: "PATCH", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "stars.put": { method: "PUT", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.delete": { method: "DELETE", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.list": { method: "GET", path: "/user/starred", pathParams: [], idempotent: false, items: "repos" },
@@ -2780,6 +2997,14 @@ export interface Operations {
   "repos.rulesets.update": { input: ReposRulesetsUpdateInput; output: ReposRulesetsUpdateOutput };
   /** Delete a ruleset. Removes a ruleset. Administrators only. */
   "repos.rulesets.delete": { input: ReposRulesetsDeleteInput; output: ReposRulesetsDeleteOutput };
+  /** List pull requests. The repository's pull requests, newest first. */
+  "pulls.list": { input: PullsListInput; output: PullsListOutput };
+  /** Create a pull request. Proposes merging one branch of the repository into another. Anyone who can read the repository may open one. Refused when the head has no commits the base lacks, or when a pull request between the two branches is already open. While open, `refs/pull/{number}/head` follows the head branch. */
+  "pulls.create": { input: PullsCreateInput; output: PullsCreateOutput };
+  /** Get a pull request. One pull request. */
+  "pulls.get": { input: PullsGetInput; output: PullsGetOutput };
+  /** Update a pull request. Changes the title or body, retargets it onto another base branch, marks it a draft or ready, closes or reopens it; fields left out are kept, and all of it happens or none. The author may do any of it to its own pull request; on anyone else's, triage closes and reopens and write does the rest. Reopening needs the head branch to exist. */
+  "pulls.update": { input: PullsUpdateInput; output: PullsUpdateOutput };
   /** Star a repository. Stars a repository the caller can read. Starring one already starred changes nothing. The token also needs `metadata:read` for the repository. */
   "stars.put": { input: StarsPutInput; output: StarsPutOutput };
   /** Unstar a repository. Takes the caller's star off a repository it can read. Unstarring one not starred changes nothing. */

@@ -34,6 +34,7 @@ import { createGrant, listGrants, revokeGrant } from "../ops/grants.js";
 import { createImport, getImport } from "../ops/imports.js";
 import { listSigningKeys, whoami } from "../ops/meta.js";
 import { createOrg, listMembers, removeMembership, setMembership, updateOrg } from "../ops/orgs.js";
+import { createPull, getPull, listPulls, updatePull } from "../ops/pulls.js";
 import { getOrgQuota, getUserQuota, setQuota } from "../ops/quotas.js";
 import {
   createOrgRepo,
@@ -111,6 +112,10 @@ export const registry = defineRegistry([
   createRuleset,
   updateRuleset,
   deleteRuleset,
+  listPulls,
+  createPull,
+  getPull,
+  updatePull,
   starRepo,
   unstarRepo,
   listStarred,

@@ -84,6 +84,12 @@ import { generateRepoOperation } from "../repos/generate.js";
 import { listAccountRepos } from "../repos/listing.js";
 import { networkSource, repoOutput, starCounts, visibleParents } from "../repos/output.js";
 import {
+  createPullOperation,
+  getPullOperation,
+  listPullsOperation,
+  updatePullOperation,
+} from "../repos/pulls.js";
+import {
   createRulesetOperation,
   deleteRulesetOperation,
   getRulesetOperation,
@@ -291,6 +297,12 @@ export const handlers: Handlers = {
   "repos.rulesets.create": createRulesetOperation,
   "repos.rulesets.update": updateRulesetOperation,
   "repos.rulesets.delete": deleteRulesetOperation,
+
+  // Pull requests live in the repository's object (repos/pulls).
+  "pulls.list": listPullsOperation,
+  "pulls.create": createPullOperation,
+  "pulls.get": getPullOperation,
+  "pulls.update": updatePullOperation,
 
   // Stars are the caller's own, of repositories it can read (repos/stars).
   "stars.put": starRepoOperation,

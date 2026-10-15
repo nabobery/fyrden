@@ -1,6 +1,7 @@
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
 import { readGrantLinks } from "@fyrden/adapters-cloudflare/auth";
 import {
+  DERIVED_REF_PREFIX,
   isNetworkId,
   type JobHandler,
   type JobKind,
@@ -25,12 +26,14 @@ import {
   protectsBranch,
   REPO_ROLES,
   type RepoRole,
+  rootIdentity,
 } from "@fyrden/domain";
 import {
   type BlockCache,
   bytesBody,
   encodePushResponse,
   failAtomically,
+  isAncestor,
   type LsRefsArgs,
   liveCommands,
   type Oid,
@@ -38,6 +41,7 @@ import {
   type PackId,
   planPush,
   readPushBody,
+  WalkLimitError,
 } from "@fyrden/git-core";
 import { readModelFor } from "../events/read-model.js";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
@@ -139,6 +143,13 @@ import {
   writeFiles,
 } from "./repo/file-writes.js";
 import {
+  type OpenPull,
+  type PullChangeFailure,
+  type PullPatch,
+  type PullRecord,
+  RepoPulls,
+} from "./repo/pulls.js";
+import {
   checkPushRules,
   hasPrecheckRules,
   precheckPushRules,
@@ -229,6 +240,9 @@ export class RepoDO extends MigratingDO {
   /** The repository's events and audit rows, written with each change. */
   readonly events: RepoEvents;
 
+  /** Pull requests between the repository's branches. */
+  readonly pulls: RepoPulls;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.metricsDataset = env.METRICS;
@@ -251,6 +265,11 @@ export class RepoDO extends MigratingDO {
       doClass: this.git.context.doClass,
     });
     this.events = new RepoEvents(this.git, this.outbox, () => this.#repoId());
+    this.pulls = new RepoPulls({
+      git: this.git,
+      events: this.events,
+      repoId: () => this.#repoId(),
+    });
     this.pullAcl = async (accountId) => {
       this.git.context.metrics.count("do.request", { class: "OrgDO", method: "snapshotFor" });
       return env.ORG.getByName(accountId).snapshotFor(this.#repoId());
@@ -264,12 +283,24 @@ export class RepoDO extends MigratingDO {
     });
     // The commit point: the initiating principal may still write, under a
     // snapshot within the write window (a commit without one is the
-    // repository's own, such as maintenance). A refusal refuses the commit.
+    // repository's own, such as maintenance); a commit that moves only pull
+    // request refs (opening or reopening one) needs it to read. A refusal
+    // refuses the commit.
     this.git.refStore.authorizeCommit = (context) => {
-      const principal = context.request.actor?.principal;
-      return principal && !this.acl.allows(principal, "write") ? ACCESS_LOST : undefined;
+      const { actor, refUpdates } = context.request;
+      if (!actor) return undefined;
+      const pullsOnly =
+        refUpdates.length > 0 && refUpdates.every((u) => u.name.startsWith(DERIVED_REF_PREFIX));
+      return this.acl.allows(actor.principal, pullsOnly ? "read" : "write")
+        ? undefined
+        : ACCESS_LOST;
     };
-    this.git.refStore.inCommit = (context) => this.events.onCommit(context);
+    // Open pull requests' refs follow their head branches, in the same commit.
+    this.git.refStore.deriveUpdates = (updates) => this.pulls.derive(updates);
+    this.git.refStore.inCommit = (context) => {
+      this.events.onCommit(context);
+      this.pulls.onCommit(context);
+    };
     this.git.refStore.onHeadChanged = () => this.events.onHeadChanged();
     // Every commit (push, import, merge) schedules the maintenance it calls
     // for and records the repository's pack count and storage.
@@ -576,6 +607,129 @@ export class RepoDO extends MigratingDO {
       if (typeof done === "string") return { ok: false as const, code: done };
       this.#ensureAuditArchive();
       return { ok: true as const, record: done };
+    });
+  }
+
+  /** The repository's pull requests, newest first, below `before` (a number) when given. */
+  listPulls(state: PullRecord["state"] | "all", before: number | undefined, limit: number) {
+    return this.#measured("listPulls", () =>
+      this.#refusesReads() ? null : this.pulls.list(state, before, limit),
+    );
+  }
+
+  /** One pull request; undefined when there is none with that number. */
+  getPull(number: number) {
+    return this.#measured("getPull", () => (this.#refusesReads() ? null : this.pulls.get(number)));
+  }
+
+  /**
+   * Opens a pull request from one of the repository's branches into
+   * another, for a caller the Worker found may open one (checked again
+   * here, with no await before the commit).
+   */
+  createPull(
+    input: Omit<OpenPull, "baseSha" | "headSha">,
+    actor: RefActor,
+  ): Promise<
+    | { ok: true; record: PullRecord }
+    | {
+        ok: false;
+        code:
+          | "repo_not_found"
+          | "repo_transferring"
+          | "access_lost"
+          | "base_not_found"
+          | "head_not_found"
+          | "same_branches"
+          | "no_commits"
+          | "already_exists"
+          | "busy";
+        number?: number;
+      }
+  > {
+    return this.#measured("createPull", async () => {
+      await this.checkEpoch();
+      const ceilings = await this.#rolesPulled(actor.principal, actor.grantId ?? null);
+      const root = rootIdentity({
+        principalId: actor.principal,
+        grantId: actor.grantId ?? null,
+        ceilingIds: ceilings,
+      });
+      if (input.baseRef === input.headRef)
+        return { ok: false as const, code: "same_branches" as const };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const refused = this.#writeRefusal();
+        if (refused) return { ok: false as const, code: refused.code as "repo_not_found" };
+        if (this.#roleNow(actor.principal, ceilings) === null)
+          return { ok: false as const, code: "access_lost" as const };
+        const { version } = this.git.refStore.state();
+        const baseSha = this.pulls.branchTip(input.baseRef);
+        if (!baseSha) return { ok: false as const, code: "base_not_found" as const };
+        const headSha = this.pulls.branchTip(input.headRef);
+        if (!headSha) return { ok: false as const, code: "head_not_found" as const };
+        let merged: boolean;
+        try {
+          merged = await isAncestor(this.git.commitGraph, "verified", headSha, baseSha, {
+            maxCommits: 3 * BROWSE_POLICY.compareMaxCommits,
+          });
+        } catch (error) {
+          // Too far apart to tell cheaply: the head has commits of its own.
+          if (!(error instanceof WalkLimitError)) throw error;
+          merged = false;
+        }
+        if (merged) return { ok: false as const, code: "no_commits" as const };
+        if (this.git.refStore.state().version !== version) continue;
+        const opened = this.pulls.open({ ...input, baseSha, headSha }, version, { actor, root });
+        if (!opened.ok && opened.code === "version-conflict") continue;
+        this.#armOutbox();
+        this.#ensureAuditArchive();
+        return opened;
+      }
+      return { ok: false as const, code: "busy" as const };
+    });
+  }
+
+  /**
+   * Changes a pull request as the mutation matrix allows the caller, with
+   * its role and root identity worked out here (no await before the change).
+   */
+  changePull(
+    number: number,
+    patch: PullPatch,
+    actor: RefActor,
+  ): Promise<
+    | { ok: true; record: PullRecord }
+    | { ok: false; code: "already_exists"; number: number }
+    | {
+        ok: false;
+        code:
+          | Exclude<PullChangeFailure, "already_exists">
+          | "repo_not_found"
+          | "repo_transferring"
+          | "access_lost"
+          | "busy";
+      }
+  > {
+    return this.#measured("changePull", async () => {
+      await this.checkEpoch();
+      const ceilings = await this.#rolesPulled(actor.principal, actor.grantId ?? null);
+      const root = rootIdentity({
+        principalId: actor.principal,
+        grantId: actor.grantId ?? null,
+        ceilingIds: ceilings,
+      });
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const refused = this.#writeRefusal();
+        if (refused) return { ok: false as const, code: refused.code as "repo_not_found" };
+        const role = this.#roleNow(actor.principal, ceilings);
+        if (role === null) return { ok: false as const, code: "access_lost" as const };
+        const changed = this.pulls.change(number, patch, { actor, root, role });
+        if (!changed.ok && changed.code === "version-conflict") continue;
+        this.#armOutbox();
+        this.#ensureAuditArchive();
+        return changed;
+      }
+      return { ok: false as const, code: "busy" as const };
     });
   }
 
@@ -1139,6 +1293,17 @@ export class RepoDO extends MigratingDO {
     return null;
   }
 
+  /** The principal's effective role now: the weakest of its own and its `ceilings`'. */
+  #roleNow(principal: string, ceilings: readonly string[]): RepoRole | null {
+    let role = this.#ruleRoleNow(principal);
+    for (const id of ceilings) {
+      const cap = this.#ruleRoleNow(id);
+      if (cap === null || (role !== null && REPO_ROLES.indexOf(cap) < REPO_ROLES.indexOf(role)))
+        role = cap;
+    }
+    return role;
+  }
+
   /**
    * Owners whose roles cap a write's: the agents' owners of its delegation
    * grant's chain, or an agent's own owner; none for a user's own token.
@@ -1179,12 +1344,7 @@ export class RepoDO extends MigratingDO {
   ): { snapshot: RuleSnapshot; stamp: string } {
     const { version, rulesets } = this.rulesetStore.current();
     const head = this.git.refStore.head();
-    let role = this.#ruleRoleNow(principal);
-    for (const id of ceilings) {
-      const cap = this.#ruleRoleNow(id);
-      if (cap === null || (role !== null && REPO_ROLES.indexOf(cap) < REPO_ROLES.indexOf(role)))
-        role = cap;
-    }
+    const role = this.#roleNow(principal, ceilings);
     return {
       snapshot: { rulesets: rulesets.map((r) => r.ruleset), head, role },
       stamp: JSON.stringify([version, head, role]),

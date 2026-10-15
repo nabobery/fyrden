@@ -79,6 +79,8 @@ export type { GitSqlStorage, GitStorageContext } from "./sql.js";
 export { promotePendingCommits, SqliteCommitGraph } from "./sqlite-commit-graph.js";
 export {
   type CommitContext,
+  DERIVED_REF_PREFIX,
+  type DerivedRefUpdate,
   type RefActor,
   type RepoCommitRequest,
   type RepoCommitResult,

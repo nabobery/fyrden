@@ -169,6 +169,25 @@ export const PERMISSIONS = {
     implies: ["contents:read"],
     writes: true,
   },
+  "pull_requests:read": {
+    resource: "repo",
+    minRole: "read",
+    summary: "Read pull requests.",
+    principals: PRINCIPAL_TYPES,
+    implies: ["metadata:read"],
+    writes: false,
+  },
+  "pull_requests:write": {
+    resource: "repo",
+    // Anyone who reads a repository may open pull requests; what it may do
+    // to someone else's depends on its role (the pull request matrix).
+    minRole: "read",
+    summary:
+      "Open pull requests, and edit, retarget, close and reopen your own (others' as your role allows).",
+    principals: PRINCIPAL_TYPES,
+    implies: ["pull_requests:read"],
+    writes: true,
+  },
   "administration:write": {
     resource: "repo",
     minRole: "admin",
