@@ -3,11 +3,17 @@
 // stored and charged at its commit; a push that commits nothing gives it
 // back, and a deleted repository's storage is free again.
 
-import { createScheduledController } from "cloudflare:test";
+import {
+  createScheduledController,
+  runDurableObjectAlarm,
+  runInDurableObject,
+} from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
-import { beforeAll, describe, expect, inject, it } from "vitest";
+import { beforeAll, describe, expect, inject, it, vi } from "vitest";
+import { OrgDO } from "../src/do/OrgDO.js";
 import { QUOTA_DEFAULTS } from "../src/do/org/quotas.js";
+import type { RepoDO } from "../src/do/RepoDO.js";
 import worker from "../src/index.js";
 import { forkRepository } from "../src/network/fork.js";
 import {
@@ -20,6 +26,7 @@ import { api, json, user, type Who } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
 import { holdAfterRunPush, type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
+import { inRepo } from "./helpers/repo-git.js";
 
 const fx = inject("pushFixtures");
 
@@ -266,6 +273,196 @@ describe("storage quota", () => {
     const pushed = await postPush(await target(owner, repo), body);
     expect(pushed.report).toContain("ok refs/heads/main\n");
     expect(await quota(owner)).toMatchObject({ storage_bytes: body.length, reserved_bytes: 0 });
+  });
+
+  it("confirms a committed push's bytes later when the account cannot be told at once", async () => {
+    const owner = await user();
+    const repo = (await createRepo(owner)).body;
+    const body = firstPush();
+    await setQuota(owner, { max_storage_bytes: 10 * body.length });
+    // The account's object fails the first confirmation, as a lost call would.
+    const confirm = OrgDO.prototype.confirmStorage;
+    let failures = 1;
+    const spy = vi.spyOn(OrgDO.prototype, "confirmStorage").mockImplementation(function (
+      this: OrgDO,
+      ...args
+    ) {
+      if (failures-- > 0) return Promise.reject(new Error("the call was lost")) as never;
+      return confirm.apply(this, args);
+    });
+    try {
+      const pushed = await postPush(await target(owner, repo), body);
+      expect(pushed.report).toContain("ok refs/heads/main\n");
+      // Owed, not counted yet; the repository's alarm tells the account.
+      expect(await quota(owner)).toMatchObject({ storage_bytes: 0 });
+      const stub = env.REPO.getByName(repo.id);
+      for (let i = 0; i < 5 && (await quota(owner)).storage_bytes === 0; i++) {
+        await inRepo(stub, ({ git }) =>
+          git.context.storage.sql.exec(
+            "UPDATE jobs SET next_run_at = 1 WHERE kind = 'storage_confirm'",
+          ),
+        );
+        await runDurableObjectAlarm(stub);
+      }
+      expect(await quota(owner)).toMatchObject({ storage_bytes: body.length, reserved_bytes: 0 });
+      // Told once: nothing is owed any more, and it is counted once.
+      expect(
+        await inRepo(
+          stub,
+          ({ git }) =>
+            git.context.storage.sql
+              .exec<{ n: number }>("SELECT count(*) AS n FROM storage_owed")
+              .one().n,
+        ),
+      ).toBe(0);
+      await runDurableObjectAlarm(stub);
+      expect(await quota(owner)).toMatchObject({ storage_bytes: body.length });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  /** Runs the repository's confirmation job now; the job's state after. */
+  const runConfirmJob = async (repoId: string) => {
+    const stub = env.REPO.getByName(repoId);
+    await inRepo(stub, ({ git }) =>
+      git.context.storage.sql.exec(
+        "UPDATE jobs SET next_run_at = 1 WHERE kind = 'storage_confirm'",
+      ),
+    );
+    await runDurableObjectAlarm(stub);
+    return inRepo(stub, ({ git }) => ({
+      owed: git.context.storage.sql
+        .exec<{ upload_id: string }>("SELECT upload_id FROM storage_owed ORDER BY upload_id")
+        .toArray()
+        .map((r) => r.upload_id),
+      state:
+        git.context.storage.sql
+          .exec<{ state: string }>("SELECT state FROM jobs WHERE kind = 'storage_confirm'")
+          .toArray()[0]?.state ?? null,
+    }));
+  };
+
+  /** Owes the account `bytes` for upload `uploadId` (at `at`), with the job to tell it. */
+  const owe = (repoId: string, uploadId: string, bytes: number, at = Date.now()) =>
+    inRepo(env.REPO.getByName(repoId), ({ git }) => {
+      git.context.storage.sql.exec(
+        "INSERT INTO storage_owed (upload_id, bytes, owed_at) VALUES (?, ?, ?)",
+        uploadId,
+        bytes,
+        at,
+      );
+      git.jobs.ensure("storage_confirm", "storage-confirm");
+    });
+
+  it("keeps its confirmation job going for what a push owed while it ran", async () => {
+    const owner = await user();
+    const repo = (await createRepo(owner)).body;
+    await owe(repo.id, "a", 3);
+    const outcome = await runInDurableObject(
+      env.REPO.getByName(repo.id),
+      async (instance: RepoDO, state) => {
+        const sql = state.storage.sql;
+        const told: string[] = [];
+        // While the job waits on the account, another push owes it more.
+        const account = {
+          confirmStorage: async (input: { uploadId: string }) => {
+            if (told.length === 0)
+              sql.exec(
+                "INSERT INTO storage_owed (upload_id, bytes, owed_at) VALUES ('b', 4, ?)",
+                Date.now(),
+              );
+            told.push(input.uploadId);
+            return true;
+          },
+        };
+        const self = instance as unknown as { env: Env };
+        const real = self.env;
+        self.env = { ...real, ORG: { getByName: () => account } as unknown as Env["ORG"] };
+        const run = async () => {
+          sql.exec("UPDATE jobs SET next_run_at = 1 WHERE kind = 'storage_confirm'");
+          await instance.alarm();
+          return sql
+            .exec<{ state: string }>("SELECT state FROM jobs WHERE kind = 'storage_confirm'")
+            .one().state;
+        };
+        try {
+          const first = await run();
+          const afterFirst = told.slice();
+          const second = await run();
+          return { first, afterFirst, second, told };
+        } finally {
+          self.env = real;
+        }
+      },
+    );
+    expect(outcome).toEqual({
+      first: "queued",
+      afterFirst: ["a"],
+      second: "done",
+      told: ["a", "b"],
+    });
+  });
+
+  it("keeps owing what an account would not take while the repository moved", async () => {
+    const owner = await user();
+    const repo = (await createRepo(owner)).body;
+    const org = uniqueId("qorg").slice(0, 39);
+    await api("POST", "/admin/organizations", admin.token, { login: org, admin: owner.handle });
+    const moved = await api("POST", `/repos/${owner.handle}/${repo.name}/transfer`, owner.token, {
+      new_owner: org,
+    });
+    expect(moved.status).toBe(200);
+    const orgId = (
+      await env.DIRECTORY.prepare("SELECT id FROM principals WHERE handle = ?")
+        .bind(org)
+        .first<{ id: string }>()
+    )?.id as string;
+    // As between the old account handing it over and the repository landing: its object
+    // still names the old account, which no longer counts it.
+    const setAccount = (id: string) =>
+      inRepo(env.REPO.getByName(repo.id), ({ git }) =>
+        git.context.storage.sql.exec("UPDATE repo_meta SET org_id = ?1, owner_id = ?1", id),
+      );
+    await setAccount(owner.principalId);
+    await owe(repo.id, "moving", 5);
+    expect((await runConfirmJob(repo.id)).owed).toEqual(["moving"]);
+    expect(await quota(owner)).toMatchObject({ storage_bytes: 0 });
+    // Landed: the new account takes it.
+    await setAccount(orgId);
+    expect((await runConfirmJob(repo.id)).owed).toEqual([]);
+    expect(
+      (await json<Quota>(api("GET", `/orgs/${org}/quota`, owner.token))).body.storage_bytes,
+    ).toBe(5);
+  });
+
+  it("counts a confirmation once, and drops a hold made for it after it was counted", async () => {
+    const owner = await user();
+    const repo = (await createRepo(owner)).body;
+    const accountId = owner.principalId;
+    const account = env.ORG.getByName(accountId);
+    const confirm = () => account.confirmStorage({ uploadId: "dup", repoId: repo.id, bytes: 5 });
+    expect(await confirm()).toBe(true);
+    // As a transfer back would charge it again.
+    await runInDurableObject(account, (_: unknown, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO quota_holds (upload_id, repo_id, kind, bytes, expires_at)
+         VALUES ('dup', ?, 'charged', 5, ?)`,
+        repo.id,
+        Date.now() + 60_000,
+      );
+    });
+    expect(await quota(owner)).toMatchObject({ storage_bytes: 5, reserved_bytes: 5 });
+    expect(await confirm()).toBe(true);
+    expect(await quota(owner)).toMatchObject({ storage_bytes: 5, reserved_bytes: 0 });
+  });
+
+  it("gives up a confirmation owed past the account's memory of the ones it took", async () => {
+    const owner = await user();
+    const repo = (await createRepo(owner)).body;
+    await owe(repo.id, "old", 9, Date.now() - 7 * 24 * 60 * 60 * 1000);
+    expect(await runConfirmJob(repo.id)).toEqual({ owed: [], state: "done" });
+    expect(await quota(owner)).toMatchObject({ storage_bytes: 0 });
   });
 
   it("stops a push without a declared length at the space left", async () => {

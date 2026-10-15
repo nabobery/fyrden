@@ -163,7 +163,7 @@ function failure(reason: string | null): OperationError {
       return new OperationError(
         403,
         "quota_exceeded",
-        "The new account's repository quota is full.",
+        "The new account's quota has no room for the repository (its repositories or its storage).",
       );
     case "too_many_collaborators":
       return new OperationError(
@@ -377,6 +377,9 @@ async function runStep(
       return "done";
     }
     case "cancelling":
+      // The room the new account made for it is free again (if it made any).
+      metrics?.count("do.request", { class: "OrgDO", method: "releaseArrival" });
+      await env.ORG.getByName(transfer.to_owner).releaseArrival(transferId);
       metrics?.count("do.request", { class: "RepoDO", method: "unfreezeTransfer" });
       await stub.unfreezeTransfer(transferId);
       return "failed";
@@ -398,9 +401,10 @@ async function moveInDirectory(
   metrics: Metrics | undefined,
 ): Promise<"moved" | { cancelled: string }> {
   const db = env.DIRECTORY;
-  // Last chance to call it off: the new account's snapshots must hold its collaborators.
-  if (!(await snapshotFits(env, transfer.from_owner, transfer.to_owner, transfer.repo_id, metrics)))
-    return { cancelled: "too_many_collaborators" };
+  // Last chance to call it off: the new account makes room for it (its storage, settled now
+  // that it is frozen, and its collaborators), held for this transfer alone.
+  const room = await arrivalRoom(env, transfer, metrics);
+  if (room !== "ok") return { cancelled: room };
   const { maxRepos } = await accountLimits(env, transfer.to_owner, metrics);
   const now = clock();
   // ?1 repo, ?2 new owner, ?3 new name, ?4 old owner, ?5 now, ?6 the new owner's quota,
@@ -477,18 +481,43 @@ async function moveInDirectory(
   return { cancelled: before.taken ? "name_taken" : "quota_exceeded" };
 }
 
-/** Whether the new account's snapshot of the repository would hold its collaborators now. */
-async function snapshotFits(
+/**
+ * The room the new account makes for the repository (see
+ * `OrgDO.reserveArrival`): its storage and its collaborators, or why
+ * they do not fit.
+ */
+async function arrivalRoom(
   env: Env,
-  from: string,
-  to: string,
-  repoId: string,
+  transfer: Transfer,
   metrics: Metrics | undefined,
-): Promise<boolean> {
-  metrics?.count("do.request", { class: "OrgDO", method: "repoForTransfer" });
-  const { collaborators } = await env.ORG.getByName(from).repoForTransfer(repoId);
-  metrics?.count("do.request", { class: "OrgDO", method: "canAdopt" });
-  return env.ORG.getByName(to).canAdopt(to, collaborators);
+): Promise<"ok" | "quota_exceeded" | "too_many_collaborators"> {
+  // What the repository still owes its account comes along too (the new account is told
+  // of it once the repository lands). Frozen, it owes no more, only less as the old account
+  // is told: read around its usage until no confirmation landed in between, so none is
+  // counted twice (after a few tries, both counted: more room held, never less).
+  const repo = env.REPO.getByName(transfer.repo_id);
+  const source = env.ORG.getByName(transfer.from_owner);
+  metrics?.count("do.request", { class: "RepoDO", method: "owedStorage" });
+  let owed = await repo.owedStorage();
+  let handedOver: Awaited<ReturnType<typeof source.repoForTransfer>>;
+  for (let attempt = 0; ; attempt++) {
+    metrics?.count("do.request", { class: "OrgDO", method: "repoForTransfer" });
+    handedOver = await source.repoForTransfer(transfer.repo_id);
+    metrics?.count("do.request", { class: "RepoDO", method: "owedStorage" });
+    const after = await repo.owedStorage();
+    if (after.length === owed.length || attempt === 2) break;
+    owed = after;
+  }
+  const { collaborators, usageBytes } = handedOver;
+  metrics?.count("do.request", { class: "OrgDO", method: "reserveArrival" });
+  return env.ORG.getByName(transfer.to_owner).reserveArrival({
+    transferId: transfer.transfer_id,
+    accountId: transfer.to_owner,
+    repoId: transfer.repo_id,
+    usageBytes,
+    owed,
+    collaborators,
+  });
 }
 
 /**

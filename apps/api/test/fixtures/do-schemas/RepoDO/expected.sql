@@ -228,6 +228,18 @@ CREATE TABLE repo_meta (
         created_at INTEGER NOT NULL
       , epoch_uuid TEXT, source_seq INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, owner_id TEXT, name TEXT, visibility TEXT
         CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT) STRICT;
+CREATE TABLE rule_suites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        upload_id TEXT NOT NULL,
+        ref TEXT NOT NULL,
+        before_sha TEXT,
+        after_sha TEXT,
+        actor_id TEXT NOT NULL,
+        pushed_at INTEGER NOT NULL,
+        refused INTEGER NOT NULL,
+        evaluations TEXT NOT NULL,
+        UNIQUE (upload_id, ref)
+      ) STRICT;
 CREATE TABLE ruleset_version (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         version INTEGER NOT NULL
@@ -242,6 +254,11 @@ CREATE TABLE rulesets (
 CREATE TABLE shallow (
     oid BLOB PRIMARY KEY CHECK (length(oid) = 20)
   ) STRICT, WITHOUT ROWID;
+CREATE TABLE storage_owed (
+        upload_id TEXT PRIMARY KEY,
+        bytes INTEGER NOT NULL,
+        owed_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE uploads (
     upload_id TEXT PRIMARY KEY,
     pack_id TEXT,

@@ -6,6 +6,7 @@ import {
   type RepoRole,
   type RuleActor,
   type Ruleset,
+  type RuleViolation,
   ruleViolations,
 } from "@fyrden/domain";
 import {
@@ -74,11 +75,28 @@ function blocking(
   branches: readonly (string | null)[],
   stage: "precheck" | "commit",
 ): string[] {
+  return violations(rulesets, change, actor, branches, stage).blocking;
+}
+
+/**
+ * The violations of `change` under any of `branches` as the default
+ * branch: the blocking ones' messages, and those of `evaluate` rulesets
+ * (each rule once).
+ */
+function violations(
+  rulesets: readonly Ruleset[],
+  change: Parameters<typeof ruleViolations>[1],
+  actor: RuleActor,
+  branches: readonly (string | null)[],
+  stage: "precheck" | "commit",
+): { blocking: string[]; evaluated: RuleViolation[] } {
   const messages = new Set<string>();
+  const evaluated = new Map<string, RuleViolation>();
   for (const branch of branches)
     for (const v of ruleViolations(rulesets, change, actor, branch, stage))
       if (v.blocking) messages.add(v.message);
-  return [...messages];
+      else evaluated.set(`${v.rulesetId}:${v.rule}`, v);
+  return { blocking: [...messages], evaluated: [...evaluated.values()] };
 }
 
 /** One refusal reason from rule messages, kept within one line of git's report. */
@@ -137,12 +155,23 @@ export function precheckPushRules(
   return refusals;
 }
 
+/** What an `evaluate` ruleset would have refused of one ref update. */
+export interface EvaluatedUpdate {
+  readonly ref: string;
+  readonly before: string | null;
+  readonly after: string | null;
+  /** Whether active rulesets refused it. */
+  readonly refused: boolean;
+  readonly violations: readonly RuleViolation[];
+}
+
 /**
  * The rulesets' refusals of a push's commands at its commit point: every
  * rule of every active ruleset that applies to the ref and the pusher,
  * with the fast-forward proof and, for `required_signatures`, the first
  * new commit (reachable from the new tip, not from the ref's old one)
- * whose signature is not verified.
+ * whose signature is not verified. `evaluated`: what `evaluate` rulesets
+ * would have refused, judged the same way, refusing nothing.
  */
 export async function checkPushRules(
   deps: PushRulesDeps,
@@ -155,33 +184,37 @@ export async function checkPushRules(
     readonly packs: readonly PackId[];
     readonly head: string | undefined;
     readonly commands: readonly CheckedCommand[];
+    /** An atomic push: one refused update fails them all. */
+    readonly atomic?: boolean;
   },
-): Promise<Map<number, string>> {
+): Promise<{ refusals: Map<number, string>; evaluated: EvaluatedUpdate[] }> {
   const refusals = new Map<number, string>();
+  const evaluated: EvaluatedUpdate[] = [];
   const rulesets = snapshot.rulesets.filter((r) => r.enforcement !== "disabled");
-  if (rulesets.length === 0 || input.commands.length === 0) return refusals;
+  if (rulesets.length === 0 || input.commands.length === 0) return { refusals, evaluated };
   const actor = actorOf(snapshot, input.principal, input.delegated ?? false);
   const branches = defaultBranches(snapshot.head, input.head);
   // Refs often share new commits: each is read and judged once per push.
   const signed = sharedSignatures(deps);
   for (const cmd of input.commands) {
-    const needsSignatures =
-      cmd.kind !== "delete" &&
-      branches.some((branch) =>
-        applicableRules(rulesets, cmd.name, actor, branch).some(
-          (a) => a.rule.type === "required_signatures" && a.ruleset.enforcement === "active",
-        ),
-      );
+    const signing =
+      cmd.kind === "delete"
+        ? []
+        : branches.flatMap((branch) =>
+            applicableRules(rulesets, cmd.name, actor, branch).filter(
+              (a) => a.rule.type === "required_signatures",
+            ),
+          );
+    const enforced = signing.some((a) => a.ruleset.enforcement === "active");
     let unverifiedCommit: { sha: string; reason: string } | undefined;
-    if (needsSignatures) {
+    /** Why the signatures could not be checked: refused under an active rule. */
+    let unchecked: string | undefined;
+    if (signing.length > 0) {
       const found = await firstUnverified(signed, input, cmd);
-      if (typeof found === "string") {
-        refusals.set(cmd.index, found);
-        continue;
-      }
-      unverifiedCommit = found;
+      if (typeof found === "string") unchecked = found;
+      else unverifiedCommit = found;
     }
-    const messages = blocking(
+    const found = violations(
       rulesets,
       {
         ref: cmd.name,
@@ -193,9 +226,37 @@ export async function checkPushRules(
       branches,
       "commit",
     );
-    if (messages.length > 0) refusals.set(cmd.index, refusalOf(messages));
+    const blockingMessages = [
+      ...(enforced && unchecked !== undefined ? [unchecked] : []),
+      ...found.blocking,
+    ];
+    if (blockingMessages.length > 0) refusals.set(cmd.index, refusalOf(blockingMessages));
+    // Signatures that could not be checked count against an evaluated rule, as they would refuse.
+    const evaluating = signing.filter((a) => a.ruleset.enforcement === "evaluate");
+    const notChecked: RuleViolation[] =
+      unchecked === undefined
+        ? []
+        : [...new Map(evaluating.map((a) => [a.ruleset.id, a.ruleset])).values()].map((r) => ({
+            rulesetId: r.id,
+            ruleset: r.name,
+            rule: "required_signatures",
+            message: `${unchecked} (ruleset "${r.name}")`,
+            blocking: false,
+          }));
+    const all = [...found.evaluated, ...notChecked];
+    if (all.length > 0)
+      evaluated.push({
+        ref: cmd.name,
+        before: cmd.oldOid ? oidToHex(cmd.oldOid) : null,
+        after: cmd.newOid ? oidToHex(cmd.newOid) : null,
+        refused: refusals.has(cmd.index),
+        violations: all,
+      });
   }
-  return refusals;
+  // An atomic push one update of which is refused updates nothing.
+  if (input.atomic && refusals.size > 0)
+    return { refusals, evaluated: evaluated.map((u) => ({ ...u, refused: true })) };
+  return { refusals, evaluated };
 }
 
 /**

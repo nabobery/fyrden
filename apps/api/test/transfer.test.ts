@@ -8,6 +8,7 @@ import type { Envelope } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import { allocateEpoch } from "../src/events/epochs.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { markDeletions } from "../src/repos/deletion.js";
 import { authorize, renameRepo, resolveRepo } from "../src/repos/directory.js";
@@ -514,6 +515,301 @@ describe("after a transfer, requests authorized for the old owner", () => {
       status: 422,
       body: { code: "too_many_collaborators" },
     });
+  });
+});
+
+describe("a restore", () => {
+  it("to before a transfer takes the owner the directory names, in a generation past the fence", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const org = await newOrg(owner);
+    const orgId = await idOf(org);
+    expect((await transfer(owner, repo, { new_owner: org })).body.state).toBe("transferred");
+    const stub = env.REPO.getByName(repo.id);
+    // The object restored to before the transfer: its old owner and generation; the
+    // runbook allocated the next epoch first.
+    await runInDurableObject(stub, (_: RepoDO, state) => {
+      state.storage.sql.exec(
+        "UPDATE repo_meta SET org_id = ?1, owner_id = ?1, owner_gen = 1",
+        owner.principalId,
+      );
+    });
+    await allocateEpoch(env.DIRECTORY, repo.id);
+    await runInDurableObject(stub, (_: RepoDO, state) => state.abort("restore")).catch(() => {});
+    // A new instance, as after a restore.
+    const restored = env.REPO.getByName(repo.id);
+    await restored.checkEpoch();
+    const fence = await env.ORG_READ.prepare(
+      "SELECT owner_gen FROM source_owner WHERE source_id = ?",
+    )
+      .bind(repo.id)
+      .first<{ owner_gen: number }>();
+    const account = await runInDurableObject(restored, (r: RepoDO) => r.events.account());
+    expect(account).toMatchObject({ accountId: orgId, ownerId: orgId });
+    expect(account?.ownerGen).toBeGreaterThanOrEqual(fence?.owner_gen ?? Number.POSITIVE_INFINITY);
+    // Its former owner's account answers for it no more: the organization's does.
+    const branches = await api("GET", `/repos/${org}/${repo.name}/branches`, owner.token);
+    expect(branches.status).toBe(200);
+  });
+});
+
+describe("a restore, further", () => {
+  /** The object as restored to `meta` (before transfers), in a new epoch and instance. */
+  async function restore(repoId: string, meta: string, ...args: unknown[]) {
+    await runInDurableObject(env.REPO.getByName(repoId), (_: RepoDO, state) => {
+      state.storage.sql.exec(meta, ...args);
+    });
+    await allocateEpoch(env.DIRECTORY, repoId);
+    await runInDurableObject(env.REPO.getByName(repoId), (_: RepoDO, state) =>
+      state.abort("restore"),
+    ).catch(() => {});
+    await env.REPO.getByName(repoId).checkEpoch();
+    return runInDurableObject(env.REPO.getByName(repoId), (_: RepoDO, state) =>
+      state.storage.sql
+        .exec<{
+          org_id: string;
+          owner_gen: number;
+          transfer_id: string | null;
+          transfer_to: string | null;
+          write_frozen: number;
+        }>("SELECT org_id, owner_gen, transfer_id, transfer_to, write_frozen FROM repo_meta")
+        .one(),
+    );
+  }
+
+  const fenceOf = async (repoId: string) =>
+    (
+      await env.ORG_READ.prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
+        .bind(repoId)
+        .first<{ owner_gen: number }>()
+    )?.owner_gen ?? 0;
+
+  it("to before transfers that brought it back to its owner still takes the fence's generation", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const org = await newOrg(owner);
+    expect((await transfer(owner, repo, { new_owner: org })).body.state).toBe("transferred");
+    const back = { ...repo, owner: org };
+    expect((await transfer(owner, back, { new_owner: owner.handle })).body.state).toBe(
+      "transferred",
+    );
+    const fence = await fenceOf(repo.id);
+    expect(fence).toBeGreaterThan(1);
+    const meta = await restore(repo.id, "UPDATE repo_meta SET owner_gen = 1");
+    expect(meta).toMatchObject({ org_id: owner.principalId, transfer_id: null });
+    expect(meta.owner_gen).toBeGreaterThanOrEqual(fence);
+  });
+
+  it("during a transfer rejoins it, frozen, and the transfer then lands it", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const org = await newOrg(owner);
+    const orgId = await idOf(org);
+    expect((await transfer(owner, repo, { new_owner: org })).body.state).toBe("transferred");
+    // As if its last step had not run yet when the object was restored to before it began.
+    const { transfer_id: transferId } = (await env.DIRECTORY.prepare(
+      "UPDATE repo_transfers SET step = 'repo', lease_id = NULL, lease_until = NULL WHERE repo_id = ? RETURNING transfer_id",
+    )
+      .bind(repo.id)
+      .first<{ transfer_id: string }>()) as { transfer_id: string };
+    const meta = await restore(
+      repo.id,
+      "DELETE FROM ended_transfers; UPDATE repo_meta SET org_id = ?1, owner_id = ?1, owner_gen = 1, transfer_id = NULL, transfer_to = NULL",
+      owner.principalId,
+    );
+    expect(meta).toMatchObject({
+      org_id: owner.principalId,
+      transfer_id: transferId,
+      transfer_to: orgId,
+      write_frozen: 1,
+    });
+    expect(await advanceTransfer(env, repo.id)).toMatchObject({ state: "transferred" });
+    const landed = await runInDurableObject(env.REPO.getByName(repo.id), (r: RepoDO) =>
+      r.events.account(),
+    );
+    expect(landed).toMatchObject({ accountId: orgId });
+    expect(landed?.ownerGen).toBeGreaterThanOrEqual(await fenceOf(repo.id));
+  });
+});
+
+describe("repository transfers in flight", () => {
+  it("hold the new account's storage for each, so two at once never overrun it", async () => {
+    const owner = await user();
+    const [one, two] = [
+      await pushedRepo(owner, "/user/repos"),
+      await pushedRepo(owner, "/user/repos"),
+    ];
+    const used = await quota("/user/quota", owner.token);
+    const each = used / 2;
+    const org = await newOrg(owner);
+    // Room for one of them, not both.
+    expect(
+      (
+        await api("PUT", `/admin/accounts/${org}/quota`, admin.token, {
+          max_storage_bytes: Math.floor(each * 1.5),
+        })
+      ).status,
+    ).toBe(200);
+    const results = await Promise.all(
+      [one, two].map((repo) => transfer(owner, repo as Repo, { new_owner: org })),
+    );
+    expect(results.map((r) => r.status).sort()).toEqual([200, 403]);
+    expect(results.find((r) => r.status === 403)?.body.code).toBe("quota_exceeded");
+    expect(await quota(`/orgs/${org}/quota`, owner.token)).toBe(each);
+    // Nothing is left held for the one called off.
+    const status = await json<{ reserved_bytes: number }>(
+      api("GET", `/orgs/${org}/quota`, owner.token),
+    );
+    expect(status.body.reserved_bytes).toBe(0);
+  });
+
+  it("hold room in the new account for what the repository still owes the old one", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const used = await quota("/user/quota", owner.token);
+    const owed = 50;
+    const stub = env.REPO.getByName(repo.id);
+    // A committed upload its account was not told of yet (a lost confirmation).
+    await runInDurableObject(stub, (_: RepoDO, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO storage_owed (upload_id, bytes, owed_at) VALUES ('owed', ?, ?)",
+        owed,
+        Date.now(),
+      );
+    });
+    const org = await newOrg(owner);
+    const limit = (bytes: number) =>
+      api("PUT", `/admin/accounts/${org}/quota`, admin.token, { max_storage_bytes: bytes });
+    expect((await limit(used + owed - 1)).status).toBe(200);
+    expect(await transfer(owner, repo, { new_owner: org })).toMatchObject({
+      status: 403,
+      body: { code: "quota_exceeded" },
+    });
+    expect((await limit(used + owed)).status).toBe(200);
+    expect((await transfer(owner, repo, { new_owner: org })).body.state).toBe("transferred");
+    // Landed, the owed bytes stay held until the new account is told of them: nothing
+    // else can take that room meanwhile.
+    const status = async () =>
+      (
+        await json<{ storage_bytes: number; reserved_bytes: number }>(
+          api("GET", `/orgs/${org}/quota`, owner.token),
+        )
+      ).body;
+    expect(await status()).toMatchObject({ storage_bytes: used, reserved_bytes: owed });
+    // Told: within what it held.
+    await runInDurableObject(stub, async (r: RepoDO, state) => {
+      state.storage.sql.exec("UPDATE jobs SET next_run_at = 1 WHERE kind = 'storage_confirm'");
+      await r.alarm();
+    });
+    expect(await status()).toMatchObject({ storage_bytes: used + owed, reserved_bytes: 0 });
+  });
+
+  it("count an arriving collaborator who stops being a member", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const org = await newOrg(owner);
+    const orgId = await idOf(org);
+    await runInDurableObject(env.ORG.getByName(orgId), (_: unknown, state) => {
+      for (let i = 0; i < 9_998; i++)
+        state.storage.sql.exec(
+          "INSERT INTO members (principal_id, handle, role, added_at) VALUES (?, ?, 'member', 1)",
+          `usr_swap${i}`,
+          `swap${i}`,
+        );
+    });
+    // The owner, 9,998 members and a collaborator of the arriving repository: 10,000.
+    const both = await user();
+    const membership = (who: Who, method: "PUT" | "DELETE") =>
+      api(
+        method,
+        `/orgs/${org}/memberships/${who.handle}`,
+        owner.token,
+        method === "PUT" ? {} : undefined,
+      ).then((r) => r.status);
+    expect(await membership(both, "PUT")).toBe(200);
+    expect(
+      await env.ORG.getByName(orgId).reserveArrival({
+        transferId: "trf_01ARZ3NDEKTSV4RRFFQ69G5FAW",
+        accountId: orgId,
+        repoId: repo.id,
+        usageBytes: 0,
+        collaborators: [{ principalId: both.principalId }],
+      }),
+    ).toBe("ok");
+    // No longer a member, it arrives from outside: a new member would make 10,001.
+    expect(await membership(both, "DELETE")).toBe(200);
+    expect(await membership(await user(), "PUT")).toBe(409);
+  });
+
+  it("hold an arrival's room until it ends, and make no room again for one adopted", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const org = await newOrg(owner);
+    const orgId = await idOf(org);
+    expect(
+      (await api("PUT", `/admin/accounts/${org}/quota`, admin.token, { max_storage_bytes: 100 }))
+        .status,
+    ).toBe(200);
+    const target = env.ORG.getByName(orgId);
+    const arrive = (transferId: string) =>
+      target.reserveArrival({
+        transferId,
+        accountId: orgId,
+        repoId: repo.id,
+        usageBytes: 80,
+        collaborators: [],
+      });
+    const first = "trf_01ARZ3NDEKTSV4RRFFQ69G5FB0";
+    const second = "trf_01ARZ3NDEKTSV4RRFFQ69G5FB1";
+    expect(await arrive(first)).toBe("ok");
+    // Held, however long the transfer takes: no room for another.
+    expect(await arrive(second)).toBe("quota_exceeded");
+    expect(await arrive(first)).toBe("ok");
+    expect((await target.quotaStatus()).reservedBytes).toBe(80);
+    // Adopted, a late runner asking again makes no room.
+    await target.adoptRepo(first, repo.id, { collaborators: [], usageBytes: 80 });
+    expect(await arrive(first)).toBe("ok");
+    expect(await target.quotaStatus()).toMatchObject({ usedBytes: 80, reservedBytes: 0 });
+    // Called off, likewise.
+    await target.releaseArrival(second);
+    expect(await arrive(second)).toBe("ok");
+    expect((await target.quotaStatus()).reservedBytes).toBe(0);
+  });
+
+  it("count a repository on its way in against members added meanwhile", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const org = await newOrg(owner);
+    const orgId = await idOf(org);
+    // The organization's owner and 9,997 members: 9,998.
+    await runInDurableObject(env.ORG.getByName(orgId), (_: unknown, state) => {
+      for (let i = 0; i < 9_997; i++)
+        state.storage.sql.exec(
+          "INSERT INTO members (principal_id, handle, role, added_at) VALUES (?, ?, 'member', 1)",
+          `usr_arrival${i}`,
+          `arrival${i}`,
+        );
+    });
+    const outside = await user();
+    // The repository is on its way in with one outside collaborator: 9,999.
+    expect(
+      await env.ORG.getByName(orgId).reserveArrival({
+        transferId: "trf_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        accountId: orgId,
+        repoId: repo.id,
+        usageBytes: 0,
+        collaborators: [{ principalId: outside.principalId }],
+      }),
+    ).toBe("ok");
+    const join = async () => {
+      const member = await user();
+      return api("PUT", `/orgs/${org}/memberships/${member.handle}`, owner.token, {}).then(
+        (r) => r.status,
+      );
+    };
+    // One more member fills it to 10,000; the next would take it past.
+    expect(await join()).toBe(200);
+    expect(await join()).toBe(409);
   });
 });
 

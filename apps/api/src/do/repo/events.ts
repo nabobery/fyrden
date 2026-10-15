@@ -21,6 +21,24 @@ export interface RepoExport {
 }
 
 /** Who the repository is, as the Worker that creates it knows it. */
+/** What the directory says of a repository when its object checks its epoch. */
+export interface EpochCheck {
+  /** The epoch it allocated (null for none yet). */
+  readonly epochGen: number | null;
+  /**
+   * Read only when that epoch is newer than the object's (a restore): who
+   * owns it and its name, the read model's owner generation fence, and a
+   * transfer the directory has not finished (it lands the repository).
+   */
+  readonly owner?: {
+    readonly ownerId: string;
+    readonly name: string;
+    readonly nameGen: number;
+    readonly ownerFence: number;
+    readonly transfer: { readonly id: string; readonly from: string; readonly to: string } | null;
+  };
+}
+
 export interface RepoIdentity {
   readonly ownerId: string;
   readonly name: string;
@@ -226,11 +244,14 @@ export class RepoEvents {
   /**
    * Takes the directory's epoch for this repository (`read`) if it is newer
    * than the one recorded: a restore happened, so later events must not
-   * reuse the ids the old history used. Emits a snapshot under the new
-   * epoch. Once per instance; a repository without an identity has nothing
-   * to check.
+   * reuse the ids the old history used. The restored object may predate a
+   * transfer or a rename: it takes the owner and name the directory names
+   * now (`owner`), the owner in a generation past the read model's fence,
+   * so a former owner's account no longer answers for it. Emits a snapshot
+   * under the new epoch. Once per instance; a repository without an
+   * identity has nothing to check.
    */
-  checkEpoch(read: () => Promise<number | null>): Promise<void> {
+  checkEpoch(read: (recorded: number) => Promise<EpochCheck>): Promise<void> {
     if (this.#epochChecked || !this.#meta()) return Promise.resolve();
     this.#epochCheck ??= this.#checkEpoch(read).finally(() => {
       this.#epochCheck = undefined;
@@ -238,8 +259,8 @@ export class RepoEvents {
     return this.#epochCheck;
   }
 
-  async #checkEpoch(read: () => Promise<number | null>): Promise<void> {
-    const current = await read();
+  async #checkEpoch(read: (recorded: number) => Promise<EpochCheck>): Promise<void> {
+    const { epochGen: current, owner } = await read(this.#meta()?.epoch_gen ?? 0);
     this.#storage.transactionSync(() => {
       const meta = this.#meta();
       if (meta && current !== null && current > meta.epoch_gen) {
@@ -249,6 +270,36 @@ export class RepoEvents {
           current,
           crypto.randomUUID(),
         );
+        // Never below the fence: the read model takes nothing of an older owner generation.
+        if (owner?.transfer)
+          // A transfer under way: the account handing it over, frozen, until the transfer
+          // lands it (its saga goes on from the step it is at).
+          this.#exec(
+            "events.epoch_transfer",
+            `UPDATE repo_meta SET org_id = ?1, owner_id = ?1, owner_gen = max(owner_gen, ?2),
+               transfer_id = ?3, transfer_to = ?4, write_frozen = 1 WHERE id = 1`,
+            owner.transfer.from,
+            owner.ownerFence,
+            owner.transfer.id,
+            owner.transfer.to,
+          );
+        else if (owner) {
+          this.#exec(
+            "events.epoch_owner",
+            `UPDATE repo_meta SET org_id = ?1, owner_id = ?1, owner_gen = max(owner_gen, ?2),
+               transfer_id = NULL, transfer_to = NULL,
+               write_frozen = CASE WHEN deleting_at IS NULL THEN 0 ELSE 1 END WHERE id = 1`,
+            owner.ownerId,
+            owner.ownerFence,
+          );
+          this.#exec(
+            "events.epoch_name",
+            "UPDATE repo_meta SET name = ?, name_gen = ? WHERE id = 1 AND name_gen < ?",
+            owner.name,
+            owner.nameGen,
+            owner.nameGen,
+          );
+        }
         this.#emit("repo.updated", { actor: null, actChain: [], data: null }, true);
       }
     });

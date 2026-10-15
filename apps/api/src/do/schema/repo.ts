@@ -290,4 +290,37 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
     `,
   },
+  {
+    version: 14,
+    // What `evaluate` rulesets would have refused of a push's ref updates
+    // (one row per upload and ref, its rules' findings as JSON), the newest kept.
+    name: "rule_suites",
+    sql: `
+      CREATE TABLE rule_suites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        upload_id TEXT NOT NULL,
+        ref TEXT NOT NULL,
+        before_sha TEXT,
+        after_sha TEXT,
+        actor_id TEXT NOT NULL,
+        pushed_at INTEGER NOT NULL,
+        refused INTEGER NOT NULL,
+        evaluations TEXT NOT NULL,
+        UNIQUE (upload_id, ref)
+      ) STRICT;
+    `,
+  },
+  {
+    version: 15,
+    // Committed uploads whose bytes the account has not been told of yet:
+    // written in the commit's transaction, removed once it confirms them.
+    name: "storage_owed",
+    sql: `
+      CREATE TABLE storage_owed (
+        upload_id TEXT PRIMARY KEY,
+        bytes INTEGER NOT NULL,
+        owed_at INTEGER NOT NULL
+      ) STRICT;
+    `,
+  },
 ];

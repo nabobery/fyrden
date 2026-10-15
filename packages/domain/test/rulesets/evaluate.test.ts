@@ -179,6 +179,7 @@ describe("rule violations", () => {
     const del = { ref: "refs/heads/main", kind: "delete" as const };
     expect(ruleViolations(sets, del, human, "main", "precheck")).toEqual([
       {
+        rulesetId: sets[0]?.id,
         ruleset: "protect main",
         rule: "deletion",
         message: 'cannot delete this ref (ruleset "protect main")',

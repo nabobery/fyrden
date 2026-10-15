@@ -4,6 +4,38 @@ import type { Ruleset } from "@fyrden/domain";
 /** Rulesets one repository may have. Proposed. */
 export const MAX_RULESETS = 50;
 
+/** Rule suites one repository keeps, the newest. Proposed. */
+export const MAX_RULE_SUITES = 1_000;
+
+/** What `evaluate` rulesets would have refused of one ref update of a push. */
+export interface RuleSuite {
+  readonly id: number;
+  readonly ref: string;
+  readonly before: string | null;
+  readonly after: string | null;
+  readonly actorId: string;
+  readonly pushedAt: number;
+  /** Whether active rulesets refused the update. */
+  readonly refused: boolean;
+  readonly evaluations: readonly {
+    readonly rulesetId: number;
+    readonly ruleset: string;
+    readonly rule: string;
+    readonly message: string;
+  }[];
+}
+
+type SuiteRow = {
+  id: number;
+  ref: string;
+  before_sha: string | null;
+  after_sha: string | null;
+  actor_id: string;
+  pushed_at: number;
+  refused: number;
+  evaluations: string;
+};
+
 /** A ruleset as it is given: everything but its id. */
 export type RulesetInput = Omit<Ruleset, "id">;
 
@@ -109,6 +141,81 @@ export class RepoRulesets {
       this.#changed("ruleset.delete", actor, id, existing.ruleset.name);
       return true;
     });
+  }
+
+  /**
+   * Records what `evaluate` rulesets found in upload `uploadId`'s ref
+   * updates (once per upload and ref: a commit tried again records nothing
+   * new), keeping the newest `MAX_RULE_SUITES`.
+   */
+  recordEvaluated(
+    uploadId: string,
+    actorId: string,
+    updates: readonly {
+      readonly ref: string;
+      readonly before: string | null;
+      readonly after: string | null;
+      readonly refused: boolean;
+      readonly violations: readonly {
+        readonly rulesetId: number;
+        readonly ruleset: string;
+        readonly rule: string;
+        readonly message: string;
+      }[];
+    }[],
+  ): void {
+    if (updates.length === 0) return;
+    const now = this.now();
+    this.storage.transactionSync(() => {
+      for (const u of updates)
+        this.storage.sql.exec(
+          `INSERT INTO rule_suites (upload_id, ref, before_sha, after_sha, actor_id, pushed_at,
+             refused, evaluations)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (upload_id, ref) DO NOTHING`,
+          uploadId,
+          u.ref,
+          u.before,
+          u.after,
+          actorId,
+          now,
+          u.refused ? 1 : 0,
+          JSON.stringify(
+            u.violations.map(({ rulesetId, ruleset, rule, message }) => ({
+              rulesetId,
+              ruleset,
+              rule,
+              message,
+            })),
+          ),
+        );
+      // The newest kept by their rows, not their ids (a skipped insert still takes one).
+      this.storage.sql.exec(
+        `DELETE FROM rule_suites WHERE id NOT IN (
+           SELECT id FROM rule_suites ORDER BY id DESC LIMIT ?)`,
+        MAX_RULE_SUITES,
+      );
+    });
+  }
+
+  /** Rule suites, newest first: `limit` of them before id `before` (the newest when absent). */
+  ruleSuites(limit: number, before?: number): RuleSuite[] {
+    return this.storage.sql
+      .exec<SuiteRow>(
+        "SELECT * FROM rule_suites WHERE id < ? ORDER BY id DESC LIMIT ?",
+        before ?? Number.MAX_SAFE_INTEGER,
+        limit,
+      )
+      .toArray()
+      .map((row) => ({
+        id: row.id,
+        ref: row.ref,
+        before: row.before_sha,
+        after: row.after_sha,
+        actorId: row.actor_id,
+        pushedAt: row.pushed_at,
+        refused: row.refused === 1,
+        evaluations: JSON.parse(row.evaluations) as RuleSuite["evaluations"],
+      }));
   }
 
   #changed(action: string, actor: RefActor | null, id: number, name: string): void {

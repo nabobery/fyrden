@@ -10,6 +10,7 @@ import {
 import { MigratingDO } from "./base/MigratingDO.js";
 import {
   AccountQuotas,
+  CONFIRMED_KEEP_MS,
   defaultLimits,
   type QuotaLimits,
   type StorageStatus,
@@ -92,6 +93,16 @@ export const BASE_ROLE: RepoRole = "read";
 
 /** Most entries one snapshot carries (an organization's members, for now). Proposed. */
 export const MAX_SNAPSHOT_ENTRIES = 10_000;
+
+/**
+ * A transfer's room in its new account never lapses: it is held until the
+ * transfer ends (adopted, or called off), which every transfer does, its
+ * steps tried again until one or the other.
+ */
+const HELD_UNTIL_ENDED = Number.MAX_SAFE_INTEGER;
+
+/** How long an ended arrival is remembered, so a late runner makes no room for it. Proposed. */
+const ENDED_ARRIVAL_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 
 type Meta = {
   account_id: string;
@@ -292,7 +303,18 @@ export class OrgDO extends MigratingDO {
             meta.account_id,
           )
     ).one().n;
-    return base + (others ?? 0);
+    // A repository on its way in brings its collaborators who are not members (now).
+    const arriving = this.ctx.storage.sql
+      .exec<{ n: number | null }>(
+        `SELECT MAX(n) AS n FROM (
+           SELECT count(*) AS n FROM transfer_arrival_collaborators c
+           JOIN transfer_arrivals a ON a.transfer_id = c.transfer_id
+           WHERE a.state = 'held' AND ${outside}
+           GROUP BY c.transfer_id)`,
+        meta.account_id,
+      )
+      .one().n;
+    return base + Math.max(others ?? 0, arriving ?? 0);
   }
 
   /** In a change's transaction: undoes it (by throwing) if a snapshot would grow past its limit. */
@@ -483,10 +505,16 @@ export class OrgDO extends MigratingDO {
     return this.#quotas().charge(input);
   }
 
-  /** An upload committed: its bytes become its repository's usage (see `AccountQuotas.confirm`). */
-  confirmStorage(input: Parameters<AccountQuotas["confirm"]>[0]): void {
-    if (this.#notHere(input.repoId)) return;
+  /**
+   * An upload committed: its bytes become its repository's usage (see
+   * `AccountQuotas.confirm`). False when the repository is not this
+   * account's (moved, or deleted): nothing is counted here, so the caller
+   * still owes it.
+   */
+  confirmStorage(input: Parameters<AccountQuotas["confirm"]>[0]): boolean {
+    if (this.#notHere(input.repoId)) return false;
     this.#quotas().confirm(input);
+    return true;
   }
 
   /** An upload ended without committing: what it holds is free again. */
@@ -528,13 +556,15 @@ export class OrgDO extends MigratingDO {
     repoId: string,
     from: ReturnType<OrgDO["repoForTransfer"]>,
   ): { epochGen: number; version: number } {
-    // The admission checked the snapshot's limit (`canAdopt`); it is not refused here, where
-    // the repository has moved already.
+    // Its admission made its room (`reserveArrival`); it is not refused here, where the
+    // repository has moved already.
     return this.ctx.storage.transactionSync(() => {
       const meta = this.#meta();
       if (!meta) throw new Error("the account is not recorded");
       if (!this.#firstTime(transferId, "adopt"))
         return { epochGen: meta.epoch_gen, version: meta.acl_version };
+      // The room its admission made is taken now.
+      this.#endArrival(transferId, true);
       // A repository that left before may come back.
       this.ctx.storage.sql.exec("DELETE FROM forgotten_repos WHERE repo_id = ?", repoId);
       this.ctx.storage.sql.exec("DELETE FROM released_repos WHERE repo_id = ?", repoId);
@@ -628,6 +658,119 @@ export class OrgDO extends MigratingDO {
       (c) => c.principalId !== accountId && !isMember(c.principalId),
     );
     return base + outside.length <= MAX_SNAPSHOT_ENTRIES;
+  }
+
+  /**
+   * Makes room for a repository on its way in (transfer `transferId`,
+   * before the directory moves it here): its storage, held under the
+   * transfer's id, and its outside collaborators, counted against members
+   * added meanwhile; or why it does not fit. Once per transfer: asked
+   * again, it answers "ok". `adoptRepo` takes the room; `releaseArrival`
+   * gives it back.
+   */
+  reserveArrival(input: {
+    readonly transferId: string;
+    readonly accountId: string;
+    readonly repoId: string;
+    readonly usageBytes: number;
+    /** Uploads it committed whose confirmations it still owes (told here once it lands). */
+    readonly owed?: readonly { readonly uploadId: string; readonly bytes: number }[];
+    readonly collaborators: readonly { readonly principalId: string }[];
+  }): "ok" | "quota_exceeded" | "too_many_collaborators" {
+    return this.ctx.storage.transactionSync(() => {
+      const sql = this.ctx.storage.sql;
+      const now = this.#now();
+      sql.exec("DELETE FROM transfer_arrivals WHERE state = 'done' AND expires_at < ?", now);
+      const arrival = sql
+        .exec<{ state: string }>(
+          "SELECT state FROM transfer_arrivals WHERE transfer_id = ?",
+          input.transferId,
+        )
+        .toArray()[0];
+      // Adopted or called off already (a late runner): no room is made again.
+      const adopted =
+        sql
+          .exec(
+            "SELECT 1 FROM transfer_ops WHERE transfer_id = ? AND op = 'adopt'",
+            input.transferId,
+          )
+          .toArray().length > 0;
+      // Held already (a step tried again), adopted or called off (a late runner): as it was.
+      if (adopted || arrival) return "ok";
+      if (!this.canAdopt(input.accountId, input.collaborators)) return "too_many_collaborators";
+      const owed = input.owed ?? [];
+      // Its usage until it lands; each owed upload charged until it is confirmed here (or for
+      // as long as a confirmation is remembered, should it be told elsewhere).
+      const held = this.#quotas().holdAll([
+        {
+          uploadId: input.transferId,
+          repoId: input.repoId,
+          kind: "reserved",
+          bytes: input.usageBytes,
+          expiresAt: HELD_UNTIL_ENDED,
+        },
+        ...owed.map((o) => ({
+          uploadId: o.uploadId,
+          repoId: input.repoId,
+          kind: "charged" as const,
+          bytes: o.bytes,
+          expiresAt: now + CONFIRMED_KEEP_MS,
+        })),
+      ]);
+      if (!held) return "quota_exceeded";
+      sql.exec(
+        `INSERT INTO transfer_arrivals (transfer_id, repo_id, state, owed, expires_at)
+         VALUES (?, ?, 'held', ?, ?)`,
+        input.transferId,
+        input.repoId,
+        JSON.stringify(owed.map((o) => o.uploadId)),
+        HELD_UNTIL_ENDED,
+      );
+      for (const c of input.collaborators)
+        sql.exec(
+          `INSERT INTO transfer_arrival_collaborators (transfer_id, principal_id) VALUES (?, ?)
+           ON CONFLICT DO NOTHING`,
+          input.transferId,
+          c.principalId,
+        );
+      return "ok";
+    });
+  }
+
+  /** A transfer called off: the room it made here is free again, and none is made for it again. */
+  releaseArrival(transferId: string): void {
+    this.ctx.storage.transactionSync(() => this.#endArrival(transferId, false));
+  }
+
+  /**
+   * In a transaction: the arrival of `transferId` ends here, adopted (its
+   * owed uploads stay charged until they are confirmed here) or called off.
+   */
+  #endArrival(transferId: string, adopted: boolean): void {
+    if (!adopted) {
+      const row = this.ctx.storage.sql
+        .exec<{ owed: string }>(
+          "SELECT owed FROM transfer_arrivals WHERE transfer_id = ?",
+          transferId,
+        )
+        .toArray()[0];
+      for (const uploadId of JSON.parse(row?.owed ?? "[]") as string[])
+        this.#quotas().release(uploadId);
+    }
+    this.#dropArrival(transferId);
+    this.ctx.storage.sql.exec(
+      "INSERT INTO transfer_arrivals (transfer_id, repo_id, state, expires_at) VALUES (?, '', 'done', ?)",
+      transferId,
+      this.#now() + ENDED_ARRIVAL_KEEP_MS,
+    );
+  }
+
+  /** In a transaction: forgets the arrival of `transferId` and the room it held. */
+  #dropArrival(transferId: string): void {
+    const sql = this.ctx.storage.sql;
+    sql.exec("DELETE FROM transfer_arrivals WHERE transfer_id = ?", transferId);
+    sql.exec("DELETE FROM transfer_arrival_collaborators WHERE transfer_id = ?", transferId);
+    this.#quotas().release(transferId);
   }
 
   /** Records transfer step `op` of `transferId`; false when it was done before. */

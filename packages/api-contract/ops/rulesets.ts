@@ -103,6 +103,63 @@ export const listRulesets = defineOperation({
   },
 });
 
+const RuleSuite = z.object({
+  id: z.number().int(),
+  ref: z.string(),
+  before_sha: z
+    .string()
+    .nullable()
+    .describe("The ref's commit before the push; null for a new ref."),
+  after_sha: z.string().nullable().describe("The commit pushed; null for a deletion."),
+  actor_id: z.string().describe("Who pushed (the user an agent acted for, under a grant)."),
+  pushed_at: z.number().int().describe("Unix time in milliseconds."),
+  result: z.enum(["pass", "fail"]).describe("Whether active rulesets let the update through."),
+  evaluation_result: z
+    .literal("fail")
+    .describe("What `evaluate` rulesets would have done: only refusals are recorded."),
+  rule_evaluations: z.array(
+    z.object({
+      rule_source: z.object({ type: z.literal("ruleset"), id: z.number().int(), name: z.string() }),
+      enforcement: z.literal("evaluate"),
+      result: z.literal("fail"),
+      rule_type: z.string(),
+      details: z.string(),
+    }),
+  ),
+});
+
+export const listRuleSuites = defineOperation({
+  id: "repos.rulesets.rule_suites.list",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/rulesets/rule-suites",
+  summary: "List rule suites",
+  description:
+    "What rulesets in `evaluate` mode would have refused of pushes to the repository, newest first: one suite per ref update one of them objected to (the newest 1,000 are kept). Nothing is recorded for an update they all let through.",
+  input: z.object({
+    ...RepoInput,
+    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+    cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
+  }),
+  output: z.object({
+    rule_suites: z.array(RuleSuite),
+    next_cursor: z
+      .string()
+      .nullable()
+      .describe("Pass as `cursor` for the next page; null on the last page."),
+  }),
+  permission: "metadata:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "list_rule_suites",
+    title: "List rule suites",
+    description:
+      "List what a repository's rulesets in evaluate mode would have refused of recent pushes.",
+    readOnly: true,
+  },
+});
+
 export const getRuleset = defineOperation({
   id: "repos.rulesets.get",
   method: "GET",

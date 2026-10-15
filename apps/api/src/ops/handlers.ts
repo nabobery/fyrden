@@ -87,6 +87,7 @@ import {
   createRulesetOperation,
   deleteRulesetOperation,
   getRulesetOperation,
+  listRuleSuitesOperation,
   listRulesetsOperation,
   updateRulesetOperation,
 } from "../repos/rulesets.js";
@@ -285,6 +286,7 @@ export const handlers: Handlers = {
 
   // Rulesets live in the repository's object (repos/rulesets).
   "repos.rulesets.list": listRulesetsOperation,
+  "repos.rulesets.rule_suites.list": listRuleSuitesOperation,
   "repos.rulesets.get": getRulesetOperation,
   "repos.rulesets.create": createRulesetOperation,
   "repos.rulesets.update": updateRulesetOperation,

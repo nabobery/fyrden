@@ -937,6 +937,51 @@ export type ReposRulesetsListOutput = {
   })[];
 };
 
+/** Input of `repos.rulesets.rule_suites.list`: List rule suites. */
+export type ReposRulesetsRuleSuitesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `repos.rulesets.rule_suites.list`. */
+export type ReposRulesetsRuleSuitesListOutput = {
+  rule_suites: ({
+    id: number;
+    ref: string;
+    /** The ref's commit before the push; null for a new ref. */
+    before_sha: string | null;
+    /** The commit pushed; null for a deletion. */
+    after_sha: string | null;
+    /** Who pushed (the user an agent acted for, under a grant). */
+    actor_id: string;
+    /** Unix time in milliseconds. */
+    pushed_at: number;
+    /** Whether active rulesets let the update through. */
+    result: "pass" | "fail";
+    /** What `evaluate` rulesets would have done: only refusals are recorded. */
+    evaluation_result: "fail";
+    rule_evaluations: {
+      rule_source: {
+        type: "ruleset";
+        id: number;
+        name: string;
+      };
+      enforcement: "evaluate";
+      result: "fail";
+      rule_type: string;
+      details: string;
+    }[];
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
 /** Input of `repos.rulesets.get`: Get a ruleset. */
 export type ReposRulesetsGetInput = {
   /** The owner's handle. */
@@ -2606,6 +2651,7 @@ export const OPERATIONS = {
   "repos.forks.list": { method: "GET", path: "/repos/{owner}/{repo}/forks", pathParams: ["owner","repo"], idempotent: false, items: "repos" },
   "repos.generate": { method: "POST", path: "/repos/{template_owner}/{template_repo}/generate", pathParams: ["template_owner","template_repo"], idempotent: true },
   "repos.rulesets.list": { method: "GET", path: "/repos/{owner}/{repo}/rulesets", pathParams: ["owner","repo"], idempotent: false },
+  "repos.rulesets.rule_suites.list": { method: "GET", path: "/repos/{owner}/{repo}/rulesets/rule-suites", pathParams: ["owner","repo"], idempotent: false, items: "rule_suites" },
   "repos.rulesets.get": { method: "GET", path: "/repos/{owner}/{repo}/rulesets/{ruleset_id}", pathParams: ["owner","repo","ruleset_id"], idempotent: false },
   "repos.rulesets.create": { method: "POST", path: "/repos/{owner}/{repo}/rulesets", pathParams: ["owner","repo"], idempotent: true },
   "repos.rulesets.update": { method: "PUT", path: "/repos/{owner}/{repo}/rulesets/{ruleset_id}", pathParams: ["owner","repo","ruleset_id"], idempotent: true },
@@ -2724,6 +2770,8 @@ export interface Operations {
   "repos.generate": { input: ReposGenerateInput; output: ReposGenerateOutput };
   /** List rulesets. The repository's rulesets, by id. */
   "repos.rulesets.list": { input: ReposRulesetsListInput; output: ReposRulesetsListOutput };
+  /** List rule suites. What rulesets in `evaluate` mode would have refused of pushes to the repository, newest first: one suite per ref update one of them objected to (the newest 1,000 are kept). Nothing is recorded for an update they all let through. */
+  "repos.rulesets.rule_suites.list": { input: ReposRulesetsRuleSuitesListInput; output: ReposRulesetsRuleSuitesListOutput };
   /** Get a ruleset. One of the repository's rulesets. */
   "repos.rulesets.get": { input: ReposRulesetsGetInput; output: ReposRulesetsGetOutput };
   /** Create a ruleset. Adds rules on the branches or tags whose names match: pushes, file writes and every other change of a matching ref are checked against them (refused ones are `ng`, naming the ruleset). Rules on names and kinds of change are checked before a push is stored; force pushes and signatures at its commit, with the rulesets current then. At most 50 per repository. Administrators only. */

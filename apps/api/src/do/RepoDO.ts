@@ -39,6 +39,7 @@ import {
   planPush,
   readPushBody,
 } from "@fyrden/git-core";
+import { readModelFor } from "../events/read-model.js";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
 import { checkObjectAccess } from "../git/cache/object-check.js";
@@ -93,6 +94,7 @@ import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
 import type { AclSnapshot } from "./OrgDO.js";
 import {
+  CONFIRMED_KEEP_MS,
   STORAGE_CHARGE_TTL_MS,
   STORAGE_QUOTA_EXCEEDED,
   STORAGE_QUOTA_UNAVAILABLE,
@@ -142,7 +144,12 @@ import {
   precheckPushRules,
   type RuleSnapshot,
 } from "./repo/push-rules.js";
-import { RepoRulesets, type RulesetInput, type RulesetRecord } from "./repo/rulesets.js";
+import {
+  RepoRulesets,
+  type RuleSuite,
+  type RulesetInput,
+  type RulesetRecord,
+} from "./repo/rulesets.js";
 import { factOf } from "./repo/signature.js";
 import {
   type TemplateTree,
@@ -165,6 +172,14 @@ export interface RepoDetails {
  * of CPU an alarm gets (measured on Workers Free, 2026-10-10).
  */
 const ALARM_BUDGET_MS = 5_000;
+/** The job that tells the account of committed uploads it was not told of at once. */
+const STORAGE_CONFIRM_JOB = "storage-confirm";
+/** How long before an owed confirmation is tried (again). Proposed. */
+const STORAGE_CONFIRM_RETRY_MS = 60_000;
+/** Owed confirmations one slice tells. Proposed. */
+const STORAGE_CONFIRM_BATCH = 50;
+/** How long a confirmation stays owed: within the account's memory of the ones it took. */
+const STORAGE_OWED_MAX_AGE_MS = CONFIRMED_KEEP_MS - 24 * 60 * 60 * 1000;
 /** How long an archive request builds before it answers "building". Proposed. */
 const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
 
@@ -501,6 +516,11 @@ export class RepoDO extends MigratingDO {
   /** The rulesets and their version (anyone who may read the repository; the Worker checked it). */
   rulesets(): { version: number; rulesets: RulesetRecord[] } {
     return this.rulesetStore.current();
+  }
+
+  /** What `evaluate` rulesets found in pushes, newest first (see `RepoRulesets.ruleSuites`). */
+  ruleSuites(limit: number, before?: number): RuleSuite[] {
+    return this.rulesetStore.ruleSuites(limit, before);
   }
 
   /** Which of the branches `names` (short names) active rulesets protect, whoever asks. */
@@ -930,9 +950,9 @@ export class RepoDO extends MigratingDO {
         const ceilings = await this.#rolesPulled(input.principal, input.grantId);
         const { snapshot, stamp } = this.#ruleSnapshot(input.principal, ceilings);
         const signatures = this.#signatureReader(input.packs);
-        let refusals: Map<number, string>;
+        let checked: Awaited<ReturnType<typeof checkPushRules>>;
         try {
-          refusals = await checkPushRules(
+          checked = await checkPushRules(
             {
               git: this.git,
               signatures: (oids) => signatures.facts(oids),
@@ -945,6 +965,8 @@ export class RepoDO extends MigratingDO {
         } finally {
           signatures.release();
         }
+        this.rulesetStore.recordEvaluated(input.uploadId, input.principal, checked.evaluated);
+        const { refusals } = checked;
         return {
           stamp,
           restamp: () => this.#ruleSnapshot(input.principal, ceilings).stamp,
@@ -978,13 +1000,21 @@ export class RepoDO extends MigratingDO {
           return STORAGE_QUOTA_UNAVAILABLE;
         }
       },
+      owe: (uploadId, bytes) => {
+        if (!account()) return;
+        this.ctx.storage.sql.exec(
+          "INSERT OR IGNORE INTO storage_owed (upload_id, bytes, owed_at) VALUES (?, ?, ?)",
+          uploadId,
+          bytes,
+          this.git.context.now(),
+        );
+        // Told right after the commit; this job tells the account should that fail.
+        this.git.jobs.ensure("storage_confirm", STORAGE_CONFIRM_JOB, {
+          runAt: this.git.context.now() + STORAGE_CONFIRM_RETRY_MS,
+        });
+      },
       confirm: async (uploadId, bytes) => {
-        // Not confirmed, the charge lapses and the bytes go uncounted.
-        await account()
-          ?.confirmStorage({ uploadId, repoId: this.#repoId(), bytes })
-          .catch((error: unknown) =>
-            this.#log().warn("storage confirm failed", { uploadId, error }),
-          );
+        await this.#confirmStorage(uploadId, bytes);
       },
       release: async (uploadId) => {
         // Not released, what the upload held lapses on its own.
@@ -1443,8 +1473,84 @@ export class RepoDO extends MigratingDO {
     );
   }
 
+  /**
+   * Tells the account a committed upload's bytes are the repository's (it
+   * counts each upload once), then owes it nothing; false when it could
+   * not be told (still owed: the `storage_confirm` job tries again).
+   */
+  async #confirmStorage(uploadId: string, bytes: number): Promise<boolean> {
+    const owner = this.events.account();
+    if (!owner) return true;
+    try {
+      // Not taken while the repository moves between accounts: owed to the next one.
+      const taken = await this.env.ORG.getByName(owner.accountId).confirmStorage({
+        uploadId,
+        repoId: this.#repoId(),
+        bytes,
+      });
+      if (!taken) return false;
+    } catch (error) {
+      this.#log().warn("storage confirm failed", { uploadId, error });
+      return false;
+    }
+    this.ctx.storage.sql.exec("DELETE FROM storage_owed WHERE upload_id = ?", uploadId);
+    return true;
+  }
+
+  /** Committed uploads the account has not been told of yet. */
+  owedStorage(): { uploadId: string; bytes: number }[] {
+    return this.ctx.storage.sql
+      .exec<{ upload_id: string; bytes: number }>(
+        "SELECT upload_id, bytes FROM storage_owed ORDER BY upload_id",
+      )
+      .toArray()
+      .map((r) => ({ uploadId: r.upload_id, bytes: r.bytes }));
+  }
+
+  /** The `storage_confirm` job: tells the account of every upload still owed. */
+  #storageConfirmHandler(): JobHandler {
+    return {
+      runSlice: async () => {
+        const sql = this.ctx.storage.sql;
+        // Owed past the account's memory of confirmations, one told again could count twice:
+        // given up, uncounted.
+        const stale = sql
+          .exec<{ upload_id: string; bytes: number }>(
+            "SELECT upload_id, bytes FROM storage_owed WHERE owed_at < ?",
+            this.git.context.now() - STORAGE_OWED_MAX_AGE_MS,
+          )
+          .toArray();
+        for (const row of stale) {
+          this.#log().error("storage confirmation given up", {
+            uploadId: row.upload_id,
+            bytes: row.bytes,
+          });
+          sql.exec("DELETE FROM storage_owed WHERE upload_id = ?", row.upload_id);
+        }
+        const owed = sql
+          .exec<{ upload_id: string; bytes: number }>(
+            "SELECT upload_id, bytes FROM storage_owed ORDER BY owed_at LIMIT ?",
+            STORAGE_CONFIRM_BATCH,
+          )
+          .toArray();
+        for (const row of owed) {
+          // The account cannot be told now: later, without spending an attempt.
+          if (!(await this.#confirmStorage(row.upload_id, row.bytes)))
+            return { done: false, cursor: null, runAfterMs: STORAGE_CONFIRM_RETRY_MS };
+        }
+        // Done only with nothing owed, judged with no wait before the answer: a push that
+        // owed more meanwhile found this job running and left it to this one.
+        const left = sql.exec<{ n: number }>("SELECT count(*) AS n FROM storage_owed").one().n;
+        return left === 0
+          ? { done: true }
+          : { done: false, cursor: null, runAfterMs: STORAGE_CONFIRM_RETRY_MS };
+      },
+    };
+  }
+
   #jobHandlers() {
     return {
+      storage_confirm: this.#storageConfirmHandler(),
       reflog_prune: reflogPruneHandler(
         this.git.context,
         REFLOG_PRUNE_BATCH,
@@ -1542,13 +1648,56 @@ export class RepoDO extends MigratingDO {
    * commit; a restore runbook calls it to take the new epoch at once.
    */
   async checkEpoch(): Promise<void> {
-    await this.events.checkEpoch(async () => {
-      this.git.context.metrics.count("d1.query", { db: "directory", op: "epoch_read" });
-      const row = await this.env.DIRECTORY.withSession("first-primary")
+    await this.events.checkEpoch(async (recorded) => {
+      const metrics = this.git.context.metrics;
+      const primary = this.env.DIRECTORY.withSession("first-primary");
+      metrics.count("d1.query", { db: "directory", op: "epoch_read" });
+      const epoch = await primary
         .prepare("SELECT epoch_gen FROM source_epochs WHERE source_id = ?")
         .bind(this.#repoId())
         .first<{ epoch_gen: number }>();
-      return row?.epoch_gen ?? null;
+      const epochGen = epoch?.epoch_gen ?? null;
+      if (epochGen === null || epochGen <= recorded) return { epochGen };
+      // Restored: the object may predate a transfer or a rename. What the directory and the
+      // read model's fence say now.
+      metrics.count("d1.query", { db: "directory", op: "epoch_owner" });
+      const row = await primary
+        .prepare(
+          `SELECT r.owner_id, r.name, r.name_gen, r.org_shard,
+             t.transfer_id, t.from_owner, t.to_owner
+           FROM repos r LEFT JOIN repo_transfers t
+             ON t.repo_id = r.id AND t.step NOT IN ('done', 'failed')
+           WHERE r.id = ?`,
+        )
+        .bind(this.#repoId())
+        .first<{
+          owner_id: string;
+          name: string;
+          name_gen: number;
+          org_shard: string;
+          transfer_id: string | null;
+          from_owner: string | null;
+          to_owner: string | null;
+        }>();
+      if (!row) return { epochGen };
+      metrics.count("d1.query", { db: "org", op: "owner_fence" });
+      const fence = await readModelFor(this.env, row.org_shard)
+        .prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
+        .bind(this.#repoId())
+        .first<{ owner_gen: number }>();
+      return {
+        epochGen,
+        owner: {
+          ownerId: row.owner_id,
+          name: row.name,
+          nameGen: row.name_gen,
+          ownerFence: fence?.owner_gen ?? 0,
+          transfer:
+            row.transfer_id && row.from_owner && row.to_owner
+              ? { id: row.transfer_id, from: row.from_owner, to: row.to_owner }
+              : null,
+        },
+      };
     });
     // A new epoch's snapshot goes out even if nothing else is written.
     this.#armOutbox();

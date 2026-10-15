@@ -2,21 +2,24 @@
 // point (and every other change of a ref goes through it), naming the
 // ruleset in the refusal.
 
+import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { gzipSync } from "node:zlib";
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import { createFakeDataset } from "@fyrden/adapters-cloudflare/obs/testing";
 import type { Ruleset } from "@fyrden/domain";
-import { type Oid, oidFromHex, oidToHex } from "@fyrden/git-core";
+import { type Oid, oidFromHex, oidToHex, WalkLimitError } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import {
   checkPushRules,
   MAX_REFUSAL_BYTES,
+  MAX_SIGNED_WALK,
   refusalOf,
   sharedSignatures,
 } from "../src/do/repo/push-rules.js";
+import { MAX_RULE_SUITES } from "../src/do/repo/rulesets.js";
 import { ACCESS_LOST } from "../src/git/push/reauthorize.js";
 import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { api, json, user, type Who } from "./helpers/api.js";
@@ -205,6 +208,71 @@ describe("rulesets", () => {
       pushBody([{ old: fx.c2, new: ZERO, ref: "refs/heads/stable" }]),
     );
     expect(deleted.report).toContain("ok refs/heads/stable\n");
+  });
+
+  it("record what evaluated rules would have blocked, signatures included, and block nothing", async () => {
+    const watching = await ruleset({
+      name: "watching",
+      enforcement: "evaluate",
+      rules: [{ type: "update" }, { type: "required_signatures" }],
+    });
+    expect(watching.status).toBe(201);
+    const pushed = await postPush(
+      await target(owner),
+      pushBody([{ old: fx.c2, new: fx.c3, ref: "refs/heads/main" }], { pack: fx.packC3ThinOnC2 }),
+    );
+    expect(pushed.report).toContain("ok refs/heads/main\n");
+    const suites = await json<{
+      rule_suites: {
+        ref: string;
+        before_sha: string;
+        after_sha: string;
+        actor_id: string;
+        result: string;
+        evaluation_result: string;
+        rule_evaluations: {
+          rule_source: { type: string; id: number; name: string };
+          enforcement: string;
+          result: string;
+          rule_type: string;
+          details: string;
+        }[];
+      }[];
+      next_cursor: string | null;
+    }>(api("GET", `${path}/rulesets/rule-suites`, owner.token));
+    expect(suites.status).toBe(200);
+    expect(suites.body.rule_suites).toHaveLength(1);
+    const [suite] = suites.body.rule_suites;
+    expect(suite).toMatchObject({
+      ref: "refs/heads/main",
+      before_sha: fx.c2,
+      after_sha: fx.c3,
+      actor_id: owner.principalId,
+      result: "pass",
+      evaluation_result: "fail",
+    });
+    expect(suite?.rule_evaluations.map((e) => e.rule_type).sort()).toEqual([
+      "required_signatures",
+      "update",
+    ]);
+    for (const evaluation of suite?.rule_evaluations ?? [])
+      expect(evaluation).toMatchObject({
+        rule_source: { type: "ruleset", id: watching.body.id, name: "watching" },
+        enforcement: "evaluate",
+        result: "fail",
+      });
+    // A push no evaluated rule objects to records nothing.
+    await postPush(
+      await target(owner),
+      pushBody([{ old: ZERO, new: fx.c2, ref: "refs/heads/other" }], { pack: fx.packEmpty }),
+    );
+    expect(
+      (
+        await json<{ rule_suites: unknown[] }>(
+          api("GET", `${path}/rulesets/rule-suites`, owner.token),
+        )
+      ).body.rule_suites,
+    ).toHaveLength(1);
   });
 
   it("make agents use pull requests while their human pushes", async () => {
@@ -636,10 +704,123 @@ describe("rule checks", () => {
         head,
         commands: [command],
       });
-    expect((await check(undefined)).size).toBe(0);
-    expect([...(await check("refs/heads/master")).values()]).toEqual([
+    expect((await check(undefined)).refusals.size).toBe(0);
+    expect([...(await check("refs/heads/master")).refusals.values()]).toEqual([
       'changes must be made through a pull request (ruleset "agents use PRs")',
     ]);
+  });
+
+  const rule = (
+    id: number,
+    enforcement: Ruleset["enforcement"],
+    include: string,
+    type: Ruleset["rules"][number]["type"],
+  ): Ruleset => ({
+    id,
+    name: `${enforcement} ${id}`,
+    target: "branch",
+    enforcement,
+    conditions: { ref_name: { include: [include], exclude: [] } },
+    rules: [{ type }],
+    bypass_actors: [],
+  });
+  const create = (index: number, name: string) => ({
+    index,
+    name,
+    kind: "create" as const,
+    oldOid: null,
+    newOid: oidFromHex("1".repeat(40)),
+    fastForward: false,
+  });
+  const noReads = {
+    git: {} as RepoGitStorage,
+    signatures: async () => new Map(),
+    verdicts: async () => [],
+  };
+
+  it("record an evaluated finding as refused when an atomic push fails as a whole", async () => {
+    const snapshot = {
+      rulesets: [
+        rule(1, "active", "refs/heads/locked", "creation"),
+        rule(2, "evaluate", "refs/heads/watched", "creation"),
+      ],
+      head: "refs/heads/main",
+      role: "write" as const,
+    };
+    const check = (atomic: boolean) =>
+      checkPushRules(noReads, snapshot, {
+        principal: "usr_01ABCDEFGHJKMNPQRSTVWXYZ01",
+        uploadId: "u",
+        packs: [],
+        head: undefined,
+        commands: [create(0, "refs/heads/locked"), create(1, "refs/heads/watched")],
+        atomic,
+      });
+    const atomic = await check(true);
+    expect([...atomic.refusals.keys()]).toEqual([0]);
+    expect(atomic.evaluated).toMatchObject([{ ref: "refs/heads/watched", refused: true }]);
+    expect((await check(false)).evaluated).toMatchObject([
+      { ref: "refs/heads/watched", refused: false },
+    ]);
+  });
+
+  it("keep evaluated findings for an update whose signatures an active rule refuses unchecked", async () => {
+    const tip = oidFromHex("1".repeat(40));
+    let reads = 0;
+    const deps = {
+      ...noReads,
+      git: {
+        commitGraph: {
+          // The tip, then a history too long to walk.
+          read: async () => {
+            if (reads++ === 0)
+              return [{ oid: tip, tree: tip, parents: [], generation: 1, level: 1, date: 0 }];
+            throw new WalkLimitError(MAX_SIGNED_WALK);
+          },
+        },
+      } as unknown as RepoGitStorage,
+    };
+    const snapshot = {
+      rulesets: [
+        rule(1, "active", "refs/heads/main", "required_signatures"),
+        rule(2, "evaluate", "refs/heads/main", "required_signatures"),
+        rule(3, "evaluate", "refs/heads/main", "creation"),
+      ],
+      head: "refs/heads/main",
+      role: "write" as const,
+    };
+    const checked = await checkPushRules(deps, snapshot, {
+      principal: "usr_01ABCDEFGHJKMNPQRSTVWXYZ01",
+      uploadId: "u",
+      packs: [],
+      head: undefined,
+      commands: [create(0, "refs/heads/main")],
+    });
+    expect([...checked.refusals.values()][0]).toContain("too long");
+    expect(checked.evaluated[0]?.violations.map((v) => `${v.rulesetId} ${v.rule}`).sort()).toEqual([
+      "2 required_signatures",
+      "3 creation",
+    ]);
+  });
+
+  it("keep the newest rule suites by their rows, though retried ones skip ids", async () => {
+    const kept = await runInDurableObject(env.REPO.getByName(repo.id), (r: RepoDO) => {
+      const store = r.rulesetStore;
+      const update = (ref: string) => ({
+        ref,
+        before: null,
+        after: "1".repeat(40),
+        refused: false,
+        violations: [{ rulesetId: 1, ruleset: "w", rule: "creation", message: "m" }],
+      });
+      for (let i = 0; i < MAX_RULE_SUITES; i++)
+        store.recordEvaluated(`u${i}`, "usr_x", [update("refs/heads/a")]);
+      // Retried commits record nothing new, but take ids.
+      for (let i = 0; i < 5; i++) store.recordEvaluated("u0", "usr_x", [update("refs/heads/a")]);
+      store.recordEvaluated("new", "usr_x", [update("refs/heads/a")]);
+      return store.ruleSuites(MAX_RULE_SUITES + 10).length;
+    });
+    expect(kept).toBe(MAX_RULE_SUITES);
   });
 
   it("keep a refusal within one line of git's report", () => {

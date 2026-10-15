@@ -156,13 +156,6 @@ export class RepoPush {
   accessCheck: ((principal: string) => Promise<string | undefined>) | undefined;
 
   /**
-   * The account's storage quota: at the commit point, after the access
-   * check, `charge` holds the upload's stored bytes (a refusal message
-   * when they do not fit); once committed, `confirm` makes them the
-   * repository's usage; an upload aborted without committing `release`s
-   * what it held.
-   */
-  /**
    * The repository's rulesets at the commit point: refusals by command
    * index (`packs` are the push's own, not live yet; `head`, a default
    * branch the push sets as it commits, as an import's), and a stamp of
@@ -182,6 +175,8 @@ export class RepoPush {
           readonly packs: readonly PackId[];
           readonly head: string | undefined;
           readonly commands: readonly CheckedCommand[];
+          /** An atomic push: one refused update fails them all. */
+          readonly atomic: boolean;
         }) => Promise<{
           stamp: string;
           restamp: () => string;
@@ -194,9 +189,18 @@ export class RepoPush {
   /** Why the repository takes no change now (deleted, being transferred), checked in each commit. */
   frozen: (() => string | undefined) | undefined;
 
+  /**
+   * The account's storage quota: at the commit point, after the access
+   * check, `charge` holds the upload's stored bytes (a refusal message
+   * when they do not fit); in the commit's transaction, `owe` records
+   * that the account must be told; once committed, `confirm` makes them
+   * the repository's usage (or leaves them owed, told later); an upload
+   * aborted without committing `release`s what it held.
+   */
   storage:
     | {
         readonly charge: (uploadId: string, bytes: number) => Promise<string | undefined>;
+        readonly owe: (uploadId: string, bytes: number) => void;
         readonly confirm: (uploadId: string, bytes: number) => Promise<void>;
         readonly release: (uploadId: string) => Promise<void>;
       }
@@ -480,6 +484,7 @@ export class RepoPush {
                 packs: indexed?.ok ? indexed.packs : [],
                 head: meta.head,
                 commands,
+                atomic: plan.capabilities.atomic,
               });
               rulesStamp = checked;
               return checked.refusals;
@@ -503,7 +508,12 @@ export class RepoPush {
                   : rulesStamp.restamp() !== rulesStamp.stamp
                     ? RULESETS_CHANGED
                     : undefined),
-            meta.inCommit,
+            // In the commit's transaction: the account is owed its confirmation (told after,
+            // or later should that fail), and the caller's own writes.
+            () => {
+              this.storage?.owe(uploadId, record.bodyBytes);
+              meta.inCommit?.();
+            },
           ),
         });
         return { plan, indexed, result };

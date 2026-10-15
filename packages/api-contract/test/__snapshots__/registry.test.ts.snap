@@ -8895,6 +8895,221 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/rulesets/rule-suites": {
+      "get": {
+        "description": "What rulesets in \`evaluate\` mode would have refused of pushes to the repository, newest first: one suite per ref update one of them objected to (the newest 1,000 are kept). Nothing is recorded for an update they all let through.",
+        "operationId": "repos.rulesets.rule_suites.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "rule_suites": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actor_id": {
+                            "description": "Who pushed (the user an agent acted for, under a grant).",
+                            "type": "string",
+                          },
+                          "after_sha": {
+                            "description": "The commit pushed; null for a deletion.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "before_sha": {
+                            "description": "The ref's commit before the push; null for a new ref.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "evaluation_result": {
+                            "const": "fail",
+                            "description": "What \`evaluate\` rulesets would have done: only refusals are recorded.",
+                            "type": "string",
+                          },
+                          "id": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "pushed_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "ref": {
+                            "type": "string",
+                          },
+                          "result": {
+                            "description": "Whether active rulesets let the update through.",
+                            "enum": [
+                              "pass",
+                              "fail",
+                            ],
+                            "type": "string",
+                          },
+                          "rule_evaluations": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "details": {
+                                  "type": "string",
+                                },
+                                "enforcement": {
+                                  "const": "evaluate",
+                                  "type": "string",
+                                },
+                                "result": {
+                                  "const": "fail",
+                                  "type": "string",
+                                },
+                                "rule_source": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "id": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer",
+                                    },
+                                    "name": {
+                                      "type": "string",
+                                    },
+                                    "type": {
+                                      "const": "ruleset",
+                                      "type": "string",
+                                    },
+                                  },
+                                  "required": [
+                                    "type",
+                                    "id",
+                                    "name",
+                                  ],
+                                  "type": "object",
+                                },
+                                "rule_type": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "rule_source",
+                                "enforcement",
+                                "result",
+                                "rule_type",
+                                "details",
+                              ],
+                              "type": "object",
+                            },
+                            "type": "array",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "ref",
+                          "before_sha",
+                          "after_sha",
+                          "actor_id",
+                          "pushed_at",
+                          "result",
+                          "evaluation_result",
+                          "rule_evaluations",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "rule_suites",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List rule suites",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/repos/{owner}/{repo}/rulesets/{ruleset_id}": {
       "delete": {
         "description": "Removes a ruleset. Administrators only.",

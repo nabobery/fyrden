@@ -87,6 +87,19 @@ CREATE TABLE teams (
         name TEXT NOT NULL,
         created_at INTEGER NOT NULL
       ) STRICT;
+CREATE TABLE transfer_arrival_collaborators (
+        transfer_id TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        PRIMARY KEY (transfer_id, principal_id)
+      ) STRICT;
+CREATE TABLE transfer_arrivals (
+        transfer_id TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('held', 'done')),
+        -- The uploads it owes confirmations of, each charged here under its own id.
+        owed TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(owed)),
+        expires_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE transfer_ops (
         transfer_id TEXT NOT NULL,
         op TEXT NOT NULL CHECK (op IN ('adopt', 'release')),

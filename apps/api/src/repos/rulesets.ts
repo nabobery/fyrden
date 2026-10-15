@@ -3,12 +3,14 @@ import type {
   deleteRuleset,
   getRuleset,
   Input,
+  listRuleSuites,
   listRulesets,
   Output,
   updateRuleset,
 } from "@fyrden/api-contract";
 import type { RulesetInput, RulesetRecord } from "../do/repo/rulesets.js";
 import { repoFor } from "../git/chunked/operations.js";
+import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import type { RepoEntry } from "./directory.js";
 
@@ -97,6 +99,43 @@ export async function listRulesetsOperation(
   ctx.metrics.count("do.request", { class: "RepoDO", method: "rulesets" });
   const { rulesets } = await ctx.env.REPO.getByName(entry.id).rulesets();
   return { rulesets: rulesets.map(output) };
+}
+
+/** The `repos.rulesets.rule_suites.list` operation. */
+export async function listRuleSuitesOperation(
+  ctx: OpContext,
+  input: Input<typeof listRuleSuites>,
+): Promise<Output<typeof listRuleSuites>> {
+  // The cursor is the last suite's id.
+  const after = decodeCursor(input.cursor, (id) => /^[1-9][0-9]{0,15}$/.test(id));
+  const entry = await repoFor(ctx, input.owner, input.repo, "metadata:read");
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "ruleSuites" });
+  const suites = await ctx.env.REPO.getByName(entry.id).ruleSuites(
+    input.per_page + 1,
+    after === "" ? undefined : Number(after),
+  );
+  const page = suites.slice(0, input.per_page);
+  const last = page.at(-1);
+  return {
+    rule_suites: page.map((s) => ({
+      id: s.id,
+      ref: s.ref,
+      before_sha: s.before,
+      after_sha: s.after,
+      actor_id: s.actorId,
+      pushed_at: s.pushedAt,
+      result: s.refused ? ("fail" as const) : ("pass" as const),
+      evaluation_result: "fail" as const,
+      rule_evaluations: s.evaluations.map((e) => ({
+        rule_source: { type: "ruleset" as const, id: e.rulesetId, name: e.ruleset },
+        enforcement: "evaluate" as const,
+        result: "fail" as const,
+        rule_type: e.rule,
+        details: e.message,
+      })),
+    })),
+    next_cursor: suites.length > input.per_page && last ? encodeCursor(String(last.id)) : null,
+  };
 }
 
 /** The `repos.rulesets.get` operation. */

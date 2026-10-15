@@ -4,9 +4,10 @@
  * two steps, each with a time limit: a reservation while it is stored (the
  * Worker stops at it), then a charge from its commit point until the
  * repository confirms the commit, when the bytes become the repository's
- * usage. A hold that lapses (an upload abandoned, a confirmation lost)
- * counts nothing, so nothing is held for ever; a lost confirmation leaves
- * the bytes uncounted rather than counted twice.
+ * usage. A hold that lapses (an upload abandoned, a confirmation late)
+ * counts nothing, so nothing is held for ever; the repository keeps a
+ * committed upload's confirmation owed until it is taken (and each upload
+ * counts once), so a lost one is told again rather than left uncounted.
  */
 
 /** Why a push is refused at its commit: the account's storage is used up. */
@@ -56,8 +57,11 @@ export function defaultLimits(env: object): QuotaLimits {
   return out as unknown as QuotaLimits;
 }
 
-/** How long confirmations are remembered, so a repeated one counts once. */
-const CONFIRMED_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * How long confirmations are remembered, so a repeated one counts once (a
+ * repository gives up an owed one before this; see `STORAGE_OWED_MAX_AGE_MS`).
+ */
+export const CONFIRMED_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 
 export class AccountQuotas {
   constructor(
@@ -195,7 +199,11 @@ export class AccountQuotas {
   }): void {
     this.storage.transactionSync(() => {
       const now = this.now();
-      if (this.#confirmed(input.uploadId)) return;
+      // Counted already: any hold made for it since (a transfer's charge) holds nothing.
+      if (this.#confirmed(input.uploadId)) {
+        this.storage.sql.exec("DELETE FROM quota_holds WHERE upload_id = ?", input.uploadId);
+        return;
+      }
       this.storage.sql.exec(
         "INSERT INTO quota_confirmed (upload_id, confirmed_at) VALUES (?, ?)",
         input.uploadId,
@@ -212,6 +220,42 @@ export class AccountQuotas {
         "DELETE FROM quota_confirmed WHERE confirmed_at < ?",
         now - CONFIRMED_KEEP_MS,
       );
+    });
+  }
+
+  /**
+   * Holds `holds` together or not at all (a repository arriving by
+   * transfer: its usage, reserved, and a charge for each upload it still
+   * owes a confirmation of, which `confirm` turns into usage); false, with
+   * nothing held, when they do not fit together.
+   */
+  holdAll(
+    holds: readonly {
+      readonly uploadId: string;
+      readonly repoId: string;
+      readonly kind: "reserved" | "charged";
+      readonly bytes: number;
+      readonly expiresAt: number;
+    }[],
+  ): boolean {
+    return this.storage.transactionSync(() => {
+      const now = this.now();
+      this.#dropLapsed(now);
+      const live = holds.filter((h) => h.bytes > 0);
+      if (live.reduce((n, h) => n + h.bytes, 0) > this.#free(now, null)) return false;
+      for (const h of live)
+        this.storage.sql.exec(
+          `INSERT INTO quota_holds (upload_id, repo_id, kind, bytes, expires_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (upload_id) DO UPDATE SET kind = excluded.kind, bytes = excluded.bytes,
+             expires_at = excluded.expires_at`,
+          h.uploadId,
+          h.repoId,
+          h.kind,
+          h.bytes,
+          h.expiresAt,
+        );
+      return true;
     });
   }
 

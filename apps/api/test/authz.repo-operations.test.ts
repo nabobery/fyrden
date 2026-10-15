@@ -62,6 +62,7 @@ const CASES: Record<
   },
   // No ruleset 1 exists: named ones are not found; a new one is made.
   "repos.rulesets.list": { input: {}, expected: { status: 200 } },
+  "repos.rulesets.rule_suites.list": { input: {}, expected: { status: 200 } },
   "repos.rulesets.get": { input: {}, expected: { status: 404, code: "ruleset_not_found" } },
   "repos.rulesets.create": {
     input: RULESET,

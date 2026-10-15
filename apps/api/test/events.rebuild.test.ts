@@ -265,10 +265,10 @@ describe("restore epochs", () => {
     const result = await runInDurableObject(env.REPO.getByName(id), async (repo: RepoDO, state) => {
       await state.storage.deleteAlarm();
       let reads = 0;
-      const read = async () => {
+      const read = async (_recorded: number) => {
         reads++;
         await new Promise((resolve) => setTimeout(resolve, 5));
-        return 2;
+        return { epochGen: 2 };
       };
       await Promise.all([repo.events.checkEpoch(read), repo.events.checkEpoch(read)]);
       // The RPC arms the alarm for the snapshot it may have written.

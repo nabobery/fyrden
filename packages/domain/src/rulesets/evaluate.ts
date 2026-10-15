@@ -19,6 +19,7 @@ export interface RefChange {
 }
 
 export interface RuleViolation {
+  readonly rulesetId: number;
   readonly ruleset: string;
   readonly rule: Rule["type"];
   /** For the client, naming the ruleset. */
@@ -96,6 +97,7 @@ export function ruleViolations(
     const broken = breaks(rule, change);
     if (broken)
       out.push({
+        rulesetId: ruleset.id,
         ruleset: ruleset.name,
         rule: rule.type,
         message: `${broken} (ruleset "${ruleset.name}")`,

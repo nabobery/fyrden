@@ -167,4 +167,28 @@ export const orgSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 5,
+    // A repository on its way in (a transfer between its admission and its
+    // adoption): its collaborators, counted against the members a change
+    // would leave; its storage is held in quota_holds under the transfer's
+    // id, until the transfer ends. Once adopted or called off (`done`), the
+    // row stays a while (`expires_at`) so a late runner makes no room again.
+    name: "transfer_arrivals",
+    sql: `
+      CREATE TABLE transfer_arrivals (
+        transfer_id TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('held', 'done')),
+        -- The uploads it owes confirmations of, each charged here under its own id.
+        owed TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(owed)),
+        expires_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE transfer_arrival_collaborators (
+        transfer_id TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        PRIMARY KEY (transfer_id, principal_id)
+      ) STRICT;
+    `,
+  },
 ];

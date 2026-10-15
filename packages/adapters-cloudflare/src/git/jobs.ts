@@ -23,6 +23,7 @@ export const JOB_KINDS = [
   "retire_packs",
   "network_gc",
   "network_delete",
+  "storage_confirm",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 

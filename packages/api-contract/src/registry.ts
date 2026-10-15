@@ -53,6 +53,7 @@ import {
   createRuleset,
   deleteRuleset,
   getRuleset,
+  listRuleSuites,
   listRulesets,
   updateRuleset,
 } from "../ops/rulesets.js";
@@ -104,6 +105,8 @@ export const registry = defineRegistry([
   listForks,
   generateRepo,
   listRulesets,
+  // Before `getRuleset`, whose `{ruleset_id}` would take `rule-suites`.
+  listRuleSuites,
   getRuleset,
   createRuleset,
   updateRuleset,

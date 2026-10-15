@@ -341,14 +341,15 @@ keeps it a week.
 | What | Value |
 |---|---|
 | File content in one archive | 1 GiB; more fails with `archive_failed` (clone instead) |
-| One file | 24 MiB |
+| One file | 24 MiB; a symbolic link's target, 64 KiB |
 | Zip entries | 65,535 (no ZIP64); use tar.gz past that |
 | Directory depth | A path's directories, with their names, fit in 1 MiB of build state (about 2,500 levels of 255-byte names); deeper fails with `archive_failed` |
-| Building | 8 MiB encoded or 5,000 entries per slice, at most 300 slices (a commit with very many small files fails: clone it); a request builds for up to 5 seconds, then answers 202 with `Retry-After: 5` until it is ready |
+| Building | 8 MiB encoded or 5,000 entries per slice (a file that would take a slice past 8 MiB starts the next, alone if it is larger), at most 300 slices (a commit with very many small files fails: clone it); a file of 1 MiB or more has its bytes reserved while it is compressed, and waits for them; a request builds for up to 5 seconds, then answers 202 with `Retry-After: 5` until it is ready |
 | Kept | 7 days, then deleted when the repository next builds one (not while a download that started in the last hour may still read it); deleted with the repository |
 | Dates | tar holds dates up to 2242, zip 1980 to 2107; later or earlier commit dates are written as the nearest one |
 | Zip names | Flagged UTF-8 when they are; other bytes are written as they are, without the flag (as git does) |
-| tar.gz | Several gzip members (any gzip reader reads them as one stream); pax headers for long names; the commit id in a pax global header, as `git archive` writes |
+| tar.gz | Several gzip members (any gzip reader reads them as one stream; a file of 1 MiB or more is one of its own); pax headers for long names; the commit id in a pax global header, as `git archive` writes |
+| Downloads | `ETag` per commit and format; a matching `If-None-Match` answers 304 without reading the archive (raw files likewise, by blob) |
 
 ## File writes
 
@@ -404,7 +405,7 @@ them and their use.
 | Before a push is stored | Its `Content-Length` is reserved, or, without one, as much as is free (up to the body limit); a push larger than the reservation is refused with a message git shows. A chunked upload reserves its declared size |
 | At the commit | The push's stored bytes are held for it; one that does not fit (the limit was lowered, or a write the repository makes itself: file writes, imports, generation) is refused, every ref `ng`, nothing changed. Once committed, the bytes become the repository's usage |
 | A push that commits nothing | What it reserved or held is free again |
-| Holds | A reservation lasts the push's longest wait plus 15 minutes (a chunked upload's session plus an hour), a commit's hold 30 minutes; a lapsed one counts nothing. A commit whose confirmation is lost goes uncounted rather than counted twice |
+| Holds | A reservation lasts the push's longest wait plus 15 minutes (a chunked upload's session plus an hour), a commit's hold 30 minutes; a lapsed one counts nothing. A commit's confirmation is owed by its repository until the account takes it (counted once): one that fails is told again every minute, for up to six days (then given up, uncounted: the account remembers the ones it took for seven) |
 | Forks | A fork that loses the last slot to a concurrent create is deleted again |
 | An agent's repositories | Besides the account's quota, an agent acting for a user may have created at most 100 active repositories (`QUOTA_AGENT_MAX_REPOS`); past it, 403 `quota_exceeded`, held against concurrent creates |
 
@@ -425,10 +426,11 @@ the cron finishes any it does not.
 | While it moves | Pushes, file writes, renames, settings, rulesets and deletion are refused (409 `repo_transferring`, or "being transferred" to git); reads go on |
 | Refused | 409 `name_taken`, 403 `quota_exceeded` (repositories or storage), 422 `same_owner`, 409 `transfer_in_progress` (another transfer or a deletion is under way, or the owner changed since the request was authorized), 409 `repo_generating` (still being generated from a template), 422 `too_many_collaborators` (the new account's members and the repository's collaborators would exceed one access list's 10,000 entries); a refused transfer leaves the repository as it was |
 | Storage of an upload committing as it moves | Not counted (its confirmation reaches the old account, which no longer counts the repository) |
-| Admission checks | The new account's repository count is enforced when the directory moves the repository; its storage quota and access-list size are checked when the transfer starts and before it moves, not reserved: concurrent transfers (or members added meanwhile) can take an account past them, as an upload in flight can |
+| Admission checks | The new account's repository count is enforced when the directory moves the repository. Just before the move, the new account makes room for it, held until the transfer lands or is called off: its storage (and, charged to each, the uploads whose confirmations it still owes, until the new account takes them) and its collaborators, counted against later membership changes. Concurrent transfers and members added meanwhile cannot take the account past either limit |
 | One runner at a time | A runner holds a transfer for 60 seconds; one that dies frees it after that |
 | Caches | Other Workers may resolve the old path to the old owner for up to 30 seconds; access is decided by the repository, which knows its owner, and changes authorized for the old owner are refused |
 | Read model | Events from before the transfer are refused once it lands (a new owner generation) |
+| Restore | A repository object restored from before a transfer or rename takes, with its new epoch, the owner and name the directory names now, in an owner generation no older than the read model's; if the directory has a transfer under way, the object rejoins it, frozen, and the transfer lands it |
 | Transfers one cron run finishes | 10 |
 
 ## Agents and delegation
@@ -507,7 +509,7 @@ shared after that.
 
 | What | Value |
 |---|---|
-| Tools | 76; `tools/list` answers about 156 KB |
+| Tools | 77; `tools/list` answers about 161 KB |
 | Browser requests | Only from the deployment's own hosts (`Origin`, against DNS rebinding): on `workers.dev`, both Fyrden Workers on the request's account subdomain; the hosts in `FYRDEN_OWN_HOSTS`; loopback. Native clients send no `Origin` |
 | Request body | 8 MiB, as REST |
 | CPU per request | **Measured** on Workers Free (2026-10-14, `wrangler tail`): `tools/list` 5 ms on a warm isolate with 63 tools (45 to 160 ms before tool schemas were converted once per isolate); `whoami` 32 ms and `resources/read` 16 ms (measured before that change) |
@@ -537,6 +539,8 @@ header, which no other site's page can send (the API grants no CORS).
 | Markdown | Raw HTML escaped, unsafe link protocols dropped; Mermaid drawn in the browser in strict mode |
 | Content Security Policy | Scripts only from the origin, plus React Router's inline scripts with a new nonce per response; styles may be inline (Mermaid); images, fonts and everything else only from the origin (and `data:`); no plugins, `<base>`, foreign form targets or framing. A README's images from other sites are not shown: with no image proxy, they would tell their author who viewed a private repository |
 | Raw files | Served as downloads (`application/octet-stream`, `nosniff`, a sandboxing CSP), never rendered on the origin |
+| Caching | Pages, the data they navigate with, and downloads are `private, no-store` |
+| Names | A file, branch or repository name is read from the URL as written (a literal `%2F` stays in the name); a page whose path ends in `.data` opens with a trailing slash (React Router takes that suffix for its own data requests) |
 | A session's credential | The user's full rights, rechecked on the primary each request; tokens and grants made from a session may last their full allowed time |
 | Custom domains | List them in `FYRDEN_OWN_HOSTS` (MCP takes browser requests only from the deployment's own hosts) |
 
@@ -602,7 +606,8 @@ repository role; Fyrden's `actor_types` limits a ruleset to principal types
 | Default branch | `~DEFAULT_BRANCH` names the current default branch and, for an import, the one it sets |
 | Refusal text | 2,000 bytes at most per ref |
 | Refusals | `ng <ref> <reason> (ruleset "<name>")`; an atomic push fails as a whole |
-| `evaluate` | Reported to nobody yet; does not block |
+| `evaluate` | Does not block; what it would have refused at a push's commit point (its signatures too) is listed at `GET /repos/{owner}/{repo}/rulesets/rule-suites` (MCP `list_rule_suites`): one suite per ref update one of them objected to, the newest 1,000 kept, nothing for an update they all let through |
+| Actor types | Each principal type at most once |
 
 ## Idempotent requests
 
