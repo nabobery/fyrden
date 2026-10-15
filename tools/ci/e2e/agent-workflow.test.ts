@@ -4,7 +4,10 @@
 // repository, gets a short-lived git token and pushes with stock git,
 // browses it and reads a file as an MCP resource at a commit, commits a file
 // change (signed by the platform, so verified), downloads an archive, forks,
-// sets an expiry, and the reaper deletes the repository after it.
+// sets an expiry, and the reaper deletes the repository after it. Then an
+// agent acting for that user under a grant: a scratch repository that
+// expires, a ruleset that holds the agent to pull requests but not its
+// user, and a revoked grant that stops its git token.
 import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -17,6 +20,7 @@ import {
   createPkce,
   type DpopKey,
   exchangeCode,
+  exchangeToken,
 } from "@fyrden/sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -71,8 +75,8 @@ function run(
   });
 }
 
-/** Stock git with no user or system config, never prompting. */
-async function git(args: string[], cwd = scratch): Promise<string> {
+/** Stock git with no user or system config, never prompting; a failure's output with no token. */
+async function tryGit(args: string[], cwd = scratch): Promise<Run> {
   const result = await run("git", args, {
     cwd,
     env: {
@@ -88,8 +92,42 @@ async function git(args: string[], cwd = scratch): Promise<string> {
   });
   // A failure's message never shows the token in a remote's URL.
   const redact = (text: string) => text.replace(/\/\/[^/@\s]*@/g, "//***@");
-  expect(result.code, redact(`git ${args.join(" ")}\n${result.stderr}`)).toBe(0);
+  return {
+    code: result.code,
+    stdout: result.stdout,
+    stderr: redact(`git ${args.join(" ")}\n${result.stderr}`),
+  };
+}
+
+/** Stock git that must succeed: its output. */
+async function git(args: string[], cwd = scratch): Promise<string> {
+  const result = await tryGit(args, cwd);
+  expect(result.code, result.stderr).toBe(0);
   return result.stdout;
+}
+
+/** A REST call as the user, with its personal access token. */
+async function rest<T = Record<string, unknown>>(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: T }> {
+  const res = await fetch(
+    `${origin}/api${path}`,
+    timed({
+      method,
+      headers: {
+        Authorization: `Bearer ${pat}`,
+        ...(body !== undefined && {
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+        }),
+      },
+      ...(body !== undefined && { body: JSON.stringify(body) }),
+    }),
+  );
+  const text = await res.text();
+  return { status: res.status, body: (text ? JSON.parse(text) : {}) as T };
 }
 
 /** Each request of the test gives up after this long (the server is local). */
@@ -463,5 +501,71 @@ describe("an agent's workflow through MCP, OAuth and stock git (wrangler dev)", 
       }
     }
     expect(recreated).toBe(true);
+  });
+
+  it("lets an agent act for its user under a grant, held to the agents' rules, until it is revoked", {
+    timeout: 180_000,
+  }, async () => {
+    // The user's agent, its own token, and a grant to act for the user.
+    const agent = `${handle}-bot`;
+    expect((await rest("POST", "/agents", { handle: agent })).status).toBe(201);
+    const own = await rest<{ token: string }>("POST", `/agents/${agent}/tokens`, {});
+    expect(own.status).toBe(201);
+    const grant = await rest<{ id: string }>("POST", "/grants", {
+      agent,
+      scopes: ["metadata:read", "contents:write", "repos:create"],
+    });
+    expect(grant.status).toBe(201);
+    // Its own token exchanged (RFC 8693) for one bound to its key, for the MCP server.
+    const key = await createDpopKey();
+    const delegated = await exchangeToken(
+      origin,
+      { subjectToken: own.body.token, grantId: grant.body.id, resource: `${origin}/mcp` },
+      { dpop: key, signal: AbortSignal.timeout(DEADLINE_MS) },
+    );
+    expect(delegated.token_type).toBe("DPoP");
+    const mcp = mcpClient(delegated.access_token, key);
+
+    // A scratch repository in the user's account, expiring unless told otherwise.
+    const name = `scratch-${Date.now().toString(36)}`;
+    const made = await mcp.tool<{ owner: string; expires_at: number | null }>("create_repo", {
+      name,
+    });
+    expect(made.owner).toBe(handle);
+    expect((made.expires_at ?? 0) - Date.now()).toBeGreaterThan(6 * 24 * 60 * 60 * 1000);
+    const agentGit = await mcp.tool<{ token: string }>("create_git_token", {});
+    const remote = (token: string) =>
+      `http://x-access-token:${token}@127.0.0.1:${port}/${handle}/${name}.git`;
+    const work = join(scratch, name);
+    await git(["init", "-q", "-b", "main", work]);
+    await writeFile(join(work, "notes.md"), "one\n");
+    await git(["add", "-A"], work);
+    await git(["commit", "-q", "-m", "one"], work);
+    await git(["push", "-q", remote(agentGit.token), "main"], work);
+
+    // Agents must use pull requests on the default branch; the user may push.
+    const ruleset = await rest("POST", `/repos/${handle}/${name}/rulesets`, {
+      name: "agents use PRs",
+      enforcement: "active",
+      target: "branch",
+      conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } },
+      rules: [{ type: "pull_request" }],
+      actor_types: ["agent"],
+    });
+    expect(ruleset.status).toBe(201);
+    await writeFile(join(work, "notes.md"), "two\n");
+    await git(["commit", "-q", "-am", "two"], work);
+    const byAgent = await tryGit(["push", remote(agentGit.token), "main"], work);
+    expect(byAgent.code).not.toBe(0);
+    expect(byAgent.stderr).toContain('through a pull request (ruleset "agents use PRs")');
+    const userGit = await rest<{ token: string }>("POST", "/user/git-tokens", {});
+    expect(userGit.status).toBe(201);
+    await git(["push", "-q", remote(userGit.body.token), "main"], work);
+
+    // Revoked, the grant stops the agent's git token at its next write.
+    expect((await rest("DELETE", `/grants/${grant.body.id}`)).status).toBe(200);
+    const revoked = await tryGit(["push", remote(agentGit.token), "main:refs/heads/side"], work);
+    expect(revoked.code).not.toBe(0);
+    expect(revoked.stderr).not.toContain(agentGit.token);
   });
 });
