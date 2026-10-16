@@ -30,9 +30,10 @@ const HIDDEN = new Set([
   "reference",
   "definition",
   "image",
-  // A footnote reference shows as a number, a footnote's label never.
+  // A footnote reference shows as a number; a footnote's text is not read (a mention there
+  // tells no one: which of its definitions the page shows depends on rules not worth following).
   "gfmFootnoteCall",
-  "gfmFootnoteDefinitionLabel",
+  "gfmFootnoteDefinition",
 ]);
 
 /**
@@ -45,11 +46,11 @@ const PARSE_BUDGET = {
   delimiters: 256,
   /** Opening brackets (links, references, footnotes). */
   brackets: 256,
-  /** Block quote and list markers opening one line. */
-  nesting: 8,
+  /** Block quote and list markers opening lines, in all (indentation nests them too). */
+  containers: 128,
 } as const;
-/** Container markers at a line's start: a quote (no space needed after it), or a list item's. */
-const CONTAINER = /^ {0,3}(?:>|(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$))[ \t]?/;
+/** A container marker at a line's start: a quote (no space needed after it), or a list item's. */
+const CONTAINER = /^[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$))[ \t]*/;
 
 /** Whether `source` stays within the parse budget. */
 function withinBudget(source: string): boolean {
@@ -59,15 +60,13 @@ function withinBudget(source: string): boolean {
     if (char === "*" || char === "_" || char === "~") delimiters++;
     else if (char === "[") brackets++;
   if (delimiters > PARSE_BUDGET.delimiters || brackets > PARSE_BUDGET.brackets) return false;
-  for (const line of source.split(/\r\n?|\n/)) {
-    let rest = line;
-    for (let depth = 0; ; depth++) {
-      const marker = CONTAINER.exec(rest);
-      if (!marker) break;
-      if (depth >= PARSE_BUDGET.nesting) return false;
+  let containers = 0;
+  for (const line of source.split(/\r\n?|\n/))
+    for (let rest = line, marker = CONTAINER.exec(rest); marker; marker = CONTAINER.exec(rest)) {
+      if (++containers > PARSE_BUDGET.containers) return false;
+      // An empty match cannot happen (a marker is at least one character).
       rest = rest.slice(marker[0].length);
     }
-  }
   return true;
 }
 /** Tokens that end a run of text (a line, a table cell, a block). */
@@ -94,33 +93,12 @@ function visibleText(markdown: string): string {
       .document()
       .write(preprocess()(source, undefined, true)),
   );
-  // Footnotes the text refers to (the page shows only those, at its end).
-  const called = new Set<string>();
-  for (const [kind, token, context] of events)
-    if (kind === "enter" && (token.type as string) === "gfmFootnoteCallString")
-      called.add(footnoteId(context.sliceSerialize(token)));
-  /** Footnotes already shown: a second definition of one is not. */
-  const shown = new Set<string>();
   const out: string[] = [];
   let hidden = 0;
   let autolink = 0;
-  /** Inside a footnote: whether it is shown (undefined until its label is read). */
-  let footnote: boolean | undefined;
-  let footnotes = 0;
   for (const [kind, token, context] of events) {
     const enter = kind === "enter";
     const type = token.type as string;
-    if (type === "gfmFootnoteDefinition") {
-      footnotes += enter ? 1 : -1;
-      footnote = undefined;
-      if (enter) out.push("\n");
-      continue;
-    }
-    if (footnotes > 0 && enter && type === "gfmFootnoteDefinitionLabelString") {
-      const id = footnoteId(context.sliceSerialize(token));
-      footnote = called.has(id) && !shown.has(id);
-      shown.add(id);
-    }
     if (HIDDEN.has(type)) {
       hidden += enter ? 1 : -1;
       // Code and images stand apart from the text around them; a link's target is just unseen.
@@ -128,7 +106,7 @@ function visibleText(markdown: string): string {
         out.push(" ");
       continue;
     }
-    if (hidden > 0 || (footnotes > 0 && footnote !== true)) continue;
+    if (hidden > 0) continue;
     if (type === "literalAutolink") {
       autolink += enter ? 1 : -1;
       if (enter) out.push(context.sliceSerialize(token));
@@ -144,15 +122,6 @@ function visibleText(markdown: string): string {
     else if (enter && TEXT.has(type)) out.push(context.sliceSerialize(token));
   }
   return out.join("");
-}
-
-/** A footnote's label as the renderer matches it: whitespace collapsed, case folded. */
-function footnoteId(label: string): string {
-  return label
-    .replace(/[\t\n\r ]+/g, " ")
-    .trim()
-    .toLowerCase()
-    .toUpperCase();
 }
 
 /** A character reference (`&#105;`, `&#x69;`, `&nbsp;`) as the character the page shows. */

@@ -125,13 +125,8 @@ describe("mentions in what the page shows of references, autolinks and footnotes
     // The page shows an autolink's text: `<mailto:@m>` reads `mailto:@m`.
     expect(mentionsIn("<mailto:@m> and <https://x.test/@not> @y")).toEqual(["m", "y"]);
     expect(mentionsIn("[^@alice]: hidden @bob")).toEqual([]);
-    // A footnote referred to is shown at the page's end; its text is read.
-    expect(mentionsIn("See note[^n].\n\n[^n]: Please ask @alice.\n[^u]: unused @bob")).toEqual([
-      "alice",
-    ]);
-    // Only a footnote's first definition is shown; labels match as the renderer matches them.
-    expect(mentionsIn("use[^a]\n\n[^a]: @alice\n\n[^a]: @bob")).toEqual(["alice"]);
-    expect(mentionsIn("use[^ß]\n\n[^SS]: @alice")).toEqual(["alice"]);
+    // A footnote's text is not read: a mention there tells no one.
+    expect(mentionsIn("See note[^n].\n\n[^n]: Please ask @alice.")).toEqual([]);
   });
 
   it("mention no one in a text too costly to parse", () => {
@@ -139,8 +134,15 @@ describe("mentions in what the page shows of references, autolinks and footnotes
     expect(mentionsIn("@a*l*ice")).toEqual(["alice"]);
     expect(mentionsIn(`@x ${"*".repeat(257)}`)).toEqual([]);
     expect(mentionsIn(`@x ${"[".repeat(257)}`)).toEqual([]);
-    expect(mentionsIn(`${"- ".repeat(9)}@x`)).toEqual([]);
+    expect(mentionsIn(`${"- ".repeat(129)}@x`)).toEqual([]);
     expect(mentionsIn(`${"- ".repeat(8)}@x`)).toEqual(["x"]);
+    // Nesting built by indentation over many lines counts, tabs too.
+    const indented = Array.from(
+      { length: 86 },
+      (_, i) => `${"\t".repeat(4 * i)}${"- ".repeat(8)}x`,
+    );
+    expect(mentionsIn(`${indented.join("\n")}\n@alice`)).toEqual([]);
+    expect(mentionsIn(`${"- \t".repeat(129)}@x`)).toEqual([]);
     expect(mentionsIn(`${"- ".repeat(8191)}@z`)).toEqual([]);
     expect(mentionsIn(`>> ${"- ".repeat(2048)}@alice`)).toEqual([]);
     expect(mentionsIn(`x\r${"- ".repeat(4096)}@alice`)).toEqual([]);
