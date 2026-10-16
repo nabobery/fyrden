@@ -19,16 +19,10 @@ import { type Browsed, fail } from "./browse.js";
 import type { FeedActor, RepoFeed } from "./feed.js";
 import { BUSY } from "./file-writes.js";
 import { type MergeMade, type MergePolicy, mergePull, PULL_CHANGED } from "./merge.js";
-import type { PullDiscussion } from "./pull-discussion.js";
+import type { MergeStamps, PullDiscussion } from "./pull-discussion.js";
 import type { PullRecord } from "./pulls.js";
-import {
-  type MergeStamps,
-  type RebasePolicy,
-  type RebaseSagas,
-  rebaseCommits,
-  rebaseJobId,
-  type SagaView,
-} from "./rebase-saga.js";
+import { type RebasePolicy, rebaseCommits } from "./rebase-replay.js";
+import { type RebaseSagas, rebaseJobId, type SagaView } from "./rebase-saga.js";
 import type { WriteContext } from "./write-context.js";
 
 /*

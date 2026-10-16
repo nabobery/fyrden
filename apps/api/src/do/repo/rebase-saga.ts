@@ -1,28 +1,7 @@
 import type { Job, JobHandler, RefActor, SliceResult } from "@fyrden/adapters-cloudflare/git";
 import { createLogger } from "@fyrden/adapters-cloudflare/obs";
-import type { MergeContext } from "@fyrden/domain";
-import {
-  createSha1Hasher,
-  hashObject,
-  type Ident,
-  MergeBudget,
-  type MergeConflict,
-  MergeLimitError,
-  mergeTrees,
-  type NewObject,
-  type ObjectSource,
-  type Oid,
-  oidFromBytes,
-  oidFromHex,
-  oidToHex,
-  parseTree,
-  reachableCommits,
-  replayCommit,
-  type TreeEntry,
-  WalkLimitError,
-} from "@fyrden/git-core";
+import { type Oid, oidFromBytes, oidFromHex, oidToHex } from "@fyrden/git-core";
 import { type PushReportSummary, readPushReport } from "../../git/chunked/head.js";
-import { ReadBudgetError } from "../../git/live-reader.js";
 import { encodeJson } from "../../git/maintenance/storage.js";
 import { reauthorizeByToken } from "../../git/push/reauthorize-token.js";
 import { PUSH_BUSY, PUSH_CANCELLED, PUSH_EXPIRED } from "../../git/push/repo-push.js";
@@ -31,21 +10,21 @@ import type { FeedActor } from "./feed.js";
 import {
   FILE_WRITE_POLICY,
   type FileWriteDeps,
-  ident,
   packOf,
   type StoredUpload,
   storeUpload,
 } from "./file-writes.js";
-import { ReadsTooLargeError, treeMemoryBytes, UnreadableObjectError } from "./held-reads.js";
-import {
-  MERGE_POLICY,
-  mergeRefused,
-  PULL_CHANGED,
-  TOO_EXPENSIVE,
-  UNREADABLE,
-  withSource,
-} from "./merge.js";
+import { mergeRefused, PULL_CHANGED, UNREADABLE } from "./merge.js";
+import type { MergeStamps, MergeStanding } from "./pull-discussion.js";
 import type { PullRecord, RepoPulls } from "./pulls.js";
+import {
+  keepObjects,
+  keptObjects,
+  type RebasePolicy,
+  type ReplayCursor,
+  type Replayed,
+  replayCommits,
+} from "./rebase-replay.js";
 
 /*
  * Rebase merges, as sagas. A rebase replays each of the pull request's
@@ -65,68 +44,13 @@ import type { PullRecord, RepoPulls } from "./pulls.js";
  * goes into one pack, finished through the push path as a merge is: the
  * merger's token checked again, the rulesets judged with the pull request's
  * records, the base branch moved from the tip the saga started from, and
- * in the same transaction the pull request merged and the saga done.
+ * in the same transaction the pull request merged and the saga done. The
+ * replay itself (the commits chosen, their trees merged, their objects
+ * kept) is `rebase-replay.ts`; this file is the saga around it.
  */
-
-/** Limits of a rebase merge. Proposed (Workers Free: 1,000 subrequests, 128 MB). */
-export const REBASE_POLICY = {
-  /** Commits a rebase replays (else `too_expensive`). */
-  maxCommits: 250,
-  /** Bytes of new objects a saga keeps, its signed commits included (as a merge makes). */
-  maxStagedBytes: MERGE_POLICY.maxOutputBytes,
-  /** New objects a saga keeps: each is a row written, and deleted at the end. */
-  maxStagedObjects: 2_000,
-  /** The largest object kept (SQLite rows hold at most 2 MB). */
-  maxObjectBytes: 1024 * 1024,
-  /** Commits one slice replays. */
-  commitsPerSlice: 25,
-  /**
-   * R2 reads one slice makes; a commit that needs more alone is
-   * `too_expensive`. Under the 200 calls the job queue leaves a slice
-   * (it starts one with up to 800 made).
-   */
-  sliceReads: 120,
-  /** Internal calls past which a request stops replaying and leaves the rest to the alarm. */
-  requestCalls: 400,
-  /**
-   * Internal calls past which finishing (storing the pack, indexing it,
-   * committing) waits for a fresh invocation: indexing's first
-   * connectivity batch checks up to 512 objects within the 1,000 calls.
-   */
-  finishCalls: 200,
-  /** Internal calls past which, its push indexed, the commit waits for a fresh invocation. */
-  commitCalls: 600,
-  /** How long a request drives its saga before it answers. */
-  requestMs: 15_000,
-  /** Sagas running at once in one repository (their objects are kept here). */
-  maxRunning: 3,
-  /** A saga still running after this is given up. */
-  maxAgeMs: 60 * 60_000,
-  /** Unexpected errors in a row after which a saga is given up. */
-  maxFailures: 3,
-  /** Delay before a slice after an unexpected error. */
-  retryMs: 5_000,
-  /** Delay before looking at the final push's indexing again, or waiting for a fresh invocation. */
-  waitMs: 1_000,
-} as const;
-export type RebasePolicy = { readonly [K in keyof typeof REBASE_POLICY]: number };
 
 /** The job that drives the pull request's saga. */
 export const rebaseJobId = (number: number) => `merge-saga:${number}`;
-
-/** What the fence compares: the pull request's reviews, threads and eligible reviewers. */
-export interface MergeStamps {
-  readonly reviews: string;
-  readonly threads: string;
-  readonly eligible: string;
-}
-
-/** The pull request's merge context and stamps, as `mergePull` works them out. */
-export interface MergeStanding {
-  readonly merge: MergeContext;
-  /** The stamps now (called again in the commit's transaction). */
-  readonly stamps: () => MergeStamps;
-}
 
 export interface RebaseDeps {
   /** The write deps of the current invocation: its signer is the key in use now. */
@@ -217,20 +141,9 @@ type SagaRow = {
   updated_at: number;
 };
 
-/** A new object a step keeps. */
-type Kept = NewObject | { readonly type: "commit"; readonly oid: Oid; readonly bytes: Uint8Array };
-
 /** A refusal as a saga records it. */
 const asFailure = (refusal: Browsed<never>): BrowseFailure =>
   refusal.ok ? fail(422, "rebase_failed", "The rebase was refused.") : refusal;
-
-/** A commit that stops the rebase (it conflicts, or is too large): the saga fails with it. */
-class ReplayRefusal extends Error {
-  override name = "ReplayRefusal";
-  constructor(readonly failure: BrowseFailure) {
-    super(failure.error);
-  }
-}
 
 /** Rolls a transaction back when the saga or the job is no longer this runner's. */
 class NotOwned extends Error {
@@ -267,12 +180,6 @@ const NOTHING = fail(
   "not_mergeable",
   "Every commit of the pull request is already in the base branch: there is nothing to rebase.",
 );
-const TOO_MANY_OBJECTS = fail(
-  422,
-  "too_expensive",
-  "The rebase makes more new objects than one may make here; rebase locally and push.",
-);
-
 /** The pull request's saga (the latest one), its runs, and the job that drives it. */
 export class RebaseSagas {
   readonly #log = createLogger({ op: "rebase.saga" });
@@ -449,104 +356,28 @@ export class RebaseSagas {
     writeDeps: FileWriteDeps,
     mode: "request" | "alarm",
   ): Promise<SliceResult> {
-    const commits = new Uint8Array(row.commits);
-    const committer = JSON.parse(row.committer_json) as { name: string; email: string };
-    const at = {
+    const at: ReplayCursor = {
       next: row.next,
       tip: oidFromHex(row.tip),
       tipTree: oidFromHex(row.tip_tree),
       bytes: row.staged_bytes,
       objects: row.staged_objects,
     };
-    let replayed = 0;
-    let budgetLeft = false;
-    const holds: { release(): void }[] = [];
-    try {
-      await withSource(
-        writeDeps,
-        { ...MERGE_POLICY, maxReads: this.policy.sliceReads },
-        async (live, readCommit) => {
-          const source = this.#overlay(row.saga_id, live, holds);
-          while (at.next * 20 < commits.length && replayed < this.policy.commitsPerSlice) {
-            if (mode === "request" && this.deps.internalCalls() >= this.policy.requestCalls) {
-              budgetLeft = true;
-              return;
-            }
-            const commit = oidFromBytes(commits, at.next * 20);
-            const made = await this.#replayOne(source, readCommit, commit, at, {
-              committer: ident(committer, row.committed_at),
-              signer: writeDeps.signer,
-            });
-            if (!this.#stage(job, row, at, made)) return;
-            replayed++;
-          }
-        },
-      );
-    } catch (error) {
-      if (error instanceof ReplayRefusal) return this.#fail(job, row, error.failure);
-      // Out of this slice's reads: the next slice goes on, unless one commit alone needs more.
-      if (error instanceof ReadBudgetError && replayed > 0) return this.#later(row, 0);
-      if (
-        error instanceof ReadBudgetError ||
-        error instanceof MergeLimitError ||
-        error instanceof ReadsTooLargeError ||
-        error instanceof WalkLimitError
-      )
-        return this.#fail(job, row, TOO_EXPENSIVE);
-      if (error instanceof UnreadableObjectError) return this.#fail(job, row, UNREADABLE);
-      throw error;
-    } finally {
-      for (const held of holds.splice(0)) held.release();
-    }
-    // A request out of calls stops here; the alarm goes on (a delay ends the request's run).
-    return this.#later(row, budgetLeft ? 1 : 0);
-  }
-
-  /** One commit replayed onto `at.tip`: its new objects, or nothing when it comes out empty. */
-  async #replayOne(
-    source: ObjectSource,
-    readCommit: (oid: Oid) => Promise<Uint8Array>,
-    commit: Oid,
-    at: { tip: Oid; tipTree: Oid },
-    made: { committer: Ident; signer: FileWriteDeps["signer"] },
-  ): Promise<{ tip: Oid; tree: Oid; objects: readonly Kept[] } | "dropped"> {
-    const graph = this.git.commitGraph;
-    const [row] = graph.readSync([commit], "verified");
-    const parentOid = row?.parents.length === 1 ? row.parents[0] : undefined;
-    const [parent] = parentOid ? graph.readSync([parentOid], "verified") : [];
-    if (!row || !parent) throw new UnreadableObjectError();
-    const same = (a: Oid, b: Oid) => oidToHex(a) === oidToHex(b);
-    let tree: Oid;
-    let objects: readonly Kept[] = [];
-    if (same(row.tree, parent.tree)) {
-      // Empty from the start: kept, as git rebase keeps it.
-      tree = at.tipTree;
-    } else if (same(parent.tree, at.tipTree)) {
-      tree = row.tree;
-    } else {
-      const merged = await mergeTrees(source, parent.tree, at.tipTree, row.tree, {
-        maxFileBytes: MERGE_POLICY.maxFileBytes,
-        budget: new MergeBudget(
-          MERGE_POLICY.maxTrees,
-          MERGE_POLICY.maxFileMerges,
-          MERGE_POLICY.maxOutputBytes,
-        ),
-      });
-      if (merged.kind === "conflicts")
-        throw new ReplayRefusal(conflictsIn(oidToHex(commit), merged.conflicts));
-      // Its changes are in the base already: dropped, as git rebase drops it.
-      if (same(merged.tree, at.tipTree)) return "dropped";
-      tree = merged.tree;
-      objects = merged.objects;
-    }
-    const bytes = await replayCommit(await readCommit(commit), {
-      tree,
-      parent: at.tip,
-      committer: made.committer,
-      ...(made.signer && { signer: made.signer }),
+    const end = await replayCommits(this.git, {
+      sagaId: row.saga_id,
+      commits: new Uint8Array(row.commits),
+      at,
+      committer: JSON.parse(row.committer_json) as { name: string; email: string },
+      committedAt: row.committed_at,
+      writeDeps,
+      mode,
+      policy: () => this.policy,
+      internalCalls: this.deps.internalCalls,
+      stage: (made) => this.#stage(job, row, at, made),
     });
-    const tip = await hashObject(() => createSha1Hasher(), "commit", bytes);
-    return { tip, tree, objects: [...objects, { type: "commit", oid: tip, bytes }] };
+    return end.kind === "refused"
+      ? this.#fail(job, row, end.failure)
+      : this.#later(row, end.runAfterMs);
   }
 
   /**
@@ -554,40 +385,17 @@ export class RebaseSagas {
    * one transaction under the job's claim; false when the saga or the job
    * is no longer this runner's (nothing written).
    */
-  #stage(
-    job: Job,
-    row: SagaRow,
-    at: { next: number; tip: Oid; tipTree: Oid; bytes: number; objects: number },
-    made: { tip: Oid; tree: Oid; objects: readonly Kept[] } | "dropped",
-  ): boolean {
+  #stage(job: Job, row: SagaRow, at: ReplayCursor, made: Replayed): boolean {
     const { storage } = this.git.context;
-    const objects = made === "dropped" ? [] : made.objects;
-    if (objects.some((o) => o.bytes.length > this.policy.maxObjectBytes))
-      throw new ReplayRefusal(TOO_EXPENSIVE);
+    const objects = keptObjects(made, this.policy);
     try {
       const kept = storage.transactionSync(() => {
         if (!this.git.jobs.checkpoint(job, this.#cursor(row))) throw new NotOwned();
-        let bytes = 0;
-        let count = 0;
-        for (const object of objects) {
-          const written = storage.sql.exec(
-            `INSERT OR IGNORE INTO merge_saga_objects (saga_id, oid, type, data)
-             VALUES (?, ?, ?, ?)`,
-            row.saga_id,
-            object.oid,
-            object.type,
-            object.bytes,
-          ).rowsWritten;
-          if (written > 0) {
-            bytes += object.bytes.length;
-            count++;
-          }
-        }
-        if (at.bytes + bytes > this.policy.maxStagedBytes) throw new ReplayRefusal(TOO_EXPENSIVE);
-        if (at.objects + count > this.policy.maxStagedObjects)
-          throw new ReplayRefusal(TOO_MANY_OBJECTS);
-        const tip = made === "dropped" ? at.tip : made.tip;
-        const tree = made === "dropped" ? at.tipTree : made.tree;
+        const { bytes, count, tip, tree } = keepObjects(
+          this.git,
+          { sagaId: row.saga_id, at, made, objects },
+          this.policy,
+        );
         const moved = storage.sql.exec(
           `UPDATE merge_sagas SET next = next + 1, tip = ?, tip_tree = ?,
              staged_bytes = staged_bytes + ?, staged_objects = staged_objects + ?, failures = 0,
@@ -946,55 +754,6 @@ export class RebaseSagas {
     return encodeJson({ saga: row.saga_id, generation: row.generation });
   }
 
-  /**
-   * Reads the saga's kept objects first, then the live packs. A kept
-   * object's memory is held as a live read's is (`holds`, released when
-   * the slice ends), and a kept tree is parsed once.
-   */
-  #overlay(sagaId: string, live: ObjectSource, holds: { release(): void }[]): ObjectSource {
-    const trees = new Map<string, readonly TreeEntry[]>();
-    const hold = (bytes: number) => {
-      let held: { release(): void } | undefined;
-      try {
-        held = this.git.memory.tryReserve(Math.max(1, bytes));
-      } catch (error) {
-        // More than the object's whole budget.
-        if (!(error instanceof RangeError)) throw error;
-      }
-      if (!held) throw new ReadsTooLargeError();
-      holds.push(held);
-    };
-    const kept = (oid: Oid) =>
-      this.git.context.storage.sql
-        .exec<{ data: ArrayBuffer }>(
-          "SELECT data FROM merge_saga_objects WHERE saga_id = ? AND oid = ?",
-          sagaId,
-          oid,
-        )
-        .toArray()[0]?.data;
-    return {
-      readTree: async (oid) => {
-        const hex = oidToHex(oid);
-        const known = trees.get(hex);
-        if (known) return known;
-        const data = kept(oid);
-        if (!data) return live.readTree(oid);
-        // As a live tree read holds it.
-        hold(treeMemoryBytes(data.byteLength));
-        const entries = parseTree(new Uint8Array(data)).value;
-        trees.set(hex, entries);
-        return entries;
-      },
-      readBlob: async (oid, maxBytes) => {
-        const data = kept(oid);
-        if (!data) return live.readBlob(oid, maxBytes);
-        if (data.byteLength > maxBytes) return undefined;
-        hold(3 * data.byteLength);
-        return new Uint8Array(data);
-      },
-    };
-  }
-
   #dropObjects(sagaId: string): void {
     this.git.context.storage.sql.exec("DELETE FROM merge_saga_objects WHERE saga_id = ?", sagaId);
   }
@@ -1004,64 +763,4 @@ export class RebaseSagas {
       .exec<SagaRow>("SELECT * FROM merge_sagas WHERE pr_number = ?", number)
       .toArray()[0];
   }
-}
-
-/**
- * The commits a rebase of `head` onto `baseTip` replays, oldest first: the
- * head's commits the base tip does not reach, one chain of single-parent
- * commits.
- */
-export async function rebaseCommits(
-  graph: FileWriteDeps["git"]["commitGraph"],
-  baseTip: Oid,
-  head: Oid,
-  policy: { readonly maxCommits: number; readonly maxWalk: number },
-): Promise<Browsed<Oid[]>> {
-  let ahead: Set<string>;
-  try {
-    const found = await reachableCommits(graph, "verified", [head], [baseTip], {
-      maxCommits: policy.maxWalk,
-    });
-    ahead = new Set([...found].map(oidToHex));
-  } catch (error) {
-    if (!(error instanceof WalkLimitError)) throw error;
-    return TOO_EXPENSIVE;
-  }
-  if (ahead.size > policy.maxCommits)
-    return fail(
-      422,
-      "too_expensive",
-      `The pull request has more than ${policy.maxCommits} commits to rebase; rebase locally and push.`,
-    );
-  const chain: Oid[] = [];
-  for (let at: Oid | undefined = head; at && ahead.has(oidToHex(at)); ) {
-    const [row] = graph.readSync([at], "verified");
-    if (!row) return UNREADABLE;
-    if (row.parents.length > 1)
-      return fail(
-        405,
-        "not_mergeable",
-        "The pull request contains merge commits, which a rebase merge does not replay; merge it another way.",
-      );
-    if (row.parents.length === 0)
-      return fail(405, "not_mergeable", "The base branch and the head share no history.");
-    chain.push(at);
-    at = row.parents[0];
-  }
-  // Single parents all the way: the chain is every commit found (else the graph is inconsistent).
-  if (chain.length !== ahead.size) return UNREADABLE;
-  return { ok: true, value: chain.reverse() };
-}
-
-/** A rebase refused for a commit's conflicts, naming the first few. */
-function conflictsIn(commit: string, conflicts: readonly MergeConflict[]): BrowseFailure {
-  const shown = conflicts
-    .slice(0, MERGE_POLICY.conflictsShown)
-    .map((c) => `${c.path} (${c.kind.replaceAll("_", "/")})`);
-  const more = conflicts.length - shown.length;
-  return fail(
-    405,
-    "merge_conflict",
-    `Commit ${commit} does not apply cleanly to the base branch: ${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}.`,
-  );
 }

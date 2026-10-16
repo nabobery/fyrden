@@ -14,7 +14,6 @@ import { rawFile } from "./contents.js";
 import type { PullView } from "./mergeability.js";
 import { mergeBaseOf } from "./pull-files.js";
 import type { PullCaller, PullRecord, RepoPulls } from "./pulls.js";
-import type { MergeStamps, MergeStanding } from "./rebase-saga.js";
 import {
   type Comparison,
   needsMergeBase,
@@ -61,6 +60,20 @@ interface Compared {
   readonly baseRef: string;
   /** The base tip it was worked out from, as `RepoPulls.comparedBase` gave it. */
   readonly baseTip: string;
+}
+
+/** What the fence compares: the pull request's reviews, threads and eligible reviewers. */
+export interface MergeStamps {
+  readonly reviews: string;
+  readonly threads: string;
+  readonly eligible: string;
+}
+
+/** The pull request's merge context and stamps, as `mergePull` works them out. */
+export interface MergeStanding {
+  readonly merge: MergeContext;
+  /** The stamps now (called again in the commit's transaction). */
+  readonly stamps: () => MergeStamps;
 }
 
 /** The first comment of a new thread on a pull request's diff, as the Worker asks for it. */

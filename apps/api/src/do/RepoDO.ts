@@ -160,7 +160,8 @@ import {
   RepoPulls,
 } from "./repo/pulls.js";
 import { hasPrecheckRules } from "./repo/push-rules.js";
-import { REBASE_POLICY, type RebasePolicy, RebaseSagas } from "./repo/rebase-saga.js";
+import { REBASE_POLICY, type RebasePolicy } from "./repo/rebase-replay.js";
+import { RebaseSagas } from "./repo/rebase-saga.js";
 import { RepoReviewComments } from "./repo/review-comments.js";
 import { RepoReviews } from "./repo/reviews.js";
 import { RepoRulesets, type RuleSuite, type RulesetRecord } from "./repo/rulesets.js";
