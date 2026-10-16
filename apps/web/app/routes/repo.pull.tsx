@@ -14,14 +14,14 @@ import {
   within,
   writeContinuation,
 } from "../lib/continuation.js";
-import { type ListedRuleset, mergeRules } from "../lib/merge.server.js";
+import { mergeRules, type RulesetsPage } from "../lib/merge.server.js";
 import { pageLinks } from "../lib/pages.js";
 import {
   field,
-  type IssueComment,
+  type IssueCommentsPage,
   pullNumber,
   pullPage,
-  type Review,
+  type ReviewsPage,
   rawField,
   repoApiPath,
 } from "../lib/pulls.js";
@@ -71,23 +71,16 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     return query.toString();
   };
   const [comments, reviews, repo, rulesets] = await Promise.all([
-    apiCall<{ comments: IssueComment[]; next_cursor: string | null }>(
+    apiCall<IssueCommentsPage>(
       context,
       request,
       "GET",
       `${repoApi}/issues/${number}/comments?${page(commentsAt)}`,
     ),
-    apiCall<{ reviews: Review[]; next_cursor: string | null }>(
-      context,
-      request,
-      "GET",
-      `${api}/reviews?${page(reviewsAt)}`,
-    ),
+    apiCall<ReviewsPage>(context, request, "GET", `${api}/reviews?${page(reviewsAt)}`),
     // For the merge box only: what the base branch's rulesets ask of a merge.
     open ? apiCall<Repo>(context, request, "GET", repoApi) : null,
-    open
-      ? apiCall<{ rulesets: ListedRuleset[] }>(context, request, "GET", `${repoApi}/rulesets`)
-      : null,
+    open ? apiCall<RulesetsPage>(context, request, "GET", `${repoApi}/rulesets`) : null,
   ]);
   const rules =
     repo?.status === 200 && rulesets?.status === 200

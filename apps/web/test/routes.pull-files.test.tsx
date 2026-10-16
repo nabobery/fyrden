@@ -34,6 +34,7 @@ const filesPage = (files: unknown[], next: string | null = null) =>
 function comment(extra: Record<string, unknown>): ReviewComment {
   return {
     id: 1,
+    pull_request_review_id: null,
     thread_id: 1,
     user: { id: "usr_a" },
     performed_via_agents: [],

@@ -3,6 +3,7 @@
 // a long rebase answered as still going on, refusals shown with their
 // reason, and a draft that cannot be merged.
 
+import { DEFAULT_PULL_REQUEST_PARAMETERS } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
 import { mergeRules } from "../app/lib/merge.server.js";
 import { action, loader, default as Pull } from "../app/routes/repo.pull.js";
@@ -19,7 +20,15 @@ function ruleset(extra: Record<string, unknown> = {}) {
     target: "branch",
     enforcement: "active",
     conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
-    rules: [{ type: "pull_request", parameters: { allowed_merge_methods: ["squash", "rebase"] } }],
+    rules: [
+      {
+        type: "pull_request",
+        parameters: {
+          ...DEFAULT_PULL_REQUEST_PARAMETERS,
+          allowed_merge_methods: ["squash", "rebase"],
+        },
+      },
+    ],
     ...extra,
   } as Parameters<typeof mergeRules>[0][number];
 }

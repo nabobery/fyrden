@@ -7,7 +7,7 @@ import {
   within,
   writeContinuation,
 } from "./continuation.js";
-import type { PullRequest, ReviewComment, Thread } from "./pulls.js";
+import type { PullRequest, ReviewComment, ReviewCommentsPage, Thread } from "./pulls.js";
 
 /** Review comments read from the API at a time: one page per navigation. */
 const COMMENTS_PER_PAGE = 30;
@@ -35,7 +35,7 @@ export async function loadThreads(
   const at: Continuation = readContinuation(continuation);
   const query = new URLSearchParams({ per_page: String(COMMENTS_PER_PAGE) });
   if (at.cursor) query.set("cursor", at.cursor);
-  const page = await apiGet<{ comments: ReviewComment[]; next_cursor: string | null }>(
+  const page = await apiGet<ReviewCommentsPage>(
     context,
     request,
     `${api}/comments?${query.toString()}`,

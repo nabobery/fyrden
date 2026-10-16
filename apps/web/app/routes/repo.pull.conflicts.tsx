@@ -17,6 +17,7 @@ import {
   KIND_TEXT,
   type LineEnding,
   lineEnding,
+  type Resolution,
   shellQuote,
   withLineEndings,
 } from "../lib/conflicts.js";
@@ -203,8 +204,8 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
   };
 }
 
-/** The API's answer to a resolution: the merge commit, and the files still holding markers. */
-function isMerge(body: unknown): body is { sha: string; markers: string[] } {
+/** Whether `body` reads as the API's answer to a resolution. */
+function isMerge(body: unknown): body is Resolution {
   if (typeof body !== "object" || body === null || !("sha" in body) || !("markers" in body))
     return false;
   const { sha, markers } = body;

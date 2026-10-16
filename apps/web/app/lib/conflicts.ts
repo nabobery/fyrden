@@ -4,31 +4,15 @@
  * a whole line: `<<<<<<< <head branch>`, `=======`, `>>>>>>> <base branch>`.
  */
 
-export type ConflictKind =
-  | "content"
-  | "add_add"
-  | "modify_delete"
-  | "file_directory"
-  | "mode"
-  | "symlink"
-  | "submodule"
-  | "binary"
-  | "too_large";
+import type { getPullConflicts, Output, resolvePullConflicts } from "@fyrden/api-contract";
 
-export interface ConflictFile {
-  path: string;
-  kind: ConflictKind;
-  editable: boolean;
-  content: string | null;
-  conflicts: number;
-}
+/** A pull request's conflicts, as the API reads them (types only, from its contract). */
+export type Conflicts = Output<typeof getPullConflicts>;
+export type ConflictFile = Conflicts["files"][number];
+export type ConflictKind = ConflictFile["kind"];
 
-export interface Conflicts {
-  base_sha: string;
-  head_sha: string;
-  conflict_snapshot: string;
-  files: ConflictFile[];
-}
+/** The API's answer to a resolution: the merge commit, and the files still holding markers. */
+export type Resolution = Output<typeof resolvePullConflicts>;
 
 /** Why a conflict cannot be resolved in the browser, in words. */
 export const KIND_TEXT: Record<ConflictKind, string> = {

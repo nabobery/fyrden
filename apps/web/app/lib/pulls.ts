@@ -1,57 +1,28 @@
-/** The pull request shapes the pages read (see @fyrden/api-contract for the full ones). */
+/**
+ * Pull requests as the pages read them: the API's own shapes, from its
+ * contract (types only: nothing of it is in the browser's bundle).
+ */
 
+import type {
+  getPull,
+  listComments,
+  listPullFiles,
+  listReviewComments,
+  listReviews,
+  Output,
+} from "@fyrden/api-contract";
 import { data } from "react-router";
 
-export interface PullSide {
-  ref: string;
-  sha: string;
-}
+export type PullRequest = Output<typeof getPull>;
 
-export interface PullRequest {
-  number: number;
-  state: "open" | "closed";
-  merged: boolean;
-  head_repo_id: string | null;
-  mergeable: boolean | null;
-  mergeable_state: "clean" | "dirty" | "draft" | "unknown";
-  draft: boolean;
-  maintainer_can_modify: boolean;
-  title: string;
-  body: string | null;
-  user: { id: string };
-  performed_via_agents: string[];
-  head: PullSide;
-  base: PullSide;
-  head_ref_deleted: boolean;
-  created_at: number;
-  updated_at: number;
-  closed_at: number | null;
-  merged_at: number | null;
-  merge_commit_sha: string | null;
-  merged_by: { id: string } | null;
-}
+/** A page of a pull request's conversation comments. */
+export type IssueCommentsPage = Output<typeof listComments>;
+export type IssueComment = IssueCommentsPage["comments"][number];
 
-export interface IssueComment {
-  id: number;
-  user: { id: string };
-  performed_via_agents: string[];
-  body: string;
-  created_at: number;
-  updated_at: number;
-}
-
-export type ReviewState = "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
-
-export interface Review {
-  id: number;
-  user: { id: string };
-  performed_via_agents: string[];
-  state: ReviewState;
-  body: string | null;
-  commit_id: string;
-  submitted_at: number;
-  dismissal: { by: string; message: string; at: number } | null;
-}
+/** A page of a pull request's reviews. */
+export type ReviewsPage = Output<typeof listReviews>;
+export type Review = ReviewsPage["reviews"][number];
+export type ReviewState = Review["state"];
 
 /** What a page calls a pull request's state. */
 export type PullStatus = "open" | "draft" | "closed" | "merged";
@@ -116,51 +87,15 @@ export function rawField(form: FormData, name: string): string {
   return typeof value === "string" ? value : "";
 }
 
-export type DiffSide = "LEFT" | "RIGHT";
+/** A page of the comments on a pull request's diff. */
+export type ReviewCommentsPage = Output<typeof listReviewComments>;
+export type ReviewComment = ReviewCommentsPage["comments"][number];
+export type DiffSide = ReviewComment["side"];
 
-export interface ReviewComment {
-  id: number;
-  in_reply_to_id?: number;
-  thread_id: number;
-  user: { id: string };
-  performed_via_agents: string[];
-  body: string;
-  commit_id: string;
-  original_commit_id: string;
-  path: string;
-  side: DiffSide;
-  line: number | null;
-  original_line: number;
-  start_line: number | null;
-  start_side: DiffSide | null;
-  outdated: boolean;
-  resolved: boolean;
-  created_at: number;
-  updated_at: number;
-}
-
-export type PatchOmitted = "binary" | "too_large" | "patch_too_large" | "submodule" | "budget";
-
-export interface PullFile {
-  sha: string;
-  filename: string;
-  previous_filename?: string;
-  status: "added" | "removed" | "modified" | "renamed" | "changed";
-  additions: number;
-  deletions: number;
-  changes: number;
-  patch?: string;
-  patch_omitted?: PatchOmitted;
-  approximate?: boolean;
-}
-
-export interface PullFilesPage {
-  files: PullFile[];
-  merge_base_sha: string;
-  head_sha: string;
-  truncated: boolean;
-  next_cursor: string | null;
-}
+/** A page of the files a pull request changes. */
+export type PullFilesPage = Output<typeof listPullFiles>;
+export type PullFile = PullFilesPage["files"][number];
+export type PatchOmitted = NonNullable<PullFile["patch_omitted"]>;
 
 /** Why a file's changes are not shown, in words. */
 export const OMITTED_REASON: Record<PatchOmitted, string> = {
