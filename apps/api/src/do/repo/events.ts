@@ -184,6 +184,11 @@ export class RepoEvents {
     this.#hooksFor = router;
   }
 
+  /** The restore generation this object has taken (0 before it has an identity). */
+  epochGen(): number {
+    return this.#meta()?.epoch_gen ?? 0;
+  }
+
   /** Says, with each event, what it means for principals' activity feeds. */
   routeFeed(router: FeedRouter): void {
     this.#feedFor = router;

@@ -557,6 +557,7 @@ export class RepoDO extends MigratingDO {
       repoId: () => this.#repoId(),
       tell: (baseRepoId, notice) => this.env.REPO.getByName(baseRepoId).receiveRevision(notice),
       log: () => this.#log(),
+      epoch: () => this.events.epochGen(),
     });
     this.pullImports = new PullImports({
       ...this.#importDeps(),
@@ -3852,15 +3853,18 @@ export class RepoDO extends MigratingDO {
   }
 
   /** Where branch `headRef` is, for a pull request's base. */
-  pullHeadTip(headRef: string): { sha: string | null; refVersion: number } {
+  async pullHeadTip(headRef: string): Promise<{ sha: string | null; refVersion: number }> {
+    // Versions are ordered by the restore generation: the directory's is taken first.
+    await this.checkEpoch();
     return this.pullSource.tip(headRef);
   }
 
   /** A pull request of `baseRepoId` follows branch `headRef` here (see `PullSource.register`). */
-  registerOutgoingPull(input: Parameters<PullSource["register"]>[0]): {
+  async registerOutgoingPull(input: Parameters<PullSource["register"]>[0]): Promise<{
     sha: string | null;
     refVersion: number;
-  } {
+  }> {
+    await this.checkEpoch();
     return this.pullSource.register(input);
   }
 

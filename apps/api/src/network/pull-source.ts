@@ -57,7 +57,17 @@ export interface PullSourceDeps {
   /** Tells a base of a revision (an RPC to its object). */
   readonly tell: (baseRepoId: string, notice: RevisionNotice) => Promise<NoticeAnswer>;
   readonly log: () => Logger;
+  /** The restore generation this repository's object has taken. */
+  readonly epoch: () => number;
 }
+
+/**
+ * Ref-state versions within one restore generation, at most (a generation's
+ * versions come after). Composed as `epoch * 2^32 + version`, exact while
+ * a generation commits fewer than 2^32 times and there are fewer than 2^21
+ * restore generations (a JavaScript number is exact to 2^53).
+ */
+const VERSIONS_PER_EPOCH = 2 ** 32;
 
 export class PullSource {
   constructor(private readonly deps: PullSourceDeps) {}
@@ -207,7 +217,16 @@ export class PullSource {
   tip(headRef: string): { sha: string | null; refVersion: number } {
     const snapshot = this.deps.git.refStore.readRefsSync();
     const oid = snapshot.refs.get(`${BRANCHES}${headRef}`);
-    return { sha: oid ? oidToHex(oid) : null, refVersion: snapshot.version };
+    return { sha: oid ? oidToHex(oid) : null, refVersion: this.#ordered(snapshot.version) };
+  }
+
+  /**
+   * A ref-state version as bases order revisions by: after a restore (a
+   * new generation) the counter starts over, but its versions still come
+   * after every one before it.
+   */
+  #ordered(version: number): number {
+    return this.deps.epoch() * VERSIONS_PER_EPOCH + version;
   }
 
   /** In every commit's transaction: a notice for each registered branch it moved or deleted. */
@@ -228,7 +247,7 @@ export class PullSource {
           pull.base_repo_id,
           pull.pr_number,
           pull.generation,
-          version,
+          this.#ordered(version),
           update.newOid ? oidToHex(update.newOid) : null,
           actor?.principal ?? null,
           actor?.grantId ?? null,

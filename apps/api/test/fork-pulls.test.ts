@@ -92,6 +92,8 @@ const notify = (notice: Partial<Parameters<RepoDO["receiveRevision"]>[0]>) =>
     pushed: true,
     ...notice,
   });
+/** A ref-state version past any the fork has told (they count from its restore generation). */
+const ahead = (n: number) => 2 ** 40 + n;
 const outgoing = () =>
   inRepo(env.REPO.getByName(fork.id), (r: RepoDO) =>
     r.git.context.storage.sql
@@ -193,6 +195,24 @@ describe("pull requests from forks", () => {
       api("GET", `${base.path}/pulls/1/files`, owner.token),
     );
     expect(files.body.files.map((f) => f.filename)).toEqual(["b.txt", "c.txt"]);
+  });
+
+  it("follow the fork's branch after the fork is restored, its ref versions counting anew", async () => {
+    await open(contributor, `${contributor.handle}:main`);
+    await sync();
+    await commitOn(contributor, fork.path, "main", [{ path: "c.txt", content: "c\n" }]);
+    await sync();
+    // As a restore leaves it: an older ref state, under a newer restore generation.
+    await inRepo(env.REPO.getByName(fork.id), (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      sql.exec("UPDATE ref_state SET version = 1 WHERE id = 1");
+      sql.exec("UPDATE repo_meta SET epoch_gen = epoch_gen + 1 WHERE id = 1");
+    });
+    const next = await commitOn(contributor, fork.path, "main", [
+      { path: "d.txt", content: "d\n" },
+    ]);
+    await sync();
+    expect((await pull()).head.sha).toBe(next);
   });
 
   it("are not moved by a branch of the base with the same name", async () => {
@@ -313,7 +333,7 @@ describe("revisions told out of order or more than once", () => {
     await open(contributor, `${contributor.handle}:main`);
     const head = (await pull()).head.sha;
     const other = await user();
-    await notify({ refVersion: 1_000, sha: head, pusher: other.principalId });
+    await notify({ refVersion: ahead(1_000), sha: head, pusher: other.principalId });
     const row = await inRepo(env.REPO.getByName(base.id), (r: RepoDO) => r.pulls.get(1));
     expect(row).toMatchObject({ lastPusher: other.principalId, headSha: head });
   });
@@ -323,10 +343,10 @@ describe("revisions told out of order or more than once", () => {
     const next = await commitOn(contributor, fork.path, "main", [
       { path: "c.txt", content: "c\n" },
     ]);
-    expect(await notify({ refVersion: 2_000, sha: next, pusher: contributor.principalId })).toBe(
-      "queued",
-    );
-    expect(await notify({ refVersion: 1_500, sha: null, pushed: false })).toBe("stale");
+    expect(
+      await notify({ refVersion: ahead(2_000), sha: next, pusher: contributor.principalId }),
+    ).toBe("queued");
+    expect(await notify({ refVersion: ahead(1_500), sha: null, pushed: false })).toBe("stale");
     await runJobs(base.id);
     expect(await pull()).toMatchObject({ head_ref_deleted: false, head: { sha: next } });
   });
