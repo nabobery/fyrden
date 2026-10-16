@@ -6,23 +6,49 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  type ShouldRevalidateFunctionArgs,
   useRouteLoaderData,
 } from "react-router";
 import type { Route } from "./+types/root";
 import "./app.css";
 import { type SessionUser, signedInUser } from "./lib/api.server.js";
 import { api } from "./lib/cloudflare.server.js";
+import { logServerError } from "./lib/log-error.server.js";
 
+/**
+ * Who is signed in and the API's version, for the header and footer. A
+ * failure to read either (the API briefly unreachable) leaves them blank,
+ * logged, rather than replacing the page with an error: the page itself may
+ * hold work, such as conflict edits.
+ */
 export async function loader({ request, context }: Route.LoaderArgs) {
+  const logged = (error: unknown) => {
+    logServerError(error, request);
+    return null;
+  };
   const [user, apiRpcVersion] = await Promise.all([
-    signedInUser(context, request),
-    api(context).rpcVersion(),
+    signedInUser(context, request).catch(logged),
+    api(context).rpcVersion().catch(logged),
   ]);
   return { user, apiRpcVersion };
 }
 
+/**
+ * The site's data is read again only when going to another page: a page's
+ * own forms and re-reads (the same path) change neither who is signed in
+ * (signing in and out load whole pages) nor the API's version.
+ */
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs): boolean {
+  if (currentUrl.pathname === nextUrl.pathname) return false;
+  return defaultShouldRevalidate;
+}
+
 function SiteFooter() {
-  const data = useRouteLoaderData("root") as { apiRpcVersion: number } | undefined;
+  const data = useRouteLoaderData("root") as { apiRpcVersion: number | null } | undefined;
   return (
     <footer className="muted" style={{ padding: "1rem", textAlign: "center" }}>
       Fyrden · API RPC version {data?.apiRpcVersion ?? "?"}
