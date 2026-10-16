@@ -12,6 +12,7 @@ import {
 import { Link } from "react-router";
 import { isShown, shownLines } from "../components/diff/patch.js";
 import { LineCommentForm, type LinePick, ThreadView } from "../components/diff/thread.js";
+import { WindowVirtualizer } from "../components/diff/window-virtualizer.js";
 import { Pager } from "../components/pager.js";
 import { PullHeader } from "../components/pull-header.js";
 import { ReviewForm } from "../components/review-form.js";
@@ -481,20 +482,22 @@ export default function PullFiles({ loaderData }: Route.ComponentProps) {
               ))}
             </ol>
           </nav>
-          {files.map((f, i) => (
-            <FileSection
-              key={f.filename}
-              file={f}
-              index={i}
-              count={files.length}
-              patches={patches}
-              threads={byPath.get(f.filename) ?? []}
-              viewer={viewer}
-              headSha={headSha}
-              mergeBaseSha={mergeBaseSha}
-              diffStyle={diffStyle}
-            />
-          ))}
+          <WindowVirtualizer>
+            {files.map((f, i) => (
+              <FileSection
+                key={f.filename}
+                file={f}
+                index={i}
+                count={files.length}
+                patches={patches}
+                threads={byPath.get(f.filename) ?? []}
+                viewer={viewer}
+                headSha={headSha}
+                mergeBaseSha={mergeBaseSha}
+                diffStyle={diffStyle}
+              />
+            ))}
+          </WindowVirtualizer>
         </>
       )}
       <Pager links={pages} label="Changed files" />

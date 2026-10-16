@@ -337,6 +337,16 @@ describe("pull requests in the web UI", () => {
     await see(drawn.getByText("line 3000", { exact: true })).toBeVisible({ timeout: 30_000 });
     expect(await mounted()).toBeLessThan(1000);
     await accessible(page, "a long file");
+    // Away and back within the app: the page unmounts and mounts again, its virtualizer
+    // with it, and still follows the scroll.
+    await page.getByRole("link", { name: "Conversation" }).click();
+    await see(page.getByRole("heading", { name: "Conversation" })).toBeVisible();
+    await page.getByRole("link", { name: "Files changed" }).click();
+    await see(drawn.getByText("line 1", { exact: true })).toBeVisible({ timeout: 30_000 });
+    expect(await mounted()).toBeLessThan(1000);
+    await page.keyboard.press("End");
+    await see(drawn.getByText("line 3000", { exact: true })).toBeVisible({ timeout: 30_000 });
+    expect(await mounted()).toBeLessThan(1000);
   });
 
   it("never had a script, style or image refused by the policy on any page", () => {

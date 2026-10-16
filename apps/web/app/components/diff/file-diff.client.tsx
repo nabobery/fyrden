@@ -15,11 +15,12 @@ import {
   WorkerPoolContextProvider,
 } from "@pierre/diffs/react";
 import DiffsWorker from "@pierre/diffs/worker/worker.js?worker";
-import { useEffect, useMemo, useState } from "react";
+import { useContext, useLayoutEffect, useMemo, useState } from "react";
 import type { Thread } from "../../lib/pulls.js";
 import { fileDiffOf } from "./file-diff.js";
 import { apiSide, rendererSide } from "./patch.js";
 import { type LinePick, ThreadView } from "./thread.js";
+import { type VirtualizerOwner, VirtualizerOwnerContext } from "./window-virtualizer.js";
 
 // High-contrast themes: the default ones' token colours fail WCAG AA contrast on the
 // changed lines' tints (measured with axe in the end-to-end test; these pass it).
@@ -38,28 +39,15 @@ const HIGHLIGHTER = {
   maxLineDiffLength: MAX_TOKENIZED_LINE,
 };
 
-/** The page's one virtualizer (on the window's scroll), shared by every drawn file. */
-let shared: { virtualizer: Virtualizer; users: number } | null = null;
-
-/** The shared virtualizer, made on first use and cleaned up when its last file goes. */
+/**
+ * The page's virtualizer (from the page's `WindowVirtualizer`), set up once
+ * this file's own parts have connected to it in their effects.
+ */
 function useWindowVirtualizer(): Virtualizer {
-  const [virtualizer] = useState(() => {
-    if (!shared) {
-      const made = new Virtualizer();
-      made.setup(document);
-      shared = { virtualizer: made, users: 0 };
-    }
-    return shared.virtualizer;
-  });
-  useEffect(() => {
-    if (shared?.virtualizer !== virtualizer) return;
-    shared.users++;
-    return () => {
-      if (shared?.virtualizer !== virtualizer || --shared.users > 0) return;
-      virtualizer.cleanUp();
-      shared = null;
-    };
-  }, [virtualizer]);
+  const owner = useContext(VirtualizerOwnerContext) as VirtualizerOwner<Virtualizer> | null;
+  if (!owner) throw new Error("A drawn file needs a WindowVirtualizer above it.");
+  const [virtualizer] = useState(() => owner.instance(() => new Virtualizer()));
+  useLayoutEffect(() => owner.ready(), [owner]);
   return virtualizer;
 }
 
