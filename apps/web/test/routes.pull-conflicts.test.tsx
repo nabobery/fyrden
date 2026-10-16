@@ -5,9 +5,10 @@
 // and branch names shown as text.
 
 import { describe, expect, it } from "vitest";
+import { leftText } from "../app/components/conflict-editor.js";
 import {
-  conflictRegions,
   lineEnding,
+  readConflicts,
   resolveRegion,
   shellQuote,
   withLineEndings,
@@ -19,34 +20,75 @@ import { ACTIVE_TAG, escaped, HOSTILE, renderPage } from "./helpers/render.js";
 
 const params = { owner: "ada", repo: "demo", number: "7" };
 const SNAPSHOT = "e".repeat(80);
+const LABELS = { head: "topic", base: "main" };
 const MARKED =
-  "top\n<<<<<<< head\nours\n=======\ntheirs\n>>>>>>> base\nmid\n<<<<<<< head\na\n||||||| base\nold\n=======\nb\nb2\n>>>>>>> base\nend\n";
+  "top\n<<<<<<< topic\nours\n=======\ntheirs\n>>>>>>> main\nmid\n<<<<<<< topic\na\n=======\nb\nb2\n>>>>>>> main\nend\n";
 
 describe("conflict markers", () => {
-  it("are read as regions with each side's lines, a base section skipped", () => {
-    const regions = conflictRegions(MARKED);
+  it("are read as regions with each side's lines", () => {
+    const { regions, ambiguous, starts } = readConflicts(MARKED, LABELS);
+    expect(ambiguous).toBe(false);
     expect(regions.map((r) => [r.head, r.base])).toEqual([
       ["ours\n", "theirs\n"],
       ["a\n", "b\nb2\n"],
     ]);
     expect(MARKED.slice(regions[0]?.start, regions[0]?.end)).toBe(
-      "<<<<<<< head\nours\n=======\ntheirs\n>>>>>>> base\n",
+      "<<<<<<< topic\nours\n=======\ntheirs\n>>>>>>> main\n",
     );
+    expect(starts).toEqual(regions.map((r) => r.start));
   });
 
   it("keep the side chosen, or both with the head's first", () => {
-    const [first, second] = conflictRegions(MARKED);
+    const [first, second] = readConflicts(MARKED, LABELS).regions;
     if (!first || !second) throw new Error("no regions");
     expect(resolveRegion(MARKED, first, "head").startsWith("top\nours\nmid\n")).toBe(true);
     expect(resolveRegion(MARKED, first, "base").startsWith("top\ntheirs\nmid\n")).toBe(true);
     expect(resolveRegion(MARKED, second, "both").endsWith("mid\na\nb\nb2\nend\n")).toBe(true);
   });
 
-  it("are not a region when a marker is missing, and work with CRLF lines", () => {
-    expect(conflictRegions("<<<<<<< head\nours\n=======\ntheirs\n")).toEqual([]);
-    expect(conflictRegions("x\n=======\n>>>>>>> base\n")).toEqual([]);
-    const crlf = "<<<<<<< head\r\nours\r\n=======\r\ntheirs\r\n>>>>>>> base\r\n";
-    expect(conflictRegions(crlf).map((r) => r.base)).toEqual(["theirs\r\n"]);
+  it("are whole marker lines only, and work with CRLF lines", () => {
+    // Lines that only start like markers, or name other branches, are content.
+    const text = "<<<<<<< topic\n<<<<<<<< x\n======= no\n=======\n>>>>>>> mainline\n>>>>>>> main\n";
+    const { regions, ambiguous } = readConflicts(text, LABELS);
+    expect(ambiguous).toBe(false);
+    expect(regions.map((r) => [r.head, r.base])).toEqual([
+      ["<<<<<<<< x\n======= no\n", ">>>>>>> mainline\n"],
+    ]);
+    const crlf = "<<<<<<< topic\r\nours\r\n=======\r\ntheirs\r\n>>>>>>> main\r\n";
+    expect(readConflicts(crlf, LABELS).regions.map((r) => r.base)).toEqual(["theirs\r\n"]);
+    // A separator outside a conflict (a heading's underline) is content.
+    expect(readConflicts("Title\n=======\n", LABELS)).toEqual({
+      regions: [],
+      ambiguous: false,
+      starts: [],
+    });
+  });
+
+  it("that do not read as whole conflicts are ambiguous, never a clean file", () => {
+    for (const text of [
+      // A start marker inside a conflict (literal, or nested).
+      "<<<<<<< topic\nbefore\n<<<<<<< topic\nx\n=======\nbase\n>>>>>>> main\n",
+      // Left open.
+      "<<<<<<< topic\nours\n=======\ntheirs\n",
+      "<<<<<<< topic\nours\n",
+      // An end with no start, or before its separator.
+      "x\n>>>>>>> main\n",
+      "<<<<<<< topic\nours\n>>>>>>> main\n",
+      // Two separators.
+      "<<<<<<< topic\na\n=======\nb\n=======\nc\n>>>>>>> main\n",
+    ]) {
+      const reading = readConflicts(text, LABELS);
+      expect(reading.ambiguous, text).toBe(true);
+      expect(leftText(reading), text).toMatch(/edit it by hand/);
+    }
+  });
+
+  it("say what is left: conflicts, marker-like lines, or none", () => {
+    expect(leftText(readConflicts(MARKED, LABELS))).toBe("2 conflicts left in this file.");
+    expect(leftText(readConflicts("<<<<<<< other\nx\n", LABELS))).toMatch(
+      /look like conflict markers/,
+    );
+    expect(leftText(readConflicts("done\n", LABELS))).toBe("No conflict markers left.");
   });
 });
 
@@ -130,7 +172,27 @@ describe("the conflicts page", () => {
       failure: null,
     });
 
-  it("edits the editable files and explains, quoted for the shell, the ones it cannot", () => {
+  it("edits the editable files, and offers no choice when their markers are ambiguous", () => {
+    const html = page([{ path: "a.txt", kind: "content", editable: true, content: MARKED }]);
+    expect(html).toContain("2 conflicts left in this file.");
+    expect(html).toContain("Previous conflict");
+    expect(html).toContain(`value="${SNAPSHOT}"`);
+    expect(html).not.toMatch(/<button type="button" disabled="">Keep/);
+    const ambiguous = page([
+      {
+        path: "a.txt",
+        kind: "content",
+        editable: true,
+        content: "<<<<<<< topic\nx\n<<<<<<< topic\ny\n=======\nz\n>>>>>>> main\n",
+      },
+    ]);
+    expect(ambiguous).toContain("edit it by hand");
+    expect(
+      ambiguous.match(/<button type="button" disabled="">Keep (head|base|both)/g),
+    ).toHaveLength(3);
+  });
+
+  it("explains, quoted for the shell, the conflicts it cannot edit", () => {
     const html = page(
       [
         { path: "a.txt", kind: "content", editable: true, content: MARKED },
@@ -138,12 +200,9 @@ describe("the conflicts page", () => {
       ],
       { head: { ref: "x;$(y)", sha: "b".repeat(40) } },
     );
-    expect(html).toContain("2 conflicts left in this file.");
     expect(html).toContain("One side changed this file and the other deleted it.");
     expect(html).toContain("git switch &#x27;x;$(y)&#x27;");
     expect(html).toMatch(/<button type="submit" class="primary" disabled=""/);
-    expect(html).toContain("Previous conflict");
-    expect(html).toContain(`value="${SNAPSHOT}"`);
   });
 
   it("shows hostile paths, contents and branch names as text", () => {
@@ -204,6 +263,51 @@ describe("resolving conflicts", () => {
       error: "The head moved since the conflicts were read.",
       stale: true,
     });
+  });
+
+  it("refuses a file over 1 MiB, or files over 4 MiB in all, without asking the API", async () => {
+    const big = "a".repeat(1024 * 1024 + 1);
+    const tooLarge = await resolve(
+      {
+        conflict_snapshot: SNAPSHOT,
+        count: "1",
+        "path:0": "a.txt",
+        "eol:0": "lf",
+        "content:0": big,
+      },
+      () => json({}, 201),
+    );
+    expect(tooLarge.outcome).toEqual({ error: "a.txt is larger than 1 MiB: merge it locally." });
+    expect(tooLarge.body).toBeUndefined();
+    // Five files of 900 KiB: each fits, together they do not.
+    const fields: Record<string, string> = { conflict_snapshot: SNAPSHOT, count: "5" };
+    for (let i = 0; i < 5; i++) {
+      fields[`path:${i}`] = `f${i}`;
+      fields[`eol:${i}`] = "lf";
+      fields[`content:${i}`] = "a".repeat(900 * 1024);
+    }
+    const together = await resolve(fields, () => json({}, 201));
+    expect(together.outcome).toEqual({
+      error: "The resolved files are larger than 4 MiB in all: merge them locally.",
+    });
+    expect(together.body).toBeUndefined();
+  });
+
+  it("refuses a form past its byte bound before reading it", async () => {
+    const { context, calls } = api({});
+    const request = new Request(`${ORIGIN}/ada/demo/pull/7/conflicts`, {
+      method: "POST",
+      headers: {
+        Origin: ORIGIN,
+        Cookie: "fyrden_session=s",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Length": String(13 * 1024 * 1024),
+      },
+      body: "a=1",
+    });
+    const thrown = await action({ request, context, params } as never).catch((e: unknown) => e);
+    expect((thrown as { init?: { status?: number } }).init?.status).toBe(413);
+    expect(calls.map(pathOf)).toEqual(["GET /auth/session"]);
   });
 
   it("refuses a form that is not one of its own without asking the API", async () => {

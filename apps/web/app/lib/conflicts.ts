@@ -1,8 +1,7 @@
 /**
  * Conflicted files as the conflicts editor works on them: text with git's
- * conflict markers, the head's side first (`<<<<<<<`, `=======`, `>>>>>>>`,
- * each marker line named as the server names it; a `|||||||` section, if
- * any, holds the merge base's lines).
+ * conflict markers, the head's side first. The server writes each marker as
+ * a whole line: `<<<<<<< <head branch>`, `=======`, `>>>>>>> <base branch>`.
  */
 
 export type ConflictKind =
@@ -54,33 +53,69 @@ export interface ConflictRegion {
   base: string;
 }
 
+/** The branch names the marker lines carry. */
+export interface MarkerLabels {
+  head: string;
+  base: string;
+}
+
+/** A file's conflicts as its markers say. */
+export interface ConflictReading {
+  /** The complete conflicts, in order. */
+  regions: ConflictRegion[];
+  /**
+   * The markers do not read as whole conflicts (one inside another, one
+   * left open, an end with no start): the regions cannot be trusted, and the
+   * file is edited by hand.
+   */
+  ambiguous: boolean;
+  /** Offsets of lines that start like a conflict's first marker (to move between). */
+  starts: number[];
+}
+
 /** The text's lines, each with its line break. */
 function linesOf(text: string): string[] {
   return text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
 }
 
-/** The complete conflicts in `text`, in order (a region missing a marker is not one). */
-export function conflictRegions(text: string): ConflictRegion[] {
+/** A line without its line break. */
+const bare = (line: string) => line.replace(/\r?\n$/, "");
+
+/** Reads `text`'s conflicts from its exact marker lines. */
+export function readConflicts(text: string, labels: MarkerLabels): ConflictReading {
+  const open = `<<<<<<< ${labels.head}`;
+  const close = `>>>>>>> ${labels.base}`;
   const regions: ConflictRegion[] = [];
+  const starts: number[] = [];
+  let ambiguous = false;
   let at = 0;
-  let open: {
-    start: number;
-    head: string;
-    base: string;
-    part: "head" | "ancestor" | "base";
-  } | null = null;
+  let region: { start: number; head: string; base: string; part: "head" | "base" } | null = null;
   for (const line of linesOf(text)) {
-    if (line.startsWith("<<<<<<<")) open = { start: at, head: "", base: "", part: "head" };
-    else if (open && line.startsWith("|||||||") && open.part === "head") open.part = "ancestor";
-    else if (open && /^=======(\r?\n|$)/.test(line) && open.part !== "base") open.part = "base";
-    else if (open && line.startsWith(">>>>>>>") && open.part === "base") {
-      regions.push({ start: open.start, end: at + line.length, head: open.head, base: open.base });
-      open = null;
-    } else if (open?.part === "head") open.head += line;
-    else if (open?.part === "base") open.base += line;
+    const marker = bare(line);
+    if (line.startsWith("<<<<<<<")) starts.push(at);
+    if (marker === open) {
+      // A start inside a conflict: nested or literal, it cannot be told.
+      if (region) ambiguous = true;
+      region = { start: at, head: "", base: "", part: "head" };
+    } else if (region && marker === "=======") {
+      if (region.part === "base") ambiguous = true;
+      region.part = "base";
+    } else if (marker === close) {
+      if (region?.part === "base")
+        regions.push({
+          start: region.start,
+          end: at + line.length,
+          head: region.head,
+          base: region.base,
+        });
+      else ambiguous = true;
+      region = null;
+    } else if (region?.part === "head") region.head += line;
+    else if (region?.part === "base") region.base += line;
     at += line.length;
   }
-  return regions;
+  if (region) ambiguous = true;
+  return { regions, ambiguous, starts };
 }
 
 export type Choice = "head" | "base" | "both";
