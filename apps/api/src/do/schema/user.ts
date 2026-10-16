@@ -28,6 +28,11 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   (`until_at`: entries of events up to then are dropped on arrival), and
  *   the account that said so at its `(epoch_gen, acl_version)` (an older
  *   one of the same account changes nothing).
+ * - `feed_evictions` (v2): items the cap deleted, by the version they were
+ *   at, so an entry up to it arriving later does not bring the item back
+ *   (unlike a tombstone, which an opening entry shows); kept until entries
+ *   that old are dropped for their age (`event_at`: the item's last event),
+ *   or past their cap the oldest.
  */
 export const userSchema: readonly DoMigration[] = [
   {
@@ -80,6 +85,22 @@ export const userSchema: readonly DoMigration[] = [
         epoch_gen INTEGER NOT NULL,
         acl_version INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;
+    `,
+  },
+  {
+    version: 2,
+    name: "feed_evictions",
+    sql: `
+      CREATE TABLE feed_evictions (
+        repo_id TEXT NOT NULL,
+        thread_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        thread_epoch INTEGER NOT NULL,
+        version INTEGER NOT NULL,
+        event_at INTEGER NOT NULL,
+        PRIMARY KEY (repo_id, thread_key, kind)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX feed_evictions_at ON feed_evictions (event_at);
     `,
   },
 ];

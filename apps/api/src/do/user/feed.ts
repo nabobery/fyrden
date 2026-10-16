@@ -16,7 +16,9 @@ import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
  * the sequence sees each change, late arrivals included. Items and
  * tombstones older than the retention, and items past the cap, are
  * deleted; the low watermark records how far, and a cursor below it has
- * missed changes. When the owner loses read access to repositories, their
+ * missed changes. An item the cap deleted leaves a fence at its version
+ * (so many at most), so an entry up to it arriving later is dropped
+ * rather than bringing the item back. When the owner loses read access to repositories, their
  * items up to then are purged, and a mark drops entries up to then that
  * arrive later; so are they when a read finds the owner cannot read them
  * now, whichever comes first.
@@ -28,6 +30,12 @@ export const FEED_POLICY = {
   retentionMs: 7 * 24 * 60 * 60 * 1000,
   /** Items a feed keeps at most; the ones changed longest ago go first. */
   maxItems: 5_000,
+  /**
+   * Fences of items the cap evicted a feed keeps at most, the ones of the
+   * oldest events going first: an item evicted longer ago can come back
+   * with a very late delivery (an obsolete item shown; nothing new lost).
+   */
+  maxFences: 1_000,
   /** Ids an activity item keeps at most (the greatest). */
   maxMembers: 100,
   /** Items a sync returns at most. */
@@ -331,8 +339,9 @@ export class Feed {
 
   /**
    * Applies entries (call within a transaction). Within one call an item's
-   * entries apply in version order. An entry older than the retention, or
-   * of a purged repository up to its purge, is dropped. A newer version
+   * entries apply in version order. An entry older than the retention, of
+   * a purged repository up to its purge, or of an item the cap evicted up
+   * to the version it was at, is dropped. A newer version
    * replaces the thread's state in the item; an activity item also takes
    * the entry's member (see `withMember`). An item is shown once an entry
    * opens it (see `#applyOne`). A duplicate, or an older version that adds
@@ -354,6 +363,7 @@ export class Feed {
       if (entry.occurredAt < now - FEED_POLICY.retentionMs) continue;
       const until = purgedUntil(entry.repoId);
       if (until !== null && entry.occurredAt <= until) continue;
+      if (this.#evicted(entry)) continue;
       if (!this.#applyOne(entry, now)) continue;
       changed++;
       if (!entry.recipient.silent) notified++;
@@ -399,6 +409,22 @@ export class Feed {
     const seq = shown || shows ? this.#next(!shown) : null;
     this.#write(id, after, seq, now);
     return seq !== null;
+  }
+
+  /** Whether the cap evicted the entry's item at the entry's version or a newer one. */
+  #evicted(entry: FeedEntry): boolean {
+    const fence = this.sql
+      .exec<{ thread_epoch: number; version: number }>(
+        `SELECT thread_epoch, version FROM feed_evictions WHERE ${WHERE_ITEM}`,
+        entry.repoId,
+        entry.feed.threadKey,
+        entry.recipient.kind,
+      )
+      .toArray()[0];
+    return (
+      fence !== undefined &&
+      !newerThan(versionOf(entry), { epoch: fence.thread_epoch, version: fence.version })
+    );
   }
 
   #write(id: FeedItemId, state: State, seq: number | null, seqAt: number): void {
@@ -608,33 +634,49 @@ export class Feed {
   }
 
   /**
-   * Deletes items, tombstones and purge marks past the retention, then the
-   * items changed longest ago past the cap, raising the low watermark to
-   * the greatest sequence number deleted (call within a transaction).
+   * Deletes items, tombstones, purge marks and eviction fences past the
+   * retention, then the items changed longest ago past the cap, each
+   * leaving a fence, raising the low watermark to the greatest sequence
+   * number deleted (call within a transaction).
    */
   retain(): void {
     const meta = this.#meta();
+    const expired = this.now() - FEED_POLICY.retentionMs;
     const deleted = this.sql
       .exec<{ feed_seq: number | null }>(
         "DELETE FROM feed_items WHERE seq_at < ? RETURNING feed_seq",
-        this.now() - FEED_POLICY.retentionMs,
+        expired,
       )
       .toArray()
       .flatMap((r) => (r.feed_seq === null ? [] : [r.feed_seq]));
-    // Entries a mark would drop are dropped for their age by now.
-    this.sql.exec(
-      "DELETE FROM purge_marks WHERE until_at < ?",
-      this.now() - FEED_POLICY.retentionMs,
-    );
+    // Entries a mark or a fence would drop are dropped for their age by now: the events up to
+    // a mark happened by its time, and those up to a fence's version by the item's last one.
+    this.sql.exec("DELETE FROM purge_marks WHERE until_at < ?", expired);
+    this.sql.exec("DELETE FROM feed_evictions WHERE event_at < ?", expired);
     const excess = meta.items - deleted.length - FEED_POLICY.maxItems;
-    if (excess > 0)
+    if (excess > 0) {
+      const oldest = `feed_seq IN
+        (SELECT feed_seq FROM feed_items WHERE feed_seq IS NOT NULL ORDER BY feed_seq LIMIT ?)`;
+      this.sql.exec(
+        `INSERT INTO feed_evictions (repo_id, thread_key, kind, thread_epoch, version, event_at)
+         SELECT repo_id, thread_key, kind, thread_epoch, version, last_event_at
+         FROM feed_items WHERE ${oldest}
+         ON CONFLICT (repo_id, thread_key, kind) DO UPDATE SET thread_epoch = excluded.thread_epoch,
+           version = excluded.version, event_at = excluded.event_at`,
+        excess,
+      );
       for (const r of this.sql.exec<{ feed_seq: number }>(
-        `DELETE FROM feed_items WHERE feed_seq IN
-           (SELECT feed_seq FROM feed_items WHERE feed_seq IS NOT NULL ORDER BY feed_seq LIMIT ?)
-         RETURNING feed_seq`,
+        `DELETE FROM feed_items WHERE ${oldest} RETURNING feed_seq`,
         excess,
       ))
         deleted.push(r.feed_seq);
+      this.sql.exec(
+        `DELETE FROM feed_evictions WHERE (repo_id, thread_key, kind) IN
+           (SELECT repo_id, thread_key, kind FROM feed_evictions ORDER BY event_at
+            LIMIT max(0, (SELECT count(*) FROM feed_evictions) - ?))`,
+        FEED_POLICY.maxFences,
+      );
+    }
     if (deleted.length === 0) return;
     this.sql.exec(
       "UPDATE feed_meta SET low_watermark = max(low_watermark, ?), items = items - ? WHERE id = 1",
@@ -645,20 +687,26 @@ export class Feed {
 
   /**
    * When retention should next run: now when the feed is past its cap,
-   * else when the item, tombstone or purge mark changed longest ago
+   * else when the item, tombstone, purge mark or fence changed longest ago
    * expires; null for an empty feed.
    */
   nextRetention(): number | null {
     if (this.#meta().items > FEED_POLICY.maxItems) return this.now();
-    const { item, tombstone, mark } = this.sql
-      .exec<{ item: number | null; tombstone: number | null; mark: number | null }>(
+    const { item, tombstone, mark, fence } = this.sql
+      .exec<{
+        item: number | null;
+        tombstone: number | null;
+        mark: number | null;
+        fence: number | null;
+      }>(
         `SELECT
            (SELECT seq_at FROM feed_items WHERE feed_seq IS NOT NULL ORDER BY feed_seq LIMIT 1) AS item,
            (SELECT min(seq_at) FROM feed_items WHERE feed_seq IS NULL) AS tombstone,
-           (SELECT min(until_at) FROM purge_marks) AS mark`,
+           (SELECT min(until_at) FROM purge_marks) AS mark,
+           (SELECT min(event_at) FROM feed_evictions) AS fence`,
       )
       .one();
-    const oldest = [item, tombstone, mark].filter((at) => at !== null);
+    const oldest = [item, tombstone, mark, fence].filter((at) => at !== null);
     return oldest.length === 0 ? null : Math.min(...oldest) + FEED_POLICY.retentionMs;
   }
 

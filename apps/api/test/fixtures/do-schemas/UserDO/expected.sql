@@ -1,4 +1,14 @@
+CREATE INDEX feed_evictions_at ON feed_evictions (event_at);
 CREATE INDEX feed_tombstones ON feed_items (seq_at) WHERE feed_seq IS NULL;
+CREATE TABLE feed_evictions (
+        repo_id TEXT NOT NULL,
+        thread_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        thread_epoch INTEGER NOT NULL,
+        version INTEGER NOT NULL,
+        event_at INTEGER NOT NULL,
+        PRIMARY KEY (repo_id, thread_key, kind)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE feed_items (
         repo_id TEXT NOT NULL,
         thread_key TEXT NOT NULL,

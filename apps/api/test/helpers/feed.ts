@@ -96,6 +96,7 @@ export function feedIn(storage: Storage, now: () => number = Date.now) {
     );
   const reset = () => {
     storage.sql.exec("DELETE FROM feed_items");
+    storage.sql.exec("DELETE FROM feed_evictions");
     storage.sql.exec("UPDATE feed_meta SET head_seq = 0, low_watermark = 0, items = 0");
   };
   return { feed, apply, head, rows, items, state, reset };
