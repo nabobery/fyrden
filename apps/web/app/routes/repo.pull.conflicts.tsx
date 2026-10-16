@@ -1,10 +1,11 @@
 import { useRef, useState } from "react";
-import { Form, Link, redirect, useActionData, useNavigation } from "react-router";
+import { Form, Link, redirect, useActionData, useNavigation, useRevalidator } from "react-router";
 import { ConflictEditor } from "../components/conflict-editor.js";
 import { PullHeader } from "../components/pull-header.js";
 import { apiCall, assertSameOrigin, readForm, signedInUser, signInUrl } from "../lib/api.server.js";
 import {
   type Conflicts,
+  conflictsView,
   KIND_TEXT,
   type LineEnding,
   lineEnding,
@@ -30,11 +31,13 @@ export const MAX_FILE_BYTES = 1024 * 1024;
  */
 export const MAX_RESOLUTION_BYTES = 4 * 1024 * 1024;
 /**
- * The editor's form at most: that content URL-encoded (up to 3 bytes for
- * each) and the rest. The form is buffered whole before it is read, so the
- * bound is the content's, not 50 files' worth.
+ * The editor's form at most, as sent: multipart (content as its bytes), and
+ * browsers send every line break as CRLF, so content takes up to twice its
+ * size; then each file's path and line ending and the commit message
+ * (generously). The form is buffered whole before it is read, so the bound
+ * is the content's, not 50 files' worth.
  */
-const CONFLICTS_FORM_MAX_BYTES = 3 * MAX_RESOLUTION_BYTES + 64 * 1024;
+export const CONFLICTS_FORM_MAX_BYTES = 2 * MAX_RESOLUTION_BYTES + 512 * 1024;
 
 export async function loader({ request, context, params }: Route.LoaderArgs) {
   const { pull, viewer } = await loadPull(context, request, params);
@@ -67,8 +70,15 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
 }
 
 type Answer =
-  | { error: string; stale?: boolean; ok?: undefined }
-  | { ok: true; sha: string; markers: string[]; error?: undefined; stale?: undefined };
+  | { error: string; stale?: boolean; snapshot?: string; ok?: undefined }
+  | {
+      ok: true;
+      sha: string;
+      markers: string[];
+      error?: undefined;
+      stale?: undefined;
+      snapshot?: undefined;
+    };
 
 export async function action({ request, context, params }: Route.ActionArgs): Promise<Answer> {
   assertSameOrigin(request);
@@ -79,23 +89,27 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
   if (!/^[0-9a-f]{80}$/.test(snapshot)) return { error: "Read the conflicts again.", stale: true };
   const count = Number(field(form, "count"));
   if (!Number.isInteger(count) || count < 0 || count > MAX_FILES)
-    return { error: "Too many files to resolve here." };
+    return { error: "Too many files to resolve here.", snapshot };
   const files: { path: string; content: string }[] = [];
   const encoder = new TextEncoder();
   let total = 0;
   for (let i = 0; i < count; i++) {
     const path = rawField(form, `path:${i}`);
-    if (!path) return { error: "A file of the resolution is missing." };
+    if (!path) return { error: "A file of the resolution is missing.", snapshot };
     const ending = field(form, `eol:${i}`);
     const content = withLineEndings(
       rawField(form, `content:${i}`),
       ending === "crlf" ? "crlf" : ending === "mixed" ? "mixed" : "lf",
     );
     const bytes = encoder.encode(content).length;
-    if (bytes > MAX_FILE_BYTES) return { error: `${path} is larger than 1 MiB: merge it locally.` };
+    if (bytes > MAX_FILE_BYTES)
+      return { error: `${path} is larger than 1 MiB: merge it locally.`, snapshot };
     total += bytes;
     if (total > MAX_RESOLUTION_BYTES)
-      return { error: "The resolved files are larger than 4 MiB in all: merge them locally." };
+      return {
+        error: "The resolved files are larger than 4 MiB in all: merge them locally.",
+        snapshot,
+      };
     files.push({ path, content });
   }
   const message = rawField(form, "commit_message");
@@ -112,6 +126,7 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
   return {
     error: problemDetail(result.body, "The conflicts were not resolved."),
     stale: code === "head_moved" || code === "base_moved",
+    snapshot,
   };
 }
 
@@ -126,6 +141,7 @@ interface Editing {
 export default function PullConflicts({ loaderData }: Route.ComponentProps) {
   const answer = useActionData<typeof action>();
   const navigation = useNavigation();
+  const revalidator = useRevalidator();
   const { owner, repo, pull, viewer, conflicts, failure } = loaderData;
   const page = pullPage(owner, repo, pull.number);
   const read = (generation: number): Editing | null =>
@@ -133,14 +149,21 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
       ? { conflicts, labels: { head: pull.head.ref, base: pull.base.ref }, generation }
       : null;
   // The editors keep the conflicts they were opened on, snapshot and text together: a later
-  // read (after a refusal, or any revalidation) replaces them only when asked.
+  // read (after a refusal, or any revalidation) replaces them only when asked, and a failed
+  // read never does.
   const [editing, setEditing] = useState<Editing | null>(() => read(0));
   const [drafts, setDrafts] = useState<{ path: string; content: string }[]>([]);
   const form = useRef<HTMLFormElement>(null);
-  const shown = editing?.conflicts.conflict_snapshot ?? null;
-  const latest = conflicts && conflicts.files.length > 0 ? conflicts.conflict_snapshot : null;
-  const moved = !answer?.ok && pull.state === "open" && failure === null && shown !== latest;
+  const view = conflictsView({
+    adopted: editing?.conflicts.conflict_snapshot ?? null,
+    latest: conflicts && conflicts.files.length > 0 ? conflicts.conflict_snapshot : null,
+    failure,
+    open: pull.state === "open",
+    answer,
+  });
   const readAgain = () => {
+    // A failed read is asked for again; the editors stay as they are meanwhile.
+    if (view.readAgain === "revalidate") return void revalidator.revalidate();
     // The text edited so far stays at hand, apart from the fresh conflicts.
     if (form.current) {
       const data = new FormData(form.current);
@@ -179,18 +202,24 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
           </p>
         </div>
       )}
-      {answer?.error && (
+      {answer?.error && view.showRefusal && (
         <p className="error" role="alert">
           {answer.error}
         </p>
       )}
-      {(moved || (answer?.stale && !answer.ok)) && (
+      {failure !== null && (
+        <p className="error" role="alert">
+          {failure}
+        </p>
+      )}
+      {(view.moved || (failure !== null && view.editors)) && (
         <div className="panel" role="status">
           <p className="error">
-            The branches have moved since these conflicts were read: what you edit here is of the
-            older conflicts, and will not be merged.
+            {view.moved
+              ? "The branches have moved since these conflicts were read: what you edit here is of the older conflicts, and will not be merged."
+              : "The conflicts could not be read again: your edits are kept here, but cannot be sent until they are."}
           </p>
-          <button type="button" onClick={readAgain}>
+          <button type="button" onClick={readAgain} disabled={revalidator.state !== "idle"}>
             Read the conflicts again
           </button>
         </div>
@@ -206,15 +235,20 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
           ))}
         </details>
       )}
-      {answer?.ok ? null : pull.state !== "open" ? (
+      {pull.state !== "open" && !answer?.ok && (
         <p className="muted">Only an open pull request's conflicts are resolved here.</p>
-      ) : failure !== null ? (
-        <p className="error">{failure}</p>
-      ) : editing === null ? (
-        <p className="ok-text">
-          No conflicts: the head merges cleanly with the base branch.{" "}
-          <Link to={page}>Back to the conversation</Link>
-        </p>
+      )}
+      {answer?.ok || !view.editors || editing === null ? (
+        !answer?.ok &&
+        pull.state === "open" &&
+        failure === null &&
+        editing === null &&
+        !view.moved && (
+          <p className="ok-text">
+            No conflicts: the head merges cleanly with the base branch.{" "}
+            <Link to={page}>Back to the conversation</Link>
+          </p>
+        )
       ) : (
         <>
           <p>
@@ -246,6 +280,8 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
           {editable.length > 0 && (
             <Form
               method="post"
+              // Multipart: content goes as its bytes, not URL-encoded (three times the size).
+              encType="multipart/form-data"
               ref={form}
               key={`${editing.conflicts.conflict_snapshot}:${editing.generation}`}
             >
@@ -277,7 +313,7 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
                 <button
                   type="submit"
                   className="primary"
-                  disabled={stuck.length > 0 || moved || navigation.state !== "idle"}
+                  disabled={stuck.length > 0 || !view.canSubmit || navigation.state !== "idle"}
                   aria-describedby={stuck.length > 0 ? "stuck" : undefined}
                 >
                   Commit merge

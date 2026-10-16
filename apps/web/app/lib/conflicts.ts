@@ -151,3 +151,51 @@ export function withLineEndings(submitted: string, ending: LineEnding): string {
 export function shellQuote(word: string): string {
   return `'${word.replaceAll("'", `'\\''`)}'`;
 }
+
+/** What the conflicts page shows and allows, from what it holds and what it last heard. */
+export interface ConflictsView {
+  /** The editors stay on the page (their edits are never dropped by a later read). */
+  editors: boolean;
+  /** The conflicts edited are no longer the latest: sending them would be refused. */
+  moved: boolean;
+  canSubmit: boolean;
+  /** What "Read the conflicts again" does: take the latest read, or ask for one (it failed). */
+  readAgain: "adopt" | "revalidate";
+  /** The last refusal is about the conflicts being edited (not ones read over since). */
+  showRefusal: boolean;
+}
+
+export function conflictsView(state: {
+  /** The snapshot of the conflicts being edited; null when none are. */
+  adopted: string | null;
+  /** The snapshot of the latest read with conflicts; null when it found none or failed. */
+  latest: string | null;
+  /** Why the latest read failed, if it did. */
+  failure: string | null;
+  open: boolean;
+  answer?:
+    | {
+        ok?: boolean | undefined;
+        stale?: boolean | undefined;
+        snapshot?: string | undefined;
+        error?: string | undefined;
+      }
+    | undefined;
+}): ConflictsView {
+  const resolved = state.answer?.ok === true;
+  const editors = state.adopted !== null && !resolved;
+  const refusalHere =
+    state.answer?.error !== undefined &&
+    (state.answer.snapshot === undefined || state.answer.snapshot === state.adopted);
+  const moved =
+    !resolved &&
+    ((refusalHere && state.answer?.stale === true) ||
+      (state.open && state.failure === null && state.latest !== state.adopted));
+  return {
+    editors,
+    moved,
+    canSubmit: editors && state.open && state.failure === null && !moved,
+    readAgain: state.failure !== null ? "revalidate" : "adopt",
+    showRefusal: refusalHere,
+  };
+}

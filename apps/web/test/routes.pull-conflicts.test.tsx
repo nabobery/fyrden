@@ -7,13 +7,19 @@
 import { describe, expect, it } from "vitest";
 import { leftText } from "../app/components/conflict-editor.js";
 import {
+  conflictsView,
   lineEnding,
   readConflicts,
   resolveRegion,
   shellQuote,
   withLineEndings,
 } from "../app/lib/conflicts.js";
-import { action, loader, default as PullConflicts } from "../app/routes/repo.pull.conflicts.js";
+import {
+  action,
+  CONFLICTS_FORM_MAX_BYTES,
+  loader,
+  default as PullConflicts,
+} from "../app/routes/repo.pull.conflicts.js";
 import { formPost, json, ORIGIN } from "./helpers/context.js";
 import { api, pathOf, pullRequest, VIEWER } from "./helpers/pulls.js";
 import { ACTIVE_TAG, escaped, HOSTILE, renderPage } from "./helpers/render.js";
@@ -259,9 +265,11 @@ describe("resolving conflicts", () => {
     const { outcome } = await resolve({ conflict_snapshot: SNAPSHOT, count: "0" }, () =>
       json({ code: "head_moved", detail: "The head moved since the conflicts were read." }, 409),
     );
+    // The refusal names the snapshot it was about, so a later read can tell it is old news.
     expect(outcome).toEqual({
       error: "The head moved since the conflicts were read.",
       stale: true,
+      snapshot: SNAPSHOT,
     });
   });
 
@@ -277,7 +285,9 @@ describe("resolving conflicts", () => {
       },
       () => json({}, 201),
     );
-    expect(tooLarge.outcome).toEqual({ error: "a.txt is larger than 1 MiB: merge it locally." });
+    expect(tooLarge.outcome).toMatchObject({
+      error: "a.txt is larger than 1 MiB: merge it locally.",
+    });
     expect(tooLarge.body).toBeUndefined();
     // Five files of 900 KiB: each fits, together they do not.
     const fields: Record<string, string> = { conflict_snapshot: SNAPSHOT, count: "5" };
@@ -287,7 +297,7 @@ describe("resolving conflicts", () => {
       fields[`content:${i}`] = "a".repeat(900 * 1024);
     }
     const together = await resolve(fields, () => json({}, 201));
-    expect(together.outcome).toEqual({
+    expect(together.outcome).toMatchObject({
       error: "The resolved files are larger than 4 MiB in all: merge them locally.",
     });
     expect(together.body).toBeUndefined();
@@ -321,4 +331,89 @@ describe("resolving conflicts", () => {
       expect(body).toBeUndefined();
     }
   });
+});
+
+describe("the conflicts page's state", () => {
+  const A = "a".repeat(80);
+  const B = "b".repeat(80);
+  const view = (s: Partial<Parameters<typeof conflictsView>[0]>) =>
+    conflictsView({ adopted: A, latest: A, failure: null, open: true, ...s });
+
+  it("edits and sends the conflicts read", () => {
+    expect(view({})).toMatchObject({ editors: true, moved: false, canSubmit: true });
+  });
+
+  it("keeps the edits, refusing to send them, when the branches moved and a read again fails", () => {
+    // Sent, refused: the base moved since.
+    const refused = { error: "The base moved.", stale: true, snapshot: A };
+    expect(view({ latest: B, answer: refused })).toMatchObject({
+      editors: true,
+      moved: true,
+      canSubmit: false,
+      showRefusal: true,
+      readAgain: "adopt",
+    });
+    // The read after the refusal fails: the editors stay, nothing can be sent, and reading
+    // again asks for a new read instead of taking a failed one.
+    expect(view({ latest: null, failure: "Too large.", answer: refused })).toMatchObject({
+      editors: true,
+      canSubmit: false,
+      readAgain: "revalidate",
+    });
+    // Read again with success: the fresh conflicts are taken, the old refusal no longer shown.
+    expect(view({ adopted: B, latest: B, answer: refused })).toMatchObject({
+      editors: true,
+      moved: false,
+      canSubmit: true,
+      showRefusal: false,
+    });
+  });
+
+  it("says when conflicts appear or go while the page is open, and stops after a resolution", () => {
+    expect(view({ adopted: null, latest: B })).toMatchObject({ editors: false, moved: true });
+    expect(view({ latest: null })).toMatchObject({ editors: true, moved: true, canSubmit: false });
+    expect(view({ answer: { ok: true } })).toMatchObject({ editors: false, moved: false });
+    // Closed meanwhile: the edits stay on the page, nothing is sent.
+    expect(view({ open: false, latest: null })).toMatchObject({ editors: true, canSubmit: false });
+  });
+});
+
+describe("the conflicts form as a browser sends it", () => {
+  /** A multipart form as a browser builds it: every line break of a textarea as CRLF. */
+  function multipart(fields: Record<string, string>): Request {
+    const data = new FormData();
+    for (const [name, value] of Object.entries(fields))
+      data.append(name, value.replace(/\r?\n/g, "\r\n"));
+    return new Request(`${ORIGIN}/ada/demo/pull/7/conflicts`, {
+      method: "POST",
+      headers: { Origin: ORIGIN, Cookie: "fyrden_session=s" },
+      body: data,
+    });
+  }
+
+  it("takes newline-heavy LF files near the aggregate limit, sending LF", async () => {
+    // Four files of 1,048,575 line breaks: 4 MiB less 4 bytes as resolved, twice that as sent.
+    const files = 4;
+    const lines = 1024 * 1024 - 1;
+    const fields: Record<string, string> = { conflict_snapshot: SNAPSHOT, count: String(files) };
+    for (let i = 0; i < files; i++) {
+      fields[`path:${i}`] = `f${i}.txt`;
+      fields[`eol:${i}`] = "lf";
+      fields[`content:${i}`] = "\n".repeat(lines);
+    }
+    const request = multipart(fields);
+    const sentBytes = (await request.clone().arrayBuffer()).byteLength;
+    expect(sentBytes).toBeGreaterThan(8 * 1024 * 1024 - 1024);
+    expect(sentBytes).toBeLessThanOrEqual(CONFLICTS_FORM_MAX_BYTES);
+    const { context, calls } = api({
+      "POST /api/repos/ada/demo/pulls/7/conflicts": () =>
+        json({ sha: "c".repeat(40), markers: [] }, 201),
+    });
+    const outcome = await action({ request, context, params } as never);
+    expect(outcome).toMatchObject({ ok: true });
+    const post = calls.find((c) => c.method === "POST");
+    const body = (await post?.json()) as { files: { content: string }[] };
+    expect(body.files.map((f) => f.content.length)).toEqual(Array(files).fill(lines));
+    expect(body.files.every((f) => !f.content.includes("\r"))).toBe(true);
+  }, 60_000);
 });
