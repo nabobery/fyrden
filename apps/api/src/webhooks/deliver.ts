@@ -44,12 +44,19 @@ export const ATTEMPT_POLICY = {
   maxQueueDelayMs: 12 * 60 * 60_000,
   /** How late a due delivery's message may be before the cron sends another. */
   lateMs: 15 * 60_000,
-  /** Due deliveries one cron run sends again, and expired ones it deletes. */
+  /** Due deliveries one cron run sends again, and dead claims it finishes. */
   // A query or two each, beside the cron's other tasks (50 D1 queries an invocation on Free).
   reconcileBatch: 4,
   /** Hooks still to be turned off after a 410, told per run (two queries each). */
   disableBatch: 2,
-  pruneBatch: 10,
+  /**
+   * Deliveries past retention one cron run deletes, in three D1 queries and
+   * one R2 call whatever their number (R2 deletes up to 1,000 keys a call:
+   * https://developers.cloudflare.com/r2/api/workers/workers-api-reference/).
+   * 288 runs a day delete 288,000: more than Workers Free lets a deployment
+   * make (see docs/operations/limits.md).
+   */
+  pruneBatch: 1_000,
   /** How long a body may take to appear in R2 before a delivery without one fails. */
   bodyWaitMs: 60 * 60_000,
   /** How often a delivery waiting for its body looks again (no attempt spent). */
@@ -392,7 +399,7 @@ export interface Reconciled {
   readonly finished: number;
   /** Requests to turn a hook off after a 410 that were tried again. */
   readonly disabled: number;
-  /** Event bodies past retention deleted, with their deliveries. */
+  /** Deliveries past retention deleted (with their attempts, and the bodies of those sent). */
   readonly pruned: number;
 }
 
@@ -508,39 +515,38 @@ async function disableGone(deps: DeliveryDeps, policy: AttemptPolicy): Promise<n
   return undisabled.results.length;
 }
 
-/** Past retention: each event's body first (its deliveries share it), then their rows. */
+/**
+ * Deletes the deliveries longest past retention, a batch a run: the bodies
+ * of those that were sent first (one bulk delete; an event's deliveries
+ * share one, so a body is deleted with the first of them, the others
+ * finding it gone), then their attempts and rows. A dropped delivery's
+ * body was never stored (it was not sent): its row goes without one.
+ */
 async function pruneExpired(deps: DeliveryDeps, policy: AttemptPolicy): Promise<number> {
   const { db, env } = deps;
-  const now = deps.now();
-  const expired = await db
-    // Through the expiry index first (bounded), then one key per event.
+  const { results } = await db
     .prepare(
-      `SELECT DISTINCT payload_key FROM (
-         SELECT payload_key FROM webhook_deliveries WHERE expires_at <= ?1
-         ORDER BY expires_at LIMIT ?2)
-       LIMIT ?3`,
+      // Through the expiry index, so the batch bounds the rows read.
+      `SELECT delivery_id, payload_key, state = 'dropped' AS dropped FROM webhook_deliveries
+       WHERE expires_at <= ? ORDER BY expires_at LIMIT ?`,
     )
-    .bind(now, policy.pruneBatch * 20, policy.pruneBatch)
-    .all<{ payload_key: string }>();
-  if (expired.results.length > 0) {
-    await env.ASSETS.delete(expired.results.map((r) => r.payload_key));
-    const keys = JSON.stringify(expired.results.map((r) => r.payload_key));
-    await db.batch([
-      db
-        .prepare(
-          `DELETE FROM webhook_attempts WHERE delivery_id IN (
-             SELECT delivery_id FROM webhook_deliveries
-             WHERE payload_key IN (SELECT value FROM json_each(?)))`,
-        )
-        .bind(keys),
-      db
-        .prepare(
-          "DELETE FROM webhook_deliveries WHERE payload_key IN (SELECT value FROM json_each(?))",
-        )
-        .bind(keys),
-    ]);
-  }
-  return expired.results.length;
+    .bind(deps.now(), policy.pruneBatch)
+    .all<{ delivery_id: string; payload_key: string; dropped: number }>();
+  if (results.length === 0) return 0;
+  const bodies = [...new Set(results.filter((r) => r.dropped === 0).map((r) => r.payload_key))];
+  if (bodies.length > 0) await env.ASSETS.delete(bodies);
+  const ids = JSON.stringify(results.map((r) => r.delivery_id));
+  await db.batch([
+    db
+      .prepare("DELETE FROM webhook_attempts WHERE delivery_id IN (SELECT value FROM json_each(?))")
+      .bind(ids),
+    db
+      .prepare(
+        "DELETE FROM webhook_deliveries WHERE delivery_id IN (SELECT value FROM json_each(?))",
+      )
+      .bind(ids),
+  ]);
+  return results.length;
 }
 
 /**

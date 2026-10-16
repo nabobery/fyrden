@@ -80,8 +80,8 @@ export interface EffectPolicy {
 /**
  * Calls the effects cron makes besides its effects' deliveries: the
  * sweep's claim, marks and prune, and reconciling webhook deliveries
- * (about 25: its batches of 4 late sends, 2 hooks to turn off, 10 bodies
- * to delete). Counted from the code, with room.
+ * (about 25: its batches of 4 late sends, 2 hooks to turn off, and one
+ * bulk delete of expired bodies). Counted from the code, with room.
  */
 export const CRON_CALLS = 50;
 
