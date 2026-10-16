@@ -36,6 +36,20 @@ export interface EffectSink {
    * idempotent per `effect.id`; throws to retry later.
    */
   deliver(effect: Effect, env: Env, db: D1Database): Promise<void>;
+  /**
+   * Delivers several of the sink's effects at once, when the sink can do
+   * better than one at a time (one call per destination they share): the
+   * dispatcher then hands it every effect of the sink it claimed. Returns
+   * the ids delivered and why the others were not; those are retried as a
+   * failed `deliver` is. Idempotent per effect id, as `deliver`.
+   */
+  deliverBatch?(effects: readonly Effect[], env: Env, db: D1Database): Promise<BatchDelivery>;
+}
+
+/** What a batch delivery did: the effects delivered, and the first failure of the rest. */
+export interface BatchDelivery {
+  readonly delivered: readonly string[];
+  readonly error?: unknown;
 }
 
 /** Proposed values. */

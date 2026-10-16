@@ -8,7 +8,9 @@ import { EFFECT_POLICY, type Effect, type EffectPolicy, type EffectSink } from "
  * records the outcome. A delivered effect is marked done; a failed one
  * backs off and is retried by the sweeper until `maxAttempts`, then marked
  * failed. A crash between the delivery and the mark leaves the claim to
- * expire, and the effect is delivered again with the same id.
+ * expire, and the effect is delivered again with the same id. A sink that
+ * delivers in batches gets every effect of it a claim took in one call;
+ * the ones it delivered are marked done together, the rest back off.
  */
 
 type Row = {
@@ -89,65 +91,130 @@ export async function sweepEffects(deps: DispatchDeps): Promise<number> {
   return delivered;
 }
 
+/** A sink that delivers its effects together. */
+type BatchSink = EffectSink & Required<Pick<EffectSink, "deliverBatch">>;
+
+const delivers = (sink: EffectSink | undefined): sink is BatchSink =>
+  sink?.deliverBatch !== undefined;
+
+/**
+ * Delivers claimed effects: one at a time, except a batch sink's, which go
+ * to it together in one call (each still has its own claim and outcome).
+ */
 async function deliverAll(
   deps: DispatchDeps,
   rows: readonly Row[],
   token: string,
 ): Promise<number> {
   let delivered = 0;
-  for (const row of rows) if (await deliverOne(deps, row, token)) delivered++;
+  const batches = new Map<BatchSink, Row[]>();
+  for (const row of rows) {
+    const sink = deps.sinks.find((s) => s.name === row.sink);
+    if (delivers(sink)) batches.set(sink, [...(batches.get(sink) ?? []), row]);
+    else if (await deliverOne(deps, sink, row, token)) delivered++;
+  }
+  for (const [sink, batch] of batches) delivered += await deliverBatch(deps, sink, batch, token);
   return delivered;
 }
 
-async function deliverOne(deps: DispatchDeps, row: Row, token: string): Promise<boolean> {
-  const policy = deps.policy ?? EFFECT_POLICY;
-  const sink = deps.sinks.find((s) => s.name === row.sink);
-  const effect: Effect = {
+function effectOf(row: Row): Effect {
+  return {
     id: row.effect_id,
     sink: row.sink,
     target: row.target,
     payload: JSON.parse(row.payload) as Record<string, unknown>,
     attempts: row.attempts,
   };
+}
+
+async function deliverOne(
+  deps: DispatchDeps,
+  sink: EffectSink | undefined,
+  row: Row,
+  token: string,
+): Promise<boolean> {
   try {
     if (!sink) throw new Error(`no sink named ${row.sink}`);
-    await sink.deliver(effect, deps.env, deps.db);
+    await sink.deliver(effectOf(row), deps.env, deps.db);
   } catch (error) {
+    await markFailed(deps, [row], token, error, !sink);
+    return false;
+  }
+  await markDone(deps, [row.effect_id], token);
+  return true;
+}
+
+/** A batch sink's effects in one call; those it did not deliver are retried. */
+async function deliverBatch(
+  deps: DispatchDeps,
+  sink: BatchSink,
+  rows: readonly Row[],
+  token: string,
+): Promise<number> {
+  let outcome: Awaited<ReturnType<BatchSink["deliverBatch"]>>;
+  try {
+    outcome = await sink.deliverBatch(rows.map(effectOf), deps.env, deps.db);
+  } catch (error) {
+    outcome = { delivered: [], error };
+  }
+  const delivered = new Set(outcome.delivered);
+  const done = rows.filter((row) => delivered.has(row.effect_id)).map((row) => row.effect_id);
+  const rest = rows.filter((row) => !delivered.has(row.effect_id));
+  if (rest.length > 0)
+    await markFailed(deps, rest, token, outcome.error ?? new Error("not delivered"), false);
+  if (done.length > 0) await markDone(deps, done, token);
+  return done.length;
+}
+
+/**
+ * Backs failed effects off (from each one's own attempts) in one query, or
+ * marks them failed after the last attempt or when `final`. Only this
+ * claim's holder writes.
+ */
+async function markFailed(
+  deps: DispatchDeps,
+  rows: readonly Row[],
+  token: string,
+  error: unknown,
+  final: boolean,
+): Promise<void> {
+  const policy = deps.policy ?? EFFECT_POLICY;
+  for (const row of rows)
     deps.log?.warn("delivering an effect failed", {
       effectId: row.effect_id,
       attempts: row.attempts + 1,
       error,
     });
-    deps.metrics?.count("d1.query", { db: "org", op: "effects_retry" });
-    // Attempts and backoff from the row itself; only this claim's holder writes.
-    await deps.db
-      .prepare(
-        `UPDATE effects SET attempts = attempts + 1,
-           next_attempt_at = ?1 + min(?2 << attempts, ?3),
-           last_error = ?4, lease_token = NULL, lease_until = NULL,
-           state = CASE WHEN ?5 OR attempts + 1 >= ?6 THEN 'failed' ELSE 'pending' END
-         WHERE effect_id = ?7 AND lease_token = ?8`,
-      )
-      .bind(
-        deps.now(),
-        policy.backoffMs,
-        policy.maxBackoffMs,
-        (error instanceof Error ? error.message : String(error)).slice(0, 500),
-        sink ? 0 : 1,
-        policy.maxAttempts,
-        row.effect_id,
-        token,
-      )
-      .run();
-    return false;
-  }
+  deps.metrics?.count("d1.query", { db: "org", op: "effects_retry" });
+  await deps.db
+    .prepare(
+      `UPDATE effects SET attempts = attempts + 1,
+         next_attempt_at = ?1 + min(?2 << attempts, ?3),
+         last_error = ?4, lease_token = NULL, lease_until = NULL,
+         state = CASE WHEN ?5 OR attempts + 1 >= ?6 THEN 'failed' ELSE 'pending' END
+       WHERE effect_id IN (SELECT value FROM json_each(?7)) AND lease_token = ?8`,
+    )
+    .bind(
+      deps.now(),
+      policy.backoffMs,
+      policy.maxBackoffMs,
+      (error instanceof Error ? error.message : String(error)).slice(0, 500),
+      final ? 1 : 0,
+      policy.maxAttempts,
+      JSON.stringify(rows.map((row) => row.effect_id)),
+      token,
+    )
+    .run();
+}
+
+/** Marks delivered effects done, in one query; only this claim's holder writes. */
+async function markDone(deps: DispatchDeps, ids: readonly string[], token: string): Promise<void> {
   deps.metrics?.count("d1.query", { db: "org", op: "effects_done" });
   await deps.db
     .prepare(
       `UPDATE effects SET state = 'done', done_at = ?, lease_token = NULL, lease_until = NULL
-       WHERE effect_id = ? AND lease_token = ?`,
+       WHERE effect_id IN (SELECT value FROM json_each(?)) AND lease_token = ?`,
     )
-    .bind(deps.now(), row.effect_id, token)
+    .bind(deps.now(), JSON.stringify(ids), token)
     .run();
-  return true;
 }

@@ -691,6 +691,7 @@ their own.
 | Retention | 7 days from an item's last change, and 5,000 items a feed (the ones changed longest ago go first), both Proposed; entries for events older than 7 days are dropped on arrival. A cursor from before what retention deleted, from another epoch or past the feed's head is refused with 410 `cursor_expired` and `resync: /api/feed/sync` |
 | Sync | Open P0 items, then P1 items changed in the last 7 days, newest first: 500 at most (Proposed; `complete` is false when more were left out), and the cursor at that instant |
 | Acknowledgement | `{item_key, version}`: a version the item does not have yet is refused (409 `version_ahead`); an older one than already acknowledged changes nothing |
+| Delivery | What an event means for feeds travels with it (at most 100 recipients) and is journaled as one effect per event, not one row per recipient. Delivering a batch of them calls each recipient's feed once with all its entries; an effect naming a recipient whose call failed is retried, the others are done. The consumer delivers 2 effects an invocation itself and the effects cron 4 a run (each a claim and one mark for all), so a delivery makes at most 400 calls to feeds. Counted in local integration tests (2026-10-16): a consumer invocation of five messages makes 12 D1 queries (a lookup and a batch per message, a claim and a mark), a sweep of feed effects 3, of Free's 50. Entries reach feeds within the consumer's invocation, or the effects cron's next run (every 5 minutes) for the rest |
 
 ## Idempotent requests
 
