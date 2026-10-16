@@ -6,7 +6,13 @@ import {
 } from "@fyrden/adapters-cloudflare/git";
 import type { RepoDO } from "../do/RepoDO.js";
 import type { Member, NetworkRegistry } from "./registry.js";
-import { type NetworkRuntime, SliceCalls, scheduleDeletions } from "./runtime.js";
+import {
+  NETWORK_GC_JOB_ID,
+  type NetworkRuntime,
+  SliceCalls,
+  scheduleDeletions,
+  scheduleNetworkGc,
+} from "./runtime.js";
 import type { MemberPack } from "./types.js";
 
 /*
@@ -15,11 +21,12 @@ import type { MemberPack } from "./types.js";
  *
  * 1. Mark, behind the fence: no fork is created and no detach starts while
  *    it runs (they wait, then get a retryable refusal), and it does not
- *    start while a fork is joining. Each member reports its view (the
- *    registry rows of packs under the network's prefix). A member's claims
- *    become exactly the shared packs its view holds; claims recorded after
- *    the epoch began are kept as they are. Shared packs no member claims
- *    are condemned (two-phase deletion, deletion.ts). The fence lifts.
+ *    start while a fork is joining (it waits until that fork is published
+ *    or abandoned). Each member reports its view (the registry rows of
+ *    packs under the network's prefix). A member's claims become exactly
+ *    the shared packs its view holds; claims recorded after the epoch began
+ *    are kept as they are. Shared packs no member claims are condemned
+ *    (two-phase deletion, deletion.ts). The fence lifts.
  * 2. Sweep: objects under `net/<nid>/p/` that no member's registry and not
  *    the network names, older than the sweep TTL, are deleted (the orphan
  *    sweep a lone repository runs for itself). Page by page: the members
@@ -62,17 +69,23 @@ interface SweepPage extends PackPrefixPage {
   readonly asked?: readonly [number, string];
 }
 
+/** The collection is due, and waits for a fork that is joining (`wakeGc`). */
+interface GcWait {
+  readonly v: 1;
+  readonly phase: "wait";
+}
+
 /** Registry states of a member's row that count as holding the pack. */
 const HOLDING = new Set(["indexing", "indexed", "live", "garbage", "superseded", "condemned"]);
 
 /** Calls one question to a member may take: the call, and the directory check if it fails. */
 const MEMBER_CALLS = 2;
 
-const encode = (cursor: GcCursor) => new TextEncoder().encode(JSON.stringify(cursor));
-function decode(bytes: Uint8Array | null): GcCursor | undefined {
+const encode = (cursor: GcCursor | GcWait) => new TextEncoder().encode(JSON.stringify(cursor));
+function decode(bytes: Uint8Array | null): GcCursor | GcWait | undefined {
   if (!bytes) return undefined;
   try {
-    const value = JSON.parse(new TextDecoder().decode(bytes)) as GcCursor;
+    const value = JSON.parse(new TextDecoder().decode(bytes)) as GcCursor | GcWait;
     return value.v === 1 ? value : undefined;
   } catch {
     return undefined;
@@ -83,15 +96,40 @@ export function networkGcHandler(runtime: NetworkRuntime): JobHandler {
   return { runSlice: (job) => gcSlice(runtime, decode(job.cursor)) };
 }
 
-async function gcSlice(runtime: NetworkRuntime, saved: GcCursor | undefined): Promise<SliceResult> {
+/**
+ * Runs a collection that waits for a joining fork now, once no fork is
+ * joining any more (the last one was published, abandoned or deleted).
+ */
+export function wakeGc(runtime: NetworkRuntime): void {
+  const { registry, jobs, context } = runtime;
+  if (registry.members(["joining"]).length > 0) return;
+  const job = jobs.get(NETWORK_GC_JOB_ID);
+  if (job?.state === "queued" && decode(job.cursor)?.phase === "wait")
+    scheduleNetworkGc(runtime, context.now());
+}
+
+async function gcSlice(
+  runtime: NetworkRuntime,
+  saved: GcCursor | GcWait | undefined,
+): Promise<SliceResult> {
   const { env, registry, context, policy } = runtime;
   const networkId = registry.networkId();
   if (!networkId) return { done: true };
   const deadline = context.now() + policy.sliceMs;
   const calls = new SliceCalls(policy.sliceCalls, context.metrics);
-  const opened = saved ?? start(runtime);
-  if (!opened) return { done: false, cursor: null, runAfterMs: 1_000 };
-  let cursor: GcCursor = opened;
+  let cursor: GcCursor;
+  if (saved === undefined || saved.phase === "wait") {
+    const started = start(runtime);
+    // Nothing awaited between this check and the job recording the wait,
+    // so a fork that finishes joining always finds it to wake.
+    if ("waitUntil" in started)
+      return {
+        done: false,
+        cursor: encode({ v: 1, phase: "wait" }),
+        runAfterMs: started.waitUntil - context.now(),
+      };
+    cursor = started;
+  } else cursor = saved;
   if (cursor.epoch !== registry.gcState().epoch) {
     // The saved run is not the current epoch's (a state lost with a reset): start again.
     registry.setGcState({ phase: "idle", fence: false });
@@ -178,15 +216,18 @@ async function gcSlice(runtime: NetworkRuntime, saved: GcCursor | undefined): Pr
 }
 
 /**
- * Opens an epoch and raises the fence, unless a fork is joining (the
- * epoch then waits for it). A fork abandoned while joining is removed.
+ * Opens an epoch and raises the fence. While a fork is joining it does
+ * not, and answers when the first joining fork counts as abandoned. A
+ * fork abandoned while joining is removed.
  */
-function start(runtime: NetworkRuntime): GcCursor | undefined {
+function start(runtime: NetworkRuntime): GcCursor | { readonly waitUntil: number } {
   const { registry, context, policy } = runtime;
   const now = context.now();
   return context.storage.transactionSync(() => {
+    // In the order they joined: the first one still joining is the first to expire.
     for (const member of registry.members(["joining"])) {
-      if (member.joinedAt + policy.joiningTtlMs > now) return undefined;
+      const abandonedAt = member.joinedAt + policy.joiningTtlMs;
+      if (abandonedAt > now) return { waitUntil: abandonedAt };
       const unclaimed = registry.removeJoining(member.repoId);
       if (unclaimed.length > 0) registry.condemn(unclaimed, policy.retentionMs);
     }

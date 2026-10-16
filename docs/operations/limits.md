@@ -338,7 +338,10 @@ deleted: the members are asked a page of 100 files at a time, and no more
 once every file of the page is accounted for. Each slice of this work makes
 at most 100 calls to members, R2 and D1 (Proposed) and saves its place, and
 an alarm starts no slice past 800 calls, so a network with many members is
-collected over as many alarms as it needs.
+collected over as many alarms as it needs. A collection due while a fork is
+being created waits for it: it runs as soon as the fork is published or
+abandoned, and a fork still unfinished after 1 hour is taken as abandoned
+and removed.
 
 ## Repository deletion
 

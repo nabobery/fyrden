@@ -2,7 +2,9 @@
 // (Free allows 1,000): every slice of the collection and of the deletions
 // makes at most `sliceCalls` calls, saving its place, and the alarm is a
 // measured invocation, so its job queue stops starting slices once the
-// calls are nearly spent.
+// calls are nearly spent. A collection due while a fork is joining waits
+// until that fork is abandoned, or runs as soon as the last joining fork
+// finishes, instead of trying again every second.
 
 import { env } from "cloudflare:workers";
 import {
@@ -12,6 +14,7 @@ import {
   newPackId,
 } from "@fyrden/adapters-cloudflare/git";
 import { currentInvocation, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
+import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, inject, it } from "vitest";
 import type { NetworkDO } from "../src/do/NetworkDO.js";
 import { deletionHandler } from "../src/network/deletion.js";
@@ -224,5 +227,87 @@ describe("network collection within a call budget", () => {
     for (let i = 0; i < 20 && gc.phase !== "idle"; i++) gc = await alarm();
     expect(gc).toMatchObject({ epoch: 1, phase: "idle", fence: false });
     for (const key of orphans) expect(await exists(key)).toBe(false);
+  });
+});
+
+describe("network collection while a fork is joining", () => {
+  /** Runs the network's alarm when its collection is next due (or now), until an epoch ends; those times. */
+  async function alarmsUntilCollected(networkId: string, max = 10): Promise<number[]> {
+    const runs: number[] = [];
+    for (let i = 0; i < max; i++) {
+      const collected = await inNetwork(networkId, async (n) => {
+        const at = Math.max(dueAt(n, NETWORK_GC_JOB_ID), n.context.now());
+        holdClock(n, at);
+        runs.push(at);
+        await n.alarm();
+        return n.registry.gcState().epoch > 0;
+      });
+      if (collected) return runs;
+    }
+    return runs;
+  }
+
+  it("waits until an abandoned fork's joining deadline, not polling meanwhile", async () => {
+    const { networkId } = await network();
+    const t0 = await inNetwork(networkId, (n) => {
+      const now = n.context.now();
+      holdClock(n, now);
+      n.registry.addMember(uniqueId("rep"), null, "joining");
+      n.startGc();
+      return now;
+    });
+    const runs = await alarmsUntilCollected(networkId);
+    expect(runs).toEqual([t0, t0 + NETWORK_DEFAULTS.joiningTtlMs]);
+    const status = await inNetwork(networkId, (n) => n.status());
+    expect(status.members.some((m) => m.state === "joining")).toBe(false);
+  });
+
+  it("a collection waiting for a fork runs once the fork is published", async () => {
+    const { p, networkId } = await network();
+    const t0 = await inNetwork(networkId, (n) => {
+      const now = n.context.now();
+      holdClock(n, now);
+      return now;
+    });
+    const waiting: number[] = [];
+    const { repo } = await fork(owner, p, owner, {
+      hooks: {
+        afterCopyStep: async ({ step }) => {
+          if (step !== 1) return;
+          waiting.push(
+            await inNetwork(networkId, async (n) => {
+              n.startGc();
+              await n.alarm();
+              expect(n.registry.gcState().epoch).toBe(0);
+              return dueAt(n, NETWORK_GC_JOB_ID);
+            }),
+          );
+        },
+      },
+    });
+    expect(waiting).toEqual([t0 + NETWORK_DEFAULTS.joiningTtlMs]);
+    // Published: the collection is due now, not at the deadline.
+    expect(await alarmsUntilCollected(networkId)).toEqual([t0]);
+    const status = await inNetwork(networkId, (n) => n.status());
+    for (const pack of status.packs) expect(pack.claims).toContain(repo.id);
+    expect(status.deletions).toEqual([]);
+  });
+
+  it("a collection waiting for a fork runs once the fork is abandoned", async () => {
+    const { networkId } = await network();
+    const joining = uniqueId("rep");
+    const t0 = await inNetwork(networkId, async (n) => {
+      const now = n.context.now();
+      holdClock(n, now);
+      n.registry.addMember(joining, null, "joining");
+      n.startGc();
+      await n.alarm();
+      return now;
+    });
+    expect(await inNetwork(networkId, (n) => dueAt(n, NETWORK_GC_JOB_ID))).toBe(
+      t0 + NETWORK_DEFAULTS.joiningTtlMs,
+    );
+    await inNetwork(networkId, (n) => n.abortFork({ networkId, forkRepoId: joining }));
+    expect(await alarmsUntilCollected(networkId)).toEqual([t0]);
   });
 });

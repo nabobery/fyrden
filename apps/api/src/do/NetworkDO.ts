@@ -7,7 +7,7 @@ import {
 import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
 import { deletionHandler } from "../network/deletion.js";
-import { networkGcHandler } from "../network/gc.js";
+import { networkGcHandler, wakeGc } from "../network/gc.js";
 import { type GcState, type Member, NetworkRegistry } from "../network/registry.js";
 import {
   NETWORK_DEFAULTS,
@@ -227,11 +227,16 @@ export class NetworkDO extends MigratingDO {
     this.registry.share([input.output], () => input.forkRepoId, [input.forkRepoId]);
   }
 
-  /** The fork is published: it is a full member, and the network is collected from now on. */
+  /**
+   * The fork is published: it is a full member, and the network is
+   * collected from now on (now, if a collection was waiting for it).
+   */
   completeFork(input: { networkId: string; forkRepoId: string }): boolean {
     this.registry.ensure(input.networkId);
     const done = this.registry.setMemberState(input.forkRepoId, ["joining"], "active");
-    scheduleNetworkGc(this.runtime, this.context.now() + this.policy.gcIntervalMs);
+    const runtime = this.runtime;
+    scheduleNetworkGc(runtime, this.context.now() + this.policy.gcIntervalMs);
+    wakeGc(runtime);
     return done;
   }
 
@@ -248,6 +253,7 @@ export class NetworkDO extends MigratingDO {
       return left;
     });
     if (unclaimed.length > 0) scheduleDeletions(this.runtime);
+    wakeGc(this.runtime);
   }
 
   /**
@@ -265,6 +271,8 @@ export class NetworkDO extends MigratingDO {
       return left;
     });
     if (unclaimed.length > 0) scheduleDeletions(this.runtime);
+    // It may have been the fork a collection waits for.
+    wakeGc(this.runtime);
   }
 
   /** Of `packIds`, the ones the network knows: their bytes are the network's to delete. */
