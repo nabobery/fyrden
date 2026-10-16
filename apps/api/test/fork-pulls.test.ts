@@ -136,6 +136,13 @@ describe("pull requests from forks", () => {
       api("PUT", `${base.path}/pulls/1/merge`, owner.token),
     );
     expect(merged.status).toBe(200);
+    // The default message names the fork's branch, as its owner's.
+    const commit = await json<{ commit: { message: string } }>(
+      api("GET", `${base.path}/commits/${merged.body.sha}`, owner.token),
+    );
+    expect(commit.body.commit.message).toMatch(
+      new RegExp(`^Merge pull request #1 from ${contributor.handle}/main\n`),
+    );
     const read = await json<{ content: string }>(
       api("GET", `${base.path}/contents/b.txt?ref=main`, owner.token),
     );

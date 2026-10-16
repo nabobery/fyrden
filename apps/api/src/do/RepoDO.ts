@@ -340,7 +340,7 @@ export interface MergePullInput {
   readonly expectedHead?: string;
   readonly commitTitle?: string;
   readonly commitMessage?: string;
-  /** The repository owner's handle, for the default merge message. */
+  /** The head branch's repository's owner's handle (a fork's, or this one's), for the default merge message. */
   readonly ownerHandle: string;
   /** Who a merge commit is by: the merger. */
   readonly mergerIdentity: CommitIdentity;

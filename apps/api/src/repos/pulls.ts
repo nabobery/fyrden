@@ -19,7 +19,7 @@ import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, decodeCursor, encodeBytesCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { resolveVerification } from "../signing/verification.js";
-import { authorize, networkReposOf, type RepoEntry } from "./directory.js";
+import { authorize, findReposById, networkReposOf, type RepoEntry } from "./directory.js";
 import { commitIdentityFor, commitIdentityOf } from "./file-writes.js";
 
 type PullOutput = Output<typeof getPull>;
@@ -321,9 +321,11 @@ export async function mergePullOperation(
   const pull = await repo.getPull(input.pull_number);
   if (pull === null) throw repoNotFound(entry);
   if (!pull) throw pullNotFound(input.pull_number);
-  const [mergerIdentity, pullAuthorIdentity] = await Promise.all([
+  const [mergerIdentity, pullAuthorIdentity, head] = await Promise.all([
     commitIdentityOf(ctx),
     commitIdentityFor(ctx, pull.authorId, pull.authorAct[0] ?? null),
+    // A head branch in a fork: the default message names the fork's owner, as GitHub's does.
+    pull.headRepoId ? findReposById(ctx.env, [pull.headRepoId], ctx.metrics) : [],
   ]);
   ctx.metrics.count("do.request", { class: "RepoDO", method: "mergePull" });
   const result = await repo.mergePull(
@@ -333,7 +335,7 @@ export async function mergePullOperation(
       ...(input.sha !== undefined && { expectedHead: input.sha }),
       ...(input.commit_title !== undefined && { commitTitle: input.commit_title }),
       ...(input.commit_message !== undefined && { commitMessage: input.commit_message }),
-      ownerHandle: entry.ownerHandle,
+      ownerHandle: head[0]?.ownerHandle ?? entry.ownerHandle,
       mergerIdentity,
       pullAuthorIdentity,
     },
