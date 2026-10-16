@@ -347,6 +347,87 @@ describe("webhooks", () => {
     expect(await active(stuck.id)).toBe(true);
   });
 
+  it("are reconciled past a failed resend, the failure reported once every step has run", async () => {
+    const hook = async () => (await t.createHook()).body.id;
+    const hooks = {
+      late: await hook(),
+      spent: await hook(),
+      gone: await hook(),
+      expired: await hook(),
+    };
+    // One ping a run: a run delivers only a few effects itself.
+    for (const event of (await t.outbox()).filter((e) => e.webhooks)) await t.materialize([event]);
+    const rows = await t.deliveries();
+    const pingOf = (id: number) =>
+      (rows.find((d) => d.hook_id === id) as { delivery_id: string }).delivery_id;
+    const [late, spent, gone, expired] = [
+      pingOf(hooks.late),
+      pingOf(hooks.spent),
+      pingOf(hooks.gone),
+      pingOf(hooks.expired),
+    ];
+    const set = (id: string, assignments: string) =>
+      env.ORG_READ.prepare(`UPDATE webhook_deliveries SET ${assignments} WHERE delivery_id = ?`)
+        .bind(id)
+        .run();
+    // Each first in its step's order, whatever other tests left in this file's database.
+    await set(late, "next_attempt_at = 0");
+    await set(
+      spent,
+      `attempts = ${ATTEMPT_POLICY.maxAttempts}, lease_token = 'dead', lease_until = 1`,
+    );
+    await set(
+      gone,
+      "state = 'failed', reason = 'gone', last_status = 410, disable_hook_version = 1, disable_retry_at = 0",
+    );
+    await set(expired, "state = 'done', expires_at = 1");
+    const body = await env.ORG_READ.prepare(
+      "SELECT payload_key FROM webhook_deliveries WHERE delivery_id = ?",
+    )
+      .bind(expired)
+      .first<{ payload_key: string }>();
+
+    const now = Date.now();
+    const queueDown = {
+      ...t.deps(now),
+      env: {
+        ...t.testEnv(),
+        WEBHOOKS: {
+          send: async () => {
+            throw new Error("queue unavailable");
+          },
+        },
+      } as unknown as Env,
+    };
+    const failed = await reconcileWebhooks(queueDown).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failed).toBeInstanceOf(AggregateError);
+    expect(failed).toMatchObject({
+      errors: expect.arrayContaining([expect.objectContaining({ message: "queue unavailable" })]),
+    });
+    // The other steps ran all the same.
+    const after = new Map((await t.deliveries()).map((d) => [d.delivery_id, d]));
+    expect(after.get(spent)).toMatchObject({ state: "failed", reason: "attempts_spent" });
+    expect(
+      (await json<HookOut>(api("GET", `${t.path}/hooks/${hooks.gone}`, t.owner.token))).body,
+    ).toMatchObject({ active: false, disabled_reason: expect.stringContaining("410") });
+    expect(after.has(expired)).toBe(false);
+    expect(await env.ASSETS.head(body?.payload_key as string)).toBeNull();
+    // The delivery whose message was not sent stays due: sent once it is late again.
+    const kept = await env.ORG_READ.prepare(
+      "SELECT state, next_attempt_at, lease_token FROM webhook_deliveries WHERE delivery_id = ?",
+    )
+      .bind(late)
+      .first();
+    expect(kept).toEqual({ state: "pending", next_attempt_at: now, lease_token: null });
+    // (Other tests' due deliveries come first: sent until this one is.)
+    for (let i = 0; i < 20 && !t.sent.some((s) => s.delivery === late); i++)
+      await reconcileWebhooks(t.deps(now + ATTEMPT_POLICY.lateMs));
+    expect(t.sent.filter((s) => s.delivery === late)).toEqual([{ delivery: late }]);
+  });
+
   it("record nothing over a cancellation, keep a bounded excerpt, and wait for a body", async () => {
     const hook = (await t.createHook()).body;
     await t.materialize((await t.outbox()).filter((e) => e.webhooks));

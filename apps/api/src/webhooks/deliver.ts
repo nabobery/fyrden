@@ -384,16 +384,66 @@ async function record(
     });
 }
 
+/** What one cron run of reconciliation did, step by step. */
+export interface Reconciled {
+  /** Late deliveries whose message was sent again. */
+  readonly sent: number;
+  /** Deliveries whose last attempt's run died with its claim, now failed. */
+  readonly finished: number;
+  /** Requests to turn a hook off after a 410 that were tried again. */
+  readonly disabled: number;
+  /** Event bodies past retention deleted, with their deliveries. */
+  readonly pruned: number;
+}
+
 /**
- * The cron's share: sends a message again for due deliveries whose message
- * is late (lost, or never sent for a wait over a queue's longest delay),
- * claiming each by its schedule so two runs send one; then deletes
- * deliveries past their retention, their bodies first.
+ * The cron's share, in independent steps, each bounded on its own: sends a
+ * message again for due deliveries whose message is late, fails those
+ * whose last attempt died with its claim, tries again to turn off hooks
+ * whose receiver answered 410, and deletes deliveries past retention. A
+ * step that fails (a queue or a repository object unavailable) stops none
+ * of the others; the failures are thrown together once all have run.
  */
-export async function reconcileWebhooks(
-  deps: DeliveryDeps,
-): Promise<{ sent: number; pruned: number }> {
+export async function reconcileWebhooks(deps: DeliveryDeps): Promise<Reconciled> {
   const policy = deps.policy ?? ATTEMPT_POLICY;
+  const log = createLogger({ op: "webhooks.reconcile" });
+  const failures: unknown[] = [];
+  const fail = (step: string, error: unknown, delivery?: string) => {
+    log.error("a reconciliation step failed", { step, ...(delivery && { delivery }), error });
+    failures.push(error);
+  };
+  const step = async (name: string, run: () => Promise<number>): Promise<number> => {
+    try {
+      return await run();
+    } catch (error) {
+      fail(name, error);
+      return 0;
+    }
+  };
+  const reconciled: Reconciled = {
+    sent: await step("resend", () =>
+      resendLate(deps, policy, (delivery, error) => fail("resend", error, delivery)),
+    ),
+    finished: await step("finish", () => finishDeadClaims(deps, policy)),
+    disabled: await step("disable", () => disableGone(deps, policy)),
+    pruned: await step("prune", () => pruneExpired(deps, policy)),
+  };
+  if (failures.length > 0)
+    throw new AggregateError(failures, `webhook reconciliation: ${failures.length} failure(s)`);
+  return reconciled;
+}
+
+/**
+ * Sends a message again for due deliveries whose message is late (lost, or
+ * never sent for a wait over a queue's longest delay), claiming each by its
+ * schedule so two runs send one. A send that fails leaves its delivery due
+ * from now: a later run finds it late again and sends it then.
+ */
+async function resendLate(
+  deps: DeliveryDeps,
+  policy: AttemptPolicy,
+  failed: (delivery: string, error: unknown) => void,
+): Promise<number> {
   const { db, env } = deps;
   const now = deps.now();
   const late = await db
@@ -415,11 +465,22 @@ export async function reconcileWebhooks(
       .bind(now, row.delivery_id, row.next_attempt_at)
       .run();
     if (moved.meta.changes === 0) continue;
-    await env.WEBHOOKS.send({ delivery: row.delivery_id } satisfies DeliveryMessage);
-    sent++;
+    try {
+      await env.WEBHOOKS.send({ delivery: row.delivery_id } satisfies DeliveryMessage);
+      sent++;
+    } catch (error) {
+      // Each on its own: the others are still sent.
+      failed(row.delivery_id, error);
+    }
   }
-  // A last attempt whose run died with its claim: nothing more to try (claims are few: indexed).
-  await db
+  return sent;
+}
+
+/** A last attempt whose run died with its claim: nothing more to try (claims are few: indexed). */
+async function finishDeadClaims(deps: DeliveryDeps, policy: AttemptPolicy): Promise<number> {
+  const { db } = deps;
+  const now = deps.now();
+  const finished = await db
     .prepare(
       `UPDATE webhook_deliveries SET state = 'failed', reason = 'attempts_spent',
          lease_token = NULL, lease_until = NULL, updated_at = ?1
@@ -431,8 +492,12 @@ export async function reconcileWebhooks(
     )
     .bind(now, policy.maxAttempts, policy.reconcileBatch)
     .run();
-  // Hooks whose receiver answered 410 and that could not be turned off then.
-  const undisabled = await db
+  return finished.meta.changes;
+}
+
+/** Hooks whose receiver answered 410 and that could not be turned off then, the longest waiting first. */
+async function disableGone(deps: DeliveryDeps, policy: AttemptPolicy): Promise<number> {
+  const undisabled = await deps.db
     .prepare(
       `SELECT delivery_id FROM webhook_deliveries WHERE disable_hook_version IS NOT NULL
        ORDER BY disable_retry_at LIMIT ?`,
@@ -440,7 +505,13 @@ export async function reconcileWebhooks(
     .bind(policy.disableBatch)
     .all<{ delivery_id: string }>();
   for (const row of undisabled.results) await disableFor(deps, row.delivery_id);
-  // Past retention: each event's body first (its deliveries share it), then their rows.
+  return undisabled.results.length;
+}
+
+/** Past retention: each event's body first (its deliveries share it), then their rows. */
+async function pruneExpired(deps: DeliveryDeps, policy: AttemptPolicy): Promise<number> {
+  const { db, env } = deps;
+  const now = deps.now();
   const expired = await db
     // Through the expiry index first (bounded), then one key per event.
     .prepare(
@@ -469,7 +540,7 @@ export async function reconcileWebhooks(
         .bind(keys),
     ]);
   }
-  return { sent, pruned: expired.results.length };
+  return expired.results.length;
 }
 
 /**
