@@ -1,0 +1,254 @@
+// Activity feeds forget repositories their owner lost read access to: an
+// account's access.revoked event reaches each principal's feed as a purge
+// of those repositories up to then, and a mark keeps older entries arriving
+// later out; a re-grant brings new items, and a late purge of an older
+// access version changes nothing.
+
+import { runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:workers";
+import {
+  createIdFactory,
+  type DomainEvent,
+  type FeedEntry,
+  secureRandomBytes,
+} from "@fyrden/domain";
+import { uniqueId } from "@fyrden/testing";
+import { describe, expect, it } from "vitest";
+import type { OrgDO } from "../src/do/OrgDO.js";
+import type { UserDO } from "../src/do/UserDO.js";
+import type { FeedPurge } from "../src/do/user/feed.js";
+import type { Effect, EffectSink } from "../src/effects/journal.js";
+import { feedSink } from "../src/feed/sink.js";
+import { applyEnvelope } from "../src/queues/events-consumer.js";
+import { api, user } from "./helpers/api.js";
+
+const newId = createIdFactory(Date.now, secureRandomBytes);
+
+/** An activity entry for `repoId`'s pull 1, at `occurredAt`. */
+function entry(repoId: string, version: number, occurredAt: number): FeedEntry {
+  return {
+    eventKey: `${repoId}:1:${version}`,
+    repoId,
+    occurredAt,
+    actor: "usr_actor",
+    feed: {
+      threadKey: "pull/1",
+      subject: { kind: "pull", number: 1, title: "A pull request", version },
+      action: "comment",
+      actorRoot: "usr_actor",
+      actorTrust: "write",
+      member: `comment/${version}`,
+      excerpt: null,
+    },
+    recipient: {
+      principal: "usr_reader",
+      kind: "activity",
+      reasons: ["commenter"],
+      priority: "P1",
+      state: "open",
+      silent: false,
+    },
+  };
+}
+
+async function shown(stub: DurableObjectStub<UserDO>) {
+  const page = await stub.listFeed(null, 100, {});
+  if (page.expired) throw new Error("expired");
+  return page.items.map((item) => [item.repoId, item.members]);
+}
+
+function revokedEvent(
+  sourceId: string,
+  seq: number,
+  data: Record<string, unknown>,
+  at = Date.now(),
+): DomainEvent {
+  return {
+    id: { sourceId, epochGen: 1, sourceSeq: seq },
+    type: "access.revoked",
+    at,
+    actor: sourceId,
+    actChain: [],
+    ownerGen: 1,
+    entity: null,
+    data,
+    stored: false,
+  };
+}
+
+describe("purging a feed", () => {
+  it("forgets a repository up to the purge, keeps older entries out, and takes a re-grant's", async () => {
+    const stub = env.USER.getByName(uniqueId("usr"));
+    const t = Date.now();
+    await stub.applyFeed([entry("rep_a", 1, t - 2_000), entry("rep_b", 1, t - 2_000)]);
+    await stub.applyFeed([entry("rep_a", 2, t - 1_000)]);
+    expect(await stub.purge({ repoIds: ["rep_a"], until: t - 500, aclVersion: 5 })).toEqual({
+      deleted: 1,
+    });
+    expect(await shown(stub)).toEqual([["rep_b", ["comment/1"]]]);
+    // An entry from before the purge arriving late: dropped.
+    await stub.applyFeed([entry("rep_a", 3, t - 600)]);
+    expect(await shown(stub)).toEqual([["rep_b", ["comment/1"]]]);
+    // Access given back: new entries apply, never the old ones.
+    await stub.applyFeed([entry("rep_a", 4, t), entry("rep_a", 1, t - 2_000)]);
+    expect(await shown(stub)).toEqual([
+      ["rep_b", ["comment/1"]],
+      ["rep_a", ["comment/4"]],
+    ]);
+    // A late purge of an older access version (or the same one again): nothing changes.
+    for (const late of [
+      { repoIds: ["rep_a"], until: t + 1_000, aclVersion: 4 },
+      { repoIds: ["rep_a"], until: t + 1_000, aclVersion: 5 },
+    ] satisfies FeedPurge[])
+      expect(await stub.purge(late)).toEqual({ deleted: 0 });
+    expect(await shown(stub)).toHaveLength(2);
+    const items = await runInDurableObject(stub, (_: UserDO, state) =>
+      state.storage.sql.exec("SELECT items FROM feed_meta").one(),
+    );
+    expect(items).toEqual({ items: 2 });
+    // A newer one applies, its mark kept for the repository.
+    expect(await stub.purge({ repoIds: ["rep_a"], until: t, aclVersion: 6 })).toEqual({
+      deleted: 1,
+    });
+    const marks = await runInDurableObject(stub, (_: UserDO, state) =>
+      state.storage.sql.exec("SELECT repo_id, until_at, acl_version FROM purge_marks").toArray(),
+    );
+    expect(marks).toEqual([{ repo_id: "rep_a", until_at: t, acl_version: 6 }]);
+  });
+});
+
+/**
+ * Feeds that record the purges they get (and apply nothing), for a sink
+ * test that needs no feed at all.
+ */
+function recordingPurges() {
+  const purges: { principal: string; purge: FeedPurge }[] = [];
+  const on = {
+    ...env,
+    USER: {
+      getByName: (principal: string) => ({
+        purge: async (purge: FeedPurge) => {
+          purges.push({ principal, purge });
+          return { deleted: 0 };
+        },
+      }),
+    },
+  } as unknown as Env;
+  return { on, purges };
+}
+
+describe("the feed sink and access revocations", () => {
+  it("plans one purge per revocation, and none for one it cannot read", () => {
+    const sourceId = newId("org");
+    const event = revokedEvent(sourceId, 1, {
+      principals: ["usr_a"],
+      repos: ["rep_x"],
+      acl_version: 3,
+    });
+    expect(feedSink.plan(event)).toEqual([
+      {
+        target: "purge",
+        payload: {
+          purge: {
+            accountId: sourceId,
+            principals: ["usr_a"],
+            repos: ["rep_x"],
+            allExcept: null,
+            until: event.at,
+            aclVersion: 3,
+          },
+        },
+      },
+    ]);
+    expect(feedSink.plan({ ...event, data: null, stored: true })).toEqual([]);
+    expect(feedSink.plan({ ...event, data: { principals: [] } })).toEqual([]);
+  });
+
+  it("takes an account's events for the feed sink only, and resolves all but the exceptions from the directory", async () => {
+    const orgId = newId("org");
+    await env.DIRECTORY.prepare(
+      "INSERT INTO principals (id, type, handle, created_at) VALUES (?, 'org', ?, 0)",
+    )
+      .bind(orgId, uniqueId("org").slice(0, 39))
+      .run();
+    const repo = async (visibility: "private" | "internal" | "public") => {
+      const id = newId("rep");
+      await env.DIRECTORY.prepare(
+        `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'default', ?, 0, 0)`,
+      )
+        .bind(id, orgId, id.toLowerCase(), newId("net"), visibility)
+        .run();
+      return id;
+    };
+    const [kept, internal, open, shared] = [
+      await repo("private"),
+      await repo("internal"),
+      await repo("public"),
+      await repo("private"),
+    ];
+    const other: string[] = [];
+    const oneByOne: EffectSink = {
+      name: "test_hook",
+      plan: () => [{ target: "hook_1", payload: {} }],
+      deliver: async (effect: Effect) => {
+        other.push(effect.id);
+      },
+    };
+    const { on, purges } = recordingPurges();
+    const at = Date.now();
+    const outcome = await applyEnvelope(
+      on,
+      {
+        sourceId: orgId,
+        events: [
+          revokedEvent(
+            orgId,
+            1,
+            { principals: ["usr_dev"], all_except: [shared], acl_version: 9 },
+            at,
+          ),
+        ],
+      },
+      { sinks: [oneByOne, feedSink] },
+    );
+    expect(outcome).toBe("applied");
+    expect(other).toEqual([]);
+    expect(purges).toHaveLength(1);
+    expect(purges[0]?.principal).toBe("usr_dev");
+    expect([...(purges[0]?.purge.repoIds ?? [])].sort()).toEqual([kept, internal].sort());
+    expect(purges[0]?.purge).toMatchObject({ until: at, aclVersion: 9 });
+    expect(open).not.toBe(kept);
+    const epoch = await env.ORG_READ.prepare(
+      "SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?",
+    )
+      .bind(orgId)
+      .first();
+    expect(epoch).toEqual({ epoch_gen: 1 });
+  });
+
+  it("purges a removed collaborator's feed of the repository, from the account's own event", async () => {
+    const owner = await user();
+    const reader = await user();
+    const made = await api("POST", "/user/repos", owner.token, { name: uniqueId("r") });
+    const repo = await made.json<{ id: string; full_name: string }>();
+    const path = `/repos/${repo.full_name}/collaborators/${reader.handle}`;
+    await api("PUT", path, owner.token, { permission: "pull" });
+    const feed = env.USER.getByName(reader.principalId);
+    await feed.applyFeed([{ ...entry(repo.id, 1, Date.now()), repoId: repo.id }]);
+    await feed.applyFeed([{ ...entry("rep_elsewhere", 1, Date.now()) }]);
+    expect(await shown(feed)).toHaveLength(2);
+    expect((await api("DELETE", path, owner.token)).status).toBe(200);
+    // What the account's outbox would send.
+    const events = await runInDurableObject(
+      env.ORG.getByName(owner.principalId),
+      (_: OrgDO, state) =>
+        state.storage.sql
+          .exec<{ event: string }>("SELECT event FROM outbox ORDER BY source_seq")
+          .toArray()
+          .map((row) => JSON.parse(row.event) as DomainEvent),
+    );
+    expect(await applyEnvelope(env, { sourceId: owner.principalId, events })).toBe("applied");
+    expect(await shown(feed)).toEqual([["rep_elsewhere", ["comment/1"]]]);
+  });
+});

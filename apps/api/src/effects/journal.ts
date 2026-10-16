@@ -89,8 +89,9 @@ export const INLINE_EFFECTS = 2;
 
 /**
  * Effects of sinks that deliver in batches one consumer invocation
- * delivers itself, besides: each message's go in one call, for about three
- * D1 queries whatever their number (a claim, one mark, one retry). Bounded
+ * delivers itself, besides: each message's go in one call, for about four
+ * D1 queries whatever their number (a claim, the sink's own lookup, one
+ * mark, one retry). Bounded
  * by the calls one delivery makes (a feed effect calls up to 100 feeds;
  * an invocation may make 1,000 calls). Proposed.
  */

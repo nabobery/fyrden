@@ -20,6 +20,9 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   100), never added again; `excerpt_member`: the member the excerpt was
  *   taken from (a comment's edit or deletion changes it); `acked_version`:
  *   the version the feed's owner last acknowledged (0 for none).
+ * - `purge_marks`: repositories the owner lost read access to, with when
+ *   (`until_at`: entries of events up to then are dropped on arrival) and
+ *   the account's ACL version that said so (an older one changes nothing).
  */
 export const userSchema: readonly DoMigration[] = [
   {
@@ -63,6 +66,12 @@ export const userSchema: readonly DoMigration[] = [
         PRIMARY KEY (repo_id, thread_key, kind)
       ) STRICT, WITHOUT ROWID;
       CREATE INDEX feed_tombstones ON feed_items (seq_at) WHERE feed_seq IS NULL;
+
+      CREATE TABLE purge_marks (
+        repo_id TEXT PRIMARY KEY,
+        until_at INTEGER NOT NULL,
+        acl_version INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
     `,
   },
 ];

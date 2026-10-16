@@ -14,7 +14,9 @@ import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
  * the sequence sees each change, late arrivals included. Items and
  * tombstones older than the retention, and items past the cap, are
  * deleted; the low watermark records how far, and a cursor below it has
- * missed changes.
+ * missed changes. When the owner loses read access to repositories, their
+ * items up to then are purged, and a mark drops entries up to then that
+ * arrive later.
  */
 
 /** Proposed values. */
@@ -87,6 +89,13 @@ export type FeedAck =
   | { readonly status: "missing" }
   | { readonly status: "ahead" }
   | { readonly status: "acked"; readonly item: FeedItem };
+
+/** Repositories the owner no longer reads, as of `until` (ms), at an account's ACL version. */
+export interface FeedPurge {
+  readonly repoIds: readonly string[];
+  readonly until: number;
+  readonly aclVersion: number;
+}
 
 /** Item key fields, as the item's primary key orders them. */
 export interface FeedItemId {
@@ -171,8 +180,8 @@ export class Feed {
 
   /**
    * Applies entries (call within a transaction). Within one call an item's
-   * entries apply in version order. An entry older than the retention is
-   * dropped. A newer version replaces the item's state; an activity item
+   * entries apply in version order. An entry older than the retention, or
+   * of a purged repository up to its purge, is dropped. A newer version replaces the item's state; an activity item
    * also adds the entry's member, unless that was deleted. An item is
    * shown once an entry opens it (see `#applyOne`). A duplicate, or an
    * older version that adds nothing, writes nothing. A comment's edit or
@@ -183,8 +192,15 @@ export class Feed {
     let changed = 0;
     let notified = 0;
     const ordered = [...entries].sort((a, b) => a.feed.subject.version - b.feed.subject.version);
+    const purged = new Map<string, number | null>();
+    const purgedUntil = (repoId: string) => {
+      if (!purged.has(repoId)) purged.set(repoId, this.#purgedUntil(repoId));
+      return purged.get(repoId) ?? null;
+    };
     for (const entry of ordered) {
       if (entry.occurredAt < now - FEED_POLICY.retentionMs) continue;
+      const until = purgedUntil(entry.repoId);
+      if (until !== null && entry.occurredAt <= until) continue;
       const redaction = isRedaction(entry);
       if (!(redaction ? this.#redact(entry, now) : this.#applyOne(entry, now))) continue;
       changed++;
@@ -435,9 +451,53 @@ export class Feed {
   }
 
   /**
-   * Deletes items and tombstones past the retention, then the items
-   * changed longest ago past the cap, raising the low watermark to the
-   * greatest sequence number deleted (call within a transaction).
+   * Forgets repositories the owner no longer reads (call within a
+   * transaction): their items and tombstones last changed up to `until`
+   * are deleted, and a mark drops entries up to then arriving later. A
+   * repository whose mark has this ACL version or a newer one is left as
+   * it is (a late or repeated purge). Returns the shown items deleted.
+   */
+  purge(purge: FeedPurge): number {
+    let deleted = 0;
+    for (const repoId of new Set(purge.repoIds)) {
+      const mark = this.sql
+        .exec<{ acl_version: number }>(
+          "SELECT acl_version FROM purge_marks WHERE repo_id = ?",
+          repoId,
+        )
+        .toArray()[0];
+      if (mark && mark.acl_version >= purge.aclVersion) continue;
+      for (const row of this.sql.exec<{ feed_seq: number | null }>(
+        "DELETE FROM feed_items WHERE repo_id = ? AND last_event_at <= ? RETURNING feed_seq",
+        repoId,
+        purge.until,
+      ))
+        if (row.feed_seq !== null) deleted++;
+      this.sql.exec(
+        `INSERT INTO purge_marks (repo_id, until_at, acl_version) VALUES (?, ?, ?)
+         ON CONFLICT (repo_id) DO UPDATE SET until_at = excluded.until_at,
+           acl_version = excluded.acl_version`,
+        repoId,
+        purge.until,
+        purge.aclVersion,
+      );
+    }
+    if (deleted > 0) this.sql.exec("UPDATE feed_meta SET items = items - ? WHERE id = 1", deleted);
+    return deleted;
+  }
+
+  #purgedUntil(repoId: string): number | null {
+    return (
+      this.sql
+        .exec<{ until_at: number }>("SELECT until_at FROM purge_marks WHERE repo_id = ?", repoId)
+        .toArray()[0]?.until_at ?? null
+    );
+  }
+
+  /**
+   * Deletes items, tombstones and purge marks past the retention, then the
+   * items changed longest ago past the cap, raising the low watermark to
+   * the greatest sequence number deleted (call within a transaction).
    */
   retain(): void {
     const meta = this.#meta();
@@ -448,6 +508,11 @@ export class Feed {
       )
       .toArray()
       .flatMap((r) => (r.feed_seq === null ? [] : [r.feed_seq]));
+    // Entries a mark would drop are dropped for their age by now.
+    this.sql.exec(
+      "DELETE FROM purge_marks WHERE until_at < ?",
+      this.now() - FEED_POLICY.retentionMs,
+    );
     const excess = meta.items - deleted.length - FEED_POLICY.maxItems;
     if (excess > 0)
       for (const r of this.sql.exec<{ feed_seq: number }>(
@@ -467,19 +532,20 @@ export class Feed {
 
   /**
    * When retention should next run: now when the feed is past its cap,
-   * else when the item or tombstone changed longest ago expires; null for
-   * an empty feed.
+   * else when the item, tombstone or purge mark changed longest ago
+   * expires; null for an empty feed.
    */
   nextRetention(): number | null {
     if (this.#meta().items > FEED_POLICY.maxItems) return this.now();
-    const { item, tombstone } = this.sql
-      .exec<{ item: number | null; tombstone: number | null }>(
+    const { item, tombstone, mark } = this.sql
+      .exec<{ item: number | null; tombstone: number | null; mark: number | null }>(
         `SELECT
            (SELECT seq_at FROM feed_items WHERE feed_seq IS NOT NULL ORDER BY feed_seq LIMIT 1) AS item,
-           (SELECT min(seq_at) FROM feed_items WHERE feed_seq IS NULL) AS tombstone`,
+           (SELECT min(seq_at) FROM feed_items WHERE feed_seq IS NULL) AS tombstone,
+           (SELECT min(until_at) FROM purge_marks) AS mark`,
       )
       .one();
-    const oldest = [item, tombstone].filter((at) => at !== null);
+    const oldest = [item, tombstone, mark].filter((at) => at !== null);
     return oldest.length === 0 ? null : Math.min(...oldest) + FEED_POLICY.retentionMs;
   }
 

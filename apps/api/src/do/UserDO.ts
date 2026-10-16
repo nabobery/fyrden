@@ -10,6 +10,7 @@ import {
   type FeedItemId,
   type FeedPage,
   type FeedPosition,
+  type FeedPurge,
 } from "./user/feed.js";
 
 /**
@@ -31,6 +32,14 @@ export class UserDO extends MigratingDO {
     // Even with nothing shown changed: a tombstone may have been written.
     if (entries.length > 0) await this.#scheduleRetention(feed);
     return applied;
+  }
+
+  /** Forgets repositories the principal no longer reads (see `Feed.purge`). */
+  async purge(purge: FeedPurge): Promise<{ deleted: number }> {
+    const feed = this.#feed();
+    const deleted = this.ctx.storage.transactionSync(() => feed.purge(purge));
+    await this.#scheduleRetention(feed);
+    return { deleted };
   }
 
   listFeed(since: FeedPosition | null, limit: number, filter: FeedFilter): FeedPage {

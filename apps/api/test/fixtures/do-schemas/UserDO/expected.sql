@@ -32,3 +32,8 @@ CREATE TABLE feed_meta (
         low_watermark INTEGER NOT NULL,
         items INTEGER NOT NULL
       ) STRICT;
+CREATE TABLE purge_marks (
+        repo_id TEXT PRIMARY KEY,
+        until_at INTEGER NOT NULL,
+        acl_version INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;

@@ -18,7 +18,8 @@ import {
   INLINE_EFFECTS,
 } from "../effects/journal.js";
 import { EFFECT_SINKS } from "../effects/sinks.js";
-import { readModelFor } from "../events/read-model.js";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
+import { feedSink } from "../feed/sink.js";
 
 /** The queue repository outboxes send to. */
 export const EVENTS_QUEUE = "fyrden-events";
@@ -72,8 +73,11 @@ export type ApplyOutcome = "applied" | "dropped" | "unlisted" | "deferred";
 export const INVOCATION_QUERIES = 45;
 /** D1 queries one inline effect delivery costs at most (its claim, its work, its outcome). */
 const QUERIES_PER_EFFECT = 6;
-/** D1 queries a message's inline effects of batch sinks cost at most (a claim, a mark, a retry). */
-const QUERIES_PER_BATCH = 3;
+/**
+ * D1 queries a message's inline effects of batch sinks cost at most (a
+ * claim, the sink's own lookup, a mark, a retry).
+ */
+const QUERIES_PER_BATCH = 4;
 
 export interface ConsumerOptions {
   readonly now?: () => number;
@@ -158,7 +162,9 @@ export async function consumeEvents(
 /**
  * Applies one envelope to its source's read model. Snapshots are applied
  * with a version guard, so duplicates and any delivery order converge on
- * the newest snapshot of each entity. Throws on a malformed envelope or row.
+ * the newest snapshot of each entity. An account's events (what its access
+ * changes mean for activity feeds) project nothing and go to the feed sink
+ * only. Throws on a malformed envelope or row.
  */
 export async function applyEnvelope(
   env: Env,
@@ -169,28 +175,35 @@ export async function applyEnvelope(
   if (!parsed.ok) throw new Error(`malformed event envelope: ${parsed.error}`);
   const { sourceId, events } = parsed.envelope;
   const now = options.now?.() ?? Date.now();
-  // Only repositories produce events so far.
-  if (!isId(sourceId, "rep")) return "dropped";
+  const account = isId(sourceId, "org") || isId(sourceId, "usr");
+  if (!account && !isId(sourceId, "rep")) return "dropped";
   const queries = options.queries ?? { left: INVOCATION_QUERIES, applied: false };
   if (queries.applied && queries.left < 3) return "deferred";
-  queries.left -= 1;
 
-  options.metrics?.count("d1.query", { db: "directory", op: "events_route" });
-  const listed = await env.DIRECTORY.prepare("SELECT state, org_shard FROM repos WHERE id = ?")
-    .bind(sourceId)
-    .first<{ state: string; org_shard: string }>();
-  if (!listed) return "unlisted";
-  // Events of a repository being deleted are dropped (purging its rows
-  // comes with deletion).
-  if (listed.state !== "active") return "dropped";
+  // An account's read model is the deployment's (one organization for now).
+  let shard = DEFAULT_ORG_SHARD;
+  if (!account) {
+    queries.left -= 1;
+    options.metrics?.count("d1.query", { db: "directory", op: "events_route" });
+    const listed = await env.DIRECTORY.prepare("SELECT state, org_shard FROM repos WHERE id = ?")
+      .bind(sourceId)
+      .first<{ state: string; org_shard: string }>();
+    if (!listed) return "unlisted";
+    // Events of a repository being deleted are dropped (purging its rows
+    // comes with deletion).
+    if (listed.state !== "active") return "dropped";
+    shard = listed.org_shard;
+  }
 
   const payloads = storedPayloads(env, sourceId);
-  const snapshots = await resolveStored(payloads, newestSnapshots(events));
-  const db = readModelFor(env, listed.org_shard);
+  const snapshots = account ? [] : await resolveStored(payloads, newestSnapshots(events));
+  const db = readModelFor(env, shard);
   // The newest epoch any event shows, projected or not: from then on, older
   // epochs are refused.
   const epochGen = Math.max(...events.map((e) => e.id.epochGen));
-  const sinks = options.sinks ?? EFFECT_SINKS;
+  const sinks = (options.sinks ?? EFFECT_SINKS).filter(
+    (sink) => !account || sink.name === feedSink.name,
+  );
   // Sinks see every event whole (stored ones with their row and data).
   const planned = sinks.length > 0 ? await hydrate(payloads, events) : events;
   const effects = effectStatements(db, sinks, sourceId, planned, now);
@@ -284,11 +297,12 @@ type Payloads = (event: DomainEvent) => Promise<{ row?: unknown; data?: unknown 
 
 function storedPayloads(env: Env, sourceId: string): Payloads {
   const fetched = new Map<string, Promise<{ row?: unknown; data?: unknown } | null>>();
+  const source = isId(sourceId, "rep") ? env.REPO.getByName(sourceId) : env.ORG.getByName(sourceId);
   return (event) => {
     const key = eventKey(event.id);
     let payload = fetched.get(key);
     if (!payload) {
-      payload = env.REPO.getByName(sourceId)
+      payload = source
         .eventPayload(key)
         .then((json) =>
           json === null ? null : (JSON.parse(json) as { row?: unknown; data?: unknown }),

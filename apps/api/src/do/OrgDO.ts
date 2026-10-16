@@ -181,6 +181,17 @@ export class OrgDO extends MigratingDO {
     );
   }
 
+  /**
+   * The data of an event too large for its queue message, as the JSON
+   * `{ row, data }`, by event key; null once its retention has passed.
+   */
+  eventPayload(key: string): string | null {
+    const stored = this.ctx.storage.sql
+      .exec<{ payload: string }>("SELECT payload FROM event_payloads WHERE event_key = ?", key)
+      .toArray()[0];
+    return stored?.payload ?? null;
+  }
+
   /** Arms the alarm for the outbox's next drain or prune, unless it is due sooner. */
   async #armOutbox(): Promise<void> {
     const due = this.#outbox.dueAt();
