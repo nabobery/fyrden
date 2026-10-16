@@ -13,5 +13,7 @@ export default [
   route(":owner/:repo/raw/:ref/*", "routes/repo.raw.ts"),
   route(":owner/:repo/archive/:format", "routes/repo.archive.ts"),
   route(":owner/:repo/commits", "routes/repo.commits.tsx"),
+  route(":owner/:repo/pulls", "routes/repo.pulls.tsx"),
+  route(":owner/:repo/pull/:number", "routes/repo.pull.tsx"),
   route(":owner/:repo/settings", "routes/repo.settings.tsx"),
 ] satisfies RouteConfig;

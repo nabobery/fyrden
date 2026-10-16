@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 import { readForm } from "../app/lib/api.server.js";
 import { action as indexAction } from "../app/routes/_index.js";
 import { action } from "../app/routes/repo.edit.js";
+import { action as pullAction } from "../app/routes/repo.pull.js";
+import { action as pullsAction } from "../app/routes/repo.pulls.js";
 import { action as settingsAction } from "../app/routes/repo.settings.js";
 import { action as agentsAction } from "../app/routes/settings.agents.js";
 import { action as tokensAction } from "../app/routes/settings.tokens.js";
@@ -77,6 +79,8 @@ describe("every form action", () => {
     const actions = [
       ["_index", indexAction],
       ["repo.edit", action],
+      ["repo.pull", pullAction],
+      ["repo.pulls", pullsAction],
       ["repo.settings", settingsAction],
       ["settings.agents", agentsAction],
       ["settings.tokens", tokensAction],
@@ -91,7 +95,7 @@ describe("every form action", () => {
       const outcome = await (act as (args: never) => Promise<unknown>)({
         request,
         context,
-        params: { owner: "ada", repo: "demo", ref: "main", "*": "a.txt" },
+        params: { owner: "ada", repo: "demo", ref: "main", "*": "a.txt", number: "1" },
       } as never).catch((e: unknown) => e);
       expect(status(outcome), name).toBe(403);
       expect(calls, name).toEqual([]);

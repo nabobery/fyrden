@@ -13,7 +13,7 @@ export default defineConfig({
     // Each test file starts its own runtime (and git processes), so local runs
     // are capped (CI keeps the default; FYRDEN_TEST_WORKERS overrides both).
     ...localWorkers(),
-    include: ["test/**/*.test.ts"],
+    include: ["test/**/*.test.ts", "test/**/*.test.tsx"],
     coverage: {
       provider: "istanbul",
       include: ["app/lib/**"],

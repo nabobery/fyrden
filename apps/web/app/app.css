@@ -184,3 +184,59 @@ button.danger {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+label.inline {
+  display: inline;
+}
+textarea.short {
+  min-height: 8rem;
+}
+nav [aria-current="page"] {
+  font-weight: 700;
+  text-decoration: none;
+  color: var(--fg);
+}
+nav.tabs {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+  margin-bottom: 1rem;
+}
+.pull-list,
+.timeline {
+  list-style: none;
+  padding: 0;
+}
+.pull-list li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.pull-title {
+  overflow-wrap: anywhere;
+}
+code.branch {
+  overflow-wrap: anywhere;
+}
+.badge.status-open {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.badge.status-merged {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.badge.status-closed {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.review-approved {
+  border-color: var(--ok);
+}
+.review-changes_requested {
+  border-color: var(--danger);
+}
+.timeline-event {
+  padding: 0.25rem 1rem;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
