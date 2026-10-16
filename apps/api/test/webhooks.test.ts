@@ -910,6 +910,19 @@ describe("pull request webhooks", () => {
 });
 
 describe("redelivery", () => {
+  // What the API queues for an attempt is kept here, not sent: the real queue's consumer would
+  // make the attempt whenever it ran (in this test or a later one), and each test makes its own.
+  let queued: string[];
+  beforeEach(() => {
+    queued = [];
+    vi.spyOn(env.WEBHOOKS, "send").mockImplementation(async (body: unknown) => {
+      queued.push((body as { delivery: string }).delivery);
+      return {} as QueueSendResponse;
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   const redeliver = (hook: number, id: string, who: Who = owner) =>
     json<{ id: string; state: string; code?: string }>(
       api("POST", `${path}/hooks/${hook}/deliveries/${id}/attempts`, who.token),
@@ -928,6 +941,8 @@ describe("redelivery", () => {
     const { hook, id } = await delivered(400);
     expect((await deliveries())[0]).toMatchObject({ state: "failed", attempts: 1 });
     const again = await redeliver(hook, id);
+    // Queued for its attempt.
+    expect(queued).toEqual([id]);
     expect(again.status).toBe(202);
     expect(again.body).toMatchObject({ id, state: "pending" });
     answer = () => new Response("ok", { status: 200 });
