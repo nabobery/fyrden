@@ -7,6 +7,7 @@ import {
   MissingCommitError,
   mergeBases,
   type Oid,
+  oidFromHex,
   oidToHex,
   reachableCommits,
   TreeDiffLimitError,
@@ -22,6 +23,7 @@ import {
   type RepoBrowse,
 } from "./browse.js";
 import { ReadsTooLargeError, UnreadableObjectError, withHeldReads } from "./held-reads.js";
+import type { RepoPulls } from "./pulls.js";
 
 /** Limits of a pull request's file listing. Proposed (Workers Free). */
 export const PULL_FILES_POLICY = {
@@ -339,4 +341,98 @@ export function pullCommits(
       value: { commits, next: end < ordered.length ? end : null, total: ordered.length },
     };
   });
+}
+
+/** Where a later page of a listing starts: the listing a first page kept, and the index. */
+export interface ListingCursor {
+  readonly listing: string;
+  readonly start: number;
+}
+
+/** A listing's cursor that names none this repository keeps for that pull request. */
+const INVALID_LISTING = fail(
+  422,
+  "invalid_cursor",
+  "The cursor is not one this API returned, or its listing has expired: start again.",
+);
+
+/**
+ * A page of the files a pull request changes. Without `from`, a listing
+ * starts: the merge base of the base it is compared from (the base
+ * branch's tip while open, see `comparedBase`) and the recorded head is
+ * worked out now, and kept for the later
+ * pages when there are any; `from` names such a listing (a cursor this
+ * repository gave) and where its next page starts.
+ */
+export async function pullFilesListing(
+  browse: RepoBrowse,
+  pulls: RepoPulls,
+  graph: SqliteCommitGraph,
+  input: { readonly number: number; readonly from: ListingCursor | null; readonly limit: number },
+): Promise<Browsed<PullFilesPage & { listing: string | null }>> {
+  const { number, from, limit } = input;
+  const pull = pulls.get(number);
+  if (!pull) return fail(404, "pull_not_found", `The repository has no pull request ${number}.`);
+  let listing = from?.listing ?? null;
+  let mergeBase: Oid;
+  let head: Oid;
+  if (from) {
+    const kept = pulls.listing(number, "files", from.listing);
+    if (!kept) return INVALID_LISTING;
+    mergeBase = oidFromHex(kept.base);
+    head = oidFromHex(kept.head);
+  } else {
+    head = oidFromHex(pull.headSha);
+    const found = await mergeBaseOf(graph, pulls.comparedBase(pull), head);
+    if (!found.ok) return found;
+    mergeBase = found.value;
+  }
+  const page = await pullFiles(browse, graph, {
+    mergeBase,
+    head,
+    start: from?.start ?? 0,
+    limit,
+  });
+  if (!page.ok) return page;
+  if (!listing && page.value.next !== null)
+    listing = pulls.startListing(number, "files", page.value.mergeBase, page.value.head);
+  return { ok: true, value: { ...page.value, listing } };
+}
+
+/**
+ * A page of a pull request's commits, oldest first: from the base it is
+ * compared from (`comparedBase`) to the recorded head, kept for the
+ * later pages as a file listing is.
+ */
+export async function pullCommitsListing(
+  browse: RepoBrowse,
+  pulls: RepoPulls,
+  graph: SqliteCommitGraph,
+  input: { readonly number: number; readonly from: ListingCursor | null; readonly limit: number },
+) {
+  const { number, from, limit } = input;
+  const pull = pulls.get(number);
+  if (!pull) return fail(404, "pull_not_found", `The repository has no pull request ${number}.`);
+  let listing = from?.listing ?? null;
+  let base: Oid;
+  let head: Oid;
+  if (from) {
+    const kept = pulls.listing(number, "commits", from.listing);
+    if (!kept) return INVALID_LISTING;
+    base = oidFromHex(kept.base);
+    head = oidFromHex(kept.head);
+  } else {
+    base = pulls.comparedBase(pull);
+    head = oidFromHex(pull.headSha);
+  }
+  const page = await pullCommits(browse, graph, {
+    base,
+    head,
+    start: from?.start ?? 0,
+    limit,
+  });
+  if (!page.ok) return page;
+  if (!listing && page.value.next !== null)
+    listing = pulls.startListing(number, "commits", oidToHex(base), oidToHex(head));
+  return { ok: true as const, value: { ...page.value, listing } };
 }

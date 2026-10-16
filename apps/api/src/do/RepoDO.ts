@@ -27,7 +27,7 @@ import {
   type ReviewEvent,
   rootIdentity,
 } from "@fyrden/domain";
-import { type BlockCache, type LsRefsArgs, type Oid, oidFromHex, oidToHex } from "@fyrden/git-core";
+import { type BlockCache, type LsRefsArgs, type Oid, oidToHex } from "@fyrden/git-core";
 import { readModelFor } from "../events/read-model.js";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
@@ -152,7 +152,7 @@ import {
   type PullChangeRefusal,
   PullDiscussion,
 } from "./repo/pull-discussion.js";
-import { mergeBaseOf, type PullFilesPage, pullCommits, pullFiles } from "./repo/pull-files.js";
+import { type ListingCursor, pullCommitsListing, pullFilesListing } from "./repo/pull-files.js";
 import { type MergePullInput, PullMerging } from "./repo/pull-merging.js";
 import { type ForkPullOpened, type PullOpened, PullOpening } from "./repo/pull-opening.js";
 import {
@@ -182,13 +182,6 @@ import {
 import type { WriteContext, WriteRefusal } from "./repo/write-context.js";
 import { repoSchema } from "./schema/repo.js";
 import type { FeedPurge } from "./user/feed.js";
-
-/** A listing's cursor that names none this repository keeps for that pull request. */
-const INVALID_LISTING = fail(
-  422,
-  "invalid_cursor",
-  "The cursor is not one this API returned, or its listing has expired: start again.",
-);
 
 /**
  * Why a feed's reader may not read the repository (`feedView`): `lost`,
@@ -1107,96 +1100,22 @@ export class RepoDO extends MigratingDO {
     return this.#measured("mergePull", () => this.#merging.merge(input, actor));
   }
 
-  /**
-   * A page of the files a pull request changes. Without `from`, a listing
-   * starts: the merge base of the base it is compared from (the base
-   * branch's tip while open, see `comparedBase`) and the recorded head is
-   * worked out now, and kept for the later
-   * pages when there are any; `from` names such a listing (a cursor this
-   * repository gave) and where its next page starts.
-   */
-  listPullFiles(
-    number: number,
-    from: { readonly listing: string; readonly start: number } | null,
-    limit: number,
-  ) {
-    return this.#browse(
-      "listPullFiles",
-      async (browse): Promise<Browsed<PullFilesPage & { listing: string | null }>> => {
-        if (this.#refusesReads()) return fail(404, "repo_not_found", REPO_DELETED);
-        const pull = this.pulls.get(number);
-        if (!pull)
-          return fail(404, "pull_not_found", `The repository has no pull request ${number}.`);
-        let listing = from?.listing ?? null;
-        let mergeBase: Oid;
-        let head: Oid;
-        if (from) {
-          const kept = this.pulls.listing(number, "files", from.listing);
-          if (!kept) return INVALID_LISTING;
-          mergeBase = oidFromHex(kept.base);
-          head = oidFromHex(kept.head);
-        } else {
-          head = oidFromHex(pull.headSha);
-          const found = await mergeBaseOf(
-            this.git.commitGraph,
-            this.pulls.comparedBase(pull),
-            head,
-          );
-          if (!found.ok) return found;
-          mergeBase = found.value;
-        }
-        const page = await pullFiles(browse, this.git.commitGraph, {
-          mergeBase,
-          head,
-          start: from?.start ?? 0,
-          limit,
-        });
-        if (!page.ok) return page;
-        if (!listing && page.value.next !== null)
-          listing = this.pulls.startListing(number, "files", page.value.mergeBase, page.value.head);
-        return { ok: true, value: { ...page.value, listing } };
-      },
+  /** A page of the files a pull request changes (see `pullFilesListing`). */
+  listPullFiles(number: number, from: ListingCursor | null, limit: number) {
+    return this.#browse("listPullFiles", async (browse) =>
+      this.#refusesReads()
+        ? fail(404, "repo_not_found", REPO_DELETED)
+        : pullFilesListing(browse, this.pulls, this.git.commitGraph, { number, from, limit }),
     );
   }
 
-  /**
-   * A page of a pull request's commits, oldest first: from the base it is
-   * compared from (`comparedBase`) to the recorded head, kept for the
-   * later pages as a file listing is.
-   */
-  listPullCommits(
-    number: number,
-    from: { readonly listing: string; readonly start: number } | null,
-    limit: number,
-  ) {
-    return this.#browse("listPullCommits", async (browse) => {
-      if (this.#refusesReads()) return fail(404, "repo_not_found", REPO_DELETED);
-      const pull = this.pulls.get(number);
-      if (!pull)
-        return fail(404, "pull_not_found", `The repository has no pull request ${number}.`);
-      let listing = from?.listing ?? null;
-      let base: Oid;
-      let head: Oid;
-      if (from) {
-        const kept = this.pulls.listing(number, "commits", from.listing);
-        if (!kept) return INVALID_LISTING;
-        base = oidFromHex(kept.base);
-        head = oidFromHex(kept.head);
-      } else {
-        base = this.pulls.comparedBase(pull);
-        head = oidFromHex(pull.headSha);
-      }
-      const page = await pullCommits(browse, this.git.commitGraph, {
-        base,
-        head,
-        start: from?.start ?? 0,
-        limit,
-      });
-      if (!page.ok) return page;
-      if (!listing && page.value.next !== null)
-        listing = this.pulls.startListing(number, "commits", oidToHex(base), oidToHex(head));
-      return { ok: true as const, value: { ...page.value, listing } };
-    });
+  /** A page of a pull request's commits, oldest first (see `pullCommitsListing`). */
+  listPullCommits(number: number, from: ListingCursor | null, limit: number) {
+    return this.#browse("listPullCommits", async (browse) =>
+      this.#refusesReads()
+        ? fail(404, "repo_not_found", REPO_DELETED)
+        : pullCommitsListing(browse, this.pulls, this.git.commitGraph, { number, from, limit }),
+    );
   }
 
   /** A pull request's reviews in the order submitted; null when the repository is gone, undefined without the pull request. */
