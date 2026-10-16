@@ -240,3 +240,59 @@ code.branch {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+main.wide {
+  max-width: 90rem;
+}
+.file-name {
+  font-size: 1rem;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.file-header {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.5rem;
+}
+.file-nav {
+  margin-left: auto;
+}
+.file-list {
+  margin: 0;
+  padding-left: 1.5rem;
+  overflow-wrap: anywhere;
+}
+.added {
+  color: var(--ok);
+}
+.removed {
+  color: var(--danger);
+}
+.diff-body {
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+.diff-body:focus-visible {
+  outline-offset: 0;
+}
+.patch-text {
+  max-height: 40rem;
+  overflow: auto;
+}
+.thread {
+  margin: 0.5rem;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  white-space: normal;
+}
+.thread.resolved {
+  border-style: dashed;
+}
+.thread-comments {
+  list-style: none;
+  padding: 0;
+}
+.thread-anchor .badge {
+  margin-left: 0.25rem;
+}
+.threads h4 {
+  margin: 1rem 0 0.25rem;
+}

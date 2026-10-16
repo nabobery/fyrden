@@ -39,6 +39,12 @@ trustPolicyExclude:
   # an npm CLI maintainer without provenance, three days after 7.5.4 shipped
   # with it. Pulled in by @babel/core (via @react-router/dev). Exact version only.
   - semver@6.3.1
+  # Reviewed 2026-10-16: theme data (frozen JSON objects, no scripts) for the
+  # web app's diff renderer. Versions before 1.1.0 were published from CI with
+  # provenance; 1.1.0 on are published by hand by a listed maintainer of the
+  # same monorepo, who also publishes @pierre/diffs (which never had
+  # provenance). Exact version only.
+  - "@pierre/theme@2.0.0"
 # Only direct dependencies may come from git or tarball URLs.
 blockExoticSubdeps: true
 # Install fails on any dependency build script not reviewed below.
@@ -67,3 +73,7 @@ overrides:
   # GHSA-4mjr-xmp4-gh2g). 6.16.0 is the patched release of the same major.
   # Drop this once Stryker moves to typed-rest-client 3.
   "typed-rest-client>qs": "6.16.0"
+  # Reviewed 2026-10-16: the diff renderer asks for shiki "^3.0.0 || ^4.0.0";
+  # pinned to a release at least two weeks old instead of the newest in range.
+  "@pierre/diffs>shiki": "4.4.3"
+  "@pierre/diffs>@shikijs/transformers": "4.4.3"

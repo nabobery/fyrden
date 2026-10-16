@@ -115,3 +115,86 @@ export function rawField(form: FormData, name: string): string {
   const value = form.get(name);
   return typeof value === "string" ? value : "";
 }
+
+export type DiffSide = "LEFT" | "RIGHT";
+
+export interface ReviewComment {
+  id: number;
+  in_reply_to_id?: number;
+  thread_id: number;
+  user: { id: string };
+  performed_via_agents: string[];
+  body: string;
+  commit_id: string;
+  original_commit_id: string;
+  path: string;
+  side: DiffSide;
+  line: number | null;
+  original_line: number;
+  start_line: number | null;
+  start_side: DiffSide | null;
+  outdated: boolean;
+  resolved: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export type PatchOmitted = "binary" | "too_large" | "patch_too_large" | "submodule" | "budget";
+
+export interface PullFile {
+  sha: string;
+  filename: string;
+  previous_filename?: string;
+  status: "added" | "removed" | "modified" | "renamed" | "changed";
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
+  patch_omitted?: PatchOmitted;
+  approximate?: boolean;
+}
+
+export interface PullFilesPage {
+  files: PullFile[];
+  merge_base_sha: string;
+  head_sha: string;
+  truncated: boolean;
+  next_cursor: string | null;
+}
+
+/** Why a file's changes are not shown, in words. */
+export const OMITTED_REASON: Record<PatchOmitted, string> = {
+  binary: "Binary file: its changes are not shown.",
+  too_large: "This file is too large to compare here.",
+  patch_too_large: "This file's changes are too large to show here.",
+  submodule: "Submodule: its changes are not shown.",
+  budget: "This file's changes could not be read on this page; open the next page or reload.",
+};
+
+/** One comment of a review thread, as the files page shows it. */
+export interface ThreadComment {
+  id: number;
+  author: string;
+  agents: string[];
+  /** Its Markdown rendered (safe HTML). */
+  html: string;
+  at: number;
+  /** It holds a suggested change that can be applied to the head now. */
+  applicable: boolean;
+}
+
+/** A review thread on lines of a file, its comments oldest first. */
+export interface Thread {
+  id: number;
+  path: string;
+  side: DiffSide;
+  /** The (last) line at the current head; null once the head has moved (outdated). */
+  line: number | null;
+  startLine: number | null;
+  /** The line at the commit it was started on. */
+  originalLine: number;
+  commit: string;
+  outdated: boolean;
+  resolved: boolean;
+  comments: ThreadComment[];
+}

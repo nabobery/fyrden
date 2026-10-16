@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { readForm } from "../app/lib/api.server.js";
 import { action as indexAction } from "../app/routes/_index.js";
 import { action } from "../app/routes/repo.edit.js";
+import { action as pullFilesAction } from "../app/routes/repo.pull.files.js";
 import { action as pullAction } from "../app/routes/repo.pull.js";
 import { action as pullsAction } from "../app/routes/repo.pulls.js";
 import { action as settingsAction } from "../app/routes/repo.settings.js";
@@ -80,6 +81,7 @@ describe("every form action", () => {
       ["_index", indexAction],
       ["repo.edit", action],
       ["repo.pull", pullAction],
+      ["repo.pull.files", pullFilesAction],
       ["repo.pulls", pullsAction],
       ["repo.settings", settingsAction],
       ["settings.agents", agentsAction],

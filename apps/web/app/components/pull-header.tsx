@@ -57,7 +57,7 @@ export function PullHeader({
       <p className="row">
         <PullStatusBadge pull={pull} />
         <span>
-          {who(pull.user.id, viewer)} wants to merge{" "}
+          {who(pull.user.id, viewer)} {pull.user.id === viewer ? "want" : "wants"} to merge{" "}
           <BranchName name={pull.head.ref} fork={pull.head_repo_id !== null} /> into{" "}
           <BranchName name={pull.base.ref} />
         </span>
