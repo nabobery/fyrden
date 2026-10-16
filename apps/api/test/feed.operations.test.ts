@@ -15,7 +15,7 @@ import { createApp } from "../src/app.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { FEED_POLICY } from "../src/do/user/feed.js";
-import { decodeFeedCursor, encodeFeedCursor, FEED_POLL_AFTER_MS } from "../src/feed/operations.js";
+import { decodeFeedCursor, encodeFeedCursor, FEED_POLL } from "../src/feed/operations.js";
 import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { SESSION_COOKIE, startSession } from "../src/oauth/session.js";
 import { agentFor } from "./helpers/agents.js";
@@ -316,6 +316,42 @@ describe("the feed operations", () => {
     expect(changed.headers.get("ETag")).not.toBe(etag);
   });
 
+  it("ask a caller to poll less often while nothing changes, up to a ceiling, and soon once something does", async () => {
+    const follow = (cursor: string) =>
+      json<FeedOut>(feedApi("GET", `/feed?since=${cursor}`, owner.token));
+    let cursor = (await json<FeedOut>(feedApi("GET", "/feed", owner.token))).body.next_cursor;
+    const waits: number[] = [];
+    for (let quiet = 0; quiet < 8; quiet++) {
+      const res = await follow(cursor);
+      expect(res.body.items).toEqual([]);
+      waits.push(res.body.poll_after_ms);
+      cursor = res.body.next_cursor;
+    }
+    // Doubling from 30 seconds, then 30 minutes.
+    expect(waits).toEqual([
+      60_000, 120_000, 240_000, 480_000, 960_000, 1_800_000, 1_800_000, 1_800_000,
+    ]);
+    expect(FEED_POLL.maxMs).toBe(1_800_000);
+    // At the ceiling the answer stays the same: unchanged, it is 304 by its ETag.
+    const again = (tag: string) =>
+      feedFetch(`/feed?since=${cursor}`, {
+        Authorization: `Bearer ${owner.token}`,
+        "If-None-Match": tag,
+      });
+    const ceiling = await feedApi("GET", `/feed?since=${cursor}`, owner.token);
+    expect((await ceiling.json<FeedOut>()).next_cursor).toBe(cursor);
+    expect((await again(ceiling.headers.get("ETag") ?? "")).status).toBe(304);
+    // Something new: shown, and the wait starts over.
+    await deliverTo(owner.principalId, { repoId: repo.id, thread: 2, version: 1 });
+    const news = await follow(cursor);
+    expect(news.body).toMatchObject({ items: [{ version: 1 }], poll_after_ms: FEED_POLL.baseMs });
+    expect((await follow(news.body.next_cursor)).body.poll_after_ms).toBe(2 * FEED_POLL.baseMs);
+    // A sync starts the wait over too.
+    expect(
+      (await json<FeedOut>(feedApi("GET", "/feed/sync", owner.token))).body.poll_after_ms,
+    ).toBe(FEED_POLL.baseMs);
+  });
+
   it("refuse a cursor below the low watermark or of another epoch with 410 and where to resync", async () => {
     const head = await json<FeedOut>(feedApi("GET", "/feed", owner.token));
     const { e } = JSON.parse(
@@ -331,12 +367,14 @@ describe("the feed operations", () => {
         body: { code: "cursor_expired", resync: "/api/feed/sync" },
       });
     }
-    expect(
-      await json<FeedOut>(feedApi("GET", "/feed?since=not-a-cursor", owner.token)),
-    ).toMatchObject({
-      status: 422,
-      body: { code: "invalid_cursor" },
-    });
+    // Not a cursor, or one counting more quiet answers than any the feed hands out.
+    for (const since of ["not-a-cursor", encodeFeedCursor({ epoch: e, seq: 1 }, 7)])
+      expect(
+        await json<FeedOut>(feedApi("GET", `/feed?since=${since}`, owner.token)),
+      ).toMatchObject({
+        status: 422,
+        body: { code: "invalid_cursor" },
+      });
     // Following the cursor: nothing new.
     const next = await json<FeedOut>(
       feedApi("GET", `/feed?since=${head.body.next_cursor}`, owner.token),
@@ -383,8 +421,12 @@ describe("the feed operations", () => {
     expect(after.sync.body).toEqual(before.sync.body);
     const since = await read(`/feed?since=${before.list.body.next_cursor}`);
     expect(since.body.items).toEqual([]);
-    expect(since.body.head_cursor).toBe(before.list.body.next_cursor);
-    expect(since.body.poll_after_ms).toBe(FEED_POLL_AFTER_MS);
+    // The same place, one quiet answer on: as for anyone whose feed did not change.
+    expect(decodeFeedCursor(since.body.head_cursor)).toEqual({
+      ...decodeFeedCursor(before.list.body.next_cursor),
+      quiet: 1,
+    });
+    expect(since.body.poll_after_ms).toBe(2 * FEED_POLL.baseMs);
     // Its own repository's items are acknowledged; the other's are not found.
     const ack = (repoId: string) =>
       feedApi("POST", "/feed/ack", limited, {
@@ -416,7 +458,7 @@ describe("the feed operations", () => {
     expect(second.body.items.map((i) => i.repo.full_name.split("/")[1])).toEqual(
       repoIds.slice(100).map((id) => id.toLowerCase()),
     );
-    expect(second.body.poll_after_ms).toBe(FEED_POLL_AFTER_MS);
+    expect(second.body.poll_after_ms).toBe(FEED_POLL.baseMs);
   });
 
   it("get past items of repositories the owner may not read, however many come first, forgetting them", async () => {
@@ -437,7 +479,7 @@ describe("the feed operations", () => {
     // A check budget of repositories it may not read: as quiet as an answer with nothing new,
     // and those repositories' items are gone from the feed (the owner lost them).
     const first = await read();
-    expect(first.body).toMatchObject({ items: [], poll_after_ms: FEED_POLL_AFTER_MS });
+    expect(first.body).toMatchObject({ items: [], poll_after_ms: 2 * FEED_POLL.baseMs });
     expect(await stored(someone.principalId)).toHaveLength(53);
     // The next answer gets past the rest of them.
     const second = await read(first.body.next_cursor);
@@ -462,7 +504,7 @@ describe("the feed operations", () => {
       shown.map((repoId) => entry({ repoId, version: 1, principal: someone.principalId })),
     );
     const first = await json<FeedOut>(feedApi("GET", "/feed", someone.token));
-    expect(first.body).toMatchObject({ items: [], poll_after_ms: FEED_POLL_AFTER_MS });
+    expect(first.body).toMatchObject({ items: [], poll_after_ms: 2 * FEED_POLL.baseMs });
     const second = await json<FeedOut>(
       feedApi("GET", `/feed?since=${first.body.next_cursor}`, someone.token),
     );

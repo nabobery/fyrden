@@ -3052,7 +3052,7 @@ export type FeedListOutput = {
   next_cursor: string;
   /** The latest change the answer found that the caller may see; the same as `next_cursor` unless more pages follow. */
   head_cursor: string;
-  /** Wait at least this long (milliseconds) before polling again with `next_cursor`; 0 after a full page, as more may follow. */
+  /** Wait at least this long (milliseconds) before polling `GET /feed` again with `next_cursor` (a sync's `head_cursor`): 0 after a full page, as more may follow; else 30 seconds after an answer that showed something, or a sync, doubling with each answer in a row that showed nothing (the cursor counts them), up to 30 minutes. */
   poll_after_ms: number;
 };
 
@@ -3110,7 +3110,7 @@ export type FeedSyncOutput = {
   complete: boolean;
   /** Pass as `since` to `GET /feed` for what changes next. */
   head_cursor: string;
-  /** Wait at least this long (milliseconds) before polling again with `next_cursor`; 0 after a full page, as more may follow. */
+  /** Wait at least this long (milliseconds) before polling `GET /feed` again with `next_cursor` (a sync's `head_cursor`): 0 after a full page, as more may follow; else 30 seconds after an answer that showed something, or a sync, doubling with each answer in a row that showed nothing (the cursor counts them), up to 30 minutes. */
   poll_after_ms: number;
 };
 
@@ -4813,7 +4813,7 @@ export interface Operations {
   "stars.delete": { input: StarsDeleteInput; output: StarsDeleteOutput };
   /** List starred repositories. Lists the repositories the caller starred, most recently starred first. Repositories the caller or its token can no longer read are left out, so a page can hold fewer than `per_page`; keep following `next_cursor` until it is null. */
   "stars.list": { input: StarsListInput; output: StarsListOutput };
-  /** Get the activity feed. The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's `next_cursor` as `since` for what changed after it; a changed item comes again, so keep the latest copy by `item_key`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short, and cursors name only items the caller was shown. An answer checks at most 100 repositories and reads at most 1,000 items, so a page can end early, even empty; the items of repositories the feed's owner itself cannot read now are then forgotten, so a later answer gets past them. A cursor older than the retention (7 days, 5,000 items) or of another epoch is refused with 410 `cursor_expired`: start over from `GET /feed/sync`. The answer carries an ETag; with `If-None-Match` an unchanged one is 304. */
+  /** Get the activity feed. The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's `next_cursor` as `since` for what changed after it; a changed item comes again, so keep the latest copy by `item_key`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short, and cursors name only items the caller was shown. An answer checks at most 100 repositories and reads at most 1,000 items, so a page can end early, even empty; the items of repositories the feed's owner itself cannot read now are then forgotten, so a later answer gets past them. Poll by `poll_after_ms`: while nothing changes the wait grows to 30 minutes, and an answer that shows something brings it back to 30 seconds. A cursor older than the retention (7 days, 5,000 items) or of another epoch is refused with 410 `cursor_expired`: start over from `GET /feed/sync`. The answer carries an ETag; with `If-None-Match` an unchanged one is 304. */
   "feed.list": { input: FeedListInput; output: FeedListOutput };
   /** Sync the activity feed. The feed's current state, to start from or start over: open P0 items, then P1 items of the last 7 days, newest first (500 at most), and the cursor to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. `complete` is false when more were left out, or when not every repository could be checked (at most 100 an answer): `head_cursor` is then the feed's start. */
   "feed.sync": { input: FeedSyncInput; output: FeedSyncOutput };

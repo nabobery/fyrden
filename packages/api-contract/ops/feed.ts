@@ -54,7 +54,7 @@ const PollAfter = z
   .number()
   .int()
   .describe(
-    "Wait at least this long (milliseconds) before polling again with `next_cursor`; 0 after a full page, as more may follow.",
+    "Wait at least this long (milliseconds) before polling `GET /feed` again with `next_cursor` (a sync's `head_cursor`): 0 after a full page, as more may follow; else 30 seconds after an answer that showed something, or a sync, doubling with each answer in a row that showed nothing (the cursor counts them), up to 30 minutes.",
   );
 
 export const getFeed = defineOperation({
@@ -63,7 +63,7 @@ export const getFeed = defineOperation({
   path: "/feed",
   summary: "Get the activity feed",
   description:
-    "The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's `next_cursor` as `since` for what changed after it; a changed item comes again, so keep the latest copy by `item_key`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short, and cursors name only items the caller was shown. An answer checks at most 100 repositories and reads at most 1,000 items, so a page can end early, even empty; the items of repositories the feed's owner itself cannot read now are then forgotten, so a later answer gets past them. A cursor older than the retention (7 days, 5,000 items) or of another epoch is refused with 410 `cursor_expired`: start over from `GET /feed/sync`. The answer carries an ETag; with `If-None-Match` an unchanged one is 304.",
+    "The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's `next_cursor` as `since` for what changed after it; a changed item comes again, so keep the latest copy by `item_key`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short, and cursors name only items the caller was shown. An answer checks at most 100 repositories and reads at most 1,000 items, so a page can end early, even empty; the items of repositories the feed's owner itself cannot read now are then forgotten, so a later answer gets past them. Poll by `poll_after_ms`: while nothing changes the wait grows to 30 minutes, and an answer that shows something brings it back to 30 seconds. A cursor older than the retention (7 days, 5,000 items) or of another epoch is refused with 410 `cursor_expired`: start over from `GET /feed/sync`. The answer carries an ETag; with `If-None-Match` an unchanged one is 304.",
   input: z.object({
     since: Cursor.optional().describe("A previous answer's `next_cursor`; from the start without."),
     limit: z.coerce.number().int().min(1).max(100).default(50).describe("Page size, 1-100."),

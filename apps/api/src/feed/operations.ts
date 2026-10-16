@@ -38,8 +38,20 @@ import { allowedWithRole, findReposById, type RepoEntry } from "../repos/directo
  * full page asks to read on at once (`poll_after_ms` 0).
  */
 
-/** How long a caller that reached the head waits before polling again. Proposed. */
-export const FEED_POLL_AFTER_MS = 30_000;
+/**
+ * How long a caller that reached the head waits before polling again:
+ * `baseMs` after an answer that showed something (or a sync), doubling
+ * with each answer in a row that showed nothing, up to `maxMs`. Every poll
+ * is a request to the feed's object, so a quiet feed costs about 53 a day
+ * rather than 2,880 (docs/operations/limits.md). Proposed.
+ */
+export const FEED_POLL = { baseMs: 30_000, maxMs: 30 * 60_000 } as const;
+
+/** Quiet answers in a row a cursor counts at most: from there on the wait is the ceiling. */
+const QUIET_MAX = Math.ceil(Math.log2(FEED_POLL.maxMs / FEED_POLL.baseMs));
+
+/** The wait after `quiet` answers in a row that showed nothing. */
+const pollAfter = (quiet: number) => Math.min(FEED_POLL.baseMs * 2 ** quiet, FEED_POLL.maxMs);
 
 /** Where a client whose cursor expired starts over. */
 const RESYNC = "/api/feed/sync";
@@ -59,15 +71,22 @@ const VIEW_MEMBERS = 100;
 
 const viewOf = (env: Env, repoId: string) => env.REPO.getByName(repoId);
 
-/** A feed cursor: `base64url({v:1,e,s})`, an epoch and a sequence number, opaque to clients. */
-export function encodeFeedCursor(position: FeedPosition): string {
-  return encodeBytesCursor(
-    new TextEncoder().encode(JSON.stringify({ v: 1, e: position.epoch, s: position.seq })),
-  );
+/**
+ * A feed cursor: `base64url({v:1,e,s,q})`, an epoch and a sequence number,
+ * and how many answers in a row before it showed nothing (`q`, left out
+ * for none), opaque to clients. The count makes the wait between polls
+ * grow without anything stored per poll; it stops at its ceiling, so a
+ * quiet feed's answer then stays the same, and its ETag with it.
+ */
+export function encodeFeedCursor(position: FeedPosition, quiet = 0): string {
+  const cursor = { v: 1, e: position.epoch, s: position.seq, ...(quiet > 0 && { q: quiet }) };
+  return encodeBytesCursor(new TextEncoder().encode(JSON.stringify(cursor)));
 }
 
-/** The position a feed cursor names (null without one); any other cursor is refused. */
-export function decodeFeedCursor(cursor: string | undefined): FeedPosition | null {
+/** What a feed cursor names (null without one); any other cursor is refused. */
+export function decodeFeedCursor(
+  cursor: string | undefined,
+): (FeedPosition & { readonly quiet: number }) | null {
   if (cursor === undefined) return null;
   const bytes = decodeBytesCursor(cursor);
   let value: unknown;
@@ -77,16 +96,26 @@ export function decodeFeedCursor(cursor: string | undefined): FeedPosition | nul
   } catch {
     throw invalidCursor();
   }
-  const { v, e, s } = (value ?? {}) as { v?: unknown; e?: unknown; s?: unknown };
+  const {
+    v,
+    e,
+    s,
+    q = 0,
+  } = (value ?? {}) as { v?: unknown; e?: unknown; s?: unknown; q?: unknown };
   if (
     v !== 1 ||
     typeof e !== "string" ||
     e.length > 64 ||
+    typeof s !== "number" ||
     !Number.isSafeInteger(s) ||
-    (s as number) < 0
+    s < 0 ||
+    typeof q !== "number" ||
+    !Number.isSafeInteger(q) ||
+    q < 0 ||
+    q > QUIET_MAX
   )
     throw invalidCursor();
-  return { epoch: e, seq: s as number };
+  return { epoch: e, seq: s, quiet: q };
 }
 
 type FeedItemOutput = Output<typeof getFeed>["items"][number];
@@ -284,6 +313,7 @@ export async function getFeedOperation(
 ): Promise<Output<typeof getFeed>> {
   const feed = feedOf(ctx);
   const since = decodeFeedCursor(input.since);
+  const start = since && { epoch: since.epoch, seq: since.seq };
   const filter: FeedFilter = {
     priority: input.priority,
     kind: input.kind,
@@ -297,7 +327,7 @@ export async function getFeedOperation(
     input.limit,
     async (after: FeedPosition | null) => {
       counted(ctx, "listFeed");
-      const page = await feed.listFeed(after ?? since, SCAN.page, filter);
+      const page = await feed.listFeed(after ?? start, SCAN.page, filter);
       if (page.expired) throw expired();
       epoch = page.head.epoch;
       lowWatermark = page.lowWatermark;
@@ -305,15 +335,17 @@ export async function getFeedOperation(
     },
     (item) => ({ epoch: epoch as string, seq: item.seq }),
   );
+  const page = shown.slice(0, input.limit);
+  // An answer that shows nothing is one more quiet one in a row, whatever it did not show.
+  const quiet = page.length > 0 ? 0 : Math.min((since?.quiet ?? 0) + 1, QUIET_MAX);
   // Positions of items shown only (where the caller started when none was), never below the
   // low watermark: what retention deleted is gone for every reader, and such a cursor would
   // only be refused.
   const at = (item: FeedItem | undefined) =>
-    encodeFeedCursor({
-      epoch: epoch as string,
-      seq: Math.max(lowWatermark, item?.seq ?? since?.seq ?? 0),
-    });
-  const page = shown.slice(0, input.limit);
+    encodeFeedCursor(
+      { epoch: epoch as string, seq: Math.max(lowWatermark, item?.seq ?? since?.seq ?? 0) },
+      quiet,
+    );
   await Promise.all([visibility.read(page.map(({ item }) => item)), visibility.forgetLost()]);
   return {
     items: page.map(({ item, repo }) => itemOutput(item, repo, visibility.excerpt(item))),
@@ -321,7 +353,7 @@ export async function getFeedOperation(
     head_cursor: at(shown.at(-1)?.item),
     // Read on at once only after a full page: what the caller sees says so, never what it
     // does not (see the top).
-    poll_after_ms: page.length === input.limit ? 0 : FEED_POLL_AFTER_MS,
+    poll_after_ms: page.length === input.limit ? 0 : pollAfter(quiet),
   };
 }
 
@@ -353,7 +385,7 @@ export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof s
     items: items.map(({ item, repo }) => itemOutput(item, repo, visibility.excerpt(item))),
     complete: !more,
     head_cursor: encodeFeedCursor({ epoch, seq }),
-    poll_after_ms: FEED_POLL_AFTER_MS,
+    poll_after_ms: FEED_POLL.baseMs,
   };
 }
 
