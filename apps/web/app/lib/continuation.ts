@@ -3,23 +3,30 @@
  * only up to a budget of source bytes, and the rest of it on the next
  * navigation, so what one response carries stays bounded and nothing is
  * skipped. A continuation names the API page (its cursor, none for the
- * first) and how many of its items were already shown.
+ * first) and the id of the last item already gone through: the listings
+ * are in id order, so an item deleted, or added, meanwhile moves nothing
+ * else (an offset into the page would skip one).
  */
 
 export interface Continuation {
   readonly cursor: string | null;
-  readonly skip: number;
+  /** The last item gone through (shown, or passed over); null for none. */
+  readonly after: number | null;
 }
 
 /** A page URL's continuation (the first page when absent or not one). */
 export function readContinuation(value: string | null): Continuation {
-  const m = value === null ? null : /^([0-9]{1,3}):(.*)$/s.exec(value);
-  if (!m) return { cursor: null, skip: 0 };
-  return { cursor: m[2] ? (m[2] as string) : null, skip: Number(m[1]) };
+  const m = value === null ? null : /^([0-9]{0,16}):(.*)$/s.exec(value);
+  if (!m) return { cursor: null, after: null };
+  const after = m[1] ? Number(m[1]) : null;
+  return {
+    cursor: m[2] ? (m[2] as string) : null,
+    after: after !== null && Number.isSafeInteger(after) ? after : null,
+  };
 }
 
 export function writeContinuation(c: Continuation): string {
-  return `${c.skip}:${c.cursor ?? ""}`;
+  return `${c.after ?? ""}:${c.cursor ?? ""}`;
 }
 
 /** A string's length in UTF-8 bytes, without encoding it. */
@@ -38,11 +45,12 @@ export function utf8Length(text: string): number {
 }
 
 /**
- * The items of a page to show from `at`: in order, while their sizes fit
- * `budget` (always one, so every navigation shows something), and where to
- * continue: in this page, at the API's next page, or nowhere.
+ * The items of a page (in id order) to show from `at`: those after its last
+ * item, while their sizes fit `budget` (always one, so every navigation
+ * moves on), and where to continue: after the last one gone through in
+ * this page, at the API's next page, or nowhere.
  */
-export function within<T>(
+export function within<T extends { id: number }>(
   items: readonly T[],
   at: Continuation,
   size: (item: T) => number,
@@ -51,14 +59,16 @@ export function within<T>(
 ): { items: T[]; next: Continuation | null } {
   const shown: T[] = [];
   let used = 0;
-  let index = Math.min(at.skip, items.length);
-  for (; index < items.length; index++) {
-    const item = items[index] as T;
+  let last: number | null = at.after;
+  const left = at.after === null ? items : items.filter((item) => item.id > (at.after as number));
+  for (const item of left) {
     const cost = size(item);
-    if (shown.length > 0 && used + cost > budget) break;
+    // Something costly already shown, and this would pass the budget: continue from here.
+    if (used > 0 && used + cost > budget)
+      return { items: shown, next: { cursor: at.cursor, after: last } };
     shown.push(item);
     used += cost;
+    last = item.id;
   }
-  if (index < items.length) return { items: shown, next: { cursor: at.cursor, skip: index } };
-  return { items: shown, next: apiNext ? { cursor: apiNext, skip: 0 } : null };
+  return { items: shown, next: apiNext ? { cursor: apiNext, after: null } : null };
 }

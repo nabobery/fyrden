@@ -179,8 +179,11 @@ export interface ThreadComment {
   /** Its Markdown source (rendered in the browser). */
   body: string;
   at: number;
-  /** It holds a suggested change that can be applied to the head now. */
-  applicable: boolean;
+  /**
+   * It is on the head's side at the current head of an open pull request:
+   * a suggested change it holds (the browser reads its body) can be applied.
+   */
+  onHead: boolean;
 }
 
 /** A review thread on lines of a file, its comments oldest first. */

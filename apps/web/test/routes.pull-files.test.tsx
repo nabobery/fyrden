@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { type ReviewComment, sameComparison } from "../app/lib/pulls.js";
 import { filesByPath, threadsOf } from "../app/lib/review-threads.server.js";
+import { holdsSuggestion } from "../app/lib/suggestion.client.js";
 import { action, loader, default as PullFiles } from "../app/routes/repo.pull.files.js";
 import { loader as patches } from "../app/routes/repo.pull.patches.js";
 import { formPost, json, ORIGIN } from "./helpers/context.js";
@@ -125,15 +126,44 @@ describe("the files page", () => {
       const next = data.threadPages.next;
       if (!next) break;
       at = new URL(`${ORIGIN}${next}`).searchParams.get("comments");
-      if (at?.endsWith(":p2")) break;
+      if (at === ":p2") break;
     }
     // Every comment of the API's page, once each, in order; then its next page.
     expect(shown).toEqual(all.map((c) => c.id));
-    expect(at).toBe("0:p2");
+    expect(at).toBe(":p2");
     expect(read[0]).toBe("GET /api/repos/ada/demo/pulls/7/comments?per_page=30");
     expect(new Set(read.slice(1))).toEqual(
       new Set(["GET /api/repos/ada/demo/pulls/7/comments?per_page=30"]),
     );
+  });
+
+  it("skips no comment when one is deleted between navigations", async () => {
+    const body = "x".repeat(64 * 1024);
+    let live = Array.from({ length: 30 }, (_, i) => comment({ id: i + 1, thread_id: i + 1, body }));
+    const { context } = api({
+      "GET /api/repos/ada/demo/pulls/7": () => json(pullRequest()),
+      "GET /api/repos/ada/demo/pulls/7/files": () => filesPage([file("a.ts")]),
+      "GET /api/repos/ada/demo/pulls/7/comments": () => json({ comments: live, next_cursor: null }),
+    });
+    const navigate = async (at: string | null) => {
+      const query = at ? `?comments=${encodeURIComponent(at)}` : "";
+      const data = await loader({
+        request: new Request(`${ORIGIN}/ada/demo/pull/7/files${query}`),
+        context,
+        params,
+      } as never);
+      const next = data.threadPages.next;
+      return {
+        ids: data.threads.flatMap((t) => t.comments.map((c) => c.id)),
+        at: next ? new URL(`${ORIGIN}${next}`).searchParams.get("comments") : null,
+      };
+    };
+    const first = await navigate(null);
+    expect(first.ids).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    // A shown comment and an unshown one are deleted before the next navigation.
+    live = live.filter((c) => c.id !== 2 && c.id !== 12);
+    const second = await navigate(first.at);
+    expect(second.ids).toEqual([9, 10, 11, 13, 14, 15, 16, 17]);
   });
 
   it("sends review comments as their Markdown source, never rendered", async () => {
@@ -282,19 +312,27 @@ describe("a review thread", () => {
   const pull = { state: "open" as const, head: { ref: "topic", sha: HEAD } };
   const suggestion = "```suggestion\nnew line\n```";
 
-  it("offers a suggestion only on the head's side, at the current head, while open", () => {
-    const applicable = (
+  it("marks a comment as on the current head's side only there, while open, without reading its body", () => {
+    const onHead = (
       c: Record<string, unknown>,
       p: typeof pull | { state: "closed"; head: typeof pull.head } = pull,
     ) =>
       threadsOf([comment({ body: suggestion, ...c })], p, new Map([["a.ts", "a.ts"]]))[0]
-        ?.comments[0]?.applicable;
-    expect(applicable({})).toBe(true);
-    expect(applicable({ side: "LEFT" })).toBe(false);
-    expect(applicable({ commit_id: "d".repeat(40) })).toBe(false);
-    expect(applicable({ outdated: true, line: null })).toBe(false);
-    expect(applicable({ body: "no suggestion" })).toBe(false);
-    expect(applicable({}, { state: "closed", head: pull.head })).toBe(false);
+        ?.comments[0]?.onHead;
+    expect(onHead({})).toBe(true);
+    expect(onHead({ side: "LEFT" })).toBe(false);
+    expect(onHead({ commit_id: "d".repeat(40) })).toBe(false);
+    expect(onHead({ outdated: true, line: null })).toBe(false);
+    expect(onHead({}, { state: "closed", head: pull.head })).toBe(false);
+    // The body is the browser's to read: on the head's side, with or without a suggestion.
+    expect(onHead({ body: "no suggestion" })).toBe(true);
+  });
+
+  it("finds a suggestion in the browser as the API reads them", () => {
+    expect(holdsSuggestion(suggestion)).toBe(true);
+    expect(holdsSuggestion("no suggestion")).toBe(false);
+    expect(holdsSuggestion("```suggestion\nunclosed")).toBe(false);
+    expect(holdsSuggestion("<div>\n```suggestion\nx\n```")).toBe(false);
   });
 
   it("keeps an outdated thread's lines off the diff", () => {

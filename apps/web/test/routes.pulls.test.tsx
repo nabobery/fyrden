@@ -211,7 +211,7 @@ describe("a pull request's conversation", () => {
     ]);
     expect(data.timeline[2]).toMatchObject({ edited: true, agents: ["agt_x"] });
     // The next navigation reads the API's next page from its start.
-    expect(data.commentPages.next).toBe("/ada/demo/pull/7?comments=0%3Amore");
+    expect(data.commentPages.next).toBe("/ada/demo/pull/7?comments=%3Amore");
     // Markdown goes as its source: the page renders it in the browser.
     expect(data.body).toBe("Some **words**");
     expect(JSON.stringify(data)).not.toContain("<strong>");

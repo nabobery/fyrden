@@ -1,8 +1,10 @@
 // Bounded pages of Markdown bodies: a page of the API's listing shown up to
-// a byte budget, the rest on the next navigation, none skipped or repeated.
+// a byte budget, the rest on the next navigation after the last id gone
+// through, so a deletion meanwhile skips or repeats nothing.
 
 import { describe, expect, it } from "vitest";
 import {
+  type Continuation,
   readContinuation,
   utf8Length,
   within,
@@ -10,15 +12,16 @@ import {
 } from "../app/lib/continuation.js";
 
 describe("a continuation", () => {
-  it("names the API's page and how many of its items were shown, and reads back", () => {
-    for (const c of [
-      { cursor: null, skip: 0 },
-      { cursor: "abc:def", skip: 7 },
-      { cursor: "x", skip: 0 },
-    ])
-      expect(readContinuation(writeContinuation(c))).toEqual(c);
-    for (const bad of [null, "", "x", "-1:a", "1234:a", "a:b"])
-      expect(readContinuation(bad), String(bad)).toEqual({ cursor: null, skip: 0 });
+  it("names the API's page and the last id gone through, and reads back", () => {
+    const cases: Continuation[] = [
+      { cursor: null, after: null },
+      { cursor: "abc:def", after: 7 },
+      { cursor: "x", after: null },
+      { cursor: null, after: 123_456 },
+    ];
+    for (const c of cases) expect(readContinuation(writeContinuation(c))).toEqual(c);
+    for (const bad of [null, "", "x", "-1:a", "a:b", "99999999999999999:a"])
+      expect(readContinuation(bad), String(bad)).toEqual({ cursor: null, after: null });
   });
 
   it("counts UTF-8 bytes", () => {
@@ -31,23 +34,56 @@ describe("a continuation", () => {
 });
 
 describe("a page's items within a budget", () => {
-  const sizes = [4, 4, 4, 10, 1];
-  const take = (skip: number, budget: number, next: string | null = "n") =>
-    within(sizes, { cursor: "c", skip }, (s) => s, budget, next);
+  // Ids 1-5, of these sizes.
+  const page = [4, 4, 4, 10, 1].map((size, i) => ({ id: i + 1, size }));
+  const take = (
+    items: typeof page,
+    after: number | null,
+    budget: number,
+    next: string | null = "n",
+  ) => within(items, { cursor: "c", after }, (i) => i.size, budget, next);
+  const ids = (r: { items: { id: number }[] }) => r.items.map((i) => i.id);
 
-  it("shows items while they fit, then continues in the same page", () => {
-    expect(take(0, 8)).toEqual({ items: [4, 4], next: { cursor: "c", skip: 2 } });
-    expect(take(2, 8)).toEqual({ items: [4], next: { cursor: "c", skip: 3 } });
+  it("shows items while they fit, then continues after the last one shown", () => {
+    const first = take(page, null, 8);
+    expect(ids(first)).toEqual([1, 2]);
+    expect(first.next).toEqual({ cursor: "c", after: 2 });
+    const second = take(page, 2, 8);
+    expect(ids(second)).toEqual([3]);
+    expect(second.next).toEqual({ cursor: "c", after: 3 });
   });
 
   it("always shows one item, however large, so every navigation moves on", () => {
-    expect(take(3, 8)).toEqual({ items: [10], next: { cursor: "c", skip: 4 } });
+    const big = take(page, 3, 8);
+    expect(ids(big)).toEqual([4]);
+    expect(big.next).toEqual({ cursor: "c", after: 4 });
+  });
+
+  it("passes over items that cost nothing, and continues after them too", () => {
+    const free = [
+      { id: 1, size: 0 },
+      { id: 2, size: 8 },
+      { id: 3, size: 0 },
+      { id: 4, size: 8 },
+    ];
+    const r = take(free, null, 8);
+    expect(ids(r)).toEqual([1, 2, 3]);
+    expect(r.next).toEqual({ cursor: "c", after: 3 });
   });
 
   it("goes on to the API's next page, or ends", () => {
-    expect(take(4, 8)).toEqual({ items: [1], next: { cursor: "n", skip: 0 } });
-    expect(take(4, 8, null)).toEqual({ items: [1], next: null });
-    // A continuation past the page's end (the page shrank) moves on too.
-    expect(take(9, 8)).toEqual({ items: [], next: { cursor: "n", skip: 0 } });
+    expect(take(page, 4, 8)).toEqual({ items: [page[4]], next: { cursor: "n", after: null } });
+    expect(take(page, 4, 8, null).next).toBeNull();
+    expect(take(page, 99, 8)).toEqual({ items: [], next: { cursor: "n", after: null } });
+  });
+
+  it("skips nothing and repeats nothing when items are deleted between navigations", () => {
+    const first = take(page, null, 8);
+    expect(ids(first)).toEqual([1, 2]);
+    // Id 1 (shown) and id 4 (not yet) are deleted before the next navigation.
+    const after = page.filter((i) => i.id !== 1 && i.id !== 4);
+    const second = take(after, first.next?.after ?? null, 8);
+    expect(ids(second)).toEqual([3, 5]);
+    // An offset of 2 into the new page would have skipped id 3.
   });
 });

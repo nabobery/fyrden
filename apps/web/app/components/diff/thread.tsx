@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import { type DiffSide, type Thread, when, who } from "../../lib/pulls.js";
 import { Markdown } from "../markdown.js";
@@ -15,6 +15,28 @@ function Outcome({ answer, done }: { answer: Answer; done: string }) {
       </p>
     );
   return answer?.ok ? <p role="status">{done}</p> : null;
+}
+
+/**
+ * The comments of `thread` holding a suggested change that can be applied:
+ * read in the browser once the page is hydrated (the parser loads on
+ * demand), only for comments on the current head's side.
+ */
+function useSuggestions(thread: Thread): ReadonlySet<number> {
+  const [found, setFound] = useState<ReadonlySet<number>>(new Set());
+  useEffect(() => {
+    const candidates = thread.comments.filter((c) => c.onHead);
+    if (candidates.length === 0) return setFound(new Set());
+    let live = true;
+    void import("../../lib/suggestion.client.js").then(({ holdsSuggestion }) => {
+      if (live)
+        setFound(new Set(candidates.filter((c) => holdsSuggestion(c.body)).map((c) => c.id)));
+    });
+    return () => {
+      live = false;
+    };
+  }, [thread]);
+  return found;
 }
 
 const sideName = (side: DiffSide) => (side === "LEFT" ? "old" : "new");
@@ -44,6 +66,7 @@ export function ThreadView({
   viewer: string | null;
   canAct: boolean;
 }) {
+  const suggestions = useSuggestions(thread);
   const reply = useFetcher<Answer>();
   const resolve = useFetcher<Answer>();
   const apply = useFetcher<Answer>();
@@ -78,7 +101,7 @@ export function ThreadView({
               <time dateTime={new Date(c.at).toISOString()}>{when(c.at)}</time>
             </p>
             <Markdown source={c.body} />
-            {c.applicable && canAct && (
+            {suggestions.has(c.id) && canAct && (
               <apply.Form method="post">
                 <input type="hidden" name="intent" value="apply" />
                 <input type="hidden" name="comment_id" value={c.id} />

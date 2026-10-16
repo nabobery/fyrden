@@ -1,4 +1,3 @@
-import { parseSuggestion } from "@fyrden/domain";
 import type { RouterContextProvider } from "react-router";
 import { apiGet } from "./api.server.js";
 import {
@@ -113,13 +112,10 @@ function addComments(
       agents: c.performed_via_agents,
       body: c.body,
       at: c.created_at,
-      // As the API applies them: on the head's side, at the current head, while open.
-      applicable:
-        pull.state === "open" &&
-        !c.outdated &&
-        c.side === "RIGHT" &&
-        c.commit_id === pull.head.sha &&
-        parseSuggestion(c.body) !== undefined,
+      // As the API applies suggestions: on the head's side, at the current head, while open.
+      // Whether the body holds one is read in the browser: the server parses no bodies.
+      onHead:
+        pull.state === "open" && !c.outdated && c.side === "RIGHT" && c.commit_id === pull.head.sha,
     });
   }
 }
