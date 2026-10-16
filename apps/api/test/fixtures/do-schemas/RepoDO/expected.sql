@@ -412,7 +412,7 @@ CREATE TABLE review_threads (
         resolved_at INTEGER,
         resolved_by TEXT,
         version INTEGER NOT NULL DEFAULT 1
-      ) STRICT;
+      , merge_base_sha TEXT) STRICT;
 CREATE TABLE reviews (
         review_id INTEGER PRIMARY KEY AUTOINCREMENT,
         pr_number INTEGER NOT NULL,

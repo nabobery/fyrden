@@ -12176,7 +12176,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "null",
                         },
                       ],
-                      "description": "The line commented on; null once the head has moved (\`outdated\`).",
+                      "description": "The line commented on; null once \`outdated\`.",
                     },
                     "original_commit_id": {
                       "type": "string",
@@ -12187,7 +12187,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "integer",
                     },
                     "outdated": {
-                      "description": "Fyrden: the head has moved since: the lines are those of \`commit_id\`.",
+                      "description": "Fyrden: the diff moved on since: the head moved, or for \`LEFT\` the merge base (the base branch can move it with the head unchanged); the lines are those of \`commit_id\` (for \`LEFT\`, of the merge base then).",
                       "type": "boolean",
                     },
                     "path": {
@@ -12426,7 +12426,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "null",
                         },
                       ],
-                      "description": "The line commented on; null once the head has moved (\`outdated\`).",
+                      "description": "The line commented on; null once \`outdated\`.",
                     },
                     "original_commit_id": {
                       "type": "string",
@@ -12437,7 +12437,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "integer",
                     },
                     "outdated": {
-                      "description": "Fyrden: the head has moved since: the lines are those of \`commit_id\`.",
+                      "description": "Fyrden: the diff moved on since: the head moved, or for \`LEFT\` the merge base (the base branch can move it with the head unchanged); the lines are those of \`commit_id\` (for \`LEFT\`, of the merge base then).",
                       "type": "boolean",
                     },
                     "path": {
@@ -13300,7 +13300,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "type": "null",
                               },
                             ],
-                            "description": "The line commented on; null once the head has moved (\`outdated\`).",
+                            "description": "The line commented on; null once \`outdated\`.",
                           },
                           "original_commit_id": {
                             "type": "string",
@@ -13311,7 +13311,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "integer",
                           },
                           "outdated": {
-                            "description": "Fyrden: the head has moved since: the lines are those of \`commit_id\`.",
+                            "description": "Fyrden: the diff moved on since: the head moved, or for \`LEFT\` the merge base (the base branch can move it with the head unchanged); the lines are those of \`commit_id\` (for \`LEFT\`, of the merge base then).",
                             "type": "boolean",
                           },
                           "path": {
@@ -13611,7 +13611,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "null",
                         },
                       ],
-                      "description": "The line commented on; null once the head has moved (\`outdated\`).",
+                      "description": "The line commented on; null once \`outdated\`.",
                     },
                     "original_commit_id": {
                       "type": "string",
@@ -13622,7 +13622,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "integer",
                     },
                     "outdated": {
-                      "description": "Fyrden: the head has moved since: the lines are those of \`commit_id\`.",
+                      "description": "Fyrden: the diff moved on since: the head moved, or for \`LEFT\` the merge base (the base branch can move it with the head unchanged); the lines are those of \`commit_id\` (for \`LEFT\`, of the merge base then).",
                       "type": "boolean",
                     },
                     "path": {

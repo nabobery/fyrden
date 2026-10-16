@@ -9,10 +9,40 @@ export const REVIEW_COMMENT_ENTITY = "pull_request_review_comment";
 /** Where a thread is anchored: lines of one file, on one side, at a head the pull request has had. */
 export interface ThreadAnchor {
   readonly commitSha: string;
+  /** On the base side: the merge base whose file the lines are of; null on the head side. */
+  readonly mergeBaseSha: string | null;
   readonly path: string;
   readonly side: CommentSide;
   readonly line: number;
   readonly startLine: number | null;
+}
+
+/**
+ * What a pull request's diff compares now: its head, and the merge base of
+ * its base branch's tip and that head; null when it was not worked out (no
+ * anchor asked needed it) or could not be.
+ */
+export interface Comparison {
+  readonly headSha: string;
+  readonly mergeBaseSha: string | null;
+}
+
+/**
+ * Whether a thread's anchor is no longer on the diff: its head is not the
+ * pull request's head, or, on the base side, its merge base is not the
+ * comparison's (the base branch can move the merge base with the head
+ * unchanged).
+ */
+export function isOutdated(anchor: ThreadAnchor, now: Comparison | null): boolean {
+  return (
+    anchor.commitSha !== now?.headSha ||
+    (anchor.mergeBaseSha !== null && anchor.mergeBaseSha !== now.mergeBaseSha)
+  );
+}
+
+/** Whether judging `anchor` needs the comparison's merge base worked out. */
+export function needsMergeBase(anchor: ThreadAnchor, headSha: string): boolean {
+  return anchor.mergeBaseSha !== null && anchor.commitSha === headSha;
 }
 
 export interface ThreadRecord extends ThreadAnchor {
@@ -62,6 +92,7 @@ type CommentRow = {
   updated_at: number;
   version: number;
   commit_sha: string;
+  merge_base_sha: string | null;
   path: string;
   side: CommentSide;
   line: number;
@@ -73,6 +104,7 @@ type ThreadRow = {
   thread_id: number;
   pr_number: number;
   commit_sha: string;
+  merge_base_sha: string | null;
   path: string;
   side: CommentSide;
   line: number;
@@ -83,7 +115,8 @@ type ThreadRow = {
   comments: number;
 };
 
-const COMMENT_SELECT = `SELECT c.*, t.commit_sha, t.path, t.side, t.line, t.start_line, t.resolved_at
+const COMMENT_SELECT = `SELECT c.*, t.commit_sha, t.merge_base_sha, t.path, t.side, t.line, t.start_line,
+  t.resolved_at
   FROM review_comments c JOIN review_threads t ON t.thread_id = c.thread_id`;
 const THREAD_SELECT = `SELECT t.*, (SELECT count(*) FROM review_comments c WHERE c.thread_id = t.thread_id)
   AS comments FROM review_threads t`;
@@ -170,10 +203,12 @@ export class RepoReviewComments {
     const comment = this.deps.git.context.storage.transactionSync(() => {
       const [thread] = this.deps.git.context.storage.sql
         .exec<{ thread_id: number }>(
-          `INSERT INTO review_threads (pr_number, commit_sha, path, side, line, start_line)
-           VALUES (?, ?, ?, ?, ?, ?) RETURNING thread_id`,
+          `INSERT INTO review_threads (pr_number, commit_sha, merge_base_sha, path, side, line,
+             start_line)
+           VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING thread_id`,
           number,
           anchor.commitSha,
+          anchor.mergeBaseSha,
           anchor.path,
           anchor.side,
           anchor.line,
@@ -408,6 +443,7 @@ function commentRecord(row: CommentRow): ReviewCommentRecord {
     body: row.body,
     anchor: {
       commitSha: row.commit_sha,
+      mergeBaseSha: row.merge_base_sha,
       path: row.path,
       side: row.side,
       line: row.line,
@@ -425,6 +461,7 @@ function threadRecord(row: ThreadRow): ThreadRecord {
     id: row.thread_id,
     number: row.pr_number,
     commitSha: row.commit_sha,
+    mergeBaseSha: row.merge_base_sha,
     path: row.path,
     side: row.side,
     line: row.line,

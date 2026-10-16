@@ -741,11 +741,14 @@ export const repoSchema: readonly DoMigration[] = [
     // then, and no approval up to it counts (the reviews stay listed as
     // they were). A revision bumped with each review that can count
     // submitted or dismissed, which a merge compares instead of reading
-    // every review.
+    // every review. The merge base a base-side thread's lines are of (the
+    // comparison it was started on), so it goes outdated when the base
+    // branch moves the merge base though the head stays.
     name: "review_standing",
     sql: `
       ALTER TABLE pull_requests ADD COLUMN approvals_after INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE pull_requests ADD COLUMN reviews_revision INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE review_threads ADD COLUMN merge_base_sha TEXT;
     `,
   },
 ];

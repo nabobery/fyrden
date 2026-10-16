@@ -13,7 +13,12 @@ import type {
 } from "@fyrden/api-contract";
 import { coAuthorTrailers } from "@fyrden/domain";
 import { appendTrailers } from "@fyrden/git-core";
-import type { ReviewCommentRecord, ThreadRecord } from "../do/repo/review-comments.js";
+import {
+  type Comparison,
+  isOutdated,
+  type ReviewCommentRecord,
+  type ThreadRecord,
+} from "../do/repo/review-comments.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
@@ -22,13 +27,13 @@ import type { RepoEntry } from "./directory.js";
 import { commitIdentityOf, noReplyPeople } from "./file-writes.js";
 import { actorOf, failure } from "./pulls.js";
 
-/** A diff comment as the API returns it; `headSha` is its pull request's head now. */
+/** A diff comment as the API returns it, judged against what its pull request's diff compares now. */
 function commentOutput(
   comment: ReviewCommentRecord,
-  headSha: string | null,
+  now: Comparison | null,
 ): Output<typeof getReviewComment> {
   const { anchor } = comment;
-  const outdated = anchor.commitSha !== headSha;
+  const outdated = isOutdated(anchor, now);
   return {
     id: comment.id,
     pull_request_review_id: null,
@@ -54,7 +59,7 @@ function commentOutput(
 
 function threadOutput(
   thread: ThreadRecord,
-  headSha: string | null,
+  now: Comparison | null,
 ): Output<typeof resolveReviewThread> {
   return {
     id: thread.id,
@@ -63,7 +68,7 @@ function threadOutput(
     line: thread.line,
     start_line: thread.startLine,
     commit_id: thread.commitSha,
-    outdated: thread.commitSha !== headSha,
+    outdated: isOutdated(thread, now),
     resolved: thread.resolvedAt !== null,
     resolved_by: thread.resolvedBy === null ? null : { id: thread.resolvedBy },
     comments: thread.comments,
@@ -126,7 +131,7 @@ export async function listReviewCommentsOperation(
   const page = listed.comments.slice(0, input.per_page);
   const last = page.at(-1);
   return {
-    comments: page.map((c) => commentOutput(c, listed.headSha)),
+    comments: page.map((c) => commentOutput(c, listed.comparison)),
     next_cursor:
       listed.comments.length > input.per_page && last ? encodeCursor(String(last.id)) : null,
   };
@@ -141,7 +146,7 @@ export async function getReviewCommentOperation(
   const found = await repo(ctx, entry, "getReviewComment").getReviewComment(input.comment_id);
   if (found === null) throw failure(entry, "repo_not_found");
   if (!found) throw commentNotFound(input.comment_id);
-  return commentOutput(found.comment, found.headSha);
+  return commentOutput(found.comment, found.comparison);
 }
 
 /** The `pulls.comments.create` operation: a new thread, or a reply in one. */
@@ -184,7 +189,7 @@ export async function createReviewCommentOperation(
       ...(input.in_reply_to !== undefined && { comment: input.in_reply_to }),
       number: input.pull_number,
     });
-  return commentOutput(result.comment, result.headSha);
+  return commentOutput(result.comment, result.comparison);
 }
 
 /** The `pulls.comments.update` operation. */
@@ -199,7 +204,7 @@ export async function updateReviewCommentOperation(
     actorOf(ctx),
   );
   if (!result.ok) throw refusal(entry, result, { comment: input.comment_id });
-  return commentOutput(result.comment, result.headSha);
+  return commentOutput(result.comment, result.comparison);
 }
 
 /** The `pulls.comments.delete` operation. */
@@ -233,7 +238,7 @@ export async function listReviewThreadsOperation(
   const page = listed.threads.slice(0, input.per_page);
   const last = page.at(-1);
   return {
-    threads: page.map((t) => threadOutput(t, listed.headSha)),
+    threads: page.map((t) => threadOutput(t, listed.comparison)),
     next_cursor:
       listed.threads.length > input.per_page && last ? encodeCursor(String(last.id)) : null,
   };
@@ -252,7 +257,7 @@ async function resolution(
     actorOf(ctx),
   );
   if (!result.ok) throw refusal(entry, result, { number: input.pull_number });
-  return threadOutput(result.thread, result.headSha);
+  return threadOutput(result.thread, result.comparison);
 }
 
 /** The `pulls.threads.resolve` operation. */

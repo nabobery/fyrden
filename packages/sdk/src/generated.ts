@@ -2121,13 +2121,13 @@ export type PullsCommentsListOutput = {
     path: string;
     /** `RIGHT`: the head's file; `LEFT`: the merge base's. */
     side: "LEFT" | "RIGHT";
-    /** The line commented on; null once the head has moved (`outdated`). */
+    /** The line commented on; null once `outdated`. */
     line: number | null;
     original_line: number;
     /** The first line, for a range. */
     start_line: number | null;
     start_side: "LEFT" | "RIGHT" | null;
-    /** Fyrden: the head has moved since: the lines are those of `commit_id`. */
+    /** Fyrden: the diff moved on since: the head moved, or for `LEFT` the merge base (the base branch can move it with the head unchanged); the lines are those of `commit_id` (for `LEFT`, of the merge base then). */
     outdated: boolean;
     /** Fyrden: its thread is resolved. */
     resolved: boolean;
@@ -2186,13 +2186,13 @@ export type PullsCommentsCreateOutput = {
   path: string;
   /** `RIGHT`: the head's file; `LEFT`: the merge base's. */
   side: "LEFT" | "RIGHT";
-  /** The line commented on; null once the head has moved (`outdated`). */
+  /** The line commented on; null once `outdated`. */
   line: number | null;
   original_line: number;
   /** The first line, for a range. */
   start_line: number | null;
   start_side: "LEFT" | "RIGHT" | null;
-  /** Fyrden: the head has moved since: the lines are those of `commit_id`. */
+  /** Fyrden: the diff moved on since: the head moved, or for `LEFT` the merge base (the base branch can move it with the head unchanged); the lines are those of `commit_id` (for `LEFT`, of the merge base then). */
   outdated: boolean;
   /** Fyrden: its thread is resolved. */
   resolved: boolean;
@@ -2234,13 +2234,13 @@ export type PullsCommentsGetOutput = {
   path: string;
   /** `RIGHT`: the head's file; `LEFT`: the merge base's. */
   side: "LEFT" | "RIGHT";
-  /** The line commented on; null once the head has moved (`outdated`). */
+  /** The line commented on; null once `outdated`. */
   line: number | null;
   original_line: number;
   /** The first line, for a range. */
   start_line: number | null;
   start_side: "LEFT" | "RIGHT" | null;
-  /** Fyrden: the head has moved since: the lines are those of `commit_id`. */
+  /** Fyrden: the diff moved on since: the head moved, or for `LEFT` the merge base (the base branch can move it with the head unchanged); the lines are those of `commit_id` (for `LEFT`, of the merge base then). */
   outdated: boolean;
   /** Fyrden: its thread is resolved. */
   resolved: boolean;
@@ -2283,13 +2283,13 @@ export type PullsCommentsUpdateOutput = {
   path: string;
   /** `RIGHT`: the head's file; `LEFT`: the merge base's. */
   side: "LEFT" | "RIGHT";
-  /** The line commented on; null once the head has moved (`outdated`). */
+  /** The line commented on; null once `outdated`. */
   line: number | null;
   original_line: number;
   /** The first line, for a range. */
   start_line: number | null;
   start_side: "LEFT" | "RIGHT" | null;
-  /** Fyrden: the head has moved since: the lines are those of `commit_id`. */
+  /** Fyrden: the diff moved on since: the head moved, or for `LEFT` the merge base (the base branch can move it with the head unchanged); the lines are those of `commit_id` (for `LEFT`, of the merge base then). */
   outdated: boolean;
   /** Fyrden: its thread is resolved. */
   resolved: boolean;

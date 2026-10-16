@@ -35,6 +35,7 @@ let owner: Who;
 let repo: { id: string; name: string };
 let path: string;
 let head: string;
+let base: string;
 
 const commitOn = async (branch: string, changes: Record<string, unknown>[]) => {
   const made = await json<{ commit: { sha: string } }>(
@@ -44,7 +45,7 @@ const commitOn = async (branch: string, changes: Record<string, unknown>[]) => {
   return made.body.commit.sha;
 };
 
-async function branchAt(name: string, sha: string) {
+async function branchAt(name: string, sha: string, from = ZERO) {
   const target: PushTarget = {
     repo: { id: repo.id, name: repo.name, stub: env.REPO.getByName(repo.id) },
     owner: {
@@ -55,7 +56,7 @@ async function branchAt(name: string, sha: string) {
   };
   const pushed = await postPush(
     target,
-    pushBody([{ old: ZERO, new: sha, ref: `refs/heads/${name}` }], { pack: fx.packEmpty }),
+    pushBody([{ old: from, new: sha, ref: `refs/heads/${name}` }], { pack: fx.packEmpty }),
   );
   expect(pushed.report).toContain(`ok refs/heads/${name}\n`);
 }
@@ -91,7 +92,7 @@ beforeEach(async () => {
     )
   ).body;
   path = `/repos/${owner.handle}/${repo.name}`;
-  const base = await commitOn("main", [{ path: "a.txt", content: "one\ntwo\n" }]);
+  base = await commitOn("main", [{ path: "a.txt", content: "one\ntwo\n" }]);
   await branchAt("feature", base);
   head = await commitOn("feature", [{ path: "a.txt", content: "one\ntwo\nthree\nfour\n" }]);
   const opened = await api("POST", `${path}/pulls`, owner.token, {
@@ -138,6 +139,63 @@ describe("diff comments", () => {
     // The merge base has two lines: a third is out of range there.
     expect((await onHead(owner, { side: "LEFT", line: 2 })).status).toBe(201);
     expect((await onHead(owner, { side: "LEFT", line: 3 })).body.code).toBe("line_out_of_range");
+  });
+
+  it("on the base side go outdated when only the base moves, into the head's history", async () => {
+    // main at B, the head two commits on (H1, then H2), each changing line 2.
+    const h1 = head;
+    head = await commitOn("feature", [{ path: "a.txt", content: "one\nTWO\nthree\nfour\n" }]);
+    const left = (await onHead(owner, { side: "LEFT", line: 2 })).body;
+    const right = (await onHead(owner, { side: "RIGHT", line: 2 })).body;
+    expect([left.outdated, right.outdated]).toEqual([false, false]);
+    // main takes H1: the comparison is H1 to H2 now, its base side H1's line 2, not B's.
+    await branchAt("main", h1, base);
+    const listed = await json<{ comments: Comment[] }>(
+      api("GET", `${path}/pulls/1/comments`, owner.token),
+    );
+    expect(listed.body.comments).toEqual([
+      expect.objectContaining({ id: left.id, outdated: true, line: null, original_line: 2 }),
+      expect.objectContaining({ id: right.id, outdated: false, line: 2 }),
+    ]);
+    const got = await json<Comment>(api("GET", `${path}/pulls/comments/${left.id}`, owner.token));
+    expect(got.body.outdated).toBe(true);
+    expect((await threads()).map((t) => t.outdated)).toEqual([true, false]);
+    // A thread started on the comparison as it is now is current, and answers so.
+    const now = await onHead(owner, { side: "LEFT", line: 2 });
+    expect(now.body.outdated).toBe(false);
+    expect((await threads()).map((t) => t.outdated)).toEqual([true, false, false]);
+    const replied = await comment(owner, { in_reply_to: left.id });
+    expect(replied.body.outdated).toBe(true);
+    expect((await resolve(owner, now.body.thread_id)).body.outdated).toBe(false);
+  });
+
+  it("on the base side stay current once merged or closed, judged on the comparison kept then", async () => {
+    const h1 = head;
+    head = await commitOn("feature", [{ path: "a.txt", content: "one\nTWO\nthree\nfour\n" }]);
+    const left = (await onHead(owner, { side: "LEFT", line: 2 })).body;
+    const outdated = async () =>
+      (
+        await json<{ comments: Comment[] }>(api("GET", `${path}/pulls/1/comments`, owner.token))
+      ).body.comments.map((c) => c.outdated);
+    // Closed: the base branch taking H1 afterwards changes nothing it compares.
+    expect((await api("PATCH", `${path}/pulls/1`, owner.token, { state: "closed" })).status).toBe(
+      200,
+    );
+    await branchAt("main", h1, base);
+    expect(await outdated()).toEqual([false]);
+    expect((await threads()).map((t) => t.outdated)).toEqual([false]);
+    // Reopened, it compares the branch again: H1 is the merge base now.
+    expect((await api("PATCH", `${path}/pulls/1`, owner.token, { state: "open" })).status).toBe(
+      200,
+    );
+    expect(await outdated()).toEqual([true]);
+    // Merged, the base branch reaches the head: its threads are judged on the base merged onto.
+    const fresh = (await onHead(owner, { side: "LEFT", line: 2 })).body;
+    expect(fresh.outdated).toBe(false);
+    expect((await api("PUT", `${path}/pulls/1/merge`, owner.token, {})).status).toBe(200);
+    expect(await outdated()).toEqual([true, false]);
+    const got = await json<Comment>(api("GET", `${path}/pulls/comments/${left.id}`, owner.token));
+    expect(got.body.outdated).toBe(true);
   });
 
   it("refuse anchors that do not fit", async () => {

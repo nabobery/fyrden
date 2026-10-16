@@ -48,17 +48,15 @@ export const ReviewComment = z.object({
   original_commit_id: z.string(),
   path: z.string(),
   side: Side.describe("`RIGHT`: the head's file; `LEFT`: the merge base's."),
-  line: z
-    .number()
-    .int()
-    .nullable()
-    .describe("The line commented on; null once the head has moved (`outdated`)."),
+  line: z.number().int().nullable().describe("The line commented on; null once `outdated`."),
   original_line: z.number().int(),
   start_line: z.number().int().nullable().describe("The first line, for a range."),
   start_side: Side.nullable(),
   outdated: z
     .boolean()
-    .describe("Fyrden: the head has moved since: the lines are those of `commit_id`."),
+    .describe(
+      "Fyrden: the diff moved on since: the head moved, or for `LEFT` the merge base (the base branch can move it with the head unchanged); the lines are those of `commit_id` (for `LEFT`, of the merge base then).",
+    ),
   resolved: z.boolean().describe("Fyrden: its thread is resolved."),
   created_at: z.number().int().describe("Unix time in milliseconds."),
   updated_at: z.number().int().describe("Unix time in milliseconds."),

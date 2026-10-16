@@ -225,6 +225,8 @@ import {
   type SagaView,
 } from "./repo/rebase-saga.js";
 import {
+  type Comparison,
+  needsMergeBase,
   RepoReviewComments,
   type ReviewCommentFailure,
   type ReviewCommentRecord,
@@ -321,6 +323,14 @@ const OPEN_IMPORT_STEPS = 40;
 
 /** The largest file a diff comment's anchor is checked against. */
 const ANCHOR_MAX_BYTES = 1024 * 1024;
+
+/** What a pull request's diff compares, with the base it was worked out from. */
+interface Compared {
+  readonly comparison: Comparison;
+  readonly baseRef: string;
+  /** The base tip it was worked out from, as `RepoPulls.comparedBase` gave it. */
+  readonly baseTip: string;
+}
 
 /** The first comment of a new thread on a pull request's diff, as the Worker asks for it. */
 export interface NewReviewComment {
@@ -2036,34 +2046,90 @@ export class RepoDO extends MigratingDO {
     return this.#pullChange("deleteComment", actor, (caller) => this.comments.delete(id, caller));
   }
 
-  /** A pull request's diff comments, oldest first; null when the repository is gone, undefined without the pull request. */
+  /**
+   * A pull request's diff comments, oldest first, with what its diff
+   * compares now (whether each is outdated); null when the repository is
+   * gone, undefined without the pull request.
+   */
   listReviewComments(number: number, after: number, limit: number) {
-    return this.#measured("listReviewComments", () => {
+    return this.#measured("listReviewComments", async () => {
       if (this.#refusesReads()) return null;
       const pull = this.pulls.get(number);
       if (!pull) return undefined;
-      return { headSha: pull.headSha, comments: this.reviewComments.list(number, after, limit) };
+      const comments = this.reviewComments.list(number, after, limit);
+      const { comparison } = await this.#compared(
+        pull,
+        comments.map((c) => c.anchor),
+      );
+      return { comparison, comments };
     });
   }
 
-  /** One diff comment, with its pull request's head; null when the repository is gone. */
+  /** One diff comment, with what its pull request's diff compares now; null when the repository is gone. */
   getReviewComment(id: number) {
-    return this.#measured("getReviewComment", () => {
+    return this.#measured("getReviewComment", async () => {
       if (this.#refusesReads()) return null;
       const comment = this.reviewComments.get(id);
       if (!comment) return undefined;
-      return { headSha: this.pulls.get(comment.number)?.headSha ?? null, comment };
+      const pull = this.pulls.get(comment.number);
+      const comparison = pull ? (await this.#compared(pull, [comment.anchor])).comparison : null;
+      return { comparison, comment };
     });
   }
 
-  /** A pull request's threads, oldest first; null when the repository is gone, undefined without the pull request. */
+  /** A pull request's threads, oldest first, as `listReviewComments`. */
   listReviewThreads(number: number, after: number, limit: number) {
-    return this.#measured("listReviewThreads", () => {
+    return this.#measured("listReviewThreads", async () => {
       if (this.#refusesReads()) return null;
       const pull = this.pulls.get(number);
       if (!pull) return undefined;
-      return { headSha: pull.headSha, threads: this.reviewComments.threads(number, after, limit) };
+      const threads = this.reviewComments.threads(number, after, limit);
+      const { comparison } = await this.#compared(pull, threads);
+      return { comparison, threads };
     });
+  }
+
+  /**
+   * What `pull`'s diff compares now: its head, and the merge base of its
+   * base and head when one of `anchors` needs it (a base-side thread on
+   * the head); one that cannot be worked out leaves those outdated. With
+   * the base tip it was worked out from.
+   */
+  async #compared(pull: PullRecord, anchors: readonly ThreadAnchor[]): Promise<Compared> {
+    const base = this.pulls.comparedBase(pull);
+    let mergeBaseSha: string | null = null;
+    if (anchors.some((anchor) => needsMergeBase(anchor, pull.headSha))) {
+      const found = await mergeBaseOf(this.git.commitGraph, base, oidFromHex(pull.headSha));
+      if (found.ok) mergeBaseSha = oidToHex(found.value);
+    }
+    return {
+      comparison: { headSha: pull.headSha, mergeBaseSha },
+      baseRef: pull.baseRef,
+      baseTip: oidToHex(base),
+    };
+  }
+
+  /**
+   * In a change, with no await since `compared` was worked out: its
+   * comparison when the pull request still compares the same base tip and
+   * head, else the head now with the merge base unknown (a base-side
+   * thread is then answered outdated, the cautious way).
+   */
+  #comparisonNow(number: number, compared: Compared | null): Comparison | null {
+    const pull = this.pulls.get(number);
+    if (!pull) return null;
+    return compared !== null &&
+      pull.headSha === compared.comparison.headSha &&
+      pull.baseRef === compared.baseRef &&
+      oidToHex(this.pulls.comparedBase(pull)) === compared.baseTip
+      ? compared.comparison
+      : { headSha: pull.headSha, mergeBaseSha: null };
+  }
+
+  /** What `#compared` works out for a change of the thread at `anchor`, before the change. */
+  async #comparedFor(number: number, anchor: ThreadAnchor | undefined): Promise<Compared | null> {
+    const pull = this.pulls.get(number);
+    return pull ? this.#compared(pull, anchor ? [anchor] : []) : null;
   }
 
   /**
@@ -2076,10 +2142,13 @@ export class RepoDO extends MigratingDO {
     return this.#pullChange(
       "createReviewComment",
       actor,
-      (caller, anchor) =>
-        anchor.ok
-          ? this.#withHead(this.reviewComments.start(number, anchor.value, input.body, caller))
-          : anchor,
+      (caller, checked) =>
+        checked.ok
+          ? this.#withComparison(
+              this.reviewComments.start(number, checked.value.anchor, input.body, caller),
+              checked.value.compared,
+            )
+          : checked,
       () => this.#checkedAnchor(number, input),
       [input.body],
     );
@@ -2090,17 +2159,26 @@ export class RepoDO extends MigratingDO {
     return this.#pullChange(
       "replyReviewComment",
       actor,
-      (caller) => this.#withHead(this.reviewComments.reply(number, to, body, caller)),
-      undefined,
+      (caller, compared) =>
+        this.#withComparison(this.reviewComments.reply(number, to, body, caller), compared),
+      () => this.#comparedFor(number, this.reviewComments.get(to)?.anchor),
       [body],
     );
   }
 
-  /** `input`'s anchor, if the file it names has the lines it names. */
+  /**
+   * `input`'s anchor, if the file it names has the lines it names (a
+   * base-side one records the merge base it was checked at), and what the
+   * diff compares now.
+   */
   async #checkedAnchor(
     number: number,
     input: NewReviewComment,
-  ): Promise<{ ok: true; value: ThreadAnchor } | BrowseFailure | { ok: false; code: string }> {
+  ): Promise<
+    | { ok: true; value: { anchor: ThreadAnchor; compared: Compared } }
+    | BrowseFailure
+    | { ok: false; code: string }
+  > {
     const pull = this.pulls.get(number);
     if (!pull) return { ok: false, code: "not_found" };
     if (!this.pulls.hadHead(number, input.commitId))
@@ -2108,13 +2186,14 @@ export class RepoDO extends MigratingDO {
     // An earlier head force-pushed away is kept only while the reflog keeps it.
     if (!this.git.commitGraph.readSync([oidFromHex(input.commitId)], "verified")[0])
       return { ok: false, code: "commit_unavailable" };
+    // The left side the files listing shows (a merged one's from the base it was merged onto).
+    const base = this.pulls.comparedBase(pull);
     let at = input.commitId;
+    let mergeBaseSha: string | null = null;
     if (input.side === "LEFT") {
-      // The left side the files listing shows (a merged one's from the base it was merged onto).
-      const base = this.pulls.comparedBase(pull);
       const found = await mergeBaseOf(this.git.commitGraph, base, oidFromHex(input.commitId));
       if (!found.ok) return found;
-      at = oidToHex(found.value);
+      at = mergeBaseSha = oidToHex(found.value);
     }
     this.#blocks ??= createClockBlockCache();
     const browse = new RepoBrowse({ git: this.git, memoryBlocks: this.#blocks });
@@ -2127,28 +2206,43 @@ export class RepoDO extends MigratingDO {
     // A missing file is a refused anchor (422); any other failure keeps its own status.
     if (!file.ok)
       return file.code === "path_not_found" ? { ok: false, code: "path_not_found" } : file;
-    const anchor = { side: input.side, line: input.line, startLine: input.startLine ?? null };
-    const refused = checkAnchor(anchor, lineCount(file.value.bytes));
+    const lines = { side: input.side, line: input.line, startLine: input.startLine ?? null };
+    const refused = checkAnchor(lines, lineCount(file.value.bytes));
     if (refused) return { ok: false, code: refused };
-    return { ok: true, value: { commitSha: input.commitId, path: input.path, ...anchor } };
+    const anchor = { commitSha: input.commitId, mergeBaseSha, path: input.path, ...lines };
+    // The merge base worked out for the head is the comparison's own: no second walk.
+    const compared: Compared = {
+      comparison: {
+        headSha: pull.headSha,
+        mergeBaseSha: needsMergeBase(anchor, pull.headSha) ? mergeBaseSha : null,
+      },
+      baseRef: pull.baseRef,
+      baseTip: oidToHex(base),
+    };
+    return { ok: true, value: { anchor, compared } };
   }
 
   editReviewComment(id: number, body: string, actor: RefActor) {
     return this.#pullChange(
       "editReviewComment",
       actor,
-      (caller) => this.#withHead(this.reviewComments.edit(id, body, caller)),
-      undefined,
+      (caller, compared) =>
+        this.#withComparison(this.reviewComments.edit(id, body, caller), compared),
+      () => {
+        const comment = this.reviewComments.get(id);
+        return comment ? this.#comparedFor(comment.number, comment.anchor) : Promise.resolve(null);
+      },
       [body],
     );
   }
 
-  /** A diff comment's change, with its pull request's head now (whether it is outdated). */
-  #withHead(
+  /** A diff comment's change, with what its pull request's diff compares now (whether it is outdated). */
+  #withComparison(
     result: { ok: true; comment: ReviewCommentRecord } | { ok: false; code: ReviewCommentFailure },
+    compared: Compared | null,
   ) {
     return result.ok
-      ? { ...result, headSha: this.pulls.get(result.comment.number)?.headSha ?? null }
+      ? { ...result, comparison: this.#comparisonNow(result.comment.number, compared) }
       : result;
   }
 
@@ -2160,10 +2254,17 @@ export class RepoDO extends MigratingDO {
 
   /** Resolves a thread, or makes it unresolved again. */
   resolveReviewThread(number: number, threadId: number, resolved: boolean, actor: RefActor) {
-    return this.#pullChange("resolveReviewThread", actor, (caller) => {
-      const result = this.reviewComments.resolve(number, threadId, resolved, caller);
-      return result.ok ? { ...result, headSha: this.pulls.get(number)?.headSha ?? null } : result;
-    });
+    return this.#pullChange(
+      "resolveReviewThread",
+      actor,
+      (caller, compared) => {
+        const result = this.reviewComments.resolve(number, threadId, resolved, caller);
+        return result.ok
+          ? { ...result, comparison: this.#comparisonNow(number, compared) }
+          : result;
+      },
+      () => this.#comparedFor(number, this.reviewComments.thread(number, threadId)),
+    );
   }
 
   /** Who wrote the diff comments `ids` (missing ones left out): a suggestion's author is credited. */
