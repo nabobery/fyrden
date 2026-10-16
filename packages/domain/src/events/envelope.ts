@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isId } from "../ids.js";
+import { FeedBlockSchema } from "./feed.js";
 
 /**
  * Domain events. A source (a repository or organization object) gives every
@@ -85,6 +86,11 @@ export const DomainEventSchema = z
         }),
       })
       .optional(),
+    /**
+     * What the event means for principals' activity feeds (see `feed.ts`),
+     * decided with the change. Absent when it means nothing for any feed.
+     */
+    feed: FeedBlockSchema.optional(),
   })
   .superRefine((event, ctx) => {
     const { entity, stored } = event;

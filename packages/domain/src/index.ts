@@ -2,6 +2,7 @@ export * from "./authz/evaluate.js";
 export * from "./authz/permissions.js";
 export * from "./authz/roles.js";
 export * from "./events/envelope.js";
+export * from "./events/feed.js";
 export * from "./events/snapshots.js";
 export * from "./ids.js";
 export * from "./principals/commit-identity.js";
