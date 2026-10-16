@@ -75,6 +75,16 @@ export class PullSource {
     readonly headRef: string;
     readonly generation: number;
     readonly knownSha: string | null;
+    /**
+     * Whether the author lets the base's maintainers write the branch, the
+     * author's root identity, and the pull request's version they were
+     * read at (a copy told late never replaces a newer one).
+     */
+    readonly consent?: {
+      readonly maintainerCanModify: boolean;
+      readonly authorRoot: string;
+      readonly version: number;
+    };
   }): { sha: string | null; refVersion: number } {
     const { git } = this.deps;
     return git.context.storage.transactionSync(() => {
@@ -88,16 +98,26 @@ export class PullSource {
         .toArray()[0];
       // Told late: a later generation follows the branch already; nothing of this one is told.
       if (current && current.generation > input.generation) return this.tip(input.headRef);
+      const consent = input.consent;
       sql.exec(
-        `INSERT INTO outgoing_pulls (base_repo_id, pr_number, head_ref, generation)
-         VALUES (?, ?, ?, ?)
+        `INSERT INTO outgoing_pulls (base_repo_id, pr_number, head_ref, generation,
+           maintainer_can_modify, author_root, consent_version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT (base_repo_id, pr_number) DO UPDATE SET head_ref = excluded.head_ref,
-           generation = excluded.generation
+           generation = excluded.generation,
+           maintainer_can_modify = CASE WHEN excluded.consent_version >= outgoing_pulls.consent_version
+             THEN excluded.maintainer_can_modify ELSE outgoing_pulls.maintainer_can_modify END,
+           author_root = CASE WHEN excluded.consent_version >= outgoing_pulls.consent_version
+             THEN excluded.author_root ELSE outgoing_pulls.author_root END,
+           consent_version = max(excluded.consent_version, outgoing_pulls.consent_version)
          WHERE excluded.generation >= outgoing_pulls.generation`,
         input.baseRepoId,
         input.number,
         input.headRef,
         input.generation,
+        consent?.maintainerCanModify ? 1 : 0,
+        consent?.authorRoot ?? null,
+        consent?.version ?? 0,
       );
       const tip = this.tip(input.headRef);
       const last = sql
@@ -119,6 +139,31 @@ export class PullSource {
       );
       return tip;
     });
+  }
+
+  /**
+   * What the fork knows of a pull request of `baseRepoId` following one of
+   * its branches: its registration, if it is at `generation` for `headRef`.
+   */
+  registration(
+    baseRepoId: string,
+    number: number,
+    generation: number,
+    headRef: string,
+  ): { readonly maintainerCanModify: boolean; readonly authorRoot: string | null } | undefined {
+    const row = this.deps.git.context.storage.sql
+      .exec<{ maintainer_can_modify: number; author_root: string | null }>(
+        `SELECT maintainer_can_modify, author_root FROM outgoing_pulls
+         WHERE base_repo_id = ? AND pr_number = ? AND generation = ? AND head_ref = ?`,
+        baseRepoId,
+        number,
+        generation,
+        headRef,
+      )
+      .toArray()[0];
+    return (
+      row && { maintainerCanModify: row.maintainer_can_modify === 1, authorRoot: row.author_root }
+    );
   }
 
   /**

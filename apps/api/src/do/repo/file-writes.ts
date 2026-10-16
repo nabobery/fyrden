@@ -25,6 +25,7 @@ import {
   readPushReport,
 } from "../../git/chunked/head.js";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
+import type { PushDecision } from "../../git/push/commit.js";
 import { ACCESS_LOST, TOKEN_REVOKED } from "../../git/push/reauthorize.js";
 import { reauthorizeByToken } from "../../git/push/reauthorize-token.js";
 import type { PushLogMeta, RepoPush } from "../../git/push/repo-push.js";
@@ -140,17 +141,24 @@ export async function writeFiles(
   commitPoint: {
     readonly meta?: Omit<PushLogMeta, "repoId" | "requestId">;
     readonly onRefused?: (report: PushReportSummary) => Browsed<never>;
+    /** Built here, committed in another repository (in place of this one's push path). */
+    readonly elsewhere?: WriteElsewhere;
   } = {},
 ): Promise<Browsed<FileWriteResult>> {
   const invalid = check(input);
   if (invalid) return invalid;
   const { git } = deps;
+  const { elsewhere } = commitPoint;
   const snapshot = git.refStore.readRefsSync();
-  const ref = input.branch ? `refs/heads/${input.branch}` : snapshot.head;
+  const ref = elsewhere
+    ? elsewhere.ref
+    : input.branch
+      ? `refs/heads/${input.branch}`
+      : snapshot.head;
   if (!ref?.startsWith("refs/heads/"))
     return fail(409, "repo_empty", "The repository has no default branch to write to.");
   const branch = ref.slice("refs/heads/".length);
-  const head = snapshot.refs.get(ref);
+  const head = elsewhere ? elsewhere.head : snapshot.refs.get(ref);
   // A first commit only on the default branch of an empty repository.
   if (!head && !(snapshot.refs.size === 0 && ref === snapshot.head))
     return fail(404, "branch_not_found", `No branch ${branch} was found.`);
@@ -158,26 +166,31 @@ export async function writeFiles(
     return fail(409, "head_moved", `The branch ${branch} is no longer at the expected head.`);
   const baseTree = head ? git.commitGraph.readSync([head], "verified")[0]?.tree : null;
   if (baseTree === undefined) throw new Error(`branch ${branch} points at an unknown commit`);
-  const refused = await deps.precheck?.(
-    input.principal,
-    [{ ref, old: head ? oidToHex(head) : null, new: ZERO_ID }],
-    input.grantId ?? null,
-  );
+  // The other repository's rulesets are judged there, at its commit point.
+  const refused = elsewhere
+    ? undefined
+    : await deps.precheck?.(
+        input.principal,
+        [{ ref, old: head ? oidToHex(head) : null, new: ZERO_ID }],
+        input.grantId ?? null,
+      );
   if (refused) return fail(409, "ruleset_violation", refused);
 
   const now = Math.floor((deps.now ?? Date.now)() / 1000);
   // Built and stored under one reservation; nothing of it is held while it is indexed.
-  const made = await build(deps, input, { ref, head, baseTree, now });
+  const made = await build(deps, input, { ref, head, baseTree, now }, elsewhere?.send);
   if (!made.ok) return made;
   const { built, upload } = made.value;
-  const committed = await finishUpload(
-    deps,
-    input,
-    upload,
-    commitPoint.meta,
-    commitPoint.onRefused,
-  );
-  if (!committed.ok) return committed;
+  if (upload) {
+    const committed = await finishUpload(
+      deps,
+      input,
+      upload,
+      commitPoint.meta,
+      commitPoint.onRefused,
+    );
+    if (!committed.ok) return committed;
+  }
   return {
     ok: true,
     value: {
@@ -212,6 +225,8 @@ async function build(
     readonly baseTree: Oid | null;
     readonly now: number;
   },
+  /** Hands the commit over to be committed elsewhere, in place of storing it here. */
+  send?: WriteElsewhere["send"],
 ): Promise<
   Browsed<{
     built: {
@@ -220,7 +235,8 @@ async function build(
       blobs: readonly (Oid | null)[];
       verification: SignatureCheck;
     };
-    upload: StoredUpload;
+    /** Absent when the commit was handed over (and committed there). */
+    upload: StoredUpload | undefined;
   }>
 > {
   const { git } = deps;
@@ -312,7 +328,11 @@ async function build(
     }
 
     const pack = await packOf(git, built.objects);
-    const upload = await storeUpload(deps, input, { ref, head, commit: built.commit, pack });
+    const upload = send
+      ? await send(built.commit, pack).then((sent) =>
+          sent.ok ? { ok: true as const, value: undefined } : sent,
+        )
+      : await storeUpload(deps, input, { ref, head, commit: built.commit, pack });
     if (!upload.ok) return upload;
     return {
       ok: true,
@@ -436,6 +456,18 @@ export type WriterOf<T extends FileWriteInput> = Pick<
   "principal" | "tokenId" | "grantId" | "repoId" | "requestId"
 >;
 
+/**
+ * A write built here and committed in another repository of the network
+ * (a pull request's head branch there), through that one's push path.
+ */
+export interface WriteElsewhere {
+  /** The branch there (a full ref name) and its tip, a commit this repository has. */
+  readonly ref: string;
+  readonly head: Oid;
+  /** Hands the commit and its objects (one pack) over; answers once committed there, or refused. */
+  readonly send: (commit: Oid, pack: Uint8Array) => Promise<Browsed<unknown>>;
+}
+
 /** A write stored as a push's body: its upload and scratch objects. */
 export interface StoredUpload {
   readonly uploadId: string;
@@ -505,6 +537,8 @@ export async function finishUpload(
   upload: StoredUpload,
   meta: Omit<PushLogMeta, "repoId" | "requestId"> = {},
   onRefused: (report: PushReportSummary) => Browsed<never> = refused,
+  /** The commit point's decision, in place of the writer's token checked against this repository. */
+  decide?: () => Promise<PushDecision>,
 ): Promise<Browsed<true>> {
   const { push } = deps;
   const { uploadId } = upload;
@@ -518,16 +552,18 @@ export async function finishUpload(
       if (step + 1 >= FILE_WRITE_POLICY.indexSteps) return BUSY;
       await new Promise((resolve) => setTimeout(resolve, FILE_WRITE_POLICY.indexPauseMs));
     }
-    const decision = await reauthorizeByToken(
-      deps.db,
-      {
-        tokenId: input.tokenId,
-        principal: input.principal,
-        repoId: input.repoId,
-        requestId: input.requestId ?? null,
-      },
-      deps.writerRole,
-    );
+    const decision = decide
+      ? await decide()
+      : await reauthorizeByToken(
+          deps.db,
+          {
+            tokenId: input.tokenId,
+            principal: input.principal,
+            repoId: input.repoId,
+            requestId: input.requestId ?? null,
+          },
+          deps.writerRole,
+        );
     const response = await push.finalize(uploadId, decision, { ...meta, repoId: input.repoId });
     // The push has settled its upload and scratch objects, committed or not.
     finalized = true;

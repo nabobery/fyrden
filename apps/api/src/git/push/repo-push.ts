@@ -163,6 +163,17 @@ export interface PushLogMeta {
   /** How the change is made, for the reflog (a pull request's merge: `merge`). */
   readonly via?: RefActor["via"];
   /**
+   * A base's maintainer writing a pull request's head here: recorded on
+   * the commit's actor, where the repository checks the author's consent.
+   */
+  readonly maintainerFor?: RefActor["maintainerFor"];
+  /**
+   * In place of the pusher's own write access (the access check and the
+   * rulesets' writable flag): the caller's own authority for this push,
+   * a refusal or undefined. The rulesets still judge the pusher's own role.
+   */
+  readonly authority?: () => string | undefined;
+  /**
    * Whether an upload this finalization did not commit is no longer the
    * caller's to discard (another run of the caller's took it over): it is
    * then left as it is, for that run.
@@ -523,7 +534,7 @@ export class RepoPush {
           // own access check for the pusher.
           reauthorize: async () =>
             decision.refusal ??
-            (await this.accessCheck?.(upload.principal)) ??
+            (meta.authority ? meta.authority() : await this.accessCheck?.(upload.principal)) ??
             (await this.storage?.charge(uploadId, record.bodyBytes)),
           ...(rules && {
             checkCommands: async (commands: readonly CheckedCommand[]) => {
@@ -554,8 +565,8 @@ export class RepoPush {
               this.frozen?.() ??
               (rulesStamp === undefined
                 ? undefined
-                : !rulesStamp.writable
-                  ? ACCESS_LOST
+                : !(meta.authority ? meta.authority() === undefined : rulesStamp.writable)
+                  ? (meta.authority?.() ?? ACCESS_LOST)
                   : rulesStamp.restamp() !== rulesStamp.stamp
                     ? RULESETS_CHANGED
                     : undefined) ??
@@ -567,6 +578,7 @@ export class RepoPush {
               meta.inCommit?.();
             },
             meta.via,
+            meta.maintainerFor,
           ),
         });
         return { plan, indexed, result };

@@ -86,6 +86,7 @@ export {
   type CommitContext,
   DERIVED_REF_PREFIX,
   type DerivedRefUpdate,
+  type MaintainerFor,
   type RefActor,
   type RepoCommitRequest,
   type RepoCommitResult,

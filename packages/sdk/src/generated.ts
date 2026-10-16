@@ -1595,6 +1595,8 @@ export type PullsListOutput = {
     /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
     mergeable_state: "clean" | "dirty" | "draft" | "unknown";
     draft: boolean;
+    /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
+    maintainer_can_modify: boolean;
     title: string;
     body: string | null;
     /** Who opened it (the user, when agents acted for one). */
@@ -1654,6 +1656,8 @@ export type PullsCreateInput = {
   base: string;
   /** Open it as a draft. */
   draft?: boolean;
+  /** With a head in a fork: let those with write access to the base change the head branch. */
+  maintainer_can_modify?: boolean;
 };
 
 /** Output of `pulls.create`. */
@@ -1668,6 +1672,8 @@ export type PullsCreateOutput = {
   /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
   mergeable_state: "clean" | "dirty" | "draft" | "unknown";
   draft: boolean;
+  /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
+  maintainer_can_modify: boolean;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -1730,6 +1736,8 @@ export type PullsGetOutput = {
   /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
   mergeable_state: "clean" | "dirty" | "draft" | "unknown";
   draft: boolean;
+  /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
+  maintainer_can_modify: boolean;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -1786,6 +1794,8 @@ export type PullsUpdateInput = {
   base?: string;
   /** Fyrden: mark it a draft, or ready for review. */
   draft?: boolean;
+  /** The author only: let the base's maintainers change a head branch in a fork. */
+  maintainer_can_modify?: boolean;
 };
 
 /** Output of `pulls.update`. */
@@ -1800,6 +1810,8 @@ export type PullsUpdateOutput = {
   /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
   mergeable_state: "clean" | "dirty" | "draft" | "unknown";
   draft: boolean;
+  /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
+  maintainer_can_modify: boolean;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -2623,6 +2635,8 @@ export type PullsRequestedReviewersAddOutput = {
   /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
   mergeable_state: "clean" | "dirty" | "draft" | "unknown";
   draft: boolean;
+  /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
+  maintainer_can_modify: boolean;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -2689,6 +2703,8 @@ export type PullsRequestedReviewersRemoveOutput = {
   /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
   mergeable_state: "clean" | "dirty" | "draft" | "unknown";
   draft: boolean;
+  /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
+  maintainer_can_modify: boolean;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -4552,15 +4568,15 @@ export interface Operations {
   "pulls.create": { input: PullsCreateInput; output: PullsCreateOutput };
   /** Get a pull request. One pull request. */
   "pulls.get": { input: PullsGetInput; output: PullsGetOutput };
-  /** Update a pull request. Changes the title or body, retargets it onto another base branch, marks it a draft or ready, closes or reopens it; fields left out are kept, and all of it happens or none. The author may do any of it to its own pull request; on anyone else's, triage closes and reopens and write does the rest. Reopening needs the head branch to exist. */
+  /** Update a pull request. Changes the title or body, retargets it onto another base branch, marks it a draft or ready, closes or reopens it, or lets the base's maintainers change a head branch in a fork; fields left out are kept, and all of it happens or none. The author may do any of it to its own pull request; on anyone else's, triage closes and reopens and write does the rest, except `maintainer_can_modify`, which only the author sets. Reopening needs the head branch to exist. */
   "pulls.update": { input: PullsUpdateInput; output: PullsUpdateOutput };
   /** Merge a pull request. Merges an open pull request that is not a draft into its base branch: `merge` makes a merge commit of the base branch's tip and the head, `squash` one commit on the base branch with the head's changes (by the pull request's author). The commit is made and signed by the server; the base branch's rulesets apply, with the pull request's reviews and last push. Refused (405) on conflicts, or when the base branch moved while merging; refused (409) when `sha` is not the head. `rebase` replays the pull request's commits (at most 250, none a merge commit) one by one onto the base branch's tip and moves the branch to the last: their authors, author dates and messages are kept, the server is their committer and signs each. Empty commits follow `git rebase`: a commit empty from the start is kept, one whose changes are already in the base is dropped; a commit the base changed further, or a rename in the base of a file the pull request edits, is a conflict. A rebase too long for one request answers 409 `merge_in_progress` and goes on in the background: send the request again (a finished rebase answers its merge) or watch the pull request. */
   "pulls.merge": { input: PullsMergeInput; output: PullsMergeOutput };
-  /** Get a pull request's conflicts. Fyrden: the conflicts of merging the base branch's tip into an open pull request's head (none when they merge cleanly). Files whose lines conflict in text (`content`, `add_add`) are `editable`: their merged content is given with git's conflict markers, the head's side first (`<<<<<<< head`, `=======`, `>>>>>>> base`), up to 50 files and 4 MiB in all. Any other conflict (a file deleted on one side, a mode, a symlink, a submodule, a binary or too large file, a file and a directory; renames are not followed) is listed but needs a merge made by hand. Resolve them with `conflict_snapshot`, which names the base tip and head they were read at. Heads in forks come later. */
+  /** Get a pull request's conflicts. Fyrden: the conflicts of merging the base branch's tip into an open pull request's head (none when they merge cleanly). Files whose lines conflict in text (`content`, `add_add`) are `editable`: their merged content is given with git's conflict markers, the head's side first (`<<<<<<< head`, `=======`, `>>>>>>> base`), up to 50 files and 4 MiB in all. Any other conflict (a file deleted on one side, a mode, a symlink, a submodule, a binary or too large file, a file and a directory; renames are not followed) is listed but needs a merge made by hand. Resolve them with `conflict_snapshot`, which names the base tip and head they were read at. A head in a fork is read as the base last imported it. */
   "pulls.conflicts.get": { input: PullsConflictsGetInput; output: PullsConflictsGetOutput };
-  /** Resolve a pull request's conflicts. Fyrden: merges the base branch's tip into the head branch with the given contents for every file whose lines conflict, as one merge commit (parents: the head, then the base tip) made and signed by the server. Write access; the head branch's rulesets apply. Refused when either branch moved since the conflicts were read (409 `head_moved`, `base_moved`), when a conflict cannot be resolved here (422 `not_editable`), when a conflicted file is missing (422 `unresolved`), or when a given file has no conflict (422 `not_conflicted`). Contents that still hold conflict markers are accepted and named in `markers`. */
+  /** Resolve a pull request's conflicts. Fyrden: merges the base branch's tip into the head branch with the given contents for every file whose lines conflict, as one merge commit (parents: the head, then the base tip) made and signed by the server. Write access; the head branch's rulesets apply. A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's `maintainer_can_modify` (the author still writing the fork); that repository's rulesets apply. Refused when either branch moved since the conflicts were read (409 `head_moved`, `base_moved`), when a conflict cannot be resolved here (422 `not_editable`), when a conflicted file is missing (422 `unresolved`), or when a given file has no conflict (422 `not_conflicted`). Contents that still hold conflict markers are accepted and named in `markers`. */
   "pulls.conflicts.resolve": { input: PullsConflictsResolveInput; output: PullsConflictsResolveOutput };
-  /** Update a pull request branch. Merges the base branch's tip into an open pull request's head branch (a merge commit made and signed by the server; parents: the head, then the base tip). Write access; the head branch's rulesets apply. Refused (422) when it conflicts (resolve the conflicts instead) or when the head already contains the base tip; refused (409) when `expected_head_sha` is not the head. Done before the answer, which is GitHub's 202. Heads in forks come later. */
+  /** Update a pull request branch. Merges the base branch's tip into an open pull request's head branch (a merge commit made and signed by the server; parents: the head, then the base tip). Write access; the head branch's rulesets apply. A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's `maintainer_can_modify` (the author still writing the fork); that repository's rulesets apply. Refused (422) when it conflicts (resolve the conflicts instead) or when the head already contains the base tip; refused (409) when `expected_head_sha` is not the head. Done before the answer, which is GitHub's 202. */
   "pulls.branch.update": { input: PullsBranchUpdateInput; output: PullsBranchUpdateOutput };
   /** List pull request files. The files a pull request changes, compared from the merge base of its base branch and head to its head (as GitHub's three-dot comparison), in path order, with each file's patch. At most 3,000 files are listed; renames with unchanged content are found. Pages keep the comparison they started with: the cursor carries `merge_base_sha` and `head_sha`. */
   "pulls.files.list": { input: PullsFilesListInput; output: PullsFilesListOutput };
@@ -4582,7 +4598,7 @@ export interface Operations {
   "pulls.threads.resolve": { input: PullsThreadsResolveInput; output: PullsThreadsResolveOutput };
   /** Unresolve a review thread. Fyrden: marks a review thread unresolved (nothing changes when it already is). The pull request's author, or write access and above. A ruleset may require every thread resolved before a merge. */
   "pulls.threads.unresolve": { input: PullsThreadsUnresolveInput; output: PullsThreadsUnresolveOutput };
-  /** Apply suggestions. Fyrden: applies the suggested changes of diff comments (a ```suggestion block each) to the pull request's head branch as one commit, made and signed by the server, with the suggestions' authors as co-authors; their threads are resolved. Each comment must be on the head side at the current head; suggestions to one file must not overlap; files of 1 MiB at most. Write access; the branch's rulesets apply, and it moves only from the head the comments are on (409 `head_moved`). */
+  /** Apply suggestions. Fyrden: applies the suggested changes of diff comments (a ```suggestion block each) to the pull request's head branch as one commit, made and signed by the server, with the suggestions' authors as co-authors; their threads are resolved. Each comment must be on the head side at the current head; suggestions to one file must not overlap; files of 1 MiB at most. Write access; the branch's rulesets apply, and it moves only from the head the comments are on (409 `head_moved`). A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's `maintainer_can_modify` (the author still writing the fork); that repository's rulesets apply. */
   "pulls.suggestions.apply": { input: PullsSuggestionsApplyInput; output: PullsSuggestionsApplyOutput };
   /** List reviews. A pull request's reviews, in the order submitted. */
   "pulls.reviews.list": { input: PullsReviewsListInput; output: PullsReviewsListOutput };

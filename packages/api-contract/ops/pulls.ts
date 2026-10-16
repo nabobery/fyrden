@@ -44,6 +44,11 @@ export const PullRequest = z.object({
       "`clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here.",
     ),
   draft: z.boolean(),
+  maintainer_can_modify: z
+    .boolean()
+    .describe(
+      "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
+    ),
   title: z.string(),
   body: z.string().nullable(),
   user: z
@@ -133,6 +138,12 @@ export const createPull = defineOperation({
       ),
     base: Branch.describe("The branch to merge into, without refs/heads/."),
     draft: z.boolean().default(false).describe("Open it as a draft."),
+    maintainer_can_modify: z
+      .boolean()
+      .default(false)
+      .describe(
+        "With a head in a fork: let those with write access to the base change the head branch.",
+      ),
   }),
   output: PullRequest,
   permission: "pull_requests:write",
@@ -174,7 +185,7 @@ export const updatePull = defineOperation({
   path: "/repos/{owner}/{repo}/pulls/{pull_number}",
   summary: "Update a pull request",
   description:
-    "Changes the title or body, retargets it onto another base branch, marks it a draft or ready, closes or reopens it; fields left out are kept, and all of it happens or none. The author may do any of it to its own pull request; on anyone else's, triage closes and reopens and write does the rest. Reopening needs the head branch to exist.",
+    "Changes the title or body, retargets it onto another base branch, marks it a draft or ready, closes or reopens it, or lets the base's maintainers change a head branch in a fork; fields left out are kept, and all of it happens or none. The author may do any of it to its own pull request; on anyone else's, triage closes and reopens and write does the rest, except `maintainer_can_modify`, which only the author sets. Reopening needs the head branch to exist.",
   input: z.object({
     ...RepoInput,
     pull_number: PullNumber,
@@ -183,6 +194,10 @@ export const updatePull = defineOperation({
     state: z.enum(["open", "closed"]).optional(),
     base: Branch.optional().describe("A new base branch, without refs/heads/."),
     draft: z.boolean().optional().describe("Fyrden: mark it a draft, or ready for review."),
+    maintainer_can_modify: z
+      .boolean()
+      .optional()
+      .describe("The author only: let the base's maintainers change a head branch in a fork."),
   }),
   output: PullRequest,
   permission: "pull_requests:write",
@@ -361,7 +376,7 @@ export const getPullConflicts = defineOperation({
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/conflicts",
   summary: "Get a pull request's conflicts",
   description:
-    "Fyrden: the conflicts of merging the base branch's tip into an open pull request's head (none when they merge cleanly). Files whose lines conflict in text (`content`, `add_add`) are `editable`: their merged content is given with git's conflict markers, the head's side first (`<<<<<<< head`, `=======`, `>>>>>>> base`), up to 50 files and 4 MiB in all. Any other conflict (a file deleted on one side, a mode, a symlink, a submodule, a binary or too large file, a file and a directory; renames are not followed) is listed but needs a merge made by hand. Resolve them with `conflict_snapshot`, which names the base tip and head they were read at. Heads in forks come later.",
+    "Fyrden: the conflicts of merging the base branch's tip into an open pull request's head (none when they merge cleanly). Files whose lines conflict in text (`content`, `add_add`) are `editable`: their merged content is given with git's conflict markers, the head's side first (`<<<<<<< head`, `=======`, `>>>>>>> base`), up to 50 files and 4 MiB in all. Any other conflict (a file deleted on one side, a mode, a symlink, a submodule, a binary or too large file, a file and a directory; renames are not followed) is listed but needs a merge made by hand. Resolve them with `conflict_snapshot`, which names the base tip and head they were read at. A head in a fork is read as the base last imported it.",
   input: z.object({ ...RepoInput, pull_number: PullNumber }),
   output: z.object({
     base_sha: z.string(),
@@ -406,7 +421,7 @@ export const resolvePullConflicts = defineOperation({
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/conflicts",
   summary: "Resolve a pull request's conflicts",
   description:
-    "Fyrden: merges the base branch's tip into the head branch with the given contents for every file whose lines conflict, as one merge commit (parents: the head, then the base tip) made and signed by the server. Write access; the head branch's rulesets apply. Refused when either branch moved since the conflicts were read (409 `head_moved`, `base_moved`), when a conflict cannot be resolved here (422 `not_editable`), when a conflicted file is missing (422 `unresolved`), or when a given file has no conflict (422 `not_conflicted`). Contents that still hold conflict markers are accepted and named in `markers`.",
+    "Fyrden: merges the base branch's tip into the head branch with the given contents for every file whose lines conflict, as one merge commit (parents: the head, then the base tip) made and signed by the server. Write access; the head branch's rulesets apply. A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's `maintainer_can_modify` (the author still writing the fork); that repository's rulesets apply. Refused when either branch moved since the conflicts were read (409 `head_moved`, `base_moved`), when a conflict cannot be resolved here (422 `not_editable`), when a conflicted file is missing (422 `unresolved`), or when a given file has no conflict (422 `not_conflicted`). Contents that still hold conflict markers are accepted and named in `markers`.",
   input: z.object({
     ...RepoInput,
     pull_number: PullNumber,
@@ -455,7 +470,7 @@ export const updatePullBranch = defineOperation({
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/update-branch",
   summary: "Update a pull request branch",
   description:
-    "Merges the base branch's tip into an open pull request's head branch (a merge commit made and signed by the server; parents: the head, then the base tip). Write access; the head branch's rulesets apply. Refused (422) when it conflicts (resolve the conflicts instead) or when the head already contains the base tip; refused (409) when `expected_head_sha` is not the head. Done before the answer, which is GitHub's 202. Heads in forks come later.",
+    "Merges the base branch's tip into an open pull request's head branch (a merge commit made and signed by the server; parents: the head, then the base tip). Write access; the head branch's rulesets apply. A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's `maintainer_can_modify` (the author still writing the fork); that repository's rulesets apply. Refused (422) when it conflicts (resolve the conflicts instead) or when the head already contains the base tip; refused (409) when `expected_head_sha` is not the head. Done before the answer, which is GitHub's 202.",
   input: z.object({
     ...RepoInput,
     pull_number: PullNumber,

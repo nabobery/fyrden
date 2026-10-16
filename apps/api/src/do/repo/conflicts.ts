@@ -10,7 +10,13 @@ import {
 import { type LiveReaderDeps, ReadBudgetError } from "../../git/live-reader.js";
 import type { PushLogMeta } from "../../git/push/repo-push.js";
 import { type Browsed, type BrowseFailure, fail } from "./browse.js";
-import { type FileWriteDeps, type FileWriteInput, refused, type WriterOf } from "./file-writes.js";
+import {
+  type FileWriteDeps,
+  type FileWriteInput,
+  refused,
+  type WriteElsewhere,
+  type WriterOf,
+} from "./file-writes.js";
 import {
   commitMerge,
   MERGE_POLICY,
@@ -223,6 +229,8 @@ export interface BaseMerge {
   readonly meta: Omit<PushLogMeta, "repoId" | "requestId">;
   /** Runs with the commit stored, before it is finished. For tests. */
   readonly beforeFinish?: () => Promise<void>;
+  /** The head branch is in another repository: the commit is handed over to it. */
+  readonly send?: WriteElsewhere["send"];
 }
 
 /** A resolution committed; `markers` names the files given that still hold conflict markers. */
@@ -298,6 +306,7 @@ export async function mergeIntoHead(
           meta: () => ({ ...run.meta, via: "api" }),
           onRefused: refused,
           ...(run.beforeFinish && { beforeFinish: run.beforeFinish }),
+          ...(run.send && { send: run.send }),
         },
       };
     },

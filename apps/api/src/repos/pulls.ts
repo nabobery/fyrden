@@ -34,6 +34,7 @@ export function pullOutput(pull: PullView): PullOutput {
     mergeable: pull.mergeable,
     mergeable_state: pull.mergeableState,
     draft: pull.draft,
+    maintainer_can_modify: pull.maintainerCanModify,
     title: pull.title,
     body: pull.body,
     user: { id: pull.authorId },
@@ -219,6 +220,7 @@ export async function createPullOperation(
     title: input.title,
     body: input.body ? input.body : null,
     draft: input.draft,
+    maintainerCanModify: input.maintainer_can_modify,
     baseRef: input.base,
   };
   const repo = ctx.env.REPO.getByName(entry.id);
@@ -293,6 +295,9 @@ export async function updatePullOperation(
       ...(input.state !== undefined && { state: input.state }),
       ...(input.base !== undefined && { base: input.base }),
       ...(input.draft !== undefined && { draft: input.draft }),
+      ...(input.maintainer_can_modify !== undefined && {
+        maintainerCanModify: input.maintainer_can_modify,
+      }),
     },
     actorOf(ctx),
   );

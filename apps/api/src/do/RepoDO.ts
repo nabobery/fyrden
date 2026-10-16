@@ -5,6 +5,7 @@ import {
   isNetworkId,
   type JobHandler,
   type JobKind,
+  type MaintainerFor,
   orphanReaperHandler,
   type PackRetireOptions,
   REFLOG_PRUNE_BATCH,
@@ -60,6 +61,7 @@ import { readModelFor } from "../events/read-model.js";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
 import { checkObjectAccess } from "../git/cache/object-check.js";
+import type { PushReportSummary } from "../git/chunked/head.js";
 import {
   type BeginChunked,
   type ChunkedFailure,
@@ -79,6 +81,7 @@ import { packCapCompactionHandler } from "../git/maintenance/tail-merge-job.js";
 import { type PackCapPolicy, packCapPolicy } from "../git/maintenance/tail-merge-plan.js";
 import type { PushDecision } from "../git/push/commit.js";
 import { ACCESS_LOST } from "../git/push/reauthorize.js";
+import { reauthorizeByToken } from "../git/push/reauthorize-token.js";
 import {
   type BeginPushInput,
   type BeginPushResult,
@@ -181,6 +184,8 @@ import {
   type FileWriteDeps,
   type FileWriteInput,
   type FileWriteResult,
+  finishUpload,
+  storeUpload,
   writeFiles,
   refused as writeRefused,
 } from "./repo/file-writes.js";
@@ -354,6 +359,48 @@ function isHttp(url: string): boolean {
   } catch {
     return true;
   }
+}
+
+/** A write of a pull request's head branch, as its base hands it to the head's repository. */
+export interface PullHeadWrite {
+  readonly baseRepoId: string;
+  readonly number: number;
+  readonly generation: number;
+  readonly headRef: string;
+  /** The head the write was built on, and the commit it makes (hex). */
+  readonly old: string;
+  readonly commit: string;
+  /** The write's objects (one pack). */
+  readonly pack: Uint8Array;
+  /** A commit of the base the write has as a parent, to import first. */
+  readonly materialize?: string;
+  readonly writer: {
+    readonly principal: string;
+    readonly tokenId: string;
+    readonly grantId: string | null;
+    readonly requestId: string | null;
+  };
+  /** Whether the pull request lets maintainers write the branch, as the base has it now. */
+  readonly maintainerAllowed: boolean;
+  /** The base's check of the writer's token against the base, right before the call. */
+  readonly baseDecision: PushDecision | null;
+}
+
+/** Why a maintainer's write of a pull request's head branch was refused. */
+const MAINTAINER_EDITS_OFF =
+  "the pull request's author does not let the base's maintainers write this branch";
+/** Why a write of a pull request's head branch was refused at its commit: no longer its branch. */
+const PULL_CHANGED_HERE = "the pull request no longer follows this branch";
+const MAINTAINER_EDITS_OFF_DETAIL =
+  "The head branch is in another repository, and its pull request's author does not let the base's maintainers write it.";
+
+/** A write of a pull request's head branch refused at its commit, as the base answers it. */
+function headWriteRefused(report: PushReportSummary): Browsed<never> {
+  if (!report.ok && report.error.includes(MAINTAINER_EDITS_OFF))
+    return fail(403, "maintainer_edits_off", MAINTAINER_EDITS_OFF_DETAIL);
+  if (!report.ok && report.error.includes(PULL_CHANGED_HERE))
+    return fail(409, "pull_changed", "The pull request no longer follows this branch.");
+  return writeRefused(report);
 }
 
 /** A merge refused while the pull request's rebase merge is under way. */
@@ -594,6 +641,8 @@ export class RepoDO extends MigratingDO {
     this.git.refStore.authorizeCommit = (context) => {
       const { actor, refUpdates } = context.request;
       if (!actor) return undefined;
+      // A base's maintainer: the head branch only, while its pull request's author allows it.
+      if (actor.maintainerFor) return this.#maintainerRefusal(actor.maintainerFor, refUpdates);
       const pullsOnly =
         refUpdates.length > 0 && refUpdates.every((u) => u.name.startsWith(DERIVED_REF_PREFIX));
       return this.acl.allows(actor.principal, pullsOnly ? "read" : "write")
@@ -1284,11 +1333,12 @@ export class RepoDO extends MigratingDO {
     if (!follow) this.pullImports.drop(pull.number);
     this.ctx.storage.sql.exec(
       `INSERT INTO head_follows (pr_number, head_repo_id, head_ref, generation, follow, known_sha,
-         requested_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+         requested_at, revision)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (pr_number) DO UPDATE SET head_repo_id = excluded.head_repo_id,
          head_ref = excluded.head_ref, generation = excluded.generation, follow = excluded.follow,
-         known_sha = excluded.known_sha, requested_at = excluded.requested_at, next_at = 0`,
+         known_sha = excluded.known_sha, requested_at = excluded.requested_at, next_at = 0,
+         revision = excluded.revision`,
       pull.number,
       pull.headRepoId as string,
       pull.headRef,
@@ -1296,8 +1346,23 @@ export class RepoDO extends MigratingDO {
       follow ? 1 : 0,
       pull.headSha,
       this.git.context.now(),
+      // The pull request's version: a request replacing this one (even after it was told and
+      // deleted) has a later one, so an answer to this one never takes that one away.
+      pull.version,
     );
     this.git.jobs.ensure("pull_follow", PULL_FOLLOW_JOB);
+  }
+
+  /** The author's consent to maintainer edits, as the pull request has it now (its version with it). */
+  #consentOf(number: number) {
+    const pull = this.pulls.get(number);
+    return (
+      pull && {
+        maintainerCanModify: pull.maintainerCanModify,
+        authorRoot: pull.authorRoot,
+        version: pull.version,
+      }
+    );
   }
 
   /** The job telling heads' repositories which branches to follow; one not reached is tried later. */
@@ -1314,6 +1379,7 @@ export class RepoDO extends MigratingDO {
             follow: number;
             known_sha: string | null;
             requested_at: number;
+            revision: number;
           }>(
             "SELECT * FROM head_follows WHERE next_at <= ? ORDER BY requested_at LIMIT ?",
             this.git.context.now(),
@@ -1323,15 +1389,17 @@ export class RepoDO extends MigratingDO {
         for (const row of rows) {
           const head = this.env.REPO.getByName(row.head_repo_id);
           try {
-            if (row.follow === 1)
+            if (row.follow === 1) {
+              const consent = this.#consentOf(row.pr_number);
               await head.registerOutgoingPull({
                 baseRepoId: this.#repoId(),
                 number: row.pr_number,
                 headRef: row.head_ref,
                 generation: row.generation,
                 knownSha: row.known_sha,
+                ...(consent && { consent }),
               });
-            else await head.unregisterOutgoingPull(this.#repoId(), row.pr_number, row.generation);
+            } else await head.unregisterOutgoingPull(this.#repoId(), row.pr_number, row.generation);
           } catch (error) {
             this.#log().warn("telling a pull request's head repository failed", {
               number: row.pr_number,
@@ -1339,21 +1407,18 @@ export class RepoDO extends MigratingDO {
             });
             // Tried again later; the others go on meanwhile.
             sql.exec(
-              "UPDATE head_follows SET next_at = ? WHERE pr_number = ? AND requested_at = ?",
+              "UPDATE head_follows SET next_at = ? WHERE pr_number = ? AND revision = ?",
               this.git.context.now() + FOLLOW_RETRY_MS,
               row.pr_number,
-              row.requested_at,
+              row.revision,
             );
             continue;
           }
           // Told: gone unless the pull request changed again meanwhile.
           sql.exec(
-            `DELETE FROM head_follows WHERE pr_number = ? AND generation = ? AND follow = ?
-               AND requested_at = ?`,
+            "DELETE FROM head_follows WHERE pr_number = ? AND revision = ?",
             row.pr_number,
-            row.generation,
-            row.follow,
-            row.requested_at,
+            row.revision,
           );
         }
         const next = sql
@@ -2070,12 +2135,6 @@ export class RepoDO extends MigratingDO {
         return fail(404, "pull_not_found", `The repository has no pull request ${input.number}.`);
       if (pull.state !== "open")
         return fail(422, "wrong_state", `Pull request ${input.number} is not open.`);
-      if (pull.headRepoId)
-        return fail(
-          422,
-          "not_applicable",
-          "The head branch is in another repository; push the changes there.",
-        );
       const ids = [...new Set(input.commentIds)];
       const comments = ids.map((id) => this.reviewComments.get(id));
       this.#blocks ??= createClockBlockCache();
@@ -2097,6 +2156,14 @@ export class RepoDO extends MigratingDO {
         role,
       };
       const applied = comments as ReviewCommentRecord[];
+      // Still open, its comments reading as they were.
+      const unchanged = () =>
+        this.pulls.get(input.number)?.state === "open" &&
+        applied.every((c) => this.reviewComments.get(c.id)?.version === c.version);
+      const resolveThreads = () => {
+        for (const threadId of new Set(applied.map((c) => c.threadId)))
+          this.reviewComments.resolve(input.number, threadId, true, caller);
+      };
       await this.suggestionHooks.beforeWrite?.();
       const written = await writeFiles(
         await this.#writeDeps(),
@@ -2116,17 +2183,24 @@ export class RepoDO extends MigratingDO {
         {
           meta: {
             // Committed only while the pull request is open and the comments read as they were.
-            fence: () =>
-              this.pulls.get(input.number)?.state === "open" &&
-              applied.every((c) => this.reviewComments.get(c.id)?.version === c.version)
-                ? undefined
-                : SUGGESTIONS_CHANGED,
+            fence: () => (unchanged() ? undefined : SUGGESTIONS_CHANGED),
             // With the commit: their threads are resolved, as GitHub's are.
-            inCommit: () => {
-              for (const threadId of new Set(applied.map((c) => c.threadId)))
-                this.reviewComments.resolve(input.number, threadId, true, caller);
-            },
+            inCommit: resolveThreads,
           },
+          // A head branch in another repository: committed there, this side checked right before.
+          ...(pull.headRepoId && {
+            elsewhere: {
+              ref: `refs/heads/${pull.headRef}`,
+              head: oidFromHex(pull.headSha),
+              send: (commit: Oid, pack: Uint8Array) =>
+                this.#sendHeadWrite(
+                  pull,
+                  actor,
+                  { old: oidFromHex(pull.headSha), commit, pack },
+                  () => (unchanged() ? undefined : SUGGESTIONS_CHANGED),
+                ),
+            },
+          }),
           onRefused: (report) =>
             !report.ok && report.error.includes(SUGGESTIONS_CHANGED)
               ? fail(
@@ -2138,6 +2212,11 @@ export class RepoDO extends MigratingDO {
         },
       );
       if (!written.ok) return written;
+      // Committed there: the threads resolved here after, while the comments are unchanged.
+      if (pull.headRepoId)
+        this.ctx.storage.transactionSync(() => {
+          if (unchanged()) resolveThreads();
+        });
       this.#armOutbox();
       this.#ensureAuditArchive();
       return { ok: true, value: { ...written.value, paths: changes.value.map((c) => c.path) } };
@@ -2240,7 +2319,7 @@ export class RepoDO extends MigratingDO {
     });
   }
 
-  /** The head and base tip of an open pull request whose head branch is here, to merge. */
+  /** The head and base tip of an open pull request, to merge the base tip into the head. */
   #headMergeable(
     number: number,
   ): Browsed<{ readonly pull: PullRecord; readonly head: Oid; readonly baseTip: Oid }> {
@@ -2248,13 +2327,9 @@ export class RepoDO extends MigratingDO {
     if (!pull) return fail(404, "pull_not_found", `The repository has no pull request ${number}.`);
     if (pull.state !== "open")
       return fail(422, "wrong_state", `Pull request ${number} is not open.`);
-    if (pull.headRepoId)
-      return fail(
-        422,
-        "not_applicable",
-        "The head branch is in another repository; merge the base branch there.",
-      );
-    const head = this.pulls.branchTip(pull.headRef);
+    // A head branch in another repository: its tip as this repository last had it (that one
+    // moves it only from there).
+    const head = pull.headRepoId ? oidFromHex(pull.headSha) : this.pulls.branchTip(pull.headRef);
     if (!head || pull.headRefDeleted)
       return fail(422, "head_not_found", "The head branch does not exist.");
     if (oidToHex(head) !== pull.headSha)
@@ -2277,6 +2352,8 @@ export class RepoDO extends MigratingDO {
       return fail(403, "forbidden", "Changing the head branch takes write access.");
     const at = this.#headMergeable(number);
     if (!at.ok) return at;
+    // A head branch in another repository: its rulesets are judged there, at the commit.
+    if (at.value.pull.headRepoId) return at;
     const precheck = await this.#precheckUpdates(
       actor.principal,
       [{ ref: `refs/heads/${at.value.pull.headRef}`, old: oidToHex(at.value.head), new: ZERO_ID }],
@@ -2284,6 +2361,71 @@ export class RepoDO extends MigratingDO {
     );
     if (precheck) return fail(422, "write_refused", precheck);
     return at;
+  }
+
+  /**
+   * Hands a write of an open pull request's head branch, built here, to
+   * the repository the branch is in (see `pullHeadWrite`): this side is
+   * checked right before (`fence`, and the writer's token against this
+   * repository); that one checks its own in the commit. A close, a
+   * retarget or a change of the author's consent landing during the
+   * handoff does not stop a write already handed over; later ones are.
+   */
+  async #sendHeadWrite(
+    pull: PullRecord,
+    actor: RefActor,
+    write: {
+      readonly old: Oid;
+      readonly commit: Oid;
+      readonly pack: Uint8Array;
+      readonly materialize?: Oid;
+    },
+    fence: () => string | undefined,
+  ): Promise<Browsed<{ sha: string }>> {
+    const writer = {
+      principal: actor.principal,
+      tokenId: actor.tokenId ?? "",
+      grantId: actor.grantId ?? null,
+      requestId: actor.requestId ?? null,
+    };
+    const decision = await reauthorizeByToken(
+      this.env.DIRECTORY,
+      { ...writer, repoId: this.#repoId() },
+      (principalId) => this.acl.roleOf(principalId, "write"),
+    );
+    if (decision.refusal) return fail(403, "forbidden", decision.refusal);
+    // Not frozen (for a transfer) or deleted meanwhile.
+    const refusedWrite = this.#writeRefusal();
+    if (refusedWrite) return fail(refusedWrite.status, refusedWrite.code, refusedWrite.error);
+    // Still the pull request the write was built for: open, between the same branches.
+    const now = this.pulls.get(pull.number);
+    if (
+      now?.state !== "open" ||
+      now.generation !== pull.generation ||
+      now.baseRef !== pull.baseRef ||
+      now.headRef !== pull.headRef ||
+      now.headRepoId !== pull.headRepoId
+    )
+      return fail(
+        409,
+        "pull_changed",
+        "The pull request was closed, reopened or retargeted meanwhile; try again.",
+      );
+    const fenced = fence();
+    if (fenced) return fail(409, "pull_changed", fenced);
+    return this.env.REPO.getByName(pull.headRepoId as string).pullHeadWrite({
+      baseRepoId: this.#repoId(),
+      number: pull.number,
+      generation: pull.generation,
+      headRef: pull.headRef,
+      old: oidToHex(write.old),
+      commit: oidToHex(write.commit),
+      pack: write.pack,
+      ...(write.materialize && { materialize: oidToHex(write.materialize) }),
+      writer,
+      maintainerAllowed: now.maintainerCanModify,
+      baseDecision: decision,
+    });
   }
 
   /** The base tip merged into the head on the head branch (see `mergeIntoHead`). */
@@ -2299,6 +2441,22 @@ export class RepoDO extends MigratingDO {
     const text = given.endsWith("\n") ? given : `${given}\n`;
     if (text.includes("\0"))
       return fail(422, "invalid_input", "A commit message must not contain NUL.");
+    // The pull request still open between the same branches, the base branch still at the tip
+    // merged (the head moves with compare-and-set).
+    const fence = () => {
+      const now = this.pulls.get(input.number);
+      if (
+        now?.state !== "open" ||
+        now.generation !== pull.generation ||
+        now.baseRef !== pull.baseRef ||
+        now.headRef !== pull.headRef ||
+        now.headRepoId !== pull.headRepoId
+      )
+        return PULL_CHANGED_WHILE_MERGING;
+      return this.pulls.branchTip(pull.baseRef)?.every((b, i) => b === at.baseTip[i]) === true
+        ? undefined
+        : BASE_MOVED_WHILE_MERGING;
+    };
     const made = await mergeIntoHead(
       await this.#writeDeps(),
       {
@@ -2317,26 +2475,19 @@ export class RepoDO extends MigratingDO {
         author: input.identity.author,
         committer: input.identity.committer,
         message: appendTrailers(text, coAuthorTrailers(text, input.identity.coAuthors)),
-        // The pull request still open between the same branches, the base branch still at the
-        // tip merged (the head moves with compare-and-set).
-        meta: {
-          fence: () => {
-            const now = this.pulls.get(input.number);
-            if (
-              now?.state !== "open" ||
-              now.generation !== pull.generation ||
-              now.baseRef !== pull.baseRef ||
-              now.headRef !== pull.headRef ||
-              now.headRepoId !== pull.headRepoId
-            )
-              return PULL_CHANGED_WHILE_MERGING;
-            return this.pulls.branchTip(pull.baseRef)?.every((b, i) => b === at.baseTip[i]) === true
-              ? undefined
-              : BASE_MOVED_WHILE_MERGING;
-          },
-        },
+        meta: { fence },
         ...(this.headMergeHooks.beforeFinish && {
           beforeFinish: this.headMergeHooks.beforeFinish,
+        }),
+        // The base tip is a parent: brought into the head's repository with its history.
+        ...(pull.headRepoId && {
+          send: (commit: Oid, pack: Uint8Array) =>
+            this.#sendHeadWrite(
+              pull,
+              actor,
+              { old: at.head, commit, pack, materialize: at.baseTip },
+              fence,
+            ),
         }),
       },
       this.mergePolicy,
@@ -3466,6 +3617,9 @@ export class RepoDO extends MigratingDO {
   /** Hooks into a merge of the base branch into a pull request's head. For tests. */
   headMergeHooks: { beforeFinish?: () => Promise<void> } = {};
 
+  /** Hooks into a write of a pull request's head branch here, handed over by its base. For tests. */
+  headWriteHooks: { beforeFinish?: () => Promise<void> } = {};
+
   /** Hooks into applying suggestions. For tests. */
   suggestionHooks: { beforeWrite?: () => Promise<void> } = {};
 
@@ -3554,14 +3708,188 @@ export class RepoDO extends MigratingDO {
   }
 
   /** A pull request of `baseRepoId` follows branch `headRef` here (see `PullSource.register`). */
-  registerOutgoingPull(input: {
-    readonly baseRepoId: string;
-    readonly number: number;
-    readonly headRef: string;
-    readonly generation: number;
-    readonly knownSha: string | null;
-  }): { sha: string | null; refVersion: number } {
+  registerOutgoingPull(input: Parameters<PullSource["register"]>[0]): {
+    sha: string | null;
+    refVersion: number;
+  } {
     return this.pullSource.register(input);
+  }
+
+  /**
+   * Commits a write a pull request's base made of its head branch here
+   * (a merge of the base into it, suggestions applied): the pack the base
+   * built, finished through this repository's push path, from `old` only.
+   * The writer needs write access here, or the pull request's author lets
+   * the base's maintainers write the branch (`maintainerAllowed`, as the
+   * base has it, and this repository's own copy), the author still writes
+   * here, and the base's check of the writer's token (`baseDecision`) let
+   * it through; that consent is checked again in the commit's transaction.
+   * With `materialize`, the base commit the write has as a parent is
+   * imported first (its history published here before the pack is indexed).
+   */
+  pullHeadWrite(input: PullHeadWrite): Promise<Browsed<{ sha: string }>> {
+    return this.#measured("pullHeadWrite", async () => {
+      await this.checkEpoch();
+      const refusedWrite = this.#writeRefusal();
+      if (refusedWrite) return fail(refusedWrite.status, refusedWrite.code, refusedWrite.error);
+      const maintainerFor = {
+        baseRepoId: input.baseRepoId,
+        number: input.number,
+        generation: input.generation,
+      };
+      const registration = this.pullSource.registration(
+        input.baseRepoId,
+        input.number,
+        input.generation,
+        input.headRef,
+      );
+      if (!registration)
+        return fail(409, "pull_changed", "The pull request no longer follows this branch.");
+      const { writer } = input;
+      // As a maintainer when the author allows it (the writer's token checked against the base,
+      // which it may be limited to); else as one who writes here (its token checked against
+      // this repository at the commit).
+      if (registration.authorRoot) await this.acl.roleOf(registration.authorRoot, "write");
+      const maintainer =
+        input.maintainerAllowed &&
+        registration.authorRoot !== null &&
+        (await this.#principalActive(registration.authorRoot)) &&
+        input.baseDecision !== null &&
+        input.baseDecision.refusal === undefined &&
+        this.#maintainerRefusal(maintainerFor, [{ name: `refs/heads/${input.headRef}` }]) ===
+          undefined;
+      if (!maintainer) {
+        const ceilings = await this.#rolesPulled(writer.principal, writer.grantId ?? null);
+        if (!atLeast(this.#roleNow(writer.principal, ceilings), "write"))
+          return fail(403, "maintainer_edits_off", MAINTAINER_EDITS_OFF_DETAIL);
+      }
+      const ref = `refs/heads/${input.headRef}`;
+      const tip = this.git.refStore.readRefsSync().refs.get(ref);
+      if (!tip || oidToHex(tip) !== input.old)
+        return fail(409, "head_moved", "The head branch moved; try again.");
+      if (input.materialize) {
+        const imported = await this.#importFrom(input.baseRepoId, input.materialize);
+        if (!imported.ok) return imported;
+      }
+      const deps = await this.#writeDeps();
+      const author = { ...writer, repoId: this.#repoId() };
+      const upload = await storeUpload(deps, author, {
+        ref,
+        head: tip,
+        commit: oidFromHex(input.commit),
+        pack: input.pack,
+      });
+      if (!upload.ok) return upload;
+      await this.headWriteHooks.beforeFinish?.();
+      const decision = input.baseDecision;
+      const committed = await finishUpload(
+        deps,
+        author,
+        upload.value,
+        {
+          via: "api",
+          // Still the pull request's branch, as the base asked.
+          fence: () =>
+            this.pullSource.registration(
+              input.baseRepoId,
+              input.number,
+              input.generation,
+              input.headRef,
+            )
+              ? undefined
+              : PULL_CHANGED_HERE,
+          ...(maintainer && {
+            maintainerFor,
+            authority: () => this.#maintainerRefusal(maintainerFor, [{ name: ref }]),
+          }),
+        },
+        headWriteRefused,
+        maintainer && decision ? async () => decision : undefined,
+      );
+      if (!committed.ok) return committed;
+      return { ok: true, value: { sha: input.commit } };
+    });
+  }
+
+  /**
+   * Whether `principalId` is still active (it and, for an agent, its
+   * owner not disabled), read from the directory's primary: a role it was
+   * granted outlives its disabling.
+   */
+  async #principalActive(principalId: string): Promise<boolean> {
+    const row = await this.env.DIRECTORY.withSession("first-primary")
+      .prepare(
+        `SELECT p.disabled_at, o.disabled_at AS owner_disabled_at FROM principals p
+         LEFT JOIN principals o ON o.id = p.owner_id WHERE p.id = ?`,
+      )
+      .bind(principalId)
+      .first<{ disabled_at: number | null; owner_disabled_at: number | null }>();
+    return row !== null && row.disabled_at === null && row.owner_disabled_at === null;
+  }
+
+  /**
+   * Why a base's maintainer may not write `refUpdates` here now (undefined
+   * when it may): exactly the registered head branch, at the pull
+   * request's generation, its author allowing it and writing here still.
+   */
+  #maintainerRefusal(
+    maintainerFor: MaintainerFor,
+    refUpdates: readonly { readonly name: string }[],
+  ): string | undefined {
+    const own = refUpdates.filter((u) => !u.name.startsWith(DERIVED_REF_PREFIX));
+    const [update] = own;
+    if (own.length !== 1 || !update?.name.startsWith("refs/heads/")) return MAINTAINER_EDITS_OFF;
+    const registration = this.pullSource.registration(
+      maintainerFor.baseRepoId,
+      maintainerFor.number,
+      maintainerFor.generation,
+      update.name.slice("refs/heads/".length),
+    );
+    if (!registration?.maintainerCanModify || !registration.authorRoot) return MAINTAINER_EDITS_OFF;
+    return this.acl.allows(registration.authorRoot, "write") ? undefined : MAINTAINER_EDITS_OFF;
+  }
+
+  /**
+   * Imports the commit `sha` of `sourceRepoId` (another member of the
+   * network) with its history: its packs borrowed, its commit rows copied
+   * and published at once, so a write naming it as a parent is indexed.
+   */
+  async #importFrom(sourceRepoId: string, sha: string): Promise<Browsed<true>> {
+    // Even with its commit rows here, its objects may be in packs collected since: always
+    // borrowed again (the graph step copies only the commits missing).
+    const importId = `head-write:${crypto.randomUUID()}`;
+    const budget = { used: 0, max: OPEN_IMPORT_CALLS };
+    let work: ImportWork = {
+      importId,
+      headRepoId: sourceRepoId,
+      sha,
+      step: "snapshot",
+      leaseId: null,
+      state: {},
+    };
+    try {
+      for (let steps = 0; work.step !== "publish"; steps++) {
+        if (steps >= OPEN_IMPORT_STEPS || budget.used >= budget.max)
+          return fail(422, "too_expensive", "The base branch is too far ahead to bring here now.");
+        work = await runImportStep(this.#importDeps(), work, this.importPolicy, budget);
+      }
+      const published = this.ctx.storage.transactionSync(() => {
+        if (!readyToPublish(this.git, work)) return false;
+        publishStaged(this.git, importId);
+        return true;
+      });
+      if (!published) return BUSY;
+      return { ok: true, value: true };
+    } catch (error) {
+      if (error instanceof ImportFailed)
+        return error.code === "too_large"
+          ? fail(422, "too_expensive", "The base branch is too far ahead to bring here now.")
+          : BUSY;
+      if (error instanceof ImportBusy) return BUSY;
+      throw error;
+    } finally {
+      await discardImport(this.#importDeps(), work).catch(() => undefined);
+    }
   }
 
   /** A pull request of `baseRepoId` no longer follows a branch here (as of `generation`). */

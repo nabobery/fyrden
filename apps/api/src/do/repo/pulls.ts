@@ -51,6 +51,8 @@ export interface PullRecord extends PullRequestRow {
   readonly lastPushAt: number | null;
   /** For a head in another repository: the ref-state version there of the revision applied last. */
   readonly headRefVersion: number | null;
+  /** The author lets the base's maintainers write the head branch (in another repository). */
+  readonly maintainerCanModify: boolean;
   /** Bumped on every change. */
   readonly version: number;
 }
@@ -71,6 +73,7 @@ type Row = {
   head_ref_deleted: number;
   head_repo_id: string | null;
   head_ref_version: number | null;
+  maintainer_can_modify: number;
   last_pusher: string | null;
   last_pusher_grant: string | null;
   last_push_at: number | null;
@@ -97,6 +100,7 @@ export interface OpenPull {
   /** For a head in another repository of the network: it, and its ref-state version at `headSha`. */
   readonly headRepoId?: string;
   readonly headRefVersion?: number;
+  readonly maintainerCanModify?: boolean;
 }
 
 /** A change asked of a pull request; a field left out stays as it is. */
@@ -106,6 +110,7 @@ export interface PullPatch {
   readonly state?: "open" | "closed";
   readonly base?: string;
   readonly draft?: boolean;
+  readonly maintainerCanModify?: boolean;
 }
 
 export type PullChangeFailure =
@@ -525,8 +530,9 @@ export class RepoPulls {
         const [row] = this.#rows(
           `INSERT INTO pull_requests (number, title, body, state, draft, author_id, author_root,
              author_act, base_ref, base_sha, head_ref, head_sha, last_pusher, last_pusher_grant,
-             last_push_at, created_at, updated_at, head_repo_id, head_ref_version)
-           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+             last_push_at, created_at, updated_at, head_repo_id, head_ref_version,
+             maintainer_can_modify)
+           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
           number,
           input.title,
           input.body,
@@ -545,6 +551,8 @@ export class RepoPulls {
           now,
           input.headRepoId ?? null,
           input.headRefVersion ?? null,
+          // Only a head branch in another repository is the base's maintainers' to write.
+          input.headRepoId && input.maintainerCanModify ? 1 : 0,
         );
         opened = record(row as Row);
         this.#emit("opened", opened, caller.actor);
@@ -681,6 +689,10 @@ export class RepoPulls {
       case "ready_for_review":
         row = set("draft = ?", action === "convert_to_draft" ? 1 : 0);
         break;
+      case "set_maintainer_edits":
+        data = { changes: { maintainer_can_modify: { from: current.maintainerCanModify } } };
+        row = set("maintainer_can_modify = ?", patch.maintainerCanModify ? 1 : 0);
+        break;
       case "close":
         row = set("state = 'closed', closed_at = ?", now);
         break;
@@ -743,7 +755,16 @@ export class RepoPulls {
       pull.headSha,
     );
     this.deps.stale?.(pull.number, pull.state === "open");
-    if (pull.headRepoId && (event === "opened" || event === "closed" || event === "reopened"))
+    // The head's repository is told what the pull request now asks of it (its consent too).
+    if (
+      pull.headRepoId &&
+      (event === "opened" ||
+        event === "closed" ||
+        event === "reopened" ||
+        (event === "edited" &&
+          data?.changes !== undefined &&
+          "maintainer_can_modify" in (data.changes as Record<string, unknown>)))
+    )
       this.deps.follow?.(pull);
     const {
       authorAct: _act,
@@ -794,6 +815,13 @@ function plannedActions(current: PullRecord, patch: PullPatch): PatchAction[] {
   if (patch.draft !== undefined && patch.draft !== current.draft)
     actions.push(patch.draft ? "convert_to_draft" : "ready_for_review");
   if (patch.state === "closed" && current.state === "open") actions.push("close");
+  if (
+    patch.maintainerCanModify !== undefined &&
+    patch.maintainerCanModify !== current.maintainerCanModify &&
+    // A head branch here is the base's own: nothing to allow.
+    current.headRepoId !== null
+  )
+    actions.push("set_maintainer_edits");
   return actions;
 }
 
@@ -811,6 +839,7 @@ function record(row: Row): PullRecord {
     headRef: row.head_ref,
     headRepoId: row.head_repo_id,
     headRefVersion: row.head_ref_version,
+    maintainerCanModify: row.maintainer_can_modify === 1,
     baseSha: row.base_sha,
     headSha: row.head_sha,
     headRefDeleted: row.head_ref_deleted === 1,

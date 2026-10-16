@@ -42,6 +42,19 @@ export interface RefActor {
   /** The request that made the change. */
   readonly requestId?: string | null;
   readonly via: "push" | "merge" | "api" | "import";
+  /**
+   * A maintainer of a pull request's base repository writing its head
+   * branch here, as the pull request's author allows: the repository
+   * decides in the commit's transaction whether that still holds.
+   */
+  readonly maintainerFor?: MaintainerFor;
+}
+
+/** The pull request a maintainer writes the head branch of. */
+export interface MaintainerFor {
+  readonly baseRepoId: string;
+  readonly number: number;
+  readonly generation: number;
 }
 
 /** What the in-transaction hooks see. */

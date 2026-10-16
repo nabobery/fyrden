@@ -242,7 +242,7 @@ export const applySuggestions = defineOperation({
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/suggestions/apply",
   summary: "Apply suggestions",
   description:
-    "Fyrden: applies the suggested changes of diff comments (a ```suggestion block each) to the pull request's head branch as one commit, made and signed by the server, with the suggestions' authors as co-authors; their threads are resolved. Each comment must be on the head side at the current head; suggestions to one file must not overlap; files of 1 MiB at most. Write access; the branch's rulesets apply, and it moves only from the head the comments are on (409 `head_moved`).",
+    "Fyrden: applies the suggested changes of diff comments (a ```suggestion block each) to the pull request's head branch as one commit, made and signed by the server, with the suggestions' authors as co-authors; their threads are resolved. Each comment must be on the head side at the current head; suggestions to one file must not overlap; files of 1 MiB at most. Write access; the branch's rulesets apply, and it moves only from the head the comments are on (409 `head_moved`). A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's `maintainer_can_modify` (the author still writing the fork); that repository's rulesets apply.",
   input: z.object({
     ...RepoInput,
     pull_number: PullNumber,

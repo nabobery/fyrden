@@ -99,6 +99,8 @@ export function pushCommitter(
   inCommit?: () => void,
   /** How the change is made, for the reflog: a merge of a pull request is `merge`. */
   via: RefActor["via"] = "push",
+  /** A base's maintainer writing a pull request's head here (see `RefActor.maintainerFor`). */
+  maintainerFor?: RefActor["maintainerFor"],
 ): (request: PushCommitRequest) => Promise<PushCommitResult> {
   const authorize = ({ now }: { now: number }, removing: readonly PackId[]): string | undefined => {
     if (!git.locks.isHeld(lock)) return "the push lost its turn to commit; try the push again";
@@ -151,6 +153,7 @@ export function pushCommitter(
           actChain: decision.actChain ?? [],
           requestId: decision.requestId ?? null,
           via,
+          ...(maintainerFor && { maintainerFor }),
         },
         fastForward: request.fastForward,
         authorize: (context) => authorize(context, removePacks),

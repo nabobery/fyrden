@@ -35,6 +35,7 @@ import {
   refused,
   type StoredUpload,
   storeUpload,
+  type WriteElsewhere,
   type WriterOf,
 } from "./file-writes.js";
 
@@ -170,6 +171,8 @@ export interface MergeCommit {
   readonly onRefused: (report: PushReportSummary) => Browsed<never>;
   /** Runs with the commit stored, before it is finished. For tests. */
   readonly beforeFinish?: () => Promise<void>;
+  /** Committed in another repository, in place of this one (`ref` and `old` are there). */
+  readonly send?: WriteElsewhere["send"];
 }
 
 /**
@@ -194,7 +197,8 @@ export async function commitMerge(
   // Only what finishing needs outlives the memory held: the merge's objects stay in this scope.
   let finish: Pick<MergeCommit, "writer" | "meta" | "onRefused" | "beforeFinish">;
   let commit: Oid;
-  let upload: Browsed<StoredUpload>;
+  // Absent when the commit was handed over (and committed elsewhere).
+  let upload: Browsed<StoredUpload | undefined>;
   try {
     const worked = await make();
     if (!worked.ok) return worked;
@@ -207,16 +211,21 @@ export async function commitMerge(
     };
     const built = await build(deps, made);
     commit = built.commit;
-    upload = await storeUpload(deps, made.writer, {
-      ref: made.ref,
-      head: made.old,
-      commit,
-      pack: built.pack,
-    });
+    upload = made.send
+      ? await made
+          .send(commit, built.pack)
+          .then((sent) => (sent.ok ? { ok: true as const, value: undefined } : sent))
+      : await storeUpload(deps, made.writer, {
+          ref: made.ref,
+          head: made.old,
+          commit,
+          pack: built.pack,
+        });
   } finally {
     memory.release();
   }
   if (!upload.ok) return upload;
+  if (!upload.value) return { ok: true, value: { sha: oidToHex(commit) } };
   await finish.beforeFinish?.();
   const committed = await finishUpload(
     deps,

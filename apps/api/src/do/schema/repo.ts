@@ -690,4 +690,22 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 26,
+    // Maintainer edits: whether a pull request's author lets the base's
+    // maintainers write its head branch (in another repository). The head's
+    // repository keeps its own copy with the registration, with the author's
+    // root identity and the pull request's version it was told at (a copy
+    // told late never replaces a newer one). A request to tell the head's
+    // repository is told apart from the one replacing it by its revision
+    // (the pull request's version when it was made).
+    name: "maintainer_edits",
+    sql: `
+      ALTER TABLE pull_requests ADD COLUMN maintainer_can_modify INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE outgoing_pulls ADD COLUMN maintainer_can_modify INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE outgoing_pulls ADD COLUMN author_root TEXT;
+      ALTER TABLE outgoing_pulls ADD COLUMN consent_version INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE head_follows ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];

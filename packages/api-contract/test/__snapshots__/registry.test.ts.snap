@@ -10518,6 +10518,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "maintainer_can_modify": {
+                            "description": "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
+                            "type": "boolean",
+                          },
                           "merge_commit_sha": {
                             "description": "Once merged, the commit the base branch moved to.",
                             "type": [
@@ -10628,6 +10632,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "mergeable",
                           "mergeable_state",
                           "draft",
+                          "maintainer_can_modify",
                           "title",
                           "body",
                           "user",
@@ -10736,6 +10741,11 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
                     "type": "string",
                   },
+                  "maintainer_can_modify": {
+                    "default": false,
+                    "description": "With a head in a fork: let those with write access to the base change the head branch.",
+                    "type": "boolean",
+                  },
                   "title": {
                     "maxLength": 256,
                     "minLength": 1,
@@ -10836,6 +10846,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "maintainer_can_modify": {
+                      "description": "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
+                      "type": "boolean",
                     },
                     "merge_commit_sha": {
                       "description": "Once merged, the commit the base branch moved to.",
@@ -10947,6 +10961,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "mergeable",
                     "mergeable_state",
                     "draft",
+                    "maintainer_can_modify",
                     "title",
                     "body",
                     "user",
@@ -11680,6 +11695,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "maintainer_can_modify": {
+                      "description": "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
+                      "type": "boolean",
+                    },
                     "merge_commit_sha": {
                       "description": "Once merged, the commit the base branch moved to.",
                       "type": [
@@ -11790,6 +11809,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "mergeable",
                     "mergeable_state",
                     "draft",
+                    "maintainer_can_modify",
                     "title",
                     "body",
                     "user",
@@ -11834,7 +11854,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "patch": {
-        "description": "Changes the title or body, retargets it onto another base branch, marks it a draft or ready, closes or reopens it; fields left out are kept, and all of it happens or none. The author may do any of it to its own pull request; on anyone else's, triage closes and reopens and write does the rest. Reopening needs the head branch to exist.",
+        "description": "Changes the title or body, retargets it onto another base branch, marks it a draft or ready, closes or reopens it, or lets the base's maintainers change a head branch in a fork; fields left out are kept, and all of it happens or none. The author may do any of it to its own pull request; on anyone else's, triage closes and reopens and write does the rest, except \`maintainer_can_modify\`, which only the author sets. Reopening needs the head branch to exist.",
         "operationId": "pulls.update",
         "parameters": [
           {
@@ -11894,6 +11914,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                   },
                   "draft": {
                     "description": "Fyrden: mark it a draft, or ready for review.",
+                    "type": "boolean",
+                  },
+                  "maintainer_can_modify": {
+                    "description": "The author only: let the base's maintainers change a head branch in a fork.",
                     "type": "boolean",
                   },
                   "state": {
@@ -12000,6 +12024,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "maintainer_can_modify": {
+                      "description": "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
+                      "type": "boolean",
+                    },
                     "merge_commit_sha": {
                       "description": "Once merged, the commit the base branch moved to.",
                       "type": [
@@ -12110,6 +12138,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "mergeable",
                     "mergeable_state",
                     "draft",
+                    "maintainer_can_modify",
                     "title",
                     "body",
                     "user",
@@ -12977,7 +13006,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/pulls/{pull_number}/conflicts": {
       "get": {
-        "description": "Fyrden: the conflicts of merging the base branch's tip into an open pull request's head (none when they merge cleanly). Files whose lines conflict in text (\`content\`, \`add_add\`) are \`editable\`: their merged content is given with git's conflict markers, the head's side first (\`<<<<<<< head\`, \`=======\`, \`>>>>>>> base\`), up to 50 files and 4 MiB in all. Any other conflict (a file deleted on one side, a mode, a symlink, a submodule, a binary or too large file, a file and a directory; renames are not followed) is listed but needs a merge made by hand. Resolve them with \`conflict_snapshot\`, which names the base tip and head they were read at. Heads in forks come later.",
+        "description": "Fyrden: the conflicts of merging the base branch's tip into an open pull request's head (none when they merge cleanly). Files whose lines conflict in text (\`content\`, \`add_add\`) are \`editable\`: their merged content is given with git's conflict markers, the head's side first (\`<<<<<<< head\`, \`=======\`, \`>>>>>>> base\`), up to 50 files and 4 MiB in all. Any other conflict (a file deleted on one side, a mode, a symlink, a submodule, a binary or too large file, a file and a directory; renames are not followed) is listed but needs a merge made by hand. Resolve them with \`conflict_snapshot\`, which names the base tip and head they were read at. A head in a fork is read as the base last imported it.",
         "operationId": "pulls.conflicts.get",
         "parameters": [
           {
@@ -13115,7 +13144,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "post": {
-        "description": "Fyrden: merges the base branch's tip into the head branch with the given contents for every file whose lines conflict, as one merge commit (parents: the head, then the base tip) made and signed by the server. Write access; the head branch's rulesets apply. Refused when either branch moved since the conflicts were read (409 \`head_moved\`, \`base_moved\`), when a conflict cannot be resolved here (422 \`not_editable\`), when a conflicted file is missing (422 \`unresolved\`), or when a given file has no conflict (422 \`not_conflicted\`). Contents that still hold conflict markers are accepted and named in \`markers\`.",
+        "description": "Fyrden: merges the base branch's tip into the head branch with the given contents for every file whose lines conflict, as one merge commit (parents: the head, then the base tip) made and signed by the server. Write access; the head branch's rulesets apply. A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's \`maintainer_can_modify\` (the author still writing the fork); that repository's rulesets apply. Refused when either branch moved since the conflicts were read (409 \`head_moved\`, \`base_moved\`), when a conflict cannot be resolved here (422 \`not_editable\`), when a conflicted file is missing (422 \`unresolved\`), or when a given file has no conflict (422 \`not_conflicted\`). Contents that still hold conflict markers are accepted and named in \`markers\`.",
         "operationId": "pulls.conflicts.resolve",
         "parameters": [
           {
@@ -13731,6 +13760,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "maintainer_can_modify": {
+                      "description": "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
+                      "type": "boolean",
+                    },
                     "merge_commit_sha": {
                       "description": "Once merged, the commit the base branch moved to.",
                       "type": [
@@ -13841,6 +13874,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "mergeable",
                     "mergeable_state",
                     "draft",
+                    "maintainer_can_modify",
                     "title",
                     "body",
                     "user",
@@ -14140,6 +14174,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "maintainer_can_modify": {
+                      "description": "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
+                      "type": "boolean",
+                    },
                     "merge_commit_sha": {
                       "description": "Once merged, the commit the base branch moved to.",
                       "type": [
@@ -14250,6 +14288,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "mergeable",
                     "mergeable_state",
                     "draft",
+                    "maintainer_can_modify",
                     "title",
                     "body",
                     "user",
@@ -15083,7 +15122,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/pulls/{pull_number}/suggestions/apply": {
       "post": {
-        "description": "Fyrden: applies the suggested changes of diff comments (a \`\`\`suggestion block each) to the pull request's head branch as one commit, made and signed by the server, with the suggestions' authors as co-authors; their threads are resolved. Each comment must be on the head side at the current head; suggestions to one file must not overlap; files of 1 MiB at most. Write access; the branch's rulesets apply, and it moves only from the head the comments are on (409 \`head_moved\`).",
+        "description": "Fyrden: applies the suggested changes of diff comments (a \`\`\`suggestion block each) to the pull request's head branch as one commit, made and signed by the server, with the suggestions' authors as co-authors; their threads are resolved. Each comment must be on the head side at the current head; suggestions to one file must not overlap; files of 1 MiB at most. Write access; the branch's rulesets apply, and it moves only from the head the comments are on (409 \`head_moved\`). A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's \`maintainer_can_modify\` (the author still writing the fork); that repository's rulesets apply.",
         "operationId": "pulls.suggestions.apply",
         "parameters": [
           {
@@ -15885,7 +15924,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/pulls/{pull_number}/update-branch": {
       "put": {
-        "description": "Merges the base branch's tip into an open pull request's head branch (a merge commit made and signed by the server; parents: the head, then the base tip). Write access; the head branch's rulesets apply. Refused (422) when it conflicts (resolve the conflicts instead) or when the head already contains the base tip; refused (409) when \`expected_head_sha\` is not the head. Done before the answer, which is GitHub's 202. Heads in forks come later.",
+        "description": "Merges the base branch's tip into an open pull request's head branch (a merge commit made and signed by the server; parents: the head, then the base tip). Write access; the head branch's rulesets apply. A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's \`maintainer_can_modify\` (the author still writing the fork); that repository's rulesets apply. Refused (422) when it conflicts (resolve the conflicts instead) or when the head already contains the base tip; refused (409) when \`expected_head_sha\` is not the head. Done before the answer, which is GitHub's 202.",
         "operationId": "pulls.branch.update",
         "parameters": [
           {

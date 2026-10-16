@@ -149,7 +149,7 @@ CREATE TABLE head_follows (
         known_sha TEXT,
         requested_at INTEGER NOT NULL,
         next_at INTEGER NOT NULL DEFAULT 0
-      ) STRICT;
+      , revision INTEGER NOT NULL DEFAULT 0) STRICT;
 CREATE TABLE import_commits (
         import_id TEXT NOT NULL,
         oid BLOB NOT NULL,
@@ -259,7 +259,7 @@ CREATE TABLE outgoing_pulls (
         base_repo_id TEXT NOT NULL,
         pr_number INTEGER NOT NULL,
         head_ref TEXT NOT NULL,
-        generation INTEGER NOT NULL,
+        generation INTEGER NOT NULL, maintainer_can_modify INTEGER NOT NULL DEFAULT 0, author_root TEXT, consent_version INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (base_repo_id, pr_number)
       ) STRICT;
 CREATE TABLE packs (
@@ -326,7 +326,7 @@ CREATE TABLE pull_requests (
         closed_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
-      , last_pusher TEXT, last_pusher_grant TEXT, last_push_at INTEGER, merge_commit_sha TEXT, merged_by TEXT, merged_at INTEGER, head_repo_id TEXT, head_ref_version INTEGER) STRICT;
+      , last_pusher TEXT, last_pusher_grant TEXT, last_push_at INTEGER, merge_commit_sha TEXT, merged_by TEXT, merged_at INTEGER, head_repo_id TEXT, head_ref_version INTEGER, maintainer_can_modify INTEGER NOT NULL DEFAULT 0) STRICT;
 CREATE TABLE ref_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL,

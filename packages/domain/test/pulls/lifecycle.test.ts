@@ -73,7 +73,7 @@ describe("decidePullAction", () => {
           const rule = PULL_ACTION_RULES[action];
           const expected =
             role !== null &&
-            ((rule.author && isAuthor) || atLeast(role, rule.minRole)) &&
+            ((rule.author && isAuthor) || (rule.minRole !== null && atLeast(role, rule.minRole))) &&
             rule.from.includes(state) &&
             !(action === "reopen" && headRefDeleted);
           const decision = decidePullAction(action, { state, headRefDeleted, isAuthor, role });

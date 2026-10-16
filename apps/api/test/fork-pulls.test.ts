@@ -602,3 +602,195 @@ describe("the base's view", () => {
     expect(files.body.files.map((f) => f.filename)).toEqual(["b.txt", "c.txt", "d.txt", "e.txt"]);
   });
 });
+
+describe("a head branch in a fork, written from the base", () => {
+  const updateBranch = (who: Who = owner) =>
+    json<{ sha: string; code?: string }>(
+      api("PUT", `${base.path}/pulls/1/update-branch`, who.token),
+    );
+  const setConsent = (who: Who, allowed: boolean) =>
+    json<Pull & { maintainer_can_modify: boolean }>(
+      api("PATCH", `${base.path}/pulls/1`, who.token, { maintainer_can_modify: allowed }),
+    );
+  const forkTip = async () =>
+    (
+      await json<{ commit: { sha: string } }>(
+        api("GET", `${fork.path}/branches/main`, contributor.token),
+      )
+    ).body.commit.sha;
+  const forkFile = async (name: string) =>
+    atob(
+      (
+        await json<{ content: string }>(
+          api("GET", `${fork.path}/contents/${name}?ref=main`, contributor.token),
+        )
+      ).body.content.replace(/\n/g, ""),
+    );
+  /** Opened, the fork told which branch it is followed for, and the base moved on. */
+  const opened = async (extra: Record<string, unknown> = {}) => {
+    const made = await open(contributor, `${contributor.handle}:main`, extra);
+    expect(made.status).toBe(201);
+    await runJobs(base.id);
+    await commitOn(owner, base.path, "main", [{ path: "c.txt", content: "base\n" }]);
+    return made.body as Pull & { maintainer_can_modify: boolean };
+  };
+
+  it("is updated by the base's maintainers when its author lets them, in the fork", async () => {
+    expect((await opened()).maintainer_can_modify).toBe(false);
+    expect((await updateBranch()).body.code).toBe("maintainer_edits_off");
+    const allowed = await setConsent(contributor, true);
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.maintainer_can_modify).toBe(true);
+    // The fork has the consent once told.
+    await runJobs(base.id);
+    const updated = await updateBranch();
+    expect(updated.status).toBe(202);
+    expect(await forkTip()).toBe(updated.body.sha);
+    expect(await forkFile("c.txt")).toBe("base\n");
+    expect(await forkFile("b.txt")).toBe("from the fork\n");
+    // The fork tells the base of the new head, as of any push.
+    await sync();
+    expect((await pull()).head.sha).toBe(updated.body.sha);
+  });
+
+  it("lets only the author allow it, and only for a head in a fork", async () => {
+    await opened();
+    expect((await setConsent(owner, true)).status).toBe(403);
+    expect((await pull()) as Pull & { maintainer_can_modify: boolean }).toMatchObject({
+      maintainer_can_modify: false,
+    });
+    // A head branch in the base itself: the base's own to write, nothing to allow.
+    const tip = (
+      await json<{ commit: { sha: string } }>(api("GET", `${base.path}/branches/main`, owner.token))
+    ).body.commit.sha;
+    const target: PushTarget = {
+      repo: { id: base.id, name: base.name, stub: env.REPO.getByName(base.id) },
+      owner: {
+        principalId: owner.principalId,
+        token: await scopedToken(owner.principalId, [], "git"),
+      },
+      path: `/${owner.handle}/${base.name}.git`,
+    };
+    const pushed = await postPush(
+      target,
+      pushBody([{ old: ZERO, new: tip, ref: "refs/heads/side" }], { pack: fx.packEmpty }),
+    );
+    expect(pushed.report).toContain("ok refs/heads/side\n");
+    await commitOn(owner, base.path, "side", [{ path: "s.txt", content: "s\n" }]);
+    const own = await json<Pull & { maintainer_can_modify: boolean }>(
+      api("POST", `${base.path}/pulls`, owner.token, {
+        title: "Own",
+        head: "side",
+        base: "main",
+        maintainer_can_modify: true,
+      }),
+    );
+    expect(own.status).toBe(201);
+    expect(own.body.maintainer_can_modify).toBe(false);
+    const patched = await json<Pull & { maintainer_can_modify: boolean }>(
+      api("PATCH", `${base.path}/pulls/${own.body.number}`, owner.token, {
+        maintainer_can_modify: true,
+      }),
+    );
+    expect(patched.status).toBe(200);
+    expect(patched.body.maintainer_can_modify).toBe(false);
+  });
+
+  it("stops a later write as soon as the author withdraws consent, before the fork is told", async () => {
+    await opened({ maintainer_can_modify: true });
+    expect((await setConsent(contributor, false)).status).toBe(200);
+    expect((await updateBranch()).body.code).toBe("maintainer_edits_off");
+  });
+
+  it("is refused once the author is disabled, though its role in the fork remains", async () => {
+    await opened({ maintainer_can_modify: true });
+    await env.DIRECTORY.prepare("UPDATE principals SET disabled_at = ? WHERE id = ?")
+      .bind(Date.now(), contributor.principalId)
+      .run();
+    const before = await forkTip();
+    expect((await updateBranch()).body.code).toBe("maintainer_edits_off");
+    expect(await forkTip()).toBe(before);
+  });
+
+  it("is refused by the fork when its own copy of the consent says no", async () => {
+    await opened({ maintainer_can_modify: true });
+    await inRepo(env.REPO.getByName(fork.id), (r: RepoDO) => {
+      r.git.context.storage.sql.exec("UPDATE outgoing_pulls SET maintainer_can_modify = 0");
+    });
+    const before = await forkTip();
+    expect((await updateBranch()).body.code).toBe("maintainer_edits_off");
+    expect(await forkTip()).toBe(before);
+  });
+
+  it("needs no consent from a maintainer who writes the fork too", async () => {
+    await opened();
+    const set = await api("PUT", `${fork.path}/collaborators/${owner.handle}`, contributor.token, {
+      permission: "push",
+    });
+    expect(set.status).toBe(200);
+    const updated = await updateBranch();
+    expect(updated.status).toBe(202);
+    expect(await forkTip()).toBe(updated.body.sha);
+  });
+
+  it("takes a maintainer's token limited to the base, while the author allows it", async () => {
+    await opened({ maintainer_can_modify: true });
+    // Writing the fork too does not make a token limited to the base write it directly.
+    const set = await api("PUT", `${fork.path}/collaborators/${owner.handle}`, contributor.token, {
+      permission: "push",
+    });
+    expect(set.status).toBe(200);
+    const limited = { ...owner, token: await scopedToken(owner.principalId, [], "pat", [base.id]) };
+    const updated = await updateBranch(limited);
+    expect(updated.status).toBe(202);
+    expect(await forkTip()).toBe(updated.body.sha);
+  });
+
+  it("is refused in the fork's commit when the consent is withdrawn there meanwhile", async () => {
+    await opened({ maintainer_can_modify: true });
+    const before = await forkTip();
+    await inRepo(env.REPO.getByName(fork.id), (r: RepoDO) => {
+      r.headWriteHooks = {
+        beforeFinish: async () => {
+          r.headWriteHooks = {};
+          r.git.context.storage.sql.exec("UPDATE outgoing_pulls SET maintainer_can_modify = 0");
+        },
+      };
+    });
+    const refused = await updateBranch();
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe("maintainer_edits_off");
+    expect(await forkTip()).toBe(before);
+  });
+
+  it("is refused when the fork's branch moved since the base last had it", async () => {
+    await opened({ maintainer_can_modify: true });
+    await commitOn(contributor, fork.path, "main", [{ path: "d.txt", content: "d\n" }]);
+    expect((await updateBranch()).body.code).toBe("head_moved");
+  });
+
+  it("takes suggestions, committed in the fork, their threads resolved", async () => {
+    const made = await opened({ maintainer_can_modify: true });
+    const suggested = await json<{ id: number }>(
+      api("POST", `${base.path}/pulls/1/comments`, owner.token, {
+        body: "Better:\n```suggestion\nFROM THE FORK\n```",
+        commit_id: made.head.sha,
+        path: "b.txt",
+        line: 1,
+      }),
+    );
+    expect(suggested.status).toBe(201);
+    const applied = await json<{ commit: { sha: string } }>(
+      api("POST", `${base.path}/pulls/1/suggestions/apply`, owner.token, {
+        comment_ids: [suggested.body.id],
+      }),
+    );
+    expect(applied.status).toBe(201);
+    expect(await forkTip()).toBe(applied.body.commit.sha);
+    expect(await forkFile("b.txt")).toBe("FROM THE FORK\n");
+    const threads = await json<{ threads: { resolved: boolean }[] }>(
+      api("GET", `${base.path}/pulls/1/threads`, owner.token),
+    );
+    expect(threads.body.threads.every((t) => t.resolved)).toBe(true);
+  });
+});

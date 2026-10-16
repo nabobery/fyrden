@@ -10,6 +10,7 @@ export const PULL_ACTIONS = [
   "close",
   "reopen",
   "merge",
+  "set_maintainer_edits",
 ] as const;
 export type PullAction = (typeof PULL_ACTIONS)[number];
 
@@ -17,8 +18,8 @@ export type PullAction = (typeof PULL_ACTIONS)[number];
 export interface PullActionRule {
   /** The author (anyone with the author's root identity) may do it to its own pull request. */
   readonly author: boolean;
-  /** The role anyone else needs. */
-  readonly minRole: RepoRole;
+  /** The role anyone else needs; null when only the author may. */
+  readonly minRole: RepoRole | null;
   /** The states it applies in. */
   readonly from: readonly PullState[];
   /** The state it leaves the pull request in, when it changes it. */
@@ -116,6 +117,18 @@ export const PULL_ACTION_RULES: Readonly<Record<PullAction, PullActionRule>> = {
     invalidatesMergeability: false,
     newGeneration: false,
   },
+  // Whether the base's maintainers may write the head branch (in another repository): the
+  // author's to give or take back, as GitHub's.
+  set_maintainer_edits: {
+    author: true,
+    minRole: null,
+    from: ["open", "closed"],
+    event: "edited",
+    audit: "pull_request.maintainer_edits",
+    staleApprovals: false,
+    invalidatesMergeability: false,
+    newGeneration: false,
+  },
 };
 
 export type PullRefusal = "forbidden" | "wrong_state" | "head_ref_deleted";
@@ -137,7 +150,10 @@ export function decidePullAction(
 ): { ok: true } | { ok: false; refusal: PullRefusal } {
   const rule = PULL_ACTION_RULES[action];
   if (!atLeast(input.role, "read")) return { ok: false, refusal: "forbidden" };
-  if (!(rule.author && input.isAuthor) && !atLeast(input.role, rule.minRole))
+  if (
+    !(rule.author && input.isAuthor) &&
+    (rule.minRole === null || !atLeast(input.role, rule.minRole))
+  )
     return { ok: false, refusal: "forbidden" };
   if (!rule.from.includes(input.state)) return { ok: false, refusal: "wrong_state" };
   if (action === "reopen" && input.headRefDeleted)
