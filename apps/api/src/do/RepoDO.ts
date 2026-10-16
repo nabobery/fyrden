@@ -832,6 +832,22 @@ export class RepoDO extends MigratingDO {
   }
 
   /**
+   * The roles of several principals at once (`roleOf` for each, from one
+   * snapshot): a caller and its agents' owners, checked in one call.
+   */
+  rolesOf(
+    principalIds: readonly string[],
+    purpose: AclPurpose,
+    directoryOwner?: string,
+  ): Promise<(RepoRole | null)[]> {
+    return this.#measured("rolesOf", async () => {
+      const roles: (RepoRole | null)[] = [];
+      for (const id of principalIds) roles.push(await this.acl.roleOf(id, purpose, directoryOwner));
+      return roles;
+    });
+  }
+
+  /**
    * Account `accountId` committed ACL `(epochGen, version)`: an older
    * snapshot is not used again (a notice from an account the repository
    * left changes nothing).

@@ -3038,11 +3038,11 @@ export type FeedListOutput = {
     /** The version last acknowledged; 0 for none. */
     acked_version: number;
   })[];
-  /** Pass as `since` next; the same as `head_cursor` once the page reached the head. */
+  /** Pass as `since` next: after the last item shown (where the answer started when none was). */
   next_cursor: string;
-  /** The feed's latest change. */
+  /** The latest change the answer found that the caller may see; the same as `next_cursor` unless more pages follow. */
   head_cursor: string;
-  /** Wait at least this long (milliseconds) before polling again with `next_cursor`. */
+  /** Wait at least this long (milliseconds) before polling again with `next_cursor`; 0 while more may follow. */
   poll_after_ms: number;
 };
 
@@ -3096,7 +3096,7 @@ export type FeedSyncOutput = {
   complete: boolean;
   /** Pass as `since` to `GET /feed` for what changes next. */
   head_cursor: string;
-  /** Wait at least this long (milliseconds) before polling again with `next_cursor`. */
+  /** Wait at least this long (milliseconds) before polling again with `next_cursor`; 0 while more may follow. */
   poll_after_ms: number;
 };
 
@@ -4795,9 +4795,9 @@ export interface Operations {
   "stars.delete": { input: StarsDeleteInput; output: StarsDeleteOutput };
   /** List starred repositories. Lists the repositories the caller starred, most recently starred first. Repositories the caller or its token can no longer read are left out, so a page can hold fewer than `per_page`; keep following `next_cursor` until it is null. */
   "stars.list": { input: StarsListInput; output: StarsListOutput };
-  /** Get the activity feed. The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's `next_cursor` as `since` for what changed after it; a changed item comes again, so keep the latest copy by `item_key`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short. A cursor older than the retention (7 days, 5,000 items) or of another epoch is refused with 410 `cursor_expired`: start over from `GET /feed/sync`. The answer carries an ETag; with `If-None-Match` an unchanged one is 304. */
+  /** Get the activity feed. The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's `next_cursor` as `since` for what changed after it; a changed item comes again, so keep the latest copy by `item_key`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short, and cursors name only items the caller was shown. An answer checks at most 100 repositories: a page can end early, with `poll_after_ms` 0 to read on. A cursor older than the retention (7 days, 5,000 items) or of another epoch is refused with 410 `cursor_expired`: start over from `GET /feed/sync`. The answer carries an ETag; with `If-None-Match` an unchanged one is 304. */
   "feed.list": { input: FeedListInput; output: FeedListOutput };
-  /** Sync the activity feed. The feed's current state, to start from or start over: open P0 items, then P1 items of the last 7 days, newest first (500 at most; `complete` is false when more were left out), and the cursor at that instant to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. */
+  /** Sync the activity feed. The feed's current state, to start from or start over: open P0 items, then P1 items of the last 7 days, newest first (500 at most), and the cursor to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. `complete` is false when more were left out, or when not every repository could be checked (at most 100 an answer): `head_cursor` is then the feed's start. */
   "feed.sync": { input: FeedSyncInput; output: FeedSyncOutput };
   /** Acknowledge a feed item. Records that the feed's owner has seen an item at a version (every reader of the feed shares it, and the item comes again in `GET /feed`). A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing. */
   "feed.ack": { input: FeedAckInput; output: FeedAckOutput };

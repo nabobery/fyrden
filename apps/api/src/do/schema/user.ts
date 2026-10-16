@@ -5,8 +5,9 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * change; add a new version instead. Every released version gets a fixture
  * in test/fixtures/do-schemas/UserDO/.
  *
- * - `feed_meta`: the feed's epoch (random, made with the object: a cursor
- *   of another epoch is expired), its head (the last sequence number
+ * - `feed_meta`: the feed's epoch (random, made with the object) and the
+ *   restore generation it took from the directory (a cursor of another
+ *   epoch or generation is expired), its head (the last sequence number
  *   given), the low watermark (the greatest sequence number retention
  *   deleted) and how many items it holds.
  * - `feed_items`: one item per repository, thread and kind, updated in
@@ -17,8 +18,10 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   later (`feed_tombstones` finds the oldest for retention). `members`:
  *   the ids an activity item aggregates (JSON, at most 100), `truncated`
  *   once any was dropped; `deleted`: the members deleted (JSON, the latest
- *   100), never added again; `excerpt_member`: the member the excerpt was
- *   taken from (a comment's edit or deletion changes it); `acked_version`:
+ *   100), never added again; `display_member`: the member the item
+ *   displays (its excerpt and author: the greatest ever seen), and
+ *   `display_version` the thread version its excerpt is of (an older edit
+ *   changes nothing); `acked_version`:
  *   the version the feed's owner last acknowledged (0 for none).
  * - `purge_marks`: repositories the owner lost read access to, with when
  *   (`until_at`: entries of events up to then are dropped on arrival) and
@@ -32,12 +35,13 @@ export const userSchema: readonly DoMigration[] = [
       CREATE TABLE feed_meta (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         epoch TEXT NOT NULL,
+        epoch_gen INTEGER NOT NULL,
         head_seq INTEGER NOT NULL,
         low_watermark INTEGER NOT NULL,
         items INTEGER NOT NULL
       ) STRICT;
-      INSERT INTO feed_meta (id, epoch, head_seq, low_watermark, items)
-        VALUES (1, lower(hex(randomblob(8))), 0, 0, 0);
+      INSERT INTO feed_meta (id, epoch, epoch_gen, head_seq, low_watermark, items)
+        VALUES (1, lower(hex(randomblob(8))), 0, 0, 0, 0);
 
       CREATE TABLE feed_items (
         repo_id TEXT NOT NULL,
@@ -54,7 +58,8 @@ export const userSchema: readonly DoMigration[] = [
         actor TEXT,
         actor_trust TEXT NOT NULL CHECK (actor_trust IN ('write', 'read', 'none')),
         excerpt TEXT,
-        excerpt_member TEXT,
+        display_member TEXT,
+        display_version INTEGER NOT NULL DEFAULT 0,
         members TEXT NOT NULL,
         deleted TEXT NOT NULL DEFAULT '[]',
         truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),

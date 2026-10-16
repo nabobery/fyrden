@@ -808,6 +808,34 @@ export async function authorize(
   return true;
 }
 
+/**
+ * `authorize`, for checks of many repositories (a feed's page): one call
+ * to the repository's object for the principal and its agents' owners
+ * together, and an outcome that tells a refusal from a check that could
+ * not be made (`unknown`: the object did not answer).
+ */
+export async function authorizeAtOnce(
+  env: Env,
+  auth: Caller,
+  repo: Pick<RepoEntry, "id" | "ownerId">,
+  permission: RepoPermission,
+  metrics?: Metrics,
+): Promise<"allowed" | "denied" | "unknown"> {
+  if (!allowedWithRole(auth, repo, permission, "admin")) return "denied";
+  const ids = [...new Set([auth.principalId, ...(auth.ceilingIds ?? [])])];
+  const purpose = PERMISSIONS[permission].writes ? "write" : "read";
+  metrics?.count("do.request", { class: "RepoDO", method: "rolesOf" });
+  let roles: (RepoRole | null)[];
+  try {
+    roles = await env.REPO.getByName(repo.id).rolesOf(ids, purpose, repo.ownerId);
+  } catch {
+    return "unknown";
+  }
+  return roles.every((role) => allowedWithRole(auth, repo, permission, role))
+    ? "allowed"
+    : "denied";
+}
+
 /** Every repository starts with HEAD at this branch; the branch exists after the first push. */
 export const INITIAL_BRANCH = "main";
 

@@ -4,7 +4,7 @@
 // watermark, acknowledgements, and the feed operations: whose feed a token
 // reads, and items of repositories the caller cannot read now left out.
 
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
@@ -13,12 +13,13 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { UserDO } from "../src/do/UserDO.js";
 import { FEED_POLICY, Feed } from "../src/do/user/feed.js";
-import { encodeFeedCursor } from "../src/feed/operations.js";
+import { encodeFeedCursor, FEED_POLL_AFTER_MS } from "../src/feed/operations.js";
 import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { SESSION_COOKIE, startSession } from "../src/oauth/session.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { ORIGIN } from "./helpers/git-http.js";
+import { scopedToken } from "./helpers/principals.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -35,6 +36,8 @@ interface EntryInit {
   principal?: string;
   action?: string;
   excerpt?: string | null;
+  actor?: string;
+  threadKey?: string;
 }
 
 /** One recipient's entry, built by hand as the repository would send it. */
@@ -45,9 +48,9 @@ function entry(init: EntryInit): FeedEntry {
     eventKey: `rep_test:1:${init.version}`,
     repoId: init.repoId ?? "rep_test",
     occurredAt: init.occurredAt ?? Date.now(),
-    actor: "usr_actor",
+    actor: init.actor ?? "usr_actor",
     feed: {
-      threadKey: `pull/${thread}`,
+      threadKey: init.threadKey ?? `pull/${thread}`,
       subject: { kind: "pull", number: thread, title: `Pull ${thread}`, version: init.version },
       action: init.action ?? (kind === "activity" ? "comment" : kind),
       actorRoot: "usr_actor",
@@ -114,11 +117,12 @@ describe("applying entries", () => {
   it("converges on the same items under any order, duplicates and batch splits", async () => {
     const step = fc.record({
       thread: fc.integer({ min: 1, max: 2 }),
-      kind: fc.constantFrom<FeedKind | "deletion">(
+      kind: fc.constantFrom<FeedKind | "deletion" | "edit">(
         "activity",
         "review_requested",
         "mention",
         "deletion",
+        "edit",
       ),
       member: fc.option(fc.integer({ min: 1, max: 40 }).map(String), { nil: null }),
       // Action items open and resolve in any interleaving.
@@ -134,6 +138,14 @@ describe("applying entries", () => {
         versions.set(s.thread, version);
         if (kind === "deletion")
           return entry({ ...s, version, member: s.member ?? "1", action: "comment_deleted" });
+        if (kind === "edit")
+          return entry({
+            ...s,
+            version,
+            member: s.member ?? "1",
+            action: "comment_edited",
+            excerpt: `edited at ${version}`,
+          });
         return entry({ ...s, kind, version, state: kind === "activity" ? "open" : state });
       });
     });
@@ -161,7 +173,7 @@ describe("applying entries", () => {
           }
           expect(state()).toEqual(expected);
         }),
-        { numRuns: 300 },
+        { numRuns: 1_000 },
       );
     });
   });
@@ -220,7 +232,7 @@ describe("applying entries", () => {
       // Neither listed, synced nor acknowledged.
       expect(
         feedIn(storage)
-          .feed.sync()
+          .feed.sync(null, 50, null)
           .items.map((i) => i.kind),
       ).toEqual(["merge_conflict"]);
       expect(
@@ -286,7 +298,7 @@ describe("applying entries", () => {
 
   it("updates or clears the excerpt of an edited or deleted comment, and drops a deleted one from the members", async () => {
     await inFeed((storage) => {
-      const { apply, head, items } = feedIn(storage);
+      const { apply, head, items, rows } = feedIn(storage);
       const edit = (version: number, member: string, excerpt: string | null, deleted = false) =>
         entry({
           version,
@@ -295,22 +307,30 @@ describe("applying entries", () => {
           silent: true,
           action: deleted ? "comment_deleted" : "comment_edited",
         });
-      // Neither shows an item.
-      expect(apply([edit(9, "comment/1", "new")]).changed).toBe(0);
-      expect(apply([edit(9, "comment/9", null, true)]).changed).toBe(0);
+      // An edit for a thread the feed has nothing of shows nothing (a tombstone keeps it).
+      const elsewhere = entry({
+        version: 9,
+        member: "comment/1",
+        threadKey: "pull/9",
+        action: "comment_edited",
+      });
+      expect(apply([elsewhere]).changed).toBe(0);
       expect(head()).toBe(0);
+      expect(rows()).toMatchObject([{ thread_key: "pull/9", feed_seq: null }]);
       apply([
         entry({ version: 1, member: "comment/1", excerpt: "first" }),
         entry({ version: 2, member: "comment/2", excerpt: "second" }),
       ]);
       apply([entry({ kind: "review_requested", version: 2, state: "resolved", priority: "P0" })]);
       expect(head()).toBe(2);
-      // Another member's edit (not the excerpt's), or one already applied: nothing changes.
+      // A member the item does not display (comment/2 is the greatest): nothing changes.
       expect(apply([edit(3, "comment/1", "first, edited")])).toEqual({ changed: 0, notified: 0 });
       expect(head()).toBe(2);
-      // The excerpt's member, whatever the version: replaced, nothing else changed.
-      expect(apply([edit(1, "comment/2", "second, edited")])).toEqual({ changed: 1, notified: 0 });
-      expect(apply([edit(1, "comment/2", "second, edited")]).changed).toBe(0);
+      // The displayed member's edit, whatever the thread's state: replaced, nothing else.
+      expect(apply([edit(4, "comment/2", "second, edited")])).toEqual({ changed: 1, notified: 0 });
+      expect(apply([edit(4, "comment/2", "second, edited")]).changed).toBe(0);
+      // An older edit arriving late changes nothing.
+      expect(apply([edit(3, "comment/2", "second, stale")]).changed).toBe(0);
       expect(head()).toBe(3);
       expect(items()).toMatchObject([
         {
@@ -324,14 +344,56 @@ describe("applying entries", () => {
         },
       ]);
       // Deleting another member drops it and keeps the excerpt; deleting the excerpt's clears it.
-      expect(apply([edit(4, "comment/1", null, true)])).toEqual({ changed: 1, notified: 0 });
+      expect(apply([edit(5, "comment/1", null, true)])).toEqual({ changed: 1, notified: 0 });
       expect(items()).toMatchObject([
         { excerpt: "second, edited", members: JSON.stringify(["comment/2"]) },
       ]);
-      expect(apply([edit(5, "comment/2", null, true)])).toEqual({ changed: 1, notified: 0 });
+      expect(apply([edit(6, "comment/2", null, true)])).toEqual({ changed: 1, notified: 0 });
       expect(items()).toMatchObject([{ excerpt: null, members: "[]", version: 2 }]);
-      expect(apply([edit(5, "comment/2", null, true)]).changed).toBe(0);
+      expect(apply([edit(6, "comment/2", null, true)]).changed).toBe(0);
       expect(head()).toBe(5);
+    });
+  });
+
+  it("displays the greatest member, whatever the order its creation and edits arrive in", async () => {
+    const edited = (version: number, excerpt: string) =>
+      entry({
+        version,
+        member: "comment/20",
+        excerpt,
+        action: "comment_edited",
+        actor: "usr_d",
+        silent: true,
+      });
+    const history = [
+      entry({ version: 1, member: "comment/20", excerpt: "twenty", actor: "usr_a" }),
+      entry({ version: 2, member: "comment/3", excerpt: "three", actor: "usr_b" }),
+      entry({ version: 3, member: "review/1", excerpt: "review", actor: "usr_c" }),
+      edited(4, "twenty, again"),
+      edited(5, "twenty, last"),
+      entry({ version: 6, member: null, action: "closed", actor: "usr_e" }),
+    ];
+    await inFeed((storage) => {
+      const { apply, items, reset } = feedIn(storage);
+      fc.assert(
+        fc.property(fc.shuffledSubarray(history, { minLength: history.length }), (shuffled) => {
+          reset();
+          for (const one of shuffled) apply([one]);
+          // "comment/20" is the greatest (longest) id: its author, its newest edit.
+          expect(items()).toMatchObject([
+            {
+              display_member: "comment/20",
+              excerpt: "twenty, last",
+              actor: "usr_a",
+              display_version: 5,
+              version: 6,
+              action: "closed",
+              members: JSON.stringify(["comment/20", "comment/3", "review/1"]),
+            },
+          ]);
+        }),
+        { numRuns: 60 },
+      );
     });
   });
 
@@ -429,7 +491,7 @@ describe("reading the feed", () => {
     expect(page).toMatchObject({ items: [{ version: 3, ackedVersion: 2 }] });
   });
 
-  it("syncs open P0 items first, then recent P1 items, with the head", async () => {
+  it("syncs open P0 items first, then recent P1 items, a page at a time", async () => {
     const stub = env.USER.getByName(uniqueId("usr"));
     await stub.applyFeed([
       entry({ thread: 1, kind: "review_requested", version: 1, priority: "P0" }),
@@ -439,12 +501,18 @@ describe("reading the feed", () => {
     await stub.applyFeed([
       entry({ thread: 3, kind: "approved", version: 2, priority: "P0", state: "resolved" }),
     ]);
-    const synced = await stub.syncFeed();
+    const synced = await stub.syncFeed(null, 50, null);
     expect(synced.items.map((i) => [i.threadKey, i.kind])).toEqual([
       ["pull/1", "review_requested"],
       ["pull/2", "activity"],
     ]);
-    expect(synced).toMatchObject({ complete: true, head: { seq: 4 } });
+    expect(synced.more).toBe(false);
+    const first = await stub.syncFeed(null, 1, null);
+    expect(first).toMatchObject({ items: [{ threadKey: "pull/1" }], more: true });
+    const next = await stub.syncFeed({ open: true, seq: first.items[0]?.seq ?? 0 }, 1, null);
+    expect(next).toMatchObject({ items: [{ threadKey: "pull/2" }], more: false });
+    // Limited to some repositories: the others are not read at all.
+    expect((await stub.syncFeed(null, 50, ["rep_other"])).items).toEqual([]);
   });
 });
 
@@ -487,7 +555,7 @@ describe("retention", () => {
     expect(await tombstones()).toEqual([]);
     // Nothing shown was deleted: cursors stay good.
     expect(
-      await stub.listFeed({ epoch: (await stub.syncFeed()).head.epoch, seq: 0 }, 50, {}),
+      await stub.listFeed({ epoch: (await stub.syncFeed(null, 1, null)).epoch, seq: 0 }, 50, {}),
     ).toMatchObject({ expired: false, items: [] });
     expect(await runInDurableObject(stub, (_: UserDO, state) => state.storage.getAlarm())).toBe(
       null,
@@ -583,9 +651,9 @@ describe("the feed operations", () => {
     const agent = await agentFor(owner, ["pull_requests:read"], [repo.fullName]);
     const res = await json<FeedOut>(api("GET", "/feed", agent.delegated));
     expect(feedNames(res.body)).toEqual([repo.fullName]);
-    // The page's cursor moved past the hidden item all the same.
+    // Its cursors name only what it was shown.
     const mine = await json<FeedOut>(api("GET", "/feed", owner.token));
-    expect(res.body.head_cursor).toBe(mine.body.head_cursor);
+    expect(res.body.head_cursor).not.toBe(mine.body.head_cursor);
 
     // A sub-agent under a narrower grant reads the same user's feed.
     const second = await json<{ id: string; handle: string }>(
@@ -737,5 +805,103 @@ describe("the feed operations", () => {
     // Sync gives the cursor to follow from.
     const synced = await json<FeedOut>(api("GET", "/feed/sync", owner.token));
     expect(synced.body.head_cursor).toBe(head.body.head_cursor);
+  });
+
+  it("show a token limited to some repositories nothing of the others: no item, cursor or ETag changes", async () => {
+    const someone = await user();
+    const shown = await repoOf(someone);
+    const hidden = await repoOf(someone);
+    await deliverTo(someone.principalId, {
+      repoId: shown.id,
+      kind: "review_requested",
+      version: 1,
+      priority: "P0",
+    });
+    await deliverTo(someone.principalId, {
+      repoId: hidden.id,
+      kind: "review_requested",
+      version: 1,
+      priority: "P0",
+    });
+    const limited = await scopedToken(someone.principalId, [], "pat", [shown.id]);
+    const read = async (path: string) => {
+      const res = await api("GET", path, limited);
+      return {
+        etag: res.headers.get("ETag"),
+        body: await res.json<FeedOut & { complete?: boolean }>(),
+      };
+    };
+    const before = { list: await read("/feed"), sync: await read("/feed/sync") };
+    expect(feedNames(before.list.body)).toEqual([shown.fullName]);
+    expect(feedNames(before.sync.body)).toEqual([shown.fullName]);
+    expect(before.sync.body.complete).toBe(true);
+    // Activity in the other repository only: the limited token's answers stay the same.
+    await deliverTo(someone.principalId, { repoId: hidden.id, version: 1 });
+    await deliverTo(someone.principalId, { repoId: hidden.id, thread: 2, version: 1 });
+    const after = { list: await read("/feed"), sync: await read("/feed/sync") };
+    expect(after.list).toEqual(before.list);
+    expect(after.sync.body).toEqual(before.sync.body);
+    const since = await read(`/feed?since=${before.list.body.next_cursor}`);
+    expect(since.body.items).toEqual([]);
+    expect(since.body.head_cursor).toBe(before.list.body.next_cursor);
+    expect(since.body.poll_after_ms).toBe(FEED_POLL_AFTER_MS);
+    // Its own repository's items are acknowledged; the other's are not found.
+    const ack = (repoId: string) =>
+      api("POST", "/feed/ack", limited, {
+        item_key: `${repoId}:pull/1:review_requested`,
+        version: 1,
+      });
+    expect((await ack(shown.id)).status).toBe(200);
+    expect((await ack(hidden.id)).status).toBe(404);
+    // The owner's own token sees both.
+    expect(feedNames((await json<FeedOut>(api("GET", "/feed", someone.token))).body)).toHaveLength(
+      4,
+    );
+  });
+
+  it("continue past their budget of repository checks with a cursor", async () => {
+    const someone = await user();
+    const repoIds = Array.from({ length: 105 }, () => uniqueId("rep_"));
+    await env.DIRECTORY.batch(
+      repoIds.map((id) =>
+        env.DIRECTORY.prepare(
+          `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'default', 'private', 0, 0)`,
+        ).bind(id, someone.principalId, id.toLowerCase(), uniqueId("net")),
+      ),
+    );
+    await env.USER.getByName(someone.principalId).applyFeed(
+      repoIds.map((repoId) => entry({ repoId, version: 1, principal: someone.principalId })),
+    );
+    const first = await json<FeedOut>(api("GET", "/feed?limit=100", someone.token));
+    // 100 repositories checked: the rest is the next page's.
+    expect(first.body.items).toHaveLength(100);
+    expect(first.body.poll_after_ms).toBe(0);
+    const second = await json<FeedOut>(
+      api("GET", `/feed?limit=100&since=${first.body.next_cursor}`, someone.token),
+    );
+    expect(second.body.items.map((i) => i.repo.full_name.split("/")[1])).toEqual(
+      repoIds.slice(100).map((id) => id.toLowerCase()),
+    );
+    expect(second.body.poll_after_ms).toBe(FEED_POLL_AFTER_MS);
+  });
+
+  it("expire cursors made before the feed's object was restored", async () => {
+    const someone = await user();
+    const made = await repoOf(someone);
+    await deliverTo(someone.principalId, { repoId: made.id, version: 1 });
+    const before = await json<FeedOut>(api("GET", "/feed", someone.token));
+    // A restore: the directory allocates the feed's next generation, and the object starts again.
+    await env.DIRECTORY.prepare("INSERT INTO source_epochs (source_id, epoch_gen) VALUES (?, 1)")
+      .bind(`feed:${someone.principalId}`)
+      .run();
+    await evictDurableObject(env.USER.getByName(someone.principalId));
+    const stale = await json<FeedOut>(
+      api("GET", `/feed?since=${before.body.next_cursor}`, someone.token),
+    );
+    expect(stale).toMatchObject({ status: 410, body: { code: "cursor_expired" } });
+    const fresh = await json<FeedOut>(api("GET", "/feed", someone.token));
+    expect(fresh.body.items).toHaveLength(1);
+    expect(fresh.body.head_cursor).not.toBe(before.body.head_cursor);
   });
 });

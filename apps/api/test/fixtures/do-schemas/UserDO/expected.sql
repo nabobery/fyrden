@@ -14,7 +14,8 @@ CREATE TABLE feed_items (
         actor TEXT,
         actor_trust TEXT NOT NULL CHECK (actor_trust IN ('write', 'read', 'none')),
         excerpt TEXT,
-        excerpt_member TEXT,
+        display_member TEXT,
+        display_version INTEGER NOT NULL DEFAULT 0,
         members TEXT NOT NULL,
         deleted TEXT NOT NULL DEFAULT '[]',
         truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
@@ -28,6 +29,7 @@ CREATE TABLE feed_items (
 CREATE TABLE feed_meta (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         epoch TEXT NOT NULL,
+        epoch_gen INTEGER NOT NULL,
         head_seq INTEGER NOT NULL,
         low_watermark INTEGER NOT NULL,
         items INTEGER NOT NULL

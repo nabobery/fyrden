@@ -41,7 +41,9 @@ export const FeedItem = z.object({
 const PollAfter = z
   .number()
   .int()
-  .describe("Wait at least this long (milliseconds) before polling again with `next_cursor`.");
+  .describe(
+    "Wait at least this long (milliseconds) before polling again with `next_cursor`; 0 while more may follow.",
+  );
 
 export const getFeed = defineOperation({
   id: "feed.list",
@@ -49,7 +51,7 @@ export const getFeed = defineOperation({
   path: "/feed",
   summary: "Get the activity feed",
   description:
-    "The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's `next_cursor` as `since` for what changed after it; a changed item comes again, so keep the latest copy by `item_key`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short. A cursor older than the retention (7 days, 5,000 items) or of another epoch is refused with 410 `cursor_expired`: start over from `GET /feed/sync`. The answer carries an ETag; with `If-None-Match` an unchanged one is 304.",
+    "The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's `next_cursor` as `since` for what changed after it; a changed item comes again, so keep the latest copy by `item_key`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short, and cursors name only items the caller was shown. An answer checks at most 100 repositories: a page can end early, with `poll_after_ms` 0 to read on. A cursor older than the retention (7 days, 5,000 items) or of another epoch is refused with 410 `cursor_expired`: start over from `GET /feed/sync`. The answer carries an ETag; with `If-None-Match` an unchanged one is 304.",
   input: z.object({
     since: Cursor.optional().describe("A previous answer's `next_cursor`; from the start without."),
     limit: z.coerce.number().int().min(1).max(100).default(50).describe("Page size, 1-100."),
@@ -59,9 +61,11 @@ export const getFeed = defineOperation({
   output: z.object({
     items: z.array(FeedItem),
     next_cursor: Cursor.describe(
-      "Pass as `since` next; the same as `head_cursor` once the page reached the head.",
+      "Pass as `since` next: after the last item shown (where the answer started when none was).",
     ),
-    head_cursor: Cursor.describe("The feed's latest change."),
+    head_cursor: Cursor.describe(
+      "The latest change the answer found that the caller may see; the same as `next_cursor` unless more pages follow.",
+    ),
     poll_after_ms: PollAfter,
   }),
   permission: AUTHENTICATED,
@@ -84,7 +88,7 @@ export const syncFeed = defineOperation({
   path: "/feed/sync",
   summary: "Sync the activity feed",
   description:
-    "The feed's current state, to start from or start over: open P0 items, then P1 items of the last 7 days, newest first (500 at most; `complete` is false when more were left out), and the cursor at that instant to follow with `GET /feed`. Items of repositories the caller cannot read now are left out.",
+    "The feed's current state, to start from or start over: open P0 items, then P1 items of the last 7 days, newest first (500 at most), and the cursor to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. `complete` is false when more were left out, or when not every repository could be checked (at most 100 an answer): `head_cursor` is then the feed's start.",
   input: z.object({}),
   output: z.object({
     items: z.array(FeedItem),

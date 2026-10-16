@@ -33,6 +33,13 @@ export const FEED_POLICY = {
   syncItems: 500,
 } as const;
 
+/**
+ * The key a feed's restore generation has in the directory's
+ * `source_epochs`: a restore of the principal's object allocates the next
+ * one there, as for a repository's.
+ */
+export const feedEpochSource = (principalId: string) => `feed:${principalId}`;
+
 /** A place in a feed: its epoch and a sequence number. */
 export interface FeedPosition {
   readonly epoch: string;
@@ -82,6 +89,14 @@ export type FeedPage =
 export interface FeedFilter {
   readonly priority?: FeedPriority | undefined;
   readonly kind?: FeedKind | undefined;
+  /** Only items of these repositories (a token's own list); null for any. */
+  readonly repoIds?: readonly string[] | null | undefined;
+}
+
+/** Where a sync page ends: whether its last item was an open P0 one, and its sequence number. */
+export interface SyncPosition {
+  readonly open: boolean;
+  readonly seq: number;
 }
 
 /** `ahead`: the item has no such version yet. */
@@ -121,7 +136,8 @@ type Row = {
   actor: string | null;
   actor_trust: "write" | "read" | "none";
   excerpt: string | null;
-  excerpt_member: string | null;
+  display_member: string | null;
+  display_version: number;
   members: string;
   deleted: string;
   truncated: number;
@@ -172,6 +188,111 @@ const REDACTIONS = new Set(["comment_edited", "comment_deleted"]);
 const isRedaction = (entry: FeedEntry) =>
   entry.recipient.kind === "activity" && REDACTIONS.has(entry.feed.action);
 
+/** An item's fields that entries change: its row less its key, sequence and acknowledgement. */
+type State = Omit<Row, "repo_id" | "thread_key" | "kind" | "acked_version" | "feed_seq" | "seq_at">;
+
+function stateOf(row: Row): State {
+  const {
+    repo_id: _,
+    thread_key: __,
+    kind: ___,
+    acked_version: ____,
+    feed_seq,
+    seq_at,
+    ...state
+  } = row;
+  return state;
+}
+
+const sameState = (a: State, b: State) => JSON.stringify(a) === JSON.stringify(b);
+
+/** A state before any entry: every entry is newer, and nothing is shown or displayed. */
+function blank(entry: FeedEntry): State {
+  return {
+    ...thread(entry),
+    version: 0,
+    state: "resolved",
+    display_member: null,
+    display_version: 0,
+    excerpt: null,
+    actor: null,
+    actor_trust: entry.feed.actorTrust,
+    members: "[]",
+    deleted: "[]",
+    truncated: 0,
+  };
+}
+
+/** The thread's state as an entry tells it (the newest version's wins). */
+function thread(entry: FeedEntry) {
+  const { feed, recipient } = entry;
+  return {
+    number: feed.subject.number,
+    title: feed.subject.title,
+    version: feed.subject.version,
+    state: recipient.state,
+    priority: recipient.priority,
+    reasons: JSON.stringify(recipient.reasons),
+    silent: recipient.silent ? 1 : 0,
+    action: feed.action,
+    last_event_key: entry.eventKey,
+    last_event_at: entry.occurredAt,
+  };
+}
+
+/**
+ * An activity item with a member's creation, edit or deletion applied.
+ * The members are the greatest 100 created and not deleted; a deleted id
+ * is remembered (the latest 100) and never added again. What the item
+ * displays (the excerpt, its author and trust) is the greatest member's
+ * ever seen, deleted ones included (their excerpt cleared): its creation
+ * sets the author (none until it arrives), and its creation or an edit
+ * the excerpt, whichever has the newest thread version. So any order of
+ * the same entries displays the same.
+ */
+function withMember(state: State, entry: FeedEntry, op: "create" | "edit" | "delete"): State {
+  const { feed } = entry;
+  const member = feed.member;
+  if (member === null) return state;
+  const version = feed.subject.version;
+  const deleted = JSON.parse(state.deleted) as string[];
+  const gone = op === "delete" || deleted.includes(member);
+  if (op === "edit" && gone) return state;
+  let members = JSON.parse(state.members) as string[];
+  let truncated = state.truncated === 1;
+  if (op === "delete") members = members.filter((m) => m !== member);
+  else if (!gone && !members.includes(member)) {
+    const union = [...members, member].sort(byIdDescending);
+    members = union.slice(0, FEED_POLICY.maxMembers);
+    truncated ||= union.length > FEED_POLICY.maxMembers;
+  }
+  const next: State = {
+    ...state,
+    members: JSON.stringify(members),
+    truncated: truncated ? 1 : 0,
+    deleted:
+      op === "delete" && !deleted.includes(member)
+        ? JSON.stringify([...deleted, member].slice(-FEED_POLICY.maxDeleted))
+        : state.deleted,
+  };
+  const shown = state.display_member;
+  if (shown !== null && byIdDescending(member, shown) > 0) return next;
+  const same = shown === member;
+  // A member displayed before its creation arrives has no author yet.
+  const display = {
+    ...next,
+    display_member: member,
+    ...(!same && { actor: null, actor_trust: feed.actorTrust }),
+  };
+  // A deleted member displays no excerpt, whatever version it had.
+  if (op === "delete") return { ...display, excerpt: null, display_version: 0 };
+  const author = op === "create" ? { actor: entry.actor, actor_trust: feed.actorTrust } : undefined;
+  if (gone) return { ...display, ...author, excerpt: null, display_version: 0 };
+  if (same && version <= state.display_version)
+    return op === "create" ? { ...next, ...author } : next;
+  return { ...display, ...author, excerpt: feed.excerpt, display_version: version };
+}
+
 export class Feed {
   constructor(
     private readonly sql: SqlStorage,
@@ -181,11 +302,12 @@ export class Feed {
   /**
    * Applies entries (call within a transaction). Within one call an item's
    * entries apply in version order. An entry older than the retention, or
-   * of a purged repository up to its purge, is dropped. A newer version replaces the item's state; an activity item
-   * also adds the entry's member, unless that was deleted. An item is
-   * shown once an entry opens it (see `#applyOne`). A duplicate, or an
-   * older version that adds nothing, writes nothing. A comment's edit or
-   * deletion (see `#redact`) notifies of nothing.
+   * of a purged repository up to its purge, is dropped. A newer version
+   * replaces the thread's state in the item; an activity item also takes
+   * the entry's member (see `withMember`). An item is shown once an entry
+   * opens it (see `#applyOne`). A duplicate, or an older version that adds
+   * nothing, writes nothing. A comment's edit or deletion notifies of
+   * nothing.
    */
   apply(entries: readonly FeedEntry[]): FeedApplied {
     const now = this.now();
@@ -210,72 +332,27 @@ export class Feed {
   }
 
   /**
-   * A comment edited or deleted, for the activity item it is a member of:
-   * whatever the thread's version, the excerpt taken from it is replaced
-   * (cleared on deletion). A deletion also drops it from the members and
-   * is remembered (in a tombstone when the feed has no item yet), so the
-   * comment is never added again, whatever arrives later. Nothing else
-   * changes (the item is not reopened), and a shown item is sequenced
-   * only when what it shows changed.
+   * A comment edited or deleted, for the activity item it is a member of
+   * (see `withMember`); the thread's state is left as it is, whatever the
+   * entry's version (the item is not reopened). For an item the feed does
+   * not have yet, a tombstone keeps it, so a creation arriving later
+   * displays the same. A shown item is sequenced only when what it shows
+   * changed.
    */
   #redact(entry: FeedEntry, now: number): boolean {
     const { feed } = entry;
-    const member = feed.member;
-    if (member === null) return false;
     const id = { repoId: entry.repoId, threadKey: feed.threadKey, kind: "activity" } as const;
-    const removing = feed.action === "comment_deleted";
     const item = this.#row(id);
-    if (!item) {
-      if (removing) this.#deletionTombstone(entry, member, now);
-      return false;
-    }
-    const members = JSON.parse(item.members) as string[];
-    const deleted = JSON.parse(item.deleted) as string[];
-    if (deleted.includes(member)) return false;
-    const kept = removing ? members.filter((m) => m !== member) : members;
-    const excerpt =
-      item.excerpt_member === member ? (removing ? null : feed.excerpt) : item.excerpt;
-    const changed = kept.length !== members.length || excerpt !== item.excerpt;
-    if (!changed && !removing) return false;
-    const resequence = changed && item.feed_seq !== null;
-    this.sql.exec(
-      `UPDATE feed_items SET members = ?, excerpt = ?, deleted = ?, feed_seq = ?, seq_at = ?
-       WHERE ${WHERE_ITEM}`,
-      JSON.stringify(kept),
-      excerpt,
-      JSON.stringify(removing ? [...deleted, member].slice(-FEED_POLICY.maxDeleted) : deleted),
-      resequence ? this.#next(false) : item.feed_seq,
-      // A tombstone's retention starts again with each change of what it guards.
-      resequence || item.feed_seq === null ? now : item.seq_at,
-      id.repoId,
-      id.threadKey,
-      id.kind,
-    );
-    return resequence;
-  }
-
-  /** An activity item not shown, that only remembers a deleted member (any entry is newer). */
-  #deletionTombstone(entry: FeedEntry, member: string, now: number): void {
-    const { feed, recipient } = entry;
-    this.sql.exec(
-      `INSERT INTO feed_items (repo_id, thread_key, kind, number, title, version, state, priority,
-         reasons, silent, action, actor, actor_trust, members, deleted, truncated, last_event_key,
-         last_event_at, seq_at)
-       VALUES (?, ?, 'activity', ?, ?, 0, 'resolved', ?, ?, 1, ?, ?, ?, '[]', ?, 0, ?, ?, ?)`,
-      entry.repoId,
-      feed.threadKey,
-      feed.subject.number,
-      feed.subject.title,
-      recipient.priority,
-      JSON.stringify(recipient.reasons),
-      feed.action,
-      entry.actor,
-      feed.actorTrust,
-      JSON.stringify([member]),
-      entry.eventKey,
-      entry.occurredAt,
-      now,
-    );
+    const before = item ? stateOf(item) : blank(entry);
+    const after = withMember(before, entry, feed.action === "comment_deleted" ? "delete" : "edit");
+    if (item && sameState(before, after)) return false;
+    const shown = item !== undefined && item.feed_seq !== null;
+    // What a reader sees changed, not only what the item remembers.
+    const visible = shown && !sameState({ ...before, deleted: "" }, { ...after, deleted: "" });
+    const seq = visible ? this.#next(false) : (item?.feed_seq ?? null);
+    // A tombstone's retention starts again with each change of what it guards.
+    this.#write(id, after, seq, visible || !shown ? now : (item?.seq_at ?? now));
+    return visible;
   }
 
   /**
@@ -289,90 +366,50 @@ export class Feed {
    */
   #applyOne(entry: FeedEntry, now: number): boolean {
     const { feed, recipient } = entry;
-    const item = this.#row({
-      repoId: entry.repoId,
-      threadKey: feed.threadKey,
-      kind: recipient.kind,
-    });
+    const id = { repoId: entry.repoId, threadKey: feed.threadKey, kind: recipient.kind };
+    const item = this.#row(id);
+    const before = item ? stateOf(item) : blank(entry);
+    const newer = feed.subject.version > before.version;
+    let after: State = newer ? { ...before, ...thread(entry) } : before;
+    if (recipient.kind === "activity") after = withMember(after, entry, "create");
+    else if (newer)
+      after = {
+        ...after,
+        display_member: feed.member,
+        display_version: feed.subject.version,
+        excerpt: feed.excerpt,
+        actor: entry.actor,
+        actor_trust: feed.actorTrust,
+      };
     const shown = item !== undefined && item.feed_seq !== null;
     const shows = !shown && recipient.state === "open";
-    const newer = !item || feed.subject.version > item.version;
-    const deleted = item ? (JSON.parse(item.deleted) as string[]) : [];
-    const gone = feed.member !== null && deleted.includes(feed.member);
-    let members: string[] = item ? (JSON.parse(item.members) as string[]) : [];
-    let truncated = item?.truncated === 1;
-    if (
-      recipient.kind === "activity" &&
-      feed.member !== null &&
-      !gone &&
-      !members.includes(feed.member)
-    ) {
-      const union = [...members, feed.member].sort(byIdDescending);
-      members = union.slice(0, FEED_POLICY.maxMembers);
-      truncated ||= union.length > FEED_POLICY.maxMembers;
-    }
-    const membersJson = JSON.stringify(members);
-    const grew =
-      item !== undefined && (membersJson !== item.members || truncated !== (item.truncated === 1));
-    if (!newer && !grew && !shows) return false;
+    if (item && sameState(before, after) && !shows) return false;
     const seq = shown || shows ? this.#next(!shown) : null;
-    if (!newer) {
-      this.sql.exec(
-        `UPDATE feed_items SET members = ?, truncated = ?, feed_seq = ?, seq_at = ? WHERE ${WHERE_ITEM}`,
-        membersJson,
-        truncated ? 1 : 0,
-        seq,
-        now,
-        entry.repoId,
-        feed.threadKey,
-        recipient.kind,
-      );
-      return seq !== null;
-    }
-    this.sql.exec(
-      `INSERT INTO feed_items (repo_id, thread_key, kind, number, title, version, state, priority,
-         reasons, silent, action, actor, actor_trust, excerpt, excerpt_member, members, truncated,
-         last_event_key, last_event_at, feed_seq, seq_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (repo_id, thread_key, kind) DO UPDATE SET
-         number = excluded.number, title = excluded.title, version = excluded.version,
-         state = excluded.state, priority = excluded.priority, reasons = excluded.reasons,
-         silent = excluded.silent, action = excluded.action, actor = excluded.actor,
-         actor_trust = excluded.actor_trust, excerpt = excluded.excerpt,
-         excerpt_member = excluded.excerpt_member, members = excluded.members,
-         truncated = excluded.truncated, last_event_key = excluded.last_event_key,
-         last_event_at = excluded.last_event_at, feed_seq = excluded.feed_seq,
-         seq_at = excluded.seq_at`,
-      entry.repoId,
-      feed.threadKey,
-      recipient.kind,
-      feed.subject.number,
-      feed.subject.title,
-      feed.subject.version,
-      recipient.state,
-      recipient.priority,
-      JSON.stringify(recipient.reasons),
-      recipient.silent ? 1 : 0,
-      feed.action,
-      entry.actor,
-      feed.actorTrust,
-      // A deleted comment's excerpt is not shown again.
-      gone ? null : feed.excerpt,
-      feed.member,
-      membersJson,
-      truncated ? 1 : 0,
-      entry.eventKey,
-      entry.occurredAt,
-      seq,
-      now,
-    );
+    this.#write(id, after, seq, now);
     return seq !== null;
+  }
+
+  #write(id: FeedItemId, state: State, seq: number | null, seqAt: number): void {
+    const columns = Object.keys(state) as (keyof State)[];
+    this.sql.exec(
+      `INSERT INTO feed_items (repo_id, thread_key, kind, ${columns.join(", ")}, feed_seq, seq_at)
+       VALUES (?, ?, ?, ${columns.map(() => "?").join(", ")}, ?, ?)
+       ON CONFLICT (repo_id, thread_key, kind) DO UPDATE SET
+         ${[...columns, "feed_seq", "seq_at"].map((c) => `${c} = excluded.${c}`).join(", ")}`,
+      id.repoId,
+      id.threadKey,
+      id.kind,
+      ...columns.map((c) => state[c]),
+      seq,
+      seqAt,
+    );
   }
 
   /**
    * A page of the items changed after `since` (from the start without one),
    * in sequence order; expired when `since` is of another epoch, below the
    * low watermark (retention deleted changes after it) or past the head.
+   * The caller reads on with the last item's position.
    */
   list(since: FeedPosition | null, limit: number, filter: FeedFilter = {}): FeedPage {
     const meta = this.#meta();
@@ -385,11 +422,13 @@ export class Feed {
       .exec<Row>(
         `SELECT * FROM feed_items
          WHERE feed_seq > ?1 AND (?2 IS NULL OR priority = ?2) AND (?3 IS NULL OR kind = ?3)
+           AND (?5 IS NULL OR repo_id IN (SELECT value FROM json_each(?5)))
          ORDER BY feed_seq LIMIT ?4`,
         since?.seq ?? 0,
         filter.priority ?? null,
         filter.kind ?? null,
         limit + 1,
+        filter.repoIds ? JSON.stringify(filter.repoIds) : null,
       )
       .toArray();
     return {
@@ -401,26 +440,35 @@ export class Feed {
   }
 
   /**
-   * What needs the owner now: open P0 items, then P1 items changed within
-   * the retention, newest first, at most `syncItems` (`complete` false when
-   * more were left out); and the head at that instant.
+   * A page of what needs the owner now: open P0 items, then P1 items
+   * changed within the retention, newest first, after `after` (from the
+   * first without); and the feed's epoch.
    */
-  sync(): { head: FeedPosition; items: FeedItem[]; complete: boolean } {
-    const meta = this.#meta();
+  sync(
+    after: SyncPosition | null,
+    limit: number,
+    repoIds: readonly string[] | null,
+  ): { epoch: string; items: FeedItem[]; more: boolean } {
     const rows = this.sql
       .exec<Row>(
-        `SELECT * FROM feed_items
-         WHERE feed_seq IS NOT NULL
-           AND ((priority = 'P0' AND state = 'open') OR (priority = 'P1' AND last_event_at >= ?1))
-         ORDER BY (priority = 'P0' AND state = 'open') DESC, feed_seq DESC LIMIT ?2`,
+        `SELECT * FROM (
+           SELECT *, (priority = 'P0' AND state = 'open') AS open FROM feed_items
+           WHERE feed_seq IS NOT NULL
+             AND ((priority = 'P0' AND state = 'open') OR (priority = 'P1' AND last_event_at >= ?1))
+             AND (?5 IS NULL OR repo_id IN (SELECT value FROM json_each(?5))))
+         WHERE (open, feed_seq) < (?2, ?3)
+         ORDER BY open DESC, feed_seq DESC LIMIT ?4`,
         this.now() - FEED_POLICY.retentionMs,
-        FEED_POLICY.syncItems + 1,
+        after === null ? 2 : after.open ? 1 : 0,
+        after?.seq ?? 0,
+        limit + 1,
+        repoIds ? JSON.stringify(repoIds) : null,
       )
       .toArray();
     return {
-      head: { epoch: meta.epoch, seq: meta.head_seq },
-      items: rows.slice(0, FEED_POLICY.syncItems).map(itemOf),
-      complete: rows.length <= FEED_POLICY.syncItems,
+      epoch: this.#meta().epoch,
+      items: rows.slice(0, limit).map(itemOf),
+      more: rows.length > limit,
     };
   }
 
@@ -549,10 +597,19 @@ export class Feed {
     return oldest.length === 0 ? null : Math.min(...oldest) + FEED_POLICY.retentionMs;
   }
 
+  /** The meta row; the epoch names the restore generation too, so a restore expires cursors. */
   #meta(): Meta {
     return this.sql
-      .exec<Meta>("SELECT epoch, head_seq, low_watermark, items FROM feed_meta WHERE id = 1")
+      .exec<Meta>(
+        `SELECT epoch_gen || '.' || epoch AS epoch, head_seq, low_watermark, items
+         FROM feed_meta WHERE id = 1`,
+      )
       .one();
+  }
+
+  /** Takes the directory's restore generation for the feed, when newer than the one recorded. */
+  takeEpoch(epochGen: number): void {
+    this.sql.exec("UPDATE feed_meta SET epoch_gen = ?1 WHERE id = 1 AND epoch_gen < ?1", epochGen);
   }
 
   #row(id: FeedItemId): Row | undefined {

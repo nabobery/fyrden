@@ -11,6 +11,8 @@ import {
   type FeedPage,
   type FeedPosition,
   type FeedPurge,
+  feedEpochSource,
+  type SyncPosition,
 } from "./user/feed.js";
 
 /**
@@ -42,12 +44,18 @@ export class UserDO extends MigratingDO {
     return { deleted };
   }
 
-  listFeed(since: FeedPosition | null, limit: number, filter: FeedFilter): FeedPage {
+  async listFeed(since: FeedPosition | null, limit: number, filter: FeedFilter): Promise<FeedPage> {
+    await this.#checkEpoch();
     return this.#feed().list(since, limit, filter);
   }
 
-  syncFeed(): { head: FeedPosition; items: FeedItem[]; complete: boolean } {
-    return this.#feed().sync();
+  async syncFeed(
+    after: SyncPosition | null,
+    limit: number,
+    repoIds: readonly string[] | null,
+  ): Promise<{ epoch: string; items: FeedItem[]; more: boolean }> {
+    await this.#checkEpoch();
+    return this.#feed().sync(after, limit, repoIds);
   }
 
   ackFeed(id: FeedItemId, version: number): FeedAck {
@@ -62,6 +70,35 @@ export class UserDO extends MigratingDO {
       return feed.nextRetention();
     });
     if (next !== null) await this.ctx.storage.setAlarm(next);
+  }
+
+  #epochChecked = false;
+  #epochCheck: Promise<void> | undefined;
+
+  /**
+   * Takes the directory's restore generation for this feed once an
+   * instance, before it reads or makes a cursor: a restored object (its
+   * storage, epoch included, as it was) gets a newer one from the restore,
+   * so cursors made since then expire instead of skipping changes.
+   */
+  #checkEpoch(): Promise<void> {
+    if (this.#epochChecked) return Promise.resolve();
+    this.#epochCheck ??= this.#takeEpoch().finally(() => {
+      this.#epochCheck = undefined;
+    });
+    return this.#epochCheck;
+  }
+
+  async #takeEpoch(): Promise<void> {
+    const principalId = this.ctx.id.name;
+    if (principalId !== undefined) {
+      const row = await this.env.DIRECTORY.withSession("first-primary")
+        .prepare("SELECT epoch_gen FROM source_epochs WHERE source_id = ?")
+        .bind(feedEpochSource(principalId))
+        .first<{ epoch_gen: number }>();
+      if (row) this.#feed().takeEpoch(row.epoch_gen);
+    }
+    this.#epochChecked = true;
   }
 
   /** An alarm by the time retention is due; an earlier one is kept. */
