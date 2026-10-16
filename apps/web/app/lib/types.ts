@@ -1,49 +1,21 @@
-/** The API's shapes the pages read (see @fyrden/api-contract for the full ones). */
+/**
+ * Repositories as the pages read them: the API's own shapes, from its
+ * contract (types only: nothing of it is in the browser's bundle).
+ */
 
-export interface Repo {
-  id: string;
-  owner: string;
-  name: string;
-  full_name: string;
-  description: string | null;
-  default_branch: string;
-  fork: boolean;
-  is_template: boolean;
-  stargazers_count: number;
-  expires_at: number | null;
-}
+import type { getContents, getRepo, listCommits, listRepos, Output } from "@fyrden/api-contract";
 
-export interface Entry {
-  type: "file" | "dir" | "symlink" | "submodule";
-  name: string;
-  path: string;
-  sha: string;
-  size?: number;
-}
+export type Repo = Output<typeof getRepo>;
 
-export type Contents =
-  | { type: "dir"; path: string; entries: Entry[]; next_cursor: string | null }
-  | {
-      type: "file";
-      path: string;
-      name: string;
-      sha: string;
-      size: number;
-      encoding: "base64" | "none";
-      content: string;
-      download_url: string;
-    }
-  | { type: "symlink"; path: string; target: string }
-  | { type: "submodule"; path: string; sha: string };
+/** A page of the signed-in user's repositories. */
+export type ReposPage = Output<typeof listRepos>;
 
-export interface Commit {
-  sha: string;
-  commit: {
-    message: string;
-    author: { name: string; email: string; date: string };
-    verification: { verified: boolean; reason: string };
-  };
-}
+/** What a path names: a directory page, a file, a symlink or a submodule. */
+export type Contents = Output<typeof getContents>;
+export type Entry = Extract<Contents, { type: "dir" }>["entries"][number];
+
+/** A page of a branch's history. */
+export type CommitsPage = Output<typeof listCommits>;
 
 /**
  * `path` without its trailing slashes. A loop, not /\/+$/: that regex is
