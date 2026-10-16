@@ -11,7 +11,12 @@ import {
 } from "react";
 import { Link } from "react-router";
 import { isShown, shownLines } from "../components/diff/patch.js";
-import { LineCommentForm, type LinePick, ThreadView } from "../components/diff/thread.js";
+import {
+  AppliedSuggestion,
+  LineCommentForm,
+  type LinePick,
+  ThreadView,
+} from "../components/diff/thread.js";
 import { WindowVirtualizer } from "../components/diff/window-virtualizer.js";
 import { Pager } from "../components/pager.js";
 import { PullHeader } from "../components/pull-header.js";
@@ -386,6 +391,7 @@ function FileSection({
           {fallback}
         </details>
       )}
+      <AppliedSuggestion file={file.filename} />
       {listed.length > 0 && (
         <div className="threads">
           <h4>{drawn ? "Other comments on this file" : "Comments on this file"}</h4>

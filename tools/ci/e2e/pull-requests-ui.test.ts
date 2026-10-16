@@ -203,6 +203,8 @@ describe("pull requests in the web UI", () => {
     await file.getByLabel(/^Comment \(Markdown/).fill('```suggestion\nconst html = "";\n```');
     await file.getByRole("button", { name: "Add comment" }).click();
     await file.getByRole("button", { name: "Apply suggestion" }).click();
+    // The head moves: the thread goes outdated and leaves the diff, and the answer stays.
+    await see(file.locator(".threads .badge", { hasText: "outdated" }).first()).toBeVisible();
     await see(file.getByRole("status").filter({ hasText: "Suggestion applied." })).toBeVisible();
     const pull = await rest<{ head: { sha: string } }>("GET", `/repos/${handle}/${name}/pulls/1`);
     const commit = await rest<{ commit: { message: string } }>(

@@ -39,6 +39,19 @@ function useSuggestions(thread: Thread): ReadonlySet<number> {
   return found;
 }
 
+/**
+ * The fetcher applying suggestions on a file's threads. Applying moves the
+ * head, so the thread goes outdated and moves off the diff (remounting it);
+ * the file's section shares the fetcher and keeps its answer.
+ */
+const applyKey = (file: string) => `apply-suggestion:${file}`;
+
+/** The answer to applying a suggestion on one of `file`'s threads. */
+export function AppliedSuggestion({ file }: { file: string }) {
+  const apply = useFetcher<Answer>({ key: applyKey(file) });
+  return <Outcome answer={apply.data} done="Suggestion applied." />;
+}
+
 const sideName = (side: DiffSide) => (side === "LEFT" ? "old" : "new");
 
 /** Where a thread is, in words: its lines and side. */
@@ -69,7 +82,7 @@ export function ThreadView({
   const suggestions = useSuggestions(thread);
   const reply = useFetcher<Answer>();
   const resolve = useFetcher<Answer>();
-  const apply = useFetcher<Answer>();
+  const apply = useFetcher<Answer>({ key: applyKey(thread.file) });
   const replyBody = useRef<HTMLTextAreaElement>(null);
   const replyId = useId();
   // A sent reply clears its box.
@@ -113,7 +126,6 @@ export function ThreadView({
           </li>
         ))}
       </ol>
-      <Outcome answer={apply.data} done="Suggestion applied." />
       {canAct && (
         <>
           <reply.Form method="post" className="thread-reply">
