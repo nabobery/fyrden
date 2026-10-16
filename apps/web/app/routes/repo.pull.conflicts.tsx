@@ -295,6 +295,17 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
           {failure}
         </p>
       )}
+      {failure !== null && !view.editors && (
+        <p>
+          <button
+            type="button"
+            onClick={() => void revalidator.revalidate()}
+            disabled={revalidator.state !== "idle"}
+          >
+            Try again
+          </button>
+        </p>
+      )}
       {(view.moved || (failure !== null && view.editors)) && (
         <div className="panel" role="status">
           <p className="error">

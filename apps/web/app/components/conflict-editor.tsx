@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   type Choice,
   type ConflictFile,
@@ -8,8 +8,9 @@ import {
   resolveRegion,
 } from "../lib/conflicts.js";
 
-/** What is left in a file, in words. */
-export function leftText(reading: ConflictReading): string {
+/** What is left in a file, in words (null: not read yet). */
+export function leftText(reading: ConflictReading | null): string {
+  if (reading === null) return "Reading the conflict markers…";
   if (reading.ambiguous)
     return "The conflict markers in this file do not read as whole conflicts: edit it by hand.";
   const left = reading.regions.length;
@@ -37,13 +38,19 @@ export function ConflictEditor({
 }) {
   const id = useId();
   const area = useRef<HTMLTextAreaElement>(null);
-  const [reading, setReading] = useState(() => readConflicts(file.content, labels));
+  // Read once the page is hydrated, never on the server (a large file costs real CPU):
+  // until then, the buttons that need the markers are off.
+  const [reading, setReading] = useState<ConflictReading | null>(null);
   const [said, setSaid] = useState("");
   const reread = () => {
-    const next = readConflicts(area.current?.value ?? "", labels);
+    const next = readConflicts(area.current?.value ?? file.content, labels);
     setReading(next);
     return next;
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read once on mount; edits re-read on input.
+  useEffect(() => {
+    reread();
+  }, []);
 
   /** The conflict at the caret, or else the next one after it, or else the first. */
   const current = (now: ConflictReading) => {
@@ -88,7 +95,12 @@ export function ConflictEditor({
     setSaid(`Kept ${kept}. ${leftText(after)}`);
   };
 
-  const fine = !reading.ambiguous && reading.regions.length === 0 && reading.starts.length === 0;
+  const fine =
+    reading !== null &&
+    !reading.ambiguous &&
+    reading.regions.length === 0 &&
+    reading.starts.length === 0;
+  const noChoice = reading === null || reading.ambiguous;
   return (
     <section className="panel conflict-file" aria-labelledby={`${id}-name`}>
       <h3 id={`${id}-name`} className="file-name">
@@ -97,19 +109,19 @@ export function ConflictEditor({
       <input type="hidden" name={`path:${index}`} value={file.path} />
       <fieldset className="row conflict-tools">
         <legend>Conflicts in {file.path}</legend>
-        <button type="button" onClick={() => move(-1)}>
+        <button type="button" onClick={() => move(-1)} disabled={reading === null}>
           Previous conflict
         </button>
-        <button type="button" onClick={() => move(1)}>
+        <button type="button" onClick={() => move(1)} disabled={reading === null}>
           Next conflict
         </button>
-        <button type="button" onClick={() => keep("head")} disabled={reading.ambiguous}>
+        <button type="button" onClick={() => keep("head")} disabled={noChoice}>
           Keep head
         </button>
-        <button type="button" onClick={() => keep("base")} disabled={reading.ambiguous}>
+        <button type="button" onClick={() => keep("base")} disabled={noChoice}>
           Keep base
         </button>
-        <button type="button" onClick={() => keep("both")} disabled={reading.ambiguous}>
+        <button type="button" onClick={() => keep("both")} disabled={noChoice}>
           Keep both
         </button>
       </fieldset>

@@ -181,24 +181,36 @@ describe("the conflicts page", () => {
       failure: null,
     });
 
-  it("edits the editable files, and offers no choice when their markers are ambiguous", () => {
+  it("edits the editable files, reading their markers only once in the browser", () => {
     const html = page([{ path: "a.txt", kind: "content", editable: true, content: MARKED }]);
-    expect(html).toContain("2 conflicts left in this file.");
-    expect(html).toContain("Previous conflict");
     expect(html).toContain(`value="${SNAPSHOT}"`);
-    expect(html).not.toMatch(/<button type="button" disabled="">Keep/);
-    const ambiguous = page([
-      {
-        path: "a.txt",
-        kind: "content",
-        editable: true,
-        content: "<<<<<<< topic\nx\n<<<<<<< topic\ny\n=======\nz\n>>>>>>> main\n",
-      },
-    ]);
-    expect(ambiguous).toContain("edit it by hand");
+    // The server's page: the text to edit, the markers not read yet, every control that
+    // needs them off until the browser has read them.
+    expect(html).toContain("Reading the conflict markers…");
+    expect(html).not.toContain("conflicts left in this file");
     expect(
-      ambiguous.match(/<button type="button" disabled="">Keep (head|base|both)/g),
-    ).toHaveLength(3);
+      html.match(
+        /<button type="button" disabled="">(Previous conflict|Next conflict|Keep head|Keep base|Keep both)/g,
+      ),
+    ).toHaveLength(5);
+    // What the browser then says, as it reads them (also when they are ambiguous).
+    expect(leftText(readConflicts(MARKED, LABELS))).toBe("2 conflicts left in this file.");
+    expect(leftText(null)).toBe("Reading the conflict markers…");
+  });
+
+  it("offers to read the conflicts again when the first read failed", () => {
+    const html = renderPage(PullConflicts, "/ada/demo/pull/7/conflicts", {
+      owner: "ada",
+      repo: "demo",
+      number: 7,
+      pull: pullRequest({ mergeable: false, mergeable_state: "dirty" }),
+      viewer: VIEWER,
+      conflicts: null,
+      failure: "Try again later.",
+    });
+    expect(html).toContain("Try again later.");
+    expect(html).toMatch(/<button type="button">Try again<\/button>/);
+    expect(html).not.toContain("No conflicts:");
   });
 
   it("explains, quoted for the shell, the conflicts it cannot edit", () => {
