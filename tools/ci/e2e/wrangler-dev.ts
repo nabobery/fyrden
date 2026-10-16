@@ -16,46 +16,86 @@ const wranglerBin = join(
 /** Starts tried at most, a port taken meanwhile each time. */
 const ATTEMPTS = 3;
 const PORT_TAKEN = /Address already in use|EADDRINUSE/;
-/** How long a stop waits for the process to exit on SIGTERM before killing it. */
+/**
+ * How long a stop waits for the processes to exit on SIGTERM before killing
+ * them. With the browser's close before it, it fits the e2e `hookTimeout`.
+ */
 const STOP_GRACE_MS = 10_000;
+/** How often a stop looks whether the killed processes are all gone. */
+const GONE_POLL_MS = 50;
 
 export interface WranglerDev {
   /** The HTTP port, on 127.0.0.1. */
   readonly port: number;
   /**
-   * Ends the process: SIGTERM, then SIGKILL if it is still running after a
-   * grace period. Resolves once it has exited and its output pipes have
-   * closed, so its state can be removed. Calling it again is safe.
+   * Ends wrangler and every process it started: SIGTERM, then SIGKILL if
+   * any is still running after a grace period. Resolves once they are all
+   * gone and the output pipes have closed, so the state can be removed.
+   * Calling it again is safe.
    */
   stop(): Promise<void>;
 }
 
 /**
- * The `stop` of `child` (see `WranglerDev.stop`), every call answered by the
- * same promise. Made right after the spawn: it listens for the `close`.
+ * Spawns `command` as the leader of a process group of its own, with a
+ * `stop` (see `WranglerDev.stop`) that signals the whole group, every call
+ * answered by the same promise. A group, because wrangler's `bin` script is
+ * a launcher: it forwards SIGTERM to the CLI it runs but cannot forward
+ * SIGKILL, and the CLI (and workerd under it) share the output pipes, so
+ * killing the launcher alone leaves them running and the pipes open.
  */
-export function stopper(child: ChildProcess, graceMs = STOP_GRACE_MS): () => Promise<void> {
+export function spawnOwned(
+  command: string,
+  args: readonly string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv },
+  graceMs = STOP_GRACE_MS,
+): { child: ChildProcess; stop: () => Promise<void> } {
+  const child = spawn(command, args, { ...options, detached: true });
   // On `close`, not `exit`: output can still arrive between the two.
   const closed = new Promise<void>((done) => child.once("close", () => done()));
-  let stopping: Promise<void> | undefined;
+  /** Sends `signal` to the group: false once none of it is left. */
+  const signal = (sig: NodeJS.Signals | 0): boolean => {
+    if (child.pid === undefined) return false;
+    try {
+      process.kill(-child.pid, sig);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+      throw error;
+    }
+  };
+  // Not left behind if the test run itself exits first.
+  const onExit = () => signal("SIGKILL");
+  process.once("exit", onExit);
+  const gone = async () => {
+    await closed;
+    // A process can outlive the pipes, the launcher's exit or its SIGKILL's delivery.
+    while (signal(0)) await new Promise((r) => setTimeout(r, GONE_POLL_MS));
+  };
   const stop = async () => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
+    if (signal("SIGTERM")) {
+      const all = gone();
       let grace: NodeJS.Timeout | undefined;
       const ended = await Promise.race([
-        closed.then(() => true),
+        all.then(() => true),
         new Promise<boolean>((give) => {
           grace = setTimeout(() => give(false), graceMs);
         }),
       ]);
       clearTimeout(grace);
-      if (!ended) child.kill("SIGKILL");
+      if (!ended) signal("SIGKILL");
+      await all;
     }
     await closed;
+    process.off("exit", onExit);
   };
-  return () => {
-    stopping ??= stop();
-    return stopping;
+  let stopping: Promise<void> | undefined;
+  return {
+    child,
+    stop: () => {
+      stopping ??= stop();
+      return stopping;
+    },
   };
 }
 
@@ -72,7 +112,7 @@ export async function startWranglerDev(options: {
 }): Promise<WranglerDev> {
   for (let attempt = 1; ; attempt++) {
     const [port, inspectorPort] = (await freePorts(2)) as [number, number];
-    const child = spawn(
+    const { child, stop } = spawnOwned(
       process.execPath,
       [
         wranglerBin,
@@ -91,7 +131,6 @@ export async function startWranglerDev(options: {
         env: { ...process.env, NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" },
       },
     );
-    const stop = stopper(child);
     let output = "";
     const started = await new Promise<"ready" | "port_taken" | Error>((settle) => {
       const timer = setTimeout(
