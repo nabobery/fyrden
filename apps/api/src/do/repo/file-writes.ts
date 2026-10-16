@@ -31,6 +31,7 @@ import { reauthorizeByToken } from "../../git/push/reauthorize-token.js";
 import type { PushLogMeta, RepoPush } from "../../git/push/repo-push.js";
 import { BUCKET_NAME, headKey, packKey } from "../../git/push/scratch.js";
 import { type Browsed, type CommitView, fail } from "./browse.js";
+import { treeMemoryBytes } from "./held-reads.js";
 import { checkSignature, type SignatureCheck } from "./signature.js";
 
 /*
@@ -56,13 +57,6 @@ export const FILE_WRITE_POLICY = {
   maxTreeBytes: 1024 * 1024,
   /** Tree bytes one write reads in all. */
   maxTreesBytes: 4 * 1024 * 1024,
-  /**
-   * Memory held per entry a tree read may hold (its parsed entry, name and
-   * id, the builder's map slot; measured near 520 bytes with short names),
-   * for the smallest entry a tree can have (28 bytes), on top of three
-   * times the tree's bytes (its body, the rebuilt tree and its pack copy).
-   */
-  entryMemoryBytes: 640,
   /** Indexing steps the write waits through before it gives up (`busy`). */
   indexSteps: 4,
   /** One indexing step's time budget. */
@@ -278,10 +272,8 @@ async function build(
         treeBytes > FILE_WRITE_POLICY.maxTreesBytes
       )
         throw new WriteRefused(TOO_WIDE);
-      const mostEntries = Math.ceil(header.size / MIN_TREE_ENTRY_BYTES);
-      const hold = git.memory.tryReserve(
-        Math.max(1, 3 * header.size + mostEntries * FILE_WRITE_POLICY.entryMemoryBytes),
-      );
+      // Its body, the rebuilt tree and its pack copy, and each entry it may have.
+      const hold = git.memory.tryReserve(Math.max(1, treeMemoryBytes(header.size)));
       if (!hold) throw new WriteRefused(BUSY);
       holds.push(hold);
       const object = await reader?.readObject(oid);
@@ -355,9 +347,6 @@ async function build(
     memory.release();
   }
 }
-
-/** The smallest tree entry: mode, space, a one-byte name, NUL, a 20-byte id. */
-const MIN_TREE_ENTRY_BYTES = 28;
 
 /** A write refused from inside the commit builder's tree reads. */
 class WriteRefused extends Error {

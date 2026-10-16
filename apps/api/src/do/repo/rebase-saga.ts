@@ -36,14 +36,13 @@ import {
   type StoredUpload,
   storeUpload,
 } from "./file-writes.js";
+import { ReadsTooLargeError, treeMemoryBytes, UnreadableObjectError } from "./held-reads.js";
 import {
   MERGE_POLICY,
-  MergeTooLargeError,
   mergeRefused,
   PULL_CHANGED,
   TOO_EXPENSIVE,
   UNREADABLE,
-  UnreadableObjectError,
   withSource,
 } from "./merge.js";
 import type { PullRecord, RepoPulls } from "./pulls.js";
@@ -217,9 +216,6 @@ type SagaRow = {
   started_at: number;
   updated_at: number;
 };
-
-/** The smallest tree entry: mode, space, a one-byte name, NUL, a 20-byte id. */
-const MIN_TREE_ENTRY_BYTES = 28;
 
 /** A new object a step keeps. */
 type Kept = NewObject | { readonly type: "commit"; readonly oid: Oid; readonly bytes: Uint8Array };
@@ -493,7 +489,7 @@ export class RebaseSagas {
       if (
         error instanceof ReadBudgetError ||
         error instanceof MergeLimitError ||
-        error instanceof MergeTooLargeError ||
+        error instanceof ReadsTooLargeError ||
         error instanceof WalkLimitError
       )
         return this.#fail(job, row, TOO_EXPENSIVE);
@@ -965,7 +961,7 @@ export class RebaseSagas {
         // More than the object's whole budget.
         if (!(error instanceof RangeError)) throw error;
       }
-      if (!held) throw new MergeTooLargeError();
+      if (!held) throw new ReadsTooLargeError();
       holds.push(held);
     };
     const kept = (oid: Oid) =>
@@ -983,9 +979,8 @@ export class RebaseSagas {
         if (known) return known;
         const data = kept(oid);
         if (!data) return live.readTree(oid);
-        // As a live tree read holds it: its bytes three times, and each entry it may have.
-        const mostEntries = Math.ceil(data.byteLength / MIN_TREE_ENTRY_BYTES);
-        hold(3 * data.byteLength + mostEntries * MERGE_POLICY.entryMemoryBytes);
+        // As a live tree read holds it.
+        hold(treeMemoryBytes(data.byteLength));
         const entries = parseTree(new Uint8Array(data)).value;
         trees.set(hex, entries);
         return entries;

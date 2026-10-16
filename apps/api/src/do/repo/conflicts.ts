@@ -17,18 +17,17 @@ import {
   type WriteElsewhere,
   type WriterOf,
 } from "./file-writes.js";
+import { ReadsTooLargeError, UnreadableObjectError } from "./held-reads.js";
 import {
   commitMerge,
   MERGE_POLICY,
   type MergeCommit,
   type MergeMade,
   type MergePolicy,
-  MergeTooLargeError,
   mergeOutcome,
   TOO_EXPENSIVE,
   type TreeOutcome,
   UNREADABLE,
-  UnreadableObjectError,
   withSource,
 } from "./merge.js";
 
@@ -195,7 +194,7 @@ export async function readConflicts(
       return view(files);
     });
   } catch (error) {
-    if (error instanceof ReadBudgetError || error instanceof MergeTooLargeError)
+    if (error instanceof ReadBudgetError || error instanceof ReadsTooLargeError)
       return TOO_EXPENSIVE;
     if (error instanceof UnreadableObjectError) return UNREADABLE;
     throw error;

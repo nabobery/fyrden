@@ -18,7 +18,6 @@ import {
   type Oid,
   oidToHex,
   parseTree,
-  type TreeEntry,
   WalkLimitError,
 } from "@fyrden/git-core";
 import type { PushReportSummary } from "../../git/chunked/head.js";
@@ -38,6 +37,7 @@ import {
   type WriteElsewhere,
   type WriterOf,
 } from "./file-writes.js";
+import { ReadsTooLargeError, UnreadableObjectError, withHeldReads } from "./held-reads.js";
 
 /*
  * Merging a pull request: the base branch's tip and the pull request's head
@@ -65,12 +65,6 @@ export const MERGE_POLICY = {
   maxTreeBytes: 1024 * 1024,
   /** Tree and file bytes one merge reads in all. */
   maxReadBytes: 24 * 1024 * 1024,
-  /**
-   * Memory held per entry a tree read may hold (its parsed entry, name and
-   * id, the merge's map slot), for the smallest entry a tree can have (28
-   * bytes), on top of three times the tree's bytes, as a file write holds.
-   */
-  entryMemoryBytes: 640,
   /** The largest side of a file merged line by line; a larger one changed on both sides conflicts. */
   maxFileBytes: 1024 * 1024,
   /** Files merged line by line. */
@@ -268,19 +262,6 @@ async function build(
   return { commit, pack };
 }
 
-/** The smallest tree entry: mode, space, a one-byte name, NUL, a 20-byte id. */
-const MIN_TREE_ENTRY_BYTES = 28;
-
-/** An object the merge needs cannot be read (gone, or not what it should be). */
-export class UnreadableObjectError extends Error {
-  override name = "UnreadableObjectError";
-}
-
-/** The merge would read more, or larger objects, than its limits allow. */
-export class MergeTooLargeError extends Error {
-  override name = "MergeTooLargeError";
-}
-
 export const UNREADABLE = fail(422, "unreadable", "An object the merge needs cannot be read.");
 export const TOO_EXPENSIVE = fail(
   422,
@@ -380,7 +361,7 @@ export async function mergeOutcome(
     if (
       error instanceof WalkLimitError ||
       error instanceof MergeLimitError ||
-      error instanceof MergeTooLargeError ||
+      error instanceof ReadsTooLargeError ||
       error instanceof ReadBudgetError
     )
       return { kind: "too_expensive" };
@@ -426,7 +407,7 @@ export type CommitReader = (oid: Oid) => Promise<Uint8Array>;
  */
 export async function withSource<T>(
   deps: LiveReaderDeps,
-  policy: Pick<MergePolicy, "maxReads" | "maxTreeBytes" | "maxReadBytes" | "entryMemoryBytes">,
+  policy: Pick<MergePolicy, "maxReads" | "maxTreeBytes" | "maxReadBytes">,
   use: (source: ObjectSource, readCommit: CommitReader) => Promise<T>,
 ): Promise<T> {
   const reader = await openLiveReader(deps, {
@@ -435,86 +416,11 @@ export async function withSource<T>(
     maxReads: policy.maxReads,
   });
   if (!reader) throw new UnreadableObjectError();
-  const holds: { release(): void }[] = [];
-  const trees = new Map<string, readonly TreeEntry[]>();
-  let readBytes = 0;
-  // Set once `use` is done: a read still under way then holds and parses nothing.
-  let done = false;
-  // Reads under way: cleanup waits for them before it lets their memory go.
-  const pending = new Set<Promise<unknown>>();
-  const tracked = <R>(read: () => Promise<R>): Promise<R> => {
-    if (done) return Promise.reject(new UnreadableObjectError());
-    const running = read();
-    pending.add(running);
-    void running.then(
-      () => pending.delete(running),
-      () => pending.delete(running),
-    );
-    return running;
-  };
-  const hold = (read: number, memory: number) => {
-    readBytes += read;
-    if (readBytes > policy.maxReadBytes) throw new MergeTooLargeError();
-    let held: { release(): void } | undefined;
-    try {
-      held = deps.git.memory.tryReserve(Math.max(1, memory));
-    } catch (error) {
-      // More than the object's whole budget.
-      if (!(error instanceof RangeError)) throw error;
-    }
-    if (!held) throw new MergeTooLargeError();
-    if (done) {
-      held.release();
-      throw new UnreadableObjectError();
-    }
-    holds.push(held);
-  };
-  const source: ObjectSource = {
-    readTree: (oid) =>
-      tracked(async () => {
-        const hex = oidToHex(oid);
-        const known = trees.get(hex);
-        if (known) return known;
-        const header = await reader.readHeader(oid);
-        if (header?.type !== "tree") throw new UnreadableObjectError();
-        if (header.size > policy.maxTreeBytes) throw new MergeTooLargeError();
-        const mostEntries = Math.ceil(header.size / MIN_TREE_ENTRY_BYTES);
-        hold(header.size, 3 * header.size + mostEntries * policy.entryMemoryBytes);
-        const object = await reader.readObject(oid);
-        if (done || object?.type !== "tree") throw new UnreadableObjectError();
-        const entries = parseTree(object.bytes).value;
-        trees.set(hex, entries);
-        return entries;
-      }),
-    readBlob: (oid, maxBytes) =>
-      tracked(async () => {
-        const header = await reader.readHeader(oid);
-        if (header?.type !== "blob") throw new UnreadableObjectError();
-        if (header.size > maxBytes) return undefined;
-        // The bytes, and the lines a merge splits them into.
-        hold(header.size, 3 * header.size);
-        const object = await reader.readObject(oid);
-        if (done || object?.type !== "blob") throw new UnreadableObjectError();
-        return object.bytes;
-      }),
-  };
-  const readCommit: CommitReader = (oid) =>
-    tracked(async () => {
-      const header = await reader.readHeader(oid);
-      if (header?.type !== "commit") throw new UnreadableObjectError();
-      if (header.size > policy.maxTreeBytes) throw new MergeTooLargeError();
-      hold(header.size, 2 * header.size);
-      const object = await reader.readObject(oid);
-      if (done || object?.type !== "commit") throw new UnreadableObjectError();
-      return object.bytes;
-    });
   try {
-    return await use(source, readCommit);
+    return await withHeldReads(reader, deps.git.memory, policy, (reads) =>
+      use(reads, reads.readCommit),
+    );
   } finally {
-    done = true;
-    // A sibling read (the merge reads three trees at once) may still be under way.
-    while (pending.size > 0) await Promise.allSettled([...pending]);
-    for (const held of holds.splice(0)) held.release();
     reader.release();
   }
 }

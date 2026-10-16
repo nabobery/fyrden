@@ -455,13 +455,7 @@ describe("a merge past its budget", () => {
     await open(owner);
     // The base moves, so the trees are merged rather than taken from the head.
     await commitOn(owner, "main", [{ path: "b.txt", content: "bee!\n" }]);
-    for (const policy of [
-      { maxTreeBytes: 10 },
-      { maxTrees: 1 },
-      { maxReads: 0 },
-      // A tree's hold larger than the object's whole memory budget.
-      { entryMemoryBytes: 1024 * 1024 * 1024 },
-    ]) {
+    for (const policy of [{ maxTreeBytes: 10 }, { maxTrees: 1 }, { maxReads: 0 }]) {
       await withPolicy(policy);
       expect(await merge(owner), JSON.stringify(policy)).toMatchObject({
         status: 422,

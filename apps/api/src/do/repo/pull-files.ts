@@ -4,15 +4,12 @@ import {
   diffFile,
   diffTrees,
   findExactRenames,
-  type MemoryReservation,
   MissingCommitError,
   mergeBases,
   type Oid,
   oidToHex,
-  parseTree,
   reachableCommits,
   TreeDiffLimitError,
-  type TreeEntry,
   WalkLimitError,
 } from "@fyrden/git-core";
 import { ReadBudgetError } from "../../git/live-reader.js";
@@ -24,6 +21,7 @@ import {
   guarded,
   type RepoBrowse,
 } from "./browse.js";
+import { ReadsTooLargeError, UnreadableObjectError, withHeldReads } from "./held-reads.js";
 
 /** Limits of a pull request's file listing. Proposed (Workers Free). */
 export const PULL_FILES_POLICY = {
@@ -36,8 +34,11 @@ export const PULL_FILES_POLICY = {
   maxRawChanges: 6_000,
   /** Trees read to list the files. */
   maxTrees: 1_500,
-  /** The largest tree read, in bytes. */
-  maxTreeBytes: 4 * 1024 * 1024,
+  /**
+   * The largest tree read, in bytes (about 37,000 entries): its memory
+   * hold, for each entry it may have, stays well within the object's.
+   */
+  maxTreeBytes: 1024 * 1024,
   /** Tree bytes one listing reads in all, held from the object's memory budget while it lists. */
   maxTreeBytesTotal: 24 * 1024 * 1024,
   /** Bytes of each side of a file compared for its patch. */
@@ -81,16 +82,6 @@ export interface PullFilesPage {
 
 const GITLINK = 0o160000;
 const isGitlink = (mode: number | null) => mode !== null && (mode & 0o170000) === GITLINK;
-
-/** An object a comparison needs cannot be read (gone, or not what it should be). */
-class UnreadableObjectError extends Error {
-  override name = "UnreadableObjectError";
-}
-
-/** The comparison needs more trees, or larger ones, than its limits allow. */
-class TreesTooLargeError extends Error {
-  override name = "TreesTooLargeError";
-}
 
 const UNREADABLE = fail(422, "unreadable", "An object the comparison needs cannot be read.");
 const TOO_EXPENSIVE = fail(422, "too_expensive", "The pull request changes too much to list.");
@@ -155,52 +146,34 @@ export function pullFiles(
     const [baseRow, headRow] = graph.readSync([input.mergeBase, input.head], "verified");
     if (!baseRow || !headRow) return UNREADABLE;
     return browse.reading(async (reader) => {
-      // Tree bodies, and what parsing makes of them, are held from the
-      // object's memory budget until the listing is worked out.
-      const holds: MemoryReservation[] = [];
-      let treeBytes = 0;
-      // Set once the listing is worked out (or failed): a read of a pair
-      // still under way then holds nothing it could keep.
-      let done = false;
-      const readTree = async (oid: Oid): Promise<readonly TreeEntry[]> => {
-        const header = await reader.readHeader(oid);
-        if (done) throw new UnreadableObjectError();
-        if (header?.type !== "tree") throw new UnreadableObjectError();
-        treeBytes += header.size;
-        if (header.size > policy.maxTreeBytes || treeBytes > policy.maxTreeBytesTotal)
-          throw new TreesTooLargeError();
-        // Parsed entries take about twice the body's bytes besides it.
-        const hold = browse.hold(3 * header.size);
-        if (!hold) throw new TreesTooLargeError();
-        if (done) {
-          hold.release();
-          throw new UnreadableObjectError();
-        }
-        holds.push(hold);
-        const object = await reader.readObject(oid);
-        if (object?.type !== "tree") throw new UnreadableObjectError();
-        return parseTree(object.bytes).value;
-      };
       let entries: DiffEntry[];
       let truncated: boolean;
       try {
-        const listed = await diffTrees(readTree, baseRow.tree, headRow.tree, {
-          maxTrees: policy.maxTrees,
-          maxChanges: policy.maxRawChanges,
-        });
-        // Past the raw cap a rename's other half may be cut off: none are
-        // paired then, so none shows half paired (git's view without renames).
-        const all = listed.truncated ? listed.changes : findExactRenames(listed.changes);
-        entries = all.slice(0, policy.maxFiles);
-        truncated = listed.truncated || all.length > policy.maxFiles;
+        // Tree bodies, and what parsing makes of them, are held from the
+        // object's memory budget until the listing is worked out.
+        ({ entries, truncated } = await withHeldReads(
+          reader,
+          { tryReserve: (bytes) => browse.hold(bytes) },
+          { maxTreeBytes: policy.maxTreeBytes, maxReadBytes: policy.maxTreeBytesTotal },
+          async (reads) => {
+            const listed = await diffTrees(reads.readTree, baseRow.tree, headRow.tree, {
+              maxTrees: policy.maxTrees,
+              maxChanges: policy.maxRawChanges,
+            });
+            // Past the raw cap a rename's other half may be cut off: none are
+            // paired then, so none shows half paired (git's view without renames).
+            const all = listed.truncated ? listed.changes : findExactRenames(listed.changes);
+            return {
+              entries: all.slice(0, policy.maxFiles),
+              truncated: listed.truncated || all.length > policy.maxFiles,
+            };
+          },
+        ));
       } catch (error) {
-        if (error instanceof TreeDiffLimitError || error instanceof TreesTooLargeError)
+        if (error instanceof TreeDiffLimitError || error instanceof ReadsTooLargeError)
           return TOO_EXPENSIVE;
         if (error instanceof UnreadableObjectError) return UNREADABLE;
         throw error;
-      } finally {
-        done = true;
-        for (const hold of holds.splice(0)) hold.release();
       }
       try {
         return {

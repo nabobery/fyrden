@@ -7,6 +7,7 @@ import { oidFromHex } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import { RepoBrowse } from "../src/do/repo/browse.js";
+import { TREE_ENTRY_MEMORY_BYTES } from "../src/do/repo/held-reads.js";
 import {
   PULL_FILES_POLICY,
   type PullFilesPolicy,
@@ -330,10 +331,16 @@ describe("a merged or closed pull request", () => {
 
 describe("pull request file limits", () => {
   const small = (over: Partial<PullFilesPolicy>) => ({ ...PULL_FILES_POLICY, ...over });
-  const listWith = async (policy: PullFilesPolicy) => {
+  /** The listing with `policy`; `held` gets the size of each memory hold it makes. */
+  const listWith = async (policy: PullFilesPolicy, held?: number[]) => {
     const { merge_base_sha, head_sha } = (await files()).body;
     return inRepo(env.REPO.getByName(repo.id), async (r) => {
       const browse = new RepoBrowse({ git: r.git, memoryBlocks: createClockBlockCache() });
+      const hold = browse.hold.bind(browse);
+      browse.hold = (bytes) => {
+        held?.push(bytes);
+        return hold(bytes);
+      };
       try {
         const page = await pullFiles(
           browse,
@@ -395,5 +402,19 @@ describe("pull request file limits", () => {
     expect(await listWith(small({ maxTreeBytesTotal: 10 }))).toMatchObject({
       code: "too_expensive",
     });
+  });
+
+  it("holds memory for each entry a tree may have before parsing it, however short the names", async () => {
+    const names = Array.from({ length: 100 }, (_, i) => `many/${i}`);
+    await commit(
+      "feature",
+      names.map((name) => ({ path: name, content: "x\n" })),
+    );
+    const held: number[] = [];
+    const listed = await listWith(PULL_FILES_POLICY, held);
+    if (!("files" in listed)) return expect.fail(listed.code);
+    expect(listed.files.map((f) => f.filename)).toContain("many/0");
+    // The directory's tree: a hundred entries of a few bytes each.
+    expect(Math.max(...held)).toBeGreaterThanOrEqual(100 * TREE_ENTRY_MEMORY_BYTES);
   });
 });
