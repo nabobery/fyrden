@@ -1,4 +1,4 @@
-import { HANDLE_PATTERN } from "@fyrden/domain";
+import { HANDLE_SHAPE, MAX_HANDLE_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
@@ -11,7 +11,12 @@ export const getArchive = defineOperation({
   description:
     "Prepares the files of a branch, tag or commit as a tar.gz or zip archive and gives its link (`download_url`, GitHub's tarball or zipball route; the same token works). A large archive is built in the background: `state` is `building` until it is `ready`; ask again, or fetch the link, which answers 202 until then. Archives hold 1 GiB of files at most, each file 24 MiB at most, a zip 65,535 entries.",
   input: z.object({
-    owner: z.string().regex(HANDLE_PATTERN).describe("The owner's handle."),
+    owner: z
+      .string()
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
+      .describe("The owner's handle."),
     repo: z.string().regex(REPO_NAME_PATTERN).describe("The repository's name."),
     format: z.enum(["tar.gz", "zip"]),
     ref: z

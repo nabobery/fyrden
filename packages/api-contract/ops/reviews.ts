@@ -1,6 +1,7 @@
 import {
-  HANDLE_PATTERN,
+  HANDLE_SHAPE,
   MAX_DISMISSAL_MESSAGE_LENGTH,
+  MAX_HANDLE_LENGTH,
   MAX_REQUESTED_REVIEWERS,
   MAX_REVIEW_BODY_LENGTH,
   REVIEW_EVENTS,
@@ -11,7 +12,12 @@ import { PullRequest } from "./pulls.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 
 const PullInput = {
-  owner: z.string().regex(HANDLE_PATTERN).describe("The owner's handle."),
+  owner: z
+    .string()
+    .min(1)
+    .max(MAX_HANDLE_LENGTH)
+    .regex(HANDLE_SHAPE)
+    .describe("The owner's handle."),
   repo: z.string().regex(REPO_NAME_PATTERN).describe("The repository's name."),
   pull_number: z.coerce.number().int().positive().describe("The pull request's number."),
 };
@@ -43,7 +49,7 @@ export const Review = z.object({
 
 const Reviewer = z.object({ id: z.string(), login: z.string() });
 const Logins = z
-  .array(z.string().regex(HANDLE_PATTERN))
+  .array(z.string().min(1).max(MAX_HANDLE_LENGTH).regex(HANDLE_SHAPE))
   .min(1)
   .max(MAX_REQUESTED_REVIEWERS)
   .describe("Handles of users and agents who can read the repository.");

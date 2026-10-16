@@ -1,4 +1,4 @@
-import { HANDLE_PATTERN, PERMISSION_NAMES } from "@fyrden/domain";
+import { HANDLE_SHAPE, MAX_HANDLE_LENGTH, PERMISSION_NAMES } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 
@@ -40,7 +40,12 @@ export const createGrant = defineOperation({
   description:
     "Lets an agent act for you, limited to `scopes`, `repositories` and an expiry: the agent exchanges its own token for a delegated one (`POST /oauth/token`, RFC 8693). An agent holding a grant may pass a narrower one (`parent`) to another agent of its owner, one hop down at most. Revoking a grant revokes the tokens issued under it and its sub-grants.",
   input: z.object({
-    agent: z.string().regex(HANDLE_PATTERN).describe("The agent's handle."),
+    agent: z
+      .string()
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
+      .describe("The agent's handle."),
     scopes: z
       .array(z.enum(PERMISSION_NAMES))
       .min(1)

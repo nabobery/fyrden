@@ -1,9 +1,14 @@
-import { HANDLE_PATTERN } from "@fyrden/domain";
+import { HANDLE_SHAPE, MAX_HANDLE_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { REPO_NAME_PATTERN, Repo } from "./repos.js";
 
-const Owner = z.string().regex(HANDLE_PATTERN).describe("The repository's owner handle.");
+const Owner = z
+  .string()
+  .min(1)
+  .max(MAX_HANDLE_LENGTH)
+  .regex(HANDLE_SHAPE)
+  .describe("The repository's owner handle.");
 const RepoName = z.string().regex(REPO_NAME_PATTERN).describe("The repository's name.");
 
 export const starRepo = defineOperation({

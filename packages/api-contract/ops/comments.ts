@@ -1,10 +1,15 @@
-import { HANDLE_PATTERN, MAX_COMMENT_BODY_LENGTH } from "@fyrden/domain";
+import { HANDLE_SHAPE, MAX_COMMENT_BODY_LENGTH, MAX_HANDLE_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 
 const RepoInput = {
-  owner: z.string().regex(HANDLE_PATTERN).describe("The owner's handle."),
+  owner: z
+    .string()
+    .min(1)
+    .max(MAX_HANDLE_LENGTH)
+    .regex(HANDLE_SHAPE)
+    .describe("The owner's handle."),
   repo: z.string().regex(REPO_NAME_PATTERN).describe("The repository's name."),
 };
 const IssueNumber = z.coerce

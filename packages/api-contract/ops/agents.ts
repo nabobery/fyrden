@@ -1,4 +1,4 @@
-import { HANDLE_PATTERN, PERMISSION_NAMES } from "@fyrden/domain";
+import { HANDLE_SHAPE, MAX_HANDLE_LENGTH, PERMISSION_NAMES } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { MAX_TOKEN_DAYS, NewHandle } from "./admin.js";
@@ -16,7 +16,9 @@ export const Agent = z.object({
 
 const AgentHandle = z
   .string()
-  .regex(HANDLE_PATTERN)
+  .min(1)
+  .max(MAX_HANDLE_LENGTH)
+  .regex(HANDLE_SHAPE)
   .describe("The agent's handle: 1-39 letters, digits and single inner hyphens.");
 
 export const createAgent = defineOperation({
@@ -33,7 +35,9 @@ export const createAgent = defineOperation({
     display_name: z.string().min(1).max(100).optional(),
     org: z
       .string()
-      .regex(HANDLE_PATTERN)
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
       .optional()
       .describe("An organization you own to own the agent; you when absent."),
   }),
@@ -58,7 +62,7 @@ export const listAgents = defineOperation({
   summary: "List agents",
   description: "Your agents, or those of an organization you own (`org`), oldest first.",
   input: z.object({
-    org: z.string().regex(HANDLE_PATTERN).optional(),
+    org: z.string().min(1).max(MAX_HANDLE_LENGTH).regex(HANDLE_SHAPE).optional(),
     per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
     cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
   }),
