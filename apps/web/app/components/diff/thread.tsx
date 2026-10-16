@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import { type DiffSide, type Thread, when, who } from "../../lib/pulls.js";
+import { useDraft, useScopedKey } from "../drafts.js";
 import { Markdown } from "../markdown.js";
 
 /** What a files-page form answers: what was done, or why not. */
@@ -52,6 +53,31 @@ export function AppliedSuggestion({ file }: { file: string }) {
   return <Outcome answer={apply.data} done="Suggestion applied." />;
 }
 
+/**
+ * A thread's reply being written, and the fetcher sending it: both outlive
+ * the thread's view, which remounts when it moves between the diff and the
+ * list (or is drawn again as the diff scrolls).
+ */
+const replyKey = (thread: number) => `reply:${thread}`;
+
+/**
+ * Empties a thread's reply once it is sent, wherever the thread is drawn by
+ * then: the file's section keeps one for each of its threads.
+ */
+export function SentReply({ thread }: { thread: number }) {
+  const reply = useFetcher<Answer>({ key: useScopedKey(replyKey(thread)) });
+  const [, setDraft] = useDraft(replyKey(thread));
+  const sending = useRef(false);
+  useEffect(() => {
+    if (reply.state !== "idle") sending.current = true;
+    else if (sending.current) {
+      sending.current = false;
+      if (reply.data?.ok) setDraft("");
+    }
+  }, [reply.state, reply.data, setDraft]);
+  return null;
+}
+
 const sideName = (side: DiffSide) => (side === "LEFT" ? "old" : "new");
 
 /** Where a thread is, in words: its lines and side. */
@@ -80,15 +106,11 @@ export function ThreadView({
   canAct: boolean;
 }) {
   const suggestions = useSuggestions(thread);
-  const reply = useFetcher<Answer>();
+  const reply = useFetcher<Answer>({ key: useScopedKey(replyKey(thread.id)) });
+  const [draft, setDraft] = useDraft(replyKey(thread.id));
   const resolve = useFetcher<Answer>();
   const apply = useFetcher<Answer>({ key: applyKey(thread.file) });
-  const replyBody = useRef<HTMLTextAreaElement>(null);
   const replyId = useId();
-  // A sent reply clears its box.
-  useEffect(() => {
-    if (reply.state === "idle" && reply.data?.ok && replyBody.current) replyBody.current.value = "";
-  }, [reply.state, reply.data]);
   return (
     <section
       className={`thread panel${thread.resolved ? " resolved" : ""}`}
@@ -132,7 +154,14 @@ export function ThreadView({
             <input type="hidden" name="intent" value="reply" />
             <input type="hidden" name="in_reply_to" value={thread.comments[0]?.id ?? ""} />
             <label htmlFor={replyId}>Reply</label>
-            <textarea id={replyId} name="body" className="short" required ref={replyBody} />
+            <textarea
+              id={replyId}
+              name="body"
+              className="short"
+              required
+              value={draft}
+              onChange={(e) => setDraft(e.currentTarget.value)}
+            />
             <p className="row">
               <button type="submit" disabled={reply.state !== "idle"}>
                 Reply
@@ -200,18 +229,15 @@ export function LineCommentForm({
       onToggle={(e) => onToggle((e.currentTarget as HTMLDetailsElement).open)}
     >
       <summary>Comment on lines</summary>
-      <fetcher.Form
-        method="post"
-        ref={form}
-        key={pick ? `${pick.side}${pick.start}-${pick.end}` : "none"}
-      >
+      <fetcher.Form method="post" ref={form}>
         <input type="hidden" name="intent" value="comment" />
         <input type="hidden" name="path" value={path} />
         {previousPath !== undefined && (
           <input type="hidden" name="previous_path" value={previousPath} />
         )}
         <input type="hidden" name="commit_id" value={headSha} />
-        <div className="row">
+        {/* Lines picked again fill these in afresh; the comment written so far stays. */}
+        <div className="row" key={pick ? `${pick.side}${pick.start}-${pick.end}` : "none"}>
           <span>
             <label htmlFor={`${id}-side`}>Side</label>
             <select id={`${id}-side`} name="side" defaultValue={pick?.side ?? "RIGHT"}>

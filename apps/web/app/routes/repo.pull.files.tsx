@@ -15,9 +15,11 @@ import {
   AppliedSuggestion,
   LineCommentForm,
   type LinePick,
+  SentReply,
   ThreadView,
 } from "../components/diff/thread.js";
 import { WindowVirtualizer } from "../components/diff/window-virtualizer.js";
+import { Drafts } from "../components/drafts.js";
 import { Pager } from "../components/pager.js";
 import { PullHeader } from "../components/pull-header.js";
 import { ReviewForm } from "../components/review-form.js";
@@ -392,6 +394,7 @@ function FileSection({
         </details>
       )}
       <AppliedSuggestion file={file.filename} />
+      {canAct && threads.map((t) => <SentReply key={t.id} thread={t.id} />)}
       {listed.length > 0 && (
         <div className="threads">
           <h4>{drawn ? "Other comments on this file" : "Comments on this file"}</h4>
@@ -488,22 +491,24 @@ export default function PullFiles({ loaderData }: Route.ComponentProps) {
               ))}
             </ol>
           </nav>
-          <WindowVirtualizer>
-            {files.map((f, i) => (
-              <FileSection
-                key={f.filename}
-                file={f}
-                index={i}
-                count={files.length}
-                patches={patches}
-                threads={byPath.get(f.filename) ?? []}
-                viewer={viewer}
-                headSha={headSha}
-                mergeBaseSha={mergeBaseSha}
-                diffStyle={diffStyle}
-              />
-            ))}
-          </WindowVirtualizer>
+          <Drafts scope={page}>
+            <WindowVirtualizer>
+              {files.map((f, i) => (
+                <FileSection
+                  key={f.filename}
+                  file={f}
+                  index={i}
+                  count={files.length}
+                  patches={patches}
+                  threads={byPath.get(f.filename) ?? []}
+                  viewer={viewer}
+                  headSha={headSha}
+                  mergeBaseSha={mergeBaseSha}
+                  diffStyle={diffStyle}
+                />
+              ))}
+            </WindowVirtualizer>
+          </Drafts>
         </>
       )}
       <Pager links={pages} label="Changed files" />

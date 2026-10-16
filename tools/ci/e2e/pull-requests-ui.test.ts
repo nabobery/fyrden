@@ -468,6 +468,55 @@ describe("pull requests in the web UI", () => {
     expect(reviews.map((r) => [r.state, r.commit_id])).toEqual([["APPROVED", moved]]);
   });
 
+  it("keeps unsent text while the page changes around it", async () => {
+    await pushBranch("drafts", { "drafts.txt": `${lines(8).join("\n")}\n` });
+    const number = await openPull("drafts", "Drafts");
+    const first = await headOf(number);
+    const pullApi = `/repos/${handle}/${name}/pulls/${number}`;
+    const comment = (line: number, body: string) =>
+      rest("POST", `${pullApi}/comments`, {
+        body,
+        commit_id: first,
+        path: "drafts.txt",
+        line,
+        side: "RIGHT",
+      });
+    await comment(2, '```suggestion\nconst line2 = "two";\n```');
+    await comment(6, "A plain remark.");
+    // A comment being written survives a review joining the conversation.
+    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}`);
+    await page.getByLabel("Comment (Markdown)").fill("An unsent comment.");
+    const review = page.locator("section", { has: page.getByRole("heading", { name: "Review" }) });
+    await review.getByLabel(/^Review comment/).fill("A review meanwhile.");
+    await review.getByRole("button", { name: "Submit review" }).click();
+    await see(page.locator(".timeline").getByText("A review meanwhile.")).toBeVisible();
+    await see(page.getByLabel("Comment (Markdown)")).toHaveValue("An unsent comment.");
+    // A line comment being written survives picking other lines.
+    await page.getByRole("link", { name: "Files changed" }).click();
+    const file = page.locator("section.file", { hasText: "drafts.txt" });
+    const drawn = file.locator("diffs-container");
+    await see(drawn.getByText("const line8 = 8;")).toBeVisible({ timeout: 30_000 });
+    await drawn.locator('[data-column-number="3"]').first().click();
+    await see(file.getByLabel("Line", { exact: true })).toHaveValue("3");
+    await file.getByLabel(/^Comment \(Markdown/).fill("An unsent line comment.");
+    await drawn.locator('[data-column-number="5"]').first().click();
+    await see(file.getByLabel("Line", { exact: true })).toHaveValue("5");
+    await see(file.getByLabel(/^Comment \(Markdown/)).toHaveValue("An unsent line comment.");
+    // A reply being written survives its thread leaving the diff: applying the other
+    // thread's suggestion moves the head, and both threads go outdated.
+    const remark = file.locator(".thread", { hasText: "A plain remark." });
+    await remark.getByLabel("Reply").fill("An unsent reply.");
+    await file.getByRole("button", { name: "Apply suggestion" }).click();
+    await see(file.locator(".threads .thread", { hasText: "A plain remark." })).toBeVisible();
+    await see(file.getByRole("status").filter({ hasText: "Suggestion applied." })).toBeVisible();
+    await see(remark.getByLabel("Reply")).toHaveValue("An unsent reply.");
+    await see(file.getByLabel(/^Comment \(Markdown/)).toHaveValue("An unsent line comment.");
+    // Sent, a reply's box empties.
+    await remark.getByRole("button", { name: "Reply" }).click();
+    await see(remark.getByText("An unsent reply.")).toBeVisible();
+    await see(remark.getByLabel("Reply")).toHaveValue("");
+  });
+
   it("never had a script, style or image refused by the policy on any page", () => {
     expect(stack.refused).toEqual([]);
   });

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Form, useActionData, useNavigation } from "react-router";
 import { Markdown } from "../components/markdown.js";
 import { MergeBox } from "../components/merge-box.js";
@@ -246,6 +247,11 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
     loaderData;
   const isAuthor = viewer !== null && pull.user.id === viewer;
   const open = pull.state === "open";
+  // A comment being written stays as the page is read again; only its own sending clears it.
+  const commentForm = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    if (result?.ok === "comment") commentForm.current?.reset();
+  }, [result]);
   return (
     <main>
       <PullHeader owner={owner} repo={repo} pull={pull} viewer={viewer} active="conversation" />
@@ -348,7 +354,7 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
 
       <section className="panel" aria-labelledby="add-comment">
         <h2 id="add-comment">Add a comment</h2>
-        <Form method="post" key={timeline.length}>
+        <Form method="post" ref={commentForm}>
           <input type="hidden" name="intent" value="comment" />
           <label htmlFor="comment-body">Comment (Markdown)</label>
           <textarea id="comment-body" name="body" className="short" required />
