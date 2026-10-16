@@ -15,7 +15,10 @@ import { FeedBlockSchema } from "./feed.js";
 const position = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
 /** Ids, names and actors are short; only `row` and `data` may be large. */
 const short = z.string().max(256);
-const sourceId = z.string().refine((s) => isId(s, "rep") || isId(s, "org"), "not a source id");
+// Repositories, and accounts (organizations, users' own) for their access changes.
+const sourceId = z
+  .string()
+  .refine((s) => isId(s, "rep") || isId(s, "org") || isId(s, "usr"), "not a source id");
 
 export const EventIdSchema = z.strictObject({
   sourceId,

@@ -1,4 +1,5 @@
 CREATE INDEX collaborators_handle ON collaborators (repo_id, handle COLLATE NOCASE);
+CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
 CREATE INDEX members_handle ON members (handle COLLATE NOCASE);
 CREATE INDEX members_owners ON members (principal_id) WHERE role = 'owner';
 CREATE INDEX quota_confirmed_at ON quota_confirmed (confirmed_at);
@@ -13,6 +14,12 @@ CREATE TABLE collaborators (
         role TEXT NOT NULL CHECK (role IN ('read', 'triage', 'write', 'maintain', 'admin')),
         added_at INTEGER NOT NULL,
         PRIMARY KEY (repo_id, principal_id)
+      ) STRICT;
+CREATE TABLE event_payloads (
+        event_key TEXT PRIMARY KEY,
+        payload TEXT NOT NULL CHECK (json_valid(payload)),
+        created_at INTEGER NOT NULL,
+        sent_at INTEGER
       ) STRICT;
 CREATE TABLE forgotten_repos (
         repo_id TEXT PRIMARY KEY,
@@ -32,6 +39,18 @@ CREATE TABLE org_meta (
         epoch_uuid TEXT NOT NULL,
         acl_version INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL
+      , source_seq INTEGER NOT NULL DEFAULT 0) STRICT;
+CREATE TABLE outbox (
+        source_seq INTEGER PRIMARY KEY,
+        event TEXT NOT NULL CHECK (json_valid(event)),
+        bytes INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE outbox_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        next_drain_at INTEGER,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
       ) STRICT;
 CREATE TABLE pending_audit (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,

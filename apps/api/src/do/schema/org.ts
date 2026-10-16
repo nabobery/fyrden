@@ -191,4 +191,33 @@ export const orgSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 6,
+    // Events of the account, sent as a repository's are (an outbox, drained
+    // by the alarm): for now, that principals no longer read repositories,
+    // so their activity feeds forget what they held of them.
+    name: "outbox",
+    sql: `
+      ALTER TABLE org_meta ADD COLUMN source_seq INTEGER NOT NULL DEFAULT 0;
+      CREATE TABLE outbox (
+        source_seq INTEGER PRIMARY KEY,
+        event TEXT NOT NULL CHECK (json_valid(event)),
+        bytes INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE outbox_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        next_drain_at INTEGER,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
+      ) STRICT;
+      CREATE TABLE event_payloads (
+        event_key TEXT PRIMARY KEY,
+        payload TEXT NOT NULL CHECK (json_valid(payload)),
+        created_at INTEGER NOT NULL,
+        sent_at INTEGER
+      ) STRICT;
+      CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
+    `,
+  },
 ];
