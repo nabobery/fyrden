@@ -202,7 +202,8 @@ export async function finishIdempotent(
  * too busy to start. Their keys are freed.
  */
 const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([401, 403, 408, 429]);
-const RETRYABLE_CODES: ReadonlySet<string> = new Set(["busy", "network_busy"]);
+// `merge_in_progress`: a rebase going on in the background; sent again, the request answers its outcome.
+const RETRYABLE_CODES: ReadonlySet<string> = new Set(["busy", "network_busy", "merge_in_progress"]);
 
 /** Answers that are not final: the same request has more to do when it is sent again. */
 const NOT_FINAL: Readonly<Record<string, (output: unknown) => boolean>> = {

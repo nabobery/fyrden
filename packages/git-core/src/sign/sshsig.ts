@@ -229,6 +229,8 @@ export async function ed25519FromSeed(
 export function sshCommitSigner(key: { privateKey: PrivateKey; publicKey: Uint8Array }): Signer {
   const publicKey = ed25519PublicKeyBlob(key.publicKey);
   return {
+    // The public key blob: a fingerprint without the hashing.
+    keyId: base64(publicKey),
     async sign(payload) {
       const data = await sshSignedData(payload, GIT_NAMESPACE, "sha512");
       const signature = new Uint8Array(

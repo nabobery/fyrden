@@ -617,4 +617,51 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 24,
+    // Rebase merges: one saga per pull request (the latest kept), with
+    // everything that decides its commits' bytes fixed when it starts, and
+    // the objects it has made so far, published together as one push at
+    // its end.
+    name: "merge_sagas",
+    sql: `
+      CREATE TABLE merge_sagas (
+        pr_number INTEGER PRIMARY KEY,
+        saga_id TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('running', 'done', 'failed')),
+        pull_json TEXT NOT NULL,
+        stamps_json TEXT NOT NULL,
+        actor_json TEXT NOT NULL,
+        base_ref TEXT NOT NULL,
+        base_tip TEXT NOT NULL,
+        head TEXT NOT NULL,
+        up_to_date INTEGER NOT NULL CHECK (up_to_date IN (0, 1)),
+        committer_json TEXT NOT NULL,
+        committed_at INTEGER NOT NULL,
+        key_id TEXT NOT NULL,
+        commits BLOB NOT NULL,
+        next INTEGER NOT NULL,
+        tip TEXT NOT NULL,
+        tip_tree TEXT NOT NULL,
+        staged_bytes INTEGER NOT NULL,
+        staged_objects INTEGER NOT NULL,
+        upload_json TEXT,
+        result_sha TEXT,
+        error_json TEXT,
+        failures INTEGER NOT NULL DEFAULT 0,
+        reported INTEGER NOT NULL DEFAULT 0 CHECK (reported IN (0, 1)),
+        started_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE merge_saga_objects (
+        saga_id TEXT NOT NULL,
+        oid BLOB NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('blob', 'tree', 'commit')),
+        data BLOB NOT NULL,
+        PRIMARY KEY (saga_id, oid)
+      ) STRICT;
+    `,
+  },
 ];

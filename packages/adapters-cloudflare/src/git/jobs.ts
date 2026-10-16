@@ -222,6 +222,44 @@ export class JobQueue {
   }
 
   /**
+   * Queues the job with this id afresh, whatever its state, from no cursor:
+   * a slice running it loses its claim (nothing of it is recorded). For a
+   * job keyed by what it works on when that work is replaced. Call it in
+   * the transaction that replaces the work.
+   */
+  restart(kind: JobKind, jobId: string): void {
+    if (!JOB_KINDS.includes(kind)) throw new RangeError(`unknown job kind ${kind}`);
+    const { storage } = this.context;
+    const now = this.context.now();
+    const written = storage.transactionSync(() => {
+      const row = first<{ kind: string }>(storage, "SELECT kind FROM jobs WHERE job_id = ?", jobId);
+      if (row && row.kind !== kind) throw new Error(`job ${jobId} is a ${row.kind} job`);
+      return row
+        ? run(
+            storage,
+            `UPDATE jobs SET state = 'queued', cursor = NULL, attempts = 0, claim = claim + 1,
+               next_run_at = ?, lease_expires_at = NULL, last_error = NULL, updated_at = ?
+             WHERE job_id = ?`,
+            now,
+            now,
+            jobId,
+          )
+        : run(
+            storage,
+            `INSERT INTO jobs (job_id, kind, state, cursor, next_run_at, created_at, updated_at)
+             VALUES (?, ?, 'queued', NULL, ?, ?, ?)`,
+            jobId,
+            kind,
+            now,
+            now,
+            now,
+          );
+    });
+    countRowsWritten(this.context, "jobs.restart", written);
+    this.rearm();
+  }
+
+  /**
    * Saves a running slice's cursor before the slice ends, under its claim,
    * for a slice whose effect and checkpoint must commit together: called
    * inside the slice's own transaction, the cursor is saved with its

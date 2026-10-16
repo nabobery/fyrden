@@ -145,6 +145,29 @@ describe("pull requests from forks", () => {
     expect(await outgoing()).toEqual([]);
   });
 
+  it("rebase onto a base that moved on, reading the fork's commits from its packs", async () => {
+    expect((await open(contributor, `${contributor.handle}:main`)).status).toBe(201);
+    await commitOn(owner, base.path, "main", [{ path: "c.txt", content: "base\n" }]);
+    const merged = await json<{ sha: string }>(
+      api("PUT", `${base.path}/pulls/1/merge`, owner.token, { merge_method: "rebase" }),
+    );
+    expect(merged.status).toBe(200);
+    const made = await json<{ commit: { committer: { name: string } }; parents: unknown[] }>(
+      api("GET", `${base.path}/commits/${merged.body.sha}`, owner.token),
+    );
+    expect(made.body.commit.committer.name).toBe("Fyrden");
+    expect(made.body.parents).toHaveLength(1);
+    for (const [name, content] of [
+      ["b.txt", "from the fork\n"],
+      ["c.txt", "base\n"],
+    ] as const) {
+      const read = await json<{ content: string }>(
+        api("GET", `${base.path}/contents/${name}?ref=main`, owner.token),
+      );
+      expect(atob(read.body.content.replace(/\n/g, ""))).toBe(content);
+    }
+  });
+
   it("follow pushes to the fork's branch, by whoever pushed", async () => {
     await open(contributor, `${contributor.handle}:main`);
     const before = (await pull()).head.sha;

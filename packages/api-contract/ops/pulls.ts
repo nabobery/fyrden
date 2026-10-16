@@ -299,7 +299,7 @@ export const mergePull = defineOperation({
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/merge",
   summary: "Merge a pull request",
   description:
-    "Merges an open pull request that is not a draft into its base branch: `merge` makes a merge commit of the base branch's tip and the head, `squash` one commit on the base branch with the head's changes (by the pull request's author). The commit is made and signed by the server; the base branch's rulesets apply, with the pull request's reviews and last push. Refused (405) on conflicts, or when the base branch moved while merging; refused (409) when `sha` is not the head. Rebasing is not offered yet.",
+    "Merges an open pull request that is not a draft into its base branch: `merge` makes a merge commit of the base branch's tip and the head, `squash` one commit on the base branch with the head's changes (by the pull request's author). The commit is made and signed by the server; the base branch's rulesets apply, with the pull request's reviews and last push. Refused (405) on conflicts, or when the base branch moved while merging; refused (409) when `sha` is not the head. `rebase` replays the pull request's commits (at most 250, none a merge commit) one by one onto the base branch's tip and moves the branch to the last: their authors, author dates and messages are kept, the server is their committer and signs each. Empty commits follow `git rebase`: a commit empty from the start is kept, one whose changes are already in the base is dropped; a commit the base changed further, or a rename in the base of a file the pull request edits, is a conflict. A rebase too long for one request answers 409 `merge_in_progress` and goes on in the background: send the request again (a finished rebase answers its merge) or watch the pull request.",
   input: z.object({
     ...RepoInput,
     pull_number: PullNumber,
@@ -323,7 +323,7 @@ export const mergePull = defineOperation({
       .regex(/^[0-9a-f]{40}$/)
       .optional()
       .describe("The head the pull request must be at: the merge is refused otherwise."),
-    merge_method: z.enum(["merge", "squash"]).default("merge"),
+    merge_method: z.enum(["merge", "squash", "rebase"]).default("merge"),
   }),
   output: z.object({
     sha: z.string().describe("The commit the base branch now points at."),
@@ -338,7 +338,7 @@ export const mergePull = defineOperation({
     tool: "merge_pull_request",
     title: "Merge a pull request",
     description:
-      "Merge an open pull request into its base branch, with a merge commit or squashed into one commit.",
+      "Merge an open pull request into its base branch: with a merge commit, squashed into one commit, or rebased onto it (a long rebase answers merge_in_progress and finishes in the background; call again for its result).",
     readOnly: false,
   },
 });

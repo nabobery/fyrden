@@ -1558,7 +1558,7 @@ export type PullsMergeInput = {
   commit_message?: string;
   /** The head the pull request must be at: the merge is refused otherwise. */
   sha?: string;
-  merge_method?: "merge" | "squash";
+  merge_method?: "merge" | "squash" | "rebase";
 };
 
 /** Output of `pulls.merge`. */
@@ -4147,7 +4147,7 @@ export interface Operations {
   "pulls.get": { input: PullsGetInput; output: PullsGetOutput };
   /** Update a pull request. Changes the title or body, retargets it onto another base branch, marks it a draft or ready, closes or reopens it; fields left out are kept, and all of it happens or none. The author may do any of it to its own pull request; on anyone else's, triage closes and reopens and write does the rest. Reopening needs the head branch to exist. */
   "pulls.update": { input: PullsUpdateInput; output: PullsUpdateOutput };
-  /** Merge a pull request. Merges an open pull request that is not a draft into its base branch: `merge` makes a merge commit of the base branch's tip and the head, `squash` one commit on the base branch with the head's changes (by the pull request's author). The commit is made and signed by the server; the base branch's rulesets apply, with the pull request's reviews and last push. Refused (405) on conflicts, or when the base branch moved while merging; refused (409) when `sha` is not the head. Rebasing is not offered yet. */
+  /** Merge a pull request. Merges an open pull request that is not a draft into its base branch: `merge` makes a merge commit of the base branch's tip and the head, `squash` one commit on the base branch with the head's changes (by the pull request's author). The commit is made and signed by the server; the base branch's rulesets apply, with the pull request's reviews and last push. Refused (405) on conflicts, or when the base branch moved while merging; refused (409) when `sha` is not the head. `rebase` replays the pull request's commits (at most 250, none a merge commit) one by one onto the base branch's tip and moves the branch to the last: their authors, author dates and messages are kept, the server is their committer and signs each. Empty commits follow `git rebase`: a commit empty from the start is kept, one whose changes are already in the base is dropped; a commit the base changed further, or a rename in the base of a file the pull request edits, is a conflict. A rebase too long for one request answers 409 `merge_in_progress` and goes on in the background: send the request again (a finished rebase answers its merge) or watch the pull request. */
   "pulls.merge": { input: PullsMergeInput; output: PullsMergeOutput };
   /** List pull request files. The files a pull request changes, compared from the merge base of its base branch and head to its head (as GitHub's three-dot comparison), in path order, with each file's patch. At most 3,000 files are listed; renames with unchanged content are found. Pages keep the comparison they started with: the cursor carries `merge_base_sha` and `head_sha`. */
   "pulls.files.list": { input: PullsFilesListInput; output: PullsFilesListOutput };

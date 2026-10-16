@@ -11485,7 +11485,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/pulls/{pull_number}/merge": {
       "put": {
-        "description": "Merges an open pull request that is not a draft into its base branch: \`merge\` makes a merge commit of the base branch's tip and the head, \`squash\` one commit on the base branch with the head's changes (by the pull request's author). The commit is made and signed by the server; the base branch's rulesets apply, with the pull request's reviews and last push. Refused (405) on conflicts, or when the base branch moved while merging; refused (409) when \`sha\` is not the head. Rebasing is not offered yet.",
+        "description": "Merges an open pull request that is not a draft into its base branch: \`merge\` makes a merge commit of the base branch's tip and the head, \`squash\` one commit on the base branch with the head's changes (by the pull request's author). The commit is made and signed by the server; the base branch's rulesets apply, with the pull request's reviews and last push. Refused (405) on conflicts, or when the base branch moved while merging; refused (409) when \`sha\` is not the head. \`rebase\` replays the pull request's commits (at most 250, none a merge commit) one by one onto the base branch's tip and moves the branch to the last: their authors, author dates and messages are kept, the server is their committer and signs each. Empty commits follow \`git rebase\`: a commit empty from the start is kept, one whose changes are already in the base is dropped; a commit the base changed further, or a rename in the base of a file the pull request edits, is a conflict. A rebase too long for one request answers 409 \`merge_in_progress\` and goes on in the background: send the request again (a finished rebase answers its merge) or watch the pull request.",
         "operationId": "pulls.merge",
         "parameters": [
           {
@@ -11541,6 +11541,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "enum": [
                       "merge",
                       "squash",
+                      "rebase",
                     ],
                     "type": "string",
                   },

@@ -190,17 +190,17 @@ async function build(
 const MIN_TREE_ENTRY_BYTES = 28;
 
 /** An object the merge needs cannot be read (gone, or not what it should be). */
-class UnreadableObjectError extends Error {
+export class UnreadableObjectError extends Error {
   override name = "UnreadableObjectError";
 }
 
 /** The merge would read more, or larger objects, than its limits allow. */
-class MergeTooLargeError extends Error {
+export class MergeTooLargeError extends Error {
   override name = "MergeTooLargeError";
 }
 
-const UNREADABLE = fail(422, "unreadable", "An object the merge needs cannot be read.");
-const TOO_EXPENSIVE = fail(
+export const UNREADABLE = fail(422, "unreadable", "An object the merge needs cannot be read.");
+export const TOO_EXPENSIVE = fail(
   422,
   "too_expensive",
   "The pull request is too large to merge here; merge it locally and push.",
@@ -315,15 +315,18 @@ async function mergedTree(
   }
 }
 
+/** Reads a commit's body (bounded as a tree is), for a merge that replays commits. */
+export type CommitReader = (oid: Oid) => Promise<Uint8Array>;
+
 /**
- * Runs `use` with an object source over the live packs: each tree and file
- * read is bounded and its memory held until `use` is done, and trees read
- * once are kept for its other reads.
+ * Runs `use` with an object source over the live packs: each tree, file
+ * and commit read is bounded and its memory held until `use` is done, and
+ * trees read once are kept for its other reads.
  */
-async function withSource<T>(
+export async function withSource<T>(
   deps: LiveReaderDeps,
-  policy: MergePolicy,
-  use: (source: ObjectSource) => Promise<T>,
+  policy: Pick<MergePolicy, "maxReads" | "maxTreeBytes" | "maxReadBytes" | "entryMemoryBytes">,
+  use: (source: ObjectSource, readCommit: CommitReader) => Promise<T>,
 ): Promise<T> {
   const reader = await openLiveReader(deps, {
     deltaBaseCacheBytes: 4 * 1024 * 1024,
@@ -394,8 +397,18 @@ async function withSource<T>(
         return object.bytes;
       }),
   };
+  const readCommit: CommitReader = (oid) =>
+    tracked(async () => {
+      const header = await reader.readHeader(oid);
+      if (header?.type !== "commit") throw new UnreadableObjectError();
+      if (header.size > policy.maxTreeBytes) throw new MergeTooLargeError();
+      hold(header.size, 2 * header.size);
+      const object = await reader.readObject(oid);
+      if (done || object?.type !== "commit") throw new UnreadableObjectError();
+      return object.bytes;
+    });
   try {
-    return await use(source);
+    return await use(source, readCommit);
   } finally {
     done = true;
     // A sibling read (the merge reads three trees at once) may still be under way.
@@ -419,7 +432,7 @@ function conflicted(conflicts: readonly MergeConflict[], policy: MergePolicy): B
 }
 
 /** A merge's push refused at its commit point, as the API answers it. */
-function mergeRefused(report: PushReportSummary): Browsed<never> {
+export function mergeRefused(report: PushReportSummary): Browsed<never> {
   const reason = report.ok ? "" : report.error;
   if (
     reason.includes("incorrect old value provided") ||

@@ -135,6 +135,7 @@ export {
   parseOidHex,
   zeroOid,
 } from "./object/oid.js";
+export { type Replay, replayCommit } from "./object/replay.js";
 export { encodeTag, parseTag, type Tag } from "./object/tag.js";
 export { appendTrailers } from "./object/trailers.js";
 export {
