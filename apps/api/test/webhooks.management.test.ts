@@ -98,4 +98,41 @@ describe("webhooks", () => {
     ]);
     expect(JSON.stringify(one.body)).not.toContain("whsec_");
   });
+
+  it("show a delivery's attempts newest first, a bounded page at a time", async () => {
+    const hook = (await t.createHook()).body;
+    await t.materialize((await t.outbox()).filter((e) => e.webhooks));
+    const [ping] = await t.deliveries();
+    const id = (ping as { delivery_id: string }).delivery_id;
+    await attemptDelivery(t.deps(), id);
+    // A long history (as many redeliveries make): 44 more attempts after the first.
+    await env.ORG_READ.prepare(
+      `WITH RECURSIVE k(n) AS (SELECT 2 UNION ALL SELECT n + 1 FROM k WHERE n < 45)
+       INSERT INTO webhook_attempts (delivery_id, n, at, status, response_excerpt)
+       SELECT ?, n, ?, 500, 'busy' FROM k`,
+    )
+      .bind(id, Date.now())
+      .run();
+    type Page = {
+      attempts_made: { n: number; status_code: number }[];
+      next_cursor: string | null;
+      code?: string;
+    };
+    const at = (query: string) =>
+      json<Page>(api("GET", `${t.path}/hooks/${hook.id}/deliveries/${id}${query}`, t.owner.token));
+    const ns = (page: Page) => page.attempts_made.map((a) => a.n);
+    const descending = (from: number, to: number) =>
+      Array.from({ length: from - to + 1 }, (_, i) => from - i);
+
+    const first = (await at("")).body;
+    expect(ns(first)).toEqual(descending(45, 16));
+    expect(first.next_cursor).not.toBeNull();
+    const rest = (await at(`?cursor=${first.next_cursor}`)).body;
+    expect(ns(rest)).toEqual(descending(15, 1));
+    expect(rest.attempts_made.at(-1)).toMatchObject({ n: 1, status_code: 200 });
+    expect(rest.next_cursor).toBeNull();
+    expect(ns((await at("?per_page=100")).body)).toEqual(descending(45, 1));
+    expect((await at("?per_page=101")).status).toBe(422);
+    expect((await at("?cursor=x")).body.code).toBe("invalid_cursor");
+  });
 });

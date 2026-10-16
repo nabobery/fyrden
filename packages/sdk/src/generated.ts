@@ -1526,6 +1526,10 @@ export type ReposHooksDeliveriesGetInput = {
   /** The webhook's id. */
   hook_id: number;
   delivery_id: string;
+  /** Attempts a page, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`: the attempts before it. */
+  cursor?: string;
 };
 
 /** Output of `repos.hooks.deliveries.get`. */
@@ -1545,6 +1549,8 @@ export type ReposHooksDeliveriesGetOutput = {
   request: {
     payload: Record<string, unknown> | null;
   };
+  /** Pass as `cursor` for older attempts; null on the last page. */
+  next_cursor: string | null;
   attempts_made: ({
     n: number;
     at: string;
@@ -4554,7 +4560,7 @@ export const OPERATIONS = {
   "repos.hooks.secret.rotate": { method: "POST", path: "/repos/{owner}/{repo}/hooks/{hook_id}/secret", pathParams: ["owner","repo","hook_id"], idempotent: true },
   "repos.hooks.secret.drop": { method: "DELETE", path: "/repos/{owner}/{repo}/hooks/{hook_id}/secret/previous", pathParams: ["owner","repo","hook_id"], idempotent: true },
   "repos.hooks.deliveries.list": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries", pathParams: ["owner","repo","hook_id"], idempotent: false, items: "deliveries" },
-  "repos.hooks.deliveries.get": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: false },
+  "repos.hooks.deliveries.get": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: false, items: "attempts_made" },
   "repos.hooks.deliveries.redeliver": { method: "POST", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: true },
   "admin.webhooks.reseal": { method: "POST", path: "/admin/webhooks/reseal", pathParams: [], idempotent: true },
   "pulls.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: false, items: "pull_requests" },
@@ -4733,9 +4739,9 @@ export interface Operations {
   "repos.hooks.secret.drop": { input: ReposHooksSecretDropInput; output: ReposHooksSecretDropOutput };
   /** List deliveries for a repository webhook. The webhook's deliveries of the last 30 days, newest first. Administrators only. */
   "repos.hooks.deliveries.list": { input: ReposHooksDeliveriesListInput; output: ReposHooksDeliveriesListOutput };
-  /** Get a delivery for a repository webhook. One delivery: its body and each attempt (where it was sent, what came back, the first 4 KiB of the response). Administrators only. */
+  /** Get a delivery for a repository webhook. One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only. */
   "repos.hooks.deliveries.get": { input: ReposHooksDeliveriesGetInput; output: ReposHooksDeliveriesGetOutput };
-  /** Redeliver a delivery for a repository webhook. Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only. */
+  /** Redeliver a delivery for a repository webhook. Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), once it has made 50 attempts (422 `too_many_attempts`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only. */
   "repos.hooks.deliveries.redeliver": { input: ReposHooksDeliveriesRedeliverInput; output: ReposHooksDeliveriesRedeliverOutput };
   /** Seal webhook secrets with the current key. Fyrden: seals again, with `WEBHOOKS_KEY`, webhook secrets sealed with a retired key, a batch of repositories at a time (call again with `cursor` until `next_cursor` is null and `remaining` is 0); `unreadable` counts secrets whose key is gone (rotate those hooks' secrets). Instance administrators only. */
   "admin.webhooks.reseal": { input: AdminWebhooksResealInput; output: AdminWebhooksResealOutput };

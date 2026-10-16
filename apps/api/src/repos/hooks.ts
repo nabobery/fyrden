@@ -22,6 +22,7 @@ import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { ownHostsOf } from "../git/import/network.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { ATTEMPT_POLICY } from "../webhooks/deliver.js";
 import { secretKeys } from "../webhooks/secrets.js";
 import { DELIVERY_POLICY, type DeliveryMessage } from "../webhooks/sink.js";
 import type { RepoEntry } from "./directory.js";
@@ -289,13 +290,32 @@ export async function listHookDeliveriesOperation(
   };
 }
 
+const invalidCursor = () =>
+  new OperationError(422, "invalid_cursor", "The cursor is not one this API returned.");
+
 function decodeCursor(cursor: string | undefined): [number, string] {
   if (cursor === undefined) return [Number.MAX_SAFE_INTEGER, "~"];
   const match = /^(\d{1,16})\.(msg_[0-9a-f]{32})$/.exec(cursor);
-  if (!match)
-    throw new OperationError(422, "invalid_cursor", "The cursor is not one this API returned.");
+  if (!match) throw invalidCursor();
   return [Number(match[1]), match[2] as string];
 }
+
+/** The attempt number a page of attempts starts below: the previous page's oldest. */
+function decodeAttemptCursor(cursor: string | undefined): number {
+  if (cursor === undefined) return Number.MAX_SAFE_INTEGER;
+  if (!/^[1-9]\d{0,8}$/.test(cursor)) throw invalidCursor();
+  return Number(cursor);
+}
+
+type AttemptRow = {
+  n: number;
+  at: number;
+  url: string | null;
+  status: number | null;
+  duration_ms: number | null;
+  response_excerpt: string | null;
+  error: string | null;
+};
 
 export async function getHookDeliveryOperation(
   ctx: OpContext,
@@ -303,6 +323,7 @@ export async function getHookDeliveryOperation(
 ): Promise<Output<typeof getHookDelivery>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "repository_hooks:read");
   unwrap(await stub(ctx, entry, "getHook").getHook(input.hook_id));
+  const before = decodeAttemptCursor(input.cursor);
   const db = readModelFor(ctx.env, DEFAULT_ORG_SHARD);
   ctx.metrics.count("d1.query", { db: "org", op: "hooks_delivery" }, 2);
   const [delivery, attempts] = await db.batch<Record<string, unknown>>([
@@ -315,10 +336,11 @@ export async function getHookDeliveryOperation(
       .bind(input.delivery_id, entry.id, input.hook_id),
     db
       .prepare(
+        // A page of its attempts, newest first, and one more to tell whether older ones follow.
         `SELECT n, at, url, status, duration_ms, response_excerpt, error FROM webhook_attempts
-         WHERE delivery_id = ? ORDER BY n`,
+         WHERE delivery_id = ? AND n < ? ORDER BY n DESC LIMIT ?`,
       )
-      .bind(input.delivery_id),
+      .bind(input.delivery_id, before, input.per_page + 1),
   ]);
   const row = delivery?.results[0] as DeliveryRow | undefined;
   if (!row)
@@ -327,21 +349,15 @@ export async function getHookDeliveryOperation(
       "delivery_not_found",
       `No delivery ${input.delivery_id} was found.`,
     );
+  const found = (attempts?.results ?? []) as AttemptRow[];
+  const page = found.slice(0, input.per_page);
+  const oldest = page.at(-1);
   const object = await ctx.env.ASSETS.get(row.payload_key);
   return {
     ...deliveryOut(row),
     request: { payload: object ? ((await object.json()) as Record<string, unknown>) : null },
-    attempts_made: (
-      (attempts?.results ?? []) as {
-        n: number;
-        at: number;
-        url: string | null;
-        status: number | null;
-        duration_ms: number | null;
-        response_excerpt: string | null;
-        error: string | null;
-      }[]
-    ).map((a) => ({
+    next_cursor: found.length > input.per_page && oldest ? String(oldest.n) : null,
+    attempts_made: page.map((a) => ({
       n: a.n,
       at: new Date(a.at).toISOString(),
       url: a.url,
@@ -400,25 +416,39 @@ export async function redeliverHookDeliveryOperation(
     );
   if (found.expires_at <= Date.now())
     throw new OperationError(422, "payload_gone", "The delivery's body is no longer kept.");
+  if (found.attempts >= ATTEMPT_POLICY.maxTotalAttempts)
+    throw new OperationError(
+      422,
+      "too_many_attempts",
+      `The delivery has made ${ATTEMPT_POLICY.maxTotalAttempts} attempts, the most one delivery makes.`,
+    );
   ctx.metrics.count("r2.class_b", { bucket: "fyrden-assets", op: "head_webhook_body" });
   if (!(await ctx.env.ASSETS.head(found.payload_key)))
     throw new OperationError(422, "payload_gone", "The delivery's body is no longer kept.");
   const now = Date.now();
   ctx.metrics.count("d1.query", { db: "org", op: "hooks_redeliver" });
-  // Only from a finished state (no claim holds it), within the hook's cap of waiting deliveries.
+  // Only from a finished state (no claim holds it), within the hook's cap of waiting deliveries
+  // and the delivery's of attempts.
   const moved = await db
     .prepare(
       `UPDATE webhook_deliveries SET state = 'pending', reason = NULL, attempt_limit = attempts + 1,
          next_attempt_at = ?1, enqueued_at = ?1, lease_token = NULL, lease_until = NULL,
          updated_at = ?1
        WHERE delivery_id = ?2 AND repo_id = ?3 AND hook_id = ?4 AND state IN ('done', 'failed')
-         AND expires_at > ?1 AND disable_hook_version IS NULL
+         AND expires_at > ?1 AND disable_hook_version IS NULL AND attempts < ?6
          AND (SELECT count(*) FROM webhook_deliveries
               WHERE repo_id = ?3 AND hook_id = ?4 AND state = 'pending') < ?5
        RETURNING delivery_id, event, action, state, reason, last_status, attempts, created_at,
          next_attempt_at, payload_key`,
     )
-    .bind(now, input.delivery_id, entry.id, input.hook_id, DELIVERY_POLICY.maxOutstanding)
+    .bind(
+      now,
+      input.delivery_id,
+      entry.id,
+      input.hook_id,
+      DELIVERY_POLICY.maxOutstanding,
+      ATTEMPT_POLICY.maxTotalAttempts,
+    )
     .first<DeliveryRow>();
   if (!moved)
     throw new OperationError(

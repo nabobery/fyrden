@@ -267,14 +267,30 @@ export const getHookDelivery = defineOperation({
   path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}",
   summary: "Get a delivery for a repository webhook",
   description:
-    "One delivery: its body and each attempt (where it was sent, what came back, the first 4 KiB of the response). Administrators only.",
+    "One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only.",
   input: z.object({
     ...RepoInput,
     hook_id: HookId,
     delivery_id: z.string().regex(/^msg_[0-9a-f]{32}$/),
+    per_page: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .default(30)
+      .describe("Attempts a page, 1-100."),
+    cursor: z
+      .string()
+      .max(200)
+      .optional()
+      .describe("From a previous page's `next_cursor`: the attempts before it."),
   }),
   output: Delivery.extend({
     request: z.object({ payload: z.record(z.string(), z.unknown()).nullable() }),
+    next_cursor: z
+      .string()
+      .nullable()
+      .describe("Pass as `cursor` for older attempts; null on the last page."),
     attempts_made: z.array(
       z.object({
         n: z.number().int(),
@@ -294,7 +310,7 @@ export const getHookDelivery = defineOperation({
   mcp: {
     tool: "get_webhook_delivery",
     title: "Get a webhook delivery",
-    description: "Get one delivery of a webhook, with its body and attempts.",
+    description: "Get one delivery of a webhook, with its body and its attempts, newest first.",
     readOnly: true,
   },
 });
@@ -305,7 +321,7 @@ export const redeliverHookDelivery = defineOperation({
   path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts",
   summary: "Redeliver a delivery for a repository webhook",
   description:
-    "Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only.",
+    "Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), once it has made 50 attempts (422 `too_many_attempts`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only.",
   input: z.object({
     ...RepoInput,
     hook_id: HookId,

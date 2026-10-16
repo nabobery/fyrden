@@ -5,7 +5,7 @@
 // a test's back, in this test or a later one.
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { attemptDelivery } from "../src/webhooks/deliver.js";
+import { ATTEMPT_POLICY, attemptDelivery } from "../src/webhooks/deliver.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { webhookTest } from "./helpers/webhooks.js";
 
@@ -56,9 +56,10 @@ describe("redelivery", () => {
     const one = await json<{ attempts_made: { n: number; status_code: number }[] }>(
       api("GET", `${t.path}/hooks/${hook}/deliveries/${id}`, t.owner.token),
     );
+    // Newest first.
     expect(one.body.attempts_made.map((a) => [a.n, a.status_code])).toEqual([
-      [1, 400],
       [2, 200],
+      [1, 400],
     ]);
   });
 
@@ -128,5 +129,32 @@ describe("redelivery", () => {
       .bind(id)
       .first<{ lease_token: string | null; attempt_limit: number; attempts: number }>();
     expect(row).toEqual({ lease_token: null, attempt_limit: 2, attempts: 1 });
+  });
+
+  it("stops once a delivery has made as many attempts as one keeps", async () => {
+    const { hook, id } = await delivered(400);
+    const attempted = (n: number) =>
+      env.ORG_READ.prepare("UPDATE webhook_deliveries SET attempts = ? WHERE delivery_id = ?")
+        .bind(n, id)
+        .run();
+    // One short of the most: the last one allowed.
+    await attempted(ATTEMPT_POLICY.maxTotalAttempts - 1);
+    expect((await redeliver(hook, id)).status).toBe(202);
+    const limit = await env.ORG_READ.prepare(
+      "SELECT attempt_limit FROM webhook_deliveries WHERE delivery_id = ?",
+    )
+      .bind(id)
+      .first<{ attempt_limit: number }>();
+    expect(limit?.attempt_limit).toBe(ATTEMPT_POLICY.maxTotalAttempts);
+    // Its last attempt made: no more, by hand either.
+    await env.ORG_READ.prepare(
+      "UPDATE webhook_deliveries SET state = 'failed', attempts = attempt_limit WHERE delivery_id = ?",
+    )
+      .bind(id)
+      .run();
+    const refused = await redeliver(hook, id);
+    expect(refused.status).toBe(422);
+    expect(refused.body.code).toBe("too_many_attempts");
+    expect(queued).toEqual([id]);
   });
 });

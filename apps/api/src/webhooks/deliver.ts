@@ -24,6 +24,11 @@ import type { DeliveryMessage } from "./sink.js";
 /** Limits of delivery attempts. Proposed. */
 export const ATTEMPT_POLICY = {
   maxAttempts: 8,
+  /**
+   * Attempts one delivery makes in all, redeliveries by hand included: each
+   * is kept with it (4 KiB of its answer at most) until its retention ends.
+   */
+  maxTotalAttempts: 50,
   /** One attempt's deadline: resolving the host, the request and the response's excerpt. */
   timeoutMs: 10_000,
   /** How long an attempt holds its delivery. */

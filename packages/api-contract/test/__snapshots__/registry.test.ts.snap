@@ -9651,7 +9651,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}": {
       "get": {
-        "description": "One delivery: its body and each attempt (where it was sent, what came back, the first 4 KiB of the response). Administrators only.",
+        "description": "One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only.",
         "operationId": "repos.hooks.deliveries.get",
         "parameters": [
           {
@@ -9693,6 +9693,28 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "required": true,
             "schema": {
               "pattern": "^msg_[0-9a-f]{32}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Attempts a page, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`: the attempts before it.",
+              "maxLength": 200,
               "type": "string",
             },
           },
@@ -9799,6 +9821,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for older attempts; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
                     "reason": {
                       "description": "Why it failed, was cancelled or dropped.",
                       "type": [
@@ -9864,6 +9893,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "delivered_at",
                     "next_attempt_at",
                     "request",
+                    "next_cursor",
                     "attempts_made",
                   ],
                   "type": "object",
@@ -9898,7 +9928,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts": {
       "post": {
-        "description": "Sends a finished delivery (\`done\` or \`failed\`) once more: its original body, the same \`webhook-id\`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 \`delivery_pending\`), while a 410 from its receiver is turning the hook off (409 \`hook_being_disabled\`), for a delivery that was cancelled or dropped (422 \`not_redeliverable\`), once its body is gone (422 \`payload_gone\`), for an inactive hook (422 \`hook_inactive\`), and while the hook has 1,000 deliveries waiting (409 \`too_many_outstanding\`). Administrators only.",
+        "description": "Sends a finished delivery (\`done\` or \`failed\`) once more: its original body, the same \`webhook-id\`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 \`delivery_pending\`), while a 410 from its receiver is turning the hook off (409 \`hook_being_disabled\`), for a delivery that was cancelled or dropped (422 \`not_redeliverable\`), once its body is gone (422 \`payload_gone\`), once it has made 50 attempts (422 \`too_many_attempts\`), for an inactive hook (422 \`hook_inactive\`), and while the hook has 1,000 deliveries waiting (409 \`too_many_outstanding\`). Administrators only.",
         "operationId": "repos.hooks.deliveries.redeliver",
         "parameters": [
           {
