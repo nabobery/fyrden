@@ -2982,6 +2982,138 @@ export type StarsListOutput = {
   next_cursor: string | null;
 };
 
+/** Input of `feed.list`: Get the activity feed. */
+export type FeedListInput = {
+  /** A previous answer's `next_cursor`; from the start without. */
+  since?: string;
+  /** Page size, 1-100. */
+  limit?: number;
+  /** Only items of this priority. */
+  priority?: "P0" | "P1";
+  /** Only items of this kind. */
+  kind?: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
+};
+
+/** Output of `feed.list`. */
+export type FeedListOutput = {
+  items: ({
+    /** The item's key: `<repository id>:<thread>:<kind>`. */
+    item_key: string;
+    repo: {
+      id: string;
+      /** owner/name */
+      full_name: string;
+    };
+    /** The thread within the repository, e.g. `pull/12`. */
+    thread_key: string;
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
+    subject: {
+      kind: "pull";
+      number: number;
+      title: string;
+    };
+    /** The thread's feed version the item is at; acknowledge with it. */
+    version: number;
+    /** `resolved`: nothing to act on any more. */
+    state: "open" | "resolved";
+    /** P0: act on this; P1: a thread you take part in. */
+    priority: "P0" | "P1";
+    /** Why it is in the feed: author, reviewer, mentioned, ... */
+    reasons: string[];
+    /** The last change was the owner's own action (or its agents'): no notification. */
+    silent: boolean;
+    /** What happened last: `comment`, `review_requested`, `merged`, ... */
+    action: string;
+    actor: string | null;
+    /** The actor's access to the repository when it acted. */
+    actor_trust: "write" | "read" | "none";
+    /** Plain text, at most 280 characters. */
+    excerpt: string | null;
+    /** For `activity`: the ids it gathers (comments, reviews), the greatest 100. */
+    members: string[];
+    /** Some members were left out. */
+    members_truncated: boolean;
+    /** When the last change happened, Unix time in milliseconds. */
+    event_at: number;
+    /** The version last acknowledged; 0 for none. */
+    acked_version: number;
+  })[];
+  /** Pass as `since` next; the same as `head_cursor` once the page reached the head. */
+  next_cursor: string;
+  /** The feed's latest change. */
+  head_cursor: string;
+  /** Wait at least this long (milliseconds) before polling again with `next_cursor`. */
+  poll_after_ms: number;
+};
+
+/** Input of `feed.sync`: Sync the activity feed. */
+export type FeedSyncInput = Record<string, never>;
+
+/** Output of `feed.sync`. */
+export type FeedSyncOutput = {
+  items: ({
+    /** The item's key: `<repository id>:<thread>:<kind>`. */
+    item_key: string;
+    repo: {
+      id: string;
+      /** owner/name */
+      full_name: string;
+    };
+    /** The thread within the repository, e.g. `pull/12`. */
+    thread_key: string;
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
+    subject: {
+      kind: "pull";
+      number: number;
+      title: string;
+    };
+    /** The thread's feed version the item is at; acknowledge with it. */
+    version: number;
+    /** `resolved`: nothing to act on any more. */
+    state: "open" | "resolved";
+    /** P0: act on this; P1: a thread you take part in. */
+    priority: "P0" | "P1";
+    /** Why it is in the feed: author, reviewer, mentioned, ... */
+    reasons: string[];
+    /** The last change was the owner's own action (or its agents'): no notification. */
+    silent: boolean;
+    /** What happened last: `comment`, `review_requested`, `merged`, ... */
+    action: string;
+    actor: string | null;
+    /** The actor's access to the repository when it acted. */
+    actor_trust: "write" | "read" | "none";
+    /** Plain text, at most 280 characters. */
+    excerpt: string | null;
+    /** For `activity`: the ids it gathers (comments, reviews), the greatest 100. */
+    members: string[];
+    /** Some members were left out. */
+    members_truncated: boolean;
+    /** When the last change happened, Unix time in milliseconds. */
+    event_at: number;
+    /** The version last acknowledged; 0 for none. */
+    acked_version: number;
+  })[];
+  complete: boolean;
+  /** Pass as `since` to `GET /feed` for what changes next. */
+  head_cursor: string;
+  /** Wait at least this long (milliseconds) before polling again with `next_cursor`. */
+  poll_after_ms: number;
+};
+
+/** Input of `feed.ack`: Acknowledge a feed item. */
+export type FeedAckInput = {
+  item_key: string;
+  version: number;
+};
+
+/** Output of `feed.ack`. */
+export type FeedAckOutput = {
+  item_key: string;
+  /** The item's current version. */
+  version: number;
+  acked_version: number;
+};
+
 /** Input of `quotas.user.get`: Get your quota. */
 export type QuotasUserGetInput = Record<string, never>;
 
@@ -4447,6 +4579,9 @@ export const OPERATIONS = {
   "stars.put": { method: "PUT", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.delete": { method: "DELETE", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.list": { method: "GET", path: "/user/starred", pathParams: [], idempotent: false, items: "repos" },
+  "feed.list": { method: "GET", path: "/feed", pathParams: [], idempotent: false },
+  "feed.sync": { method: "GET", path: "/feed/sync", pathParams: [], idempotent: false },
+  "feed.ack": { method: "POST", path: "/feed/ack", pathParams: [], idempotent: true },
   "quotas.user.get": { method: "GET", path: "/user/quota", pathParams: [], idempotent: false },
   "quotas.org.get": { method: "GET", path: "/orgs/{org}/quota", pathParams: ["org"], idempotent: false },
   "admin.quotas.set": { method: "PUT", path: "/admin/accounts/{account}/quota", pathParams: ["account"], idempotent: true },
@@ -4660,6 +4795,12 @@ export interface Operations {
   "stars.delete": { input: StarsDeleteInput; output: StarsDeleteOutput };
   /** List starred repositories. Lists the repositories the caller starred, most recently starred first. Repositories the caller or its token can no longer read are left out, so a page can hold fewer than `per_page`; keep following `next_cursor` until it is null. */
   "stars.list": { input: StarsListInput; output: StarsListOutput };
+  /** Get the activity feed. The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's `next_cursor` as `since` for what changed after it; a changed item comes again, so keep the latest copy by `item_key`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short. A cursor older than the retention (7 days, 5,000 items) or of another epoch is refused with 410 `cursor_expired`: start over from `GET /feed/sync`. The answer carries an ETag; with `If-None-Match` an unchanged one is 304. */
+  "feed.list": { input: FeedListInput; output: FeedListOutput };
+  /** Sync the activity feed. The feed's current state, to start from or start over: open P0 items, then P1 items of the last 7 days, newest first (500 at most; `complete` is false when more were left out), and the cursor at that instant to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. */
+  "feed.sync": { input: FeedSyncInput; output: FeedSyncOutput };
+  /** Acknowledge a feed item. Records that the feed's owner has seen an item at a version (every reader of the feed shares it, and the item comes again in `GET /feed`). A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing. */
+  "feed.ack": { input: FeedAckInput; output: FeedAckOutput };
   /** Get your quota. The authenticated user's quota: how many repositories it may have and how many bytes their pushes may store, and how much of each is used. A deleted repository's bytes are free again once its deletion finishes. */
   "quotas.user.get": { input: QuotasUserGetInput; output: QuotasUserGetOutput };
   /** Get an organization's quota. An organization's quota and its use, for its members. */

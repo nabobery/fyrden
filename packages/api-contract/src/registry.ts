@@ -36,6 +36,7 @@ import {
   updateComment,
 } from "../ops/comments.js";
 import { getContents, getReadme, getRootContents, getTree } from "../ops/contents.js";
+import { ackFeedItem, getFeed, syncFeed } from "../ops/feed.js";
 import { createFileCommit, deleteContents, putContents } from "../ops/file-writes.js";
 import { createGrant, listGrants, revokeGrant } from "../ops/grants.js";
 import {
@@ -210,6 +211,9 @@ export const registry = defineRegistry([
   starRepo,
   unstarRepo,
   listStarred,
+  getFeed,
+  syncFeed,
+  ackFeedItem,
   getUserQuota,
   getOrgQuota,
   setQuota,

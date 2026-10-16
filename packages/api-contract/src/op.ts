@@ -55,6 +55,11 @@ export interface OperationDef<
   successStatus?: 200 | 201 | 202;
   /** The response carries a secret, so idempotent replays omit it. */
   secretResponse?: boolean;
+  /**
+   * A GET whose REST answer carries an ETag of its body: a request whose
+   * `If-None-Match` matches gets 304 Not Modified.
+   */
+  etag?: boolean;
   mcp:
     | false
     | {
@@ -113,6 +118,7 @@ function validate(def: OperationDef): void {
   if (def.method !== "GET" && def.idempotency !== "key")
     fail("non-GET operations require an Idempotency-Key");
   if (def.method === "GET" && def.successStatus === 201) fail("a GET operation cannot answer 201");
+  if (def.etag && def.method !== "GET") fail("only a GET operation answers with an ETag");
   if (def.mcp && !TOOL.test(def.mcp.tool)) fail(`MCP tool name ${def.mcp.tool} is invalid`);
   if (def.mcp && def.mcp.readOnly !== (def.method === "GET"))
     fail("MCP readOnly must match the HTTP method");

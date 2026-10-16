@@ -65,6 +65,11 @@ describe("defineOperation", () => {
     ["readOnly tool on a POST", { method: "POST", idempotency: "key" }, /readOnly/],
     ["bad tool name", { mcp: { ...base.mcp, tool: "Get Repo" } }, /tool name/],
     ["GET answering 201", { successStatus: 201 }, /cannot answer 201/],
+    [
+      "an ETag on a POST",
+      { method: "POST", idempotency: "key", mcp: false, etag: true },
+      /only a GET operation answers with an ETag/,
+    ],
   ])("rejects %s", (_, change, message) => {
     expect(() => defineOperation({ ...base, ...change } as OperationDef)).toThrow(message);
   });
@@ -117,8 +122,14 @@ describe("generated artifacts", () => {
   });
 
   it("names a permission from the table for every other operation", () => {
-    // Facts about the caller or the instance, for any authenticated caller.
-    const anyCaller = new Set(["meta.whoami", "meta.signing_keys.list"]);
+    // Facts about the caller or the instance, and the caller's own feed, for any authenticated caller.
+    const anyCaller = new Set([
+      "meta.whoami",
+      "meta.signing_keys.list",
+      "feed.list",
+      "feed.sync",
+      "feed.ack",
+    ]);
     for (const op of registry) {
       if (anyCaller.has(op.id)) continue;
       expect(isPermission(op.permission), op.id).toBe(true);

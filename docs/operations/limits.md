@@ -673,6 +673,25 @@ secrets are sealed with, its rotation and restore) is in
 | Delivery log | Deliveries, their attempts (URL, status, duration, 4 KiB of the answer, no request header values) and their bodies are kept 30 days, then deleted (bodies first) by the cron |
 | Loss boundary | Events reach deliveries through the events queue: an outage of its consumer longer than the queue keeps messages (24 hours on Free) loses those events before any delivery exists |
 
+## Activity feed
+
+Each user and agent has an activity feed of the pull requests that need it
+or that it takes part in: `GET /feed`, `GET /feed/sync` and
+`POST /feed/ack` (MCP tools `get_feed`, `sync_feed`, `ack_feed_item`), for
+any user or agent token or a signed-in session, without a permission of
+their own.
+
+| What | Value |
+|---|---|
+| Whose feed | The token's principal's: an agent's own token reads the agent's feed; a delegated token, whichever agent of its chain holds it, reads the user's; a session reads its user's. Acknowledgements are the feed's, shared by everyone who reads it |
+| Read-time checks | Every list, sync and acknowledgement checks each repository of its items again: the repository must exist and the caller must have `pull_requests:read` there now, within its token's scopes and repositories (a delegated token's grant) and its agents' owners' rights. Items it fails are left out without saying how many, so a page can be short; an acknowledgement of one is 404 |
+| Items | One per repository, thread and kind (`review_requested`, `changes_requested`, `approved`, `merge_conflict`, `mention`, `activity`), updated in place. A change applies only from a newer version of the thread, so duplicate and reordered deliveries leave the same item; an entry that only resolves an item the feed does not have creates nothing. An `activity` item gathers the ids of its comments and reviews: the greatest 100, `members_truncated` once any was dropped. A comment's edit replaces the excerpt taken from it, and its deletion clears that excerpt and drops it from the members, without reopening the item or notifying. A change made by the owner itself (`silent`) still updates its item, reopening it included, without a notification |
+| Order and cursors | Every change of an item, an acknowledgement included, takes the feed's next sequence number, so following `next_cursor` never skips a change, however late it arrives; a changed item comes again. Cursors are opaque (`base64url` of a version, the feed's epoch and a sequence number). `poll_after_ms`: 0 while pages remain, else 30 seconds (Proposed) |
+| ETag | `GET /feed` carries an ETag of its answer; a request with a matching `If-None-Match` gets 304. `Cache-Control: private, no-cache` |
+| Retention | 7 days from an item's last change, and 5,000 items a feed (the ones changed longest ago go first), both Proposed; entries for events older than 7 days are dropped on arrival. A cursor from before what retention deleted, from another epoch or past the feed's head is refused with 410 `cursor_expired` and `resync: /api/feed/sync` |
+| Sync | Open P0 items, then P1 items changed in the last 7 days, newest first: 500 at most (Proposed; `complete` is false when more were left out), and the cursor at that instant |
+| Acknowledgement | `{item_key, version}`: a version the item does not have yet is refused (409 `version_ahead`); an older one than already acknowledged changes nothing |
+
 ## Idempotent requests
 
 A REST write (any method but GET) sent with an `Idempotency-Key` header runs

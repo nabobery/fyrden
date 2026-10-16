@@ -51,6 +51,7 @@ import {
   listUserTokensOperation,
   revokeUserTokenOperation,
 } from "../accounts/tokens.js";
+import { ackFeedItemOperation, getFeedOperation, syncFeedOperation } from "../feed/operations.js";
 import {
   abortUploadSession,
   completeUploadSession,
@@ -394,6 +395,11 @@ export const handlers: Handlers = {
   "stars.put": starRepoOperation,
   "stars.delete": unstarRepoOperation,
   "stars.list": listStarredOperation,
+
+  // The caller's activity feed (feed/operations).
+  "feed.list": getFeedOperation,
+  "feed.sync": syncFeedOperation,
+  "feed.ack": ackFeedItemOperation,
 
   // Quotas live in each account's object (accounts/quotas).
   "quotas.user.get": getUserQuotaOperation,

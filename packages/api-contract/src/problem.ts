@@ -8,6 +8,10 @@ export const Problem = z.object({
   detail: z.string(),
   request_id: z.string().optional(),
   missing_permission: z.string().optional(),
+  resync: z
+    .string()
+    .optional()
+    .describe("Where to start over when a cursor expired (`cursor_expired`): a REST path."),
 });
 
 export type Problem = z.infer<typeof Problem>;
@@ -19,6 +23,7 @@ export interface ProblemInit {
   requestId?: string | undefined;
   type?: string;
   missingPermission?: string;
+  resync?: string;
 }
 
 /**
@@ -33,5 +38,6 @@ export function makeProblem(init: ProblemInit): Problem {
     detail: init.detail,
     ...(init.requestId !== undefined && { request_id: init.requestId }),
     ...(init.missingPermission !== undefined && { missing_permission: init.missingPermission }),
+    ...(init.resync !== undefined && { resync: init.resync }),
   };
 }

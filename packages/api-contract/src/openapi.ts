@@ -57,7 +57,9 @@ function operationObject(op: OperationDef): JsonSchema {
         description:
           op.successStatus === 201 ? "Created" : op.successStatus === 202 ? "Accepted" : "OK",
         content: { "application/json": { schema: stripMeta(toSchema(op.output, "output")) } },
+        ...(op.etag && { headers: { ETag: { schema: { type: "string" } } } }),
       },
+      ...(op.etag && { "304": { description: "Not Modified: the If-None-Match ETag matches" } }),
       default: {
         description: "Error",
         content: { "application/problem+json": { schema: problem } },

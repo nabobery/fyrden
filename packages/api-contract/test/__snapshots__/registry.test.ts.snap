@@ -20,6 +20,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "request_id": {
             "type": "string",
           },
+          "resync": {
+            "description": "Where to start over when a cursor expired (\`cursor_expired\`): a REST path.",
+            "type": "string",
+          },
           "status": {
             "maximum": 9007199254740991,
             "minimum": -9007199254740991,
@@ -1412,6 +1416,623 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "user",
         ],
         "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/feed": {
+      "get": {
+        "description": "The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's \`next_cursor\` as \`since\` for what changed after it; a changed item comes again, so keep the latest copy by \`item_key\`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short. A cursor older than the retention (7 days, 5,000 items) or of another epoch is refused with 410 \`cursor_expired\`: start over from \`GET /feed/sync\`. The answer carries an ETag; with \`If-None-Match\` an unchanged one is 304.",
+        "operationId": "feed.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "description": "A previous answer's \`next_cursor\`; from the start without.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "priority",
+            "required": false,
+            "schema": {
+              "description": "Only items of this priority.",
+              "enum": [
+                "P0",
+                "P1",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "description": "Only items of this kind.",
+              "enum": [
+                "review_requested",
+                "changes_requested",
+                "approved",
+                "merge_conflict",
+                "mention",
+                "activity",
+              ],
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "head_cursor": {
+                      "description": "The feed's latest change.",
+                      "maxLength": 200,
+                      "type": "string",
+                    },
+                    "items": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "acked_version": {
+                            "description": "The version last acknowledged; 0 for none.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "action": {
+                            "description": "What happened last: \`comment\`, \`review_requested\`, \`merged\`, ...",
+                            "type": "string",
+                          },
+                          "actor": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "actor_trust": {
+                            "description": "The actor's access to the repository when it acted.",
+                            "enum": [
+                              "write",
+                              "read",
+                              "none",
+                            ],
+                            "type": "string",
+                          },
+                          "event_at": {
+                            "description": "When the last change happened, Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "excerpt": {
+                            "description": "Plain text, at most 280 characters.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "item_key": {
+                            "description": "The item's key: \`<repository id>:<thread>:<kind>\`.",
+                            "type": "string",
+                          },
+                          "kind": {
+                            "enum": [
+                              "review_requested",
+                              "changes_requested",
+                              "approved",
+                              "merge_conflict",
+                              "mention",
+                              "activity",
+                            ],
+                            "type": "string",
+                          },
+                          "members": {
+                            "description": "For \`activity\`: the ids it gathers (comments, reviews), the greatest 100.",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "members_truncated": {
+                            "description": "Some members were left out.",
+                            "type": "boolean",
+                          },
+                          "priority": {
+                            "description": "P0: act on this; P1: a thread you take part in.",
+                            "enum": [
+                              "P0",
+                              "P1",
+                            ],
+                            "type": "string",
+                          },
+                          "reasons": {
+                            "description": "Why it is in the feed: author, reviewer, mentioned, ...",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "repo": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "full_name": {
+                                "description": "owner/name",
+                                "type": "string",
+                              },
+                              "id": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "full_name",
+                            ],
+                            "type": "object",
+                          },
+                          "silent": {
+                            "description": "The last change was the owner's own action (or its agents'): no notification.",
+                            "type": "boolean",
+                          },
+                          "state": {
+                            "description": "\`resolved\`: nothing to act on any more.",
+                            "enum": [
+                              "open",
+                              "resolved",
+                            ],
+                            "type": "string",
+                          },
+                          "subject": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "pull",
+                                "type": "string",
+                              },
+                              "number": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "title": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "kind",
+                              "number",
+                              "title",
+                            ],
+                            "type": "object",
+                          },
+                          "thread_key": {
+                            "description": "The thread within the repository, e.g. \`pull/12\`.",
+                            "type": "string",
+                          },
+                          "version": {
+                            "description": "The thread's feed version the item is at; acknowledge with it.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                        },
+                        "required": [
+                          "item_key",
+                          "repo",
+                          "thread_key",
+                          "kind",
+                          "subject",
+                          "version",
+                          "state",
+                          "priority",
+                          "reasons",
+                          "silent",
+                          "action",
+                          "actor",
+                          "actor_trust",
+                          "excerpt",
+                          "members",
+                          "members_truncated",
+                          "event_at",
+                          "acked_version",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`since\` next; the same as \`head_cursor\` once the page reached the head.",
+                      "maxLength": 200,
+                      "type": "string",
+                    },
+                    "poll_after_ms": {
+                      "description": "Wait at least this long (milliseconds) before polling again with \`next_cursor\`.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "items",
+                    "next_cursor",
+                    "head_cursor",
+                    "poll_after_ms",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string",
+                },
+              },
+            },
+          },
+          "304": {
+            "description": "Not Modified: the If-None-Match ETag matches",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get the activity feed",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/feed/ack": {
+      "post": {
+        "description": "Records that the feed's owner has seen an item at a version (every reader of the feed shares it, and the item comes again in \`GET /feed\`). A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing.",
+        "operationId": "feed.ack",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "item_key": {
+                    "maxLength": 300,
+                    "type": "string",
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer",
+                  },
+                },
+                "required": [
+                  "item_key",
+                  "version",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "acked_version": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "item_key": {
+                      "type": "string",
+                    },
+                    "version": {
+                      "description": "The item's current version.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "item_key",
+                    "version",
+                    "acked_version",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Acknowledge a feed item",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/feed/sync": {
+      "get": {
+        "description": "The feed's current state, to start from or start over: open P0 items, then P1 items of the last 7 days, newest first (500 at most; \`complete\` is false when more were left out), and the cursor at that instant to follow with \`GET /feed\`. Items of repositories the caller cannot read now are left out.",
+        "operationId": "feed.sync",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "complete": {
+                      "type": "boolean",
+                    },
+                    "head_cursor": {
+                      "description": "Pass as \`since\` to \`GET /feed\` for what changes next.",
+                      "maxLength": 200,
+                      "type": "string",
+                    },
+                    "items": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "acked_version": {
+                            "description": "The version last acknowledged; 0 for none.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "action": {
+                            "description": "What happened last: \`comment\`, \`review_requested\`, \`merged\`, ...",
+                            "type": "string",
+                          },
+                          "actor": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "actor_trust": {
+                            "description": "The actor's access to the repository when it acted.",
+                            "enum": [
+                              "write",
+                              "read",
+                              "none",
+                            ],
+                            "type": "string",
+                          },
+                          "event_at": {
+                            "description": "When the last change happened, Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "excerpt": {
+                            "description": "Plain text, at most 280 characters.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "item_key": {
+                            "description": "The item's key: \`<repository id>:<thread>:<kind>\`.",
+                            "type": "string",
+                          },
+                          "kind": {
+                            "enum": [
+                              "review_requested",
+                              "changes_requested",
+                              "approved",
+                              "merge_conflict",
+                              "mention",
+                              "activity",
+                            ],
+                            "type": "string",
+                          },
+                          "members": {
+                            "description": "For \`activity\`: the ids it gathers (comments, reviews), the greatest 100.",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "members_truncated": {
+                            "description": "Some members were left out.",
+                            "type": "boolean",
+                          },
+                          "priority": {
+                            "description": "P0: act on this; P1: a thread you take part in.",
+                            "enum": [
+                              "P0",
+                              "P1",
+                            ],
+                            "type": "string",
+                          },
+                          "reasons": {
+                            "description": "Why it is in the feed: author, reviewer, mentioned, ...",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "repo": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "full_name": {
+                                "description": "owner/name",
+                                "type": "string",
+                              },
+                              "id": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "full_name",
+                            ],
+                            "type": "object",
+                          },
+                          "silent": {
+                            "description": "The last change was the owner's own action (or its agents'): no notification.",
+                            "type": "boolean",
+                          },
+                          "state": {
+                            "description": "\`resolved\`: nothing to act on any more.",
+                            "enum": [
+                              "open",
+                              "resolved",
+                            ],
+                            "type": "string",
+                          },
+                          "subject": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "pull",
+                                "type": "string",
+                              },
+                              "number": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "title": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "kind",
+                              "number",
+                              "title",
+                            ],
+                            "type": "object",
+                          },
+                          "thread_key": {
+                            "description": "The thread within the repository, e.g. \`pull/12\`.",
+                            "type": "string",
+                          },
+                          "version": {
+                            "description": "The thread's feed version the item is at; acknowledge with it.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                        },
+                        "required": [
+                          "item_key",
+                          "repo",
+                          "thread_key",
+                          "kind",
+                          "subject",
+                          "version",
+                          "state",
+                          "priority",
+                          "reasons",
+                          "silent",
+                          "action",
+                          "actor",
+                          "actor_trust",
+                          "excerpt",
+                          "members",
+                          "members_truncated",
+                          "event_at",
+                          "acked_version",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "poll_after_ms": {
+                      "description": "Wait at least this long (milliseconds) before polling again with \`next_cursor\`.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "items",
+                    "complete",
+                    "head_cursor",
+                    "poll_after_ms",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Sync the activity feed",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
       },
     },
     "/grants": {

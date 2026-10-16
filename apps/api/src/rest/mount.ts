@@ -2,7 +2,7 @@ import { type OperationDef, openApiDocument, registry } from "@fyrden/api-contra
 import type { Context, Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
-import { NO_STORE } from "../http/cache.js";
+import { NO_STORE, notModified } from "../http/cache.js";
 import { problem, problemResponse } from "../http/problem.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
 import { executeOperation, type OpContext, type OpHandler, type OpResult } from "../ops/execute.js";
@@ -78,7 +78,35 @@ async function readInput(c: AppContext, op: OperationDef): Promise<ReadResult> {
   return { ok: true, input: { ...body, ...params } };
 }
 
-function respond(c: AppContext, op: OperationDef, result: OpResult): Response {
+/** A strong ETag of a body: its SHA-256, the first 16 bytes in hex. */
+async function etagOf(body: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
+  const hex = [...new Uint8Array(digest).slice(0, 16)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return `"${hex}"`;
+}
+
+/**
+ * An answer with an ETag of its body, or 304 when the request's
+ * `If-None-Match` matches. It is the caller's own: shared caches keep
+ * none, and a client revalidates before reusing it.
+ */
+async function respondWithEtag(c: AppContext, output: unknown, status: number): Promise<Response> {
+  const body = JSON.stringify(output);
+  const etag = await etagOf(body);
+  const caching = { "Cache-Control": "private, no-cache" };
+  return (
+    notModified(c.req.raw, etag, caching) ??
+    c.body(body, status as ContentfulStatusCode, {
+      ...caching,
+      ETag: etag,
+      "Content-Type": "application/json",
+    })
+  );
+}
+
+function respond(c: AppContext, op: OperationDef, result: OpResult): Response | Promise<Response> {
   const replayed: Record<string, string> = result.replayed ? { "Idempotent-Replayed": "true" } : {};
   if (!result.ok) {
     const retry =
@@ -89,6 +117,7 @@ function respond(c: AppContext, op: OperationDef, result: OpResult): Response {
           : {};
     return problemResponse(c, result.problem, { ...retry, ...replayed });
   }
+  if (op.etag) return respondWithEtag(c, result.output, result.status ?? op.successStatus ?? 200);
   // A secret (a new token) is shown once: no cache keeps it.
   return c.json(
     result.output as Record<string, unknown>,
