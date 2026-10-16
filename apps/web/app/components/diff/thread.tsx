@@ -132,12 +132,15 @@ export interface LinePick {
  */
 export function LineCommentForm({
   path,
+  previousPath,
   headSha,
   pick,
   open,
   onToggle,
 }: {
   path: string;
+  /** A renamed file's old path: comments on its old side name it. */
+  previousPath?: string | undefined;
   headSha: string;
   pick: LinePick | null;
   open: boolean;
@@ -169,6 +172,9 @@ export function LineCommentForm({
       >
         <input type="hidden" name="intent" value="comment" />
         <input type="hidden" name="path" value={path} />
+        {previousPath !== undefined && (
+          <input type="hidden" name="previous_path" value={previousPath} />
+        )}
         <input type="hidden" name="commit_id" value={headSha} />
         <div className="row">
           <span>

@@ -186,7 +186,10 @@ export interface ThreadComment {
 /** A review thread on lines of a file, its comments oldest first. */
 export interface Thread {
   id: number;
+  /** The path its comments name: a renamed file's old path on the old side. */
   path: string;
+  /** The listed file it belongs to (its current name). */
+  file: string;
   side: DiffSide;
   /** The (last) line at the current head; null once the head has moved (outdated). */
   line: number | null;
@@ -197,4 +200,16 @@ export interface Thread {
   outdated: boolean;
   resolved: boolean;
   comments: ThreadComment[];
+}
+
+/**
+ * Whether a page of patches compares what the listing compared: the same
+ * head and the same merge base (the base branch can move to a commit the
+ * head already has, changing the comparison with the head unchanged).
+ */
+export function sameComparison(
+  patches: { head_sha: string; merge_base_sha: string },
+  listed: { headSha: string; mergeBaseSha: string },
+): boolean {
+  return patches.head_sha === listed.headSha && patches.merge_base_sha === listed.mergeBaseSha;
 }

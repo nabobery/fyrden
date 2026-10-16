@@ -4,8 +4,8 @@
 // reach the API as it takes them; hostile file names and comments stay text.
 
 import { describe, expect, it } from "vitest";
-import type { ReviewComment } from "../app/lib/pulls.js";
-import { threadsOf } from "../app/lib/review-threads.server.js";
+import { type ReviewComment, sameComparison } from "../app/lib/pulls.js";
+import { filesByPath, threadsOf } from "../app/lib/review-threads.server.js";
 import { action, loader, default as PullFiles } from "../app/routes/repo.pull.files.js";
 import { loader as patches } from "../app/routes/repo.pull.patches.js";
 import { formPost, json, ORIGIN } from "./helpers/context.js";
@@ -108,9 +108,97 @@ describe("the files page", () => {
       context,
       params,
     } as never);
-    expect(served).toBe(10);
-    expect(data.threadsComplete).toBe(false);
-    expect(data.threads).toHaveLength(10);
+    expect(served).toBe(20);
+    expect(data.threadPages.next).toBe("/ada/demo/pull/7/files?comments=more");
+    expect(data.threads).toHaveLength(20);
+  });
+
+  // Rendering 30 bodies of 64 KiB takes seconds under a parallel run: a bound on work, not time.
+  it("stops reading comments once their rendered HTML passes its bound, and continues from there", {
+    timeout: 60_000,
+  }, async () => {
+    // A body of 65,536 `<` renders to about four times as much HTML.
+    const huge = "<".repeat(65_536);
+    const { context, calls } = api({
+      "GET /api/repos/ada/demo/pulls/7": () => json(pullRequest()),
+      "GET /api/repos/ada/demo/pulls/7/files": () => filesPage([file("a.ts")]),
+      "GET /api/repos/ada/demo/pulls/7/comments": () =>
+        json({
+          comments: Array.from({ length: 30 }, (_, i) =>
+            comment({ id: i + 1, thread_id: i + 1, body: huge }),
+          ),
+          next_cursor: "p2",
+        }),
+    });
+    const data = await loader({
+      request: new Request(`${ORIGIN}/ada/demo/pull/7/files?comments=p1`),
+      context,
+      params,
+    } as never);
+    const read = calls.map(pathOf).filter((p) => p.includes("/comments"));
+    // Read from the page asked for, and one page (30 comments) passes the bound: no more.
+    expect(read).toEqual(["GET /api/repos/ada/demo/pulls/7/comments?per_page=30&cursor=p1"]);
+    const rendered = data.threads.flatMap((t) => t.comments).reduce((n, c) => n + c.html.length, 0);
+    expect(rendered).toBeGreaterThan(2 * 1024 * 1024);
+    expect(rendered).toBeLessThan(10 * 1024 * 1024);
+    expect(data.threadPages.next).toBe("/ada/demo/pull/7/files?comments=p2");
+  });
+
+  it("shows a renamed file's old-side threads with it", () => {
+    const files = filesByPath([
+      { filename: "new.ts", previous_filename: "old.ts" },
+      { filename: "other.ts" },
+    ]);
+    const threads = threadsOf(
+      [
+        comment({ id: 1, thread_id: 1, path: "old.ts", side: "LEFT" }),
+        comment({ id: 2, thread_id: 2, path: "new.ts", side: "RIGHT" }),
+        comment({ id: 3, thread_id: 3, path: "gone.ts" }),
+      ],
+      pullRequest() as never,
+      files,
+    );
+    expect(threads.map((t) => [t.path, t.file])).toEqual([
+      ["old.ts", "new.ts"],
+      ["new.ts", "new.ts"],
+    ]);
+    // A file listed under its own name keeps its threads, even if another was renamed from it.
+    expect(
+      filesByPath([{ filename: "a.ts" }, { filename: "b.ts", previous_filename: "a.ts" }]).get(
+        "a.ts",
+      ),
+    ).toBe("a.ts");
+  });
+
+  it("reviews the head it shows, and says when that is older than the pull request's", () => {
+    const old = "d".repeat(40);
+    const html = renderPage(PullFiles, "/ada/demo/pull/7/files?cursor=c", {
+      owner: "ada",
+      repo: "demo",
+      pull: pullRequest(),
+      viewer: "usr_other",
+      cursor: "c",
+      files: [],
+      headSha: old,
+      mergeBaseSha: BASE,
+      truncated: false,
+      pages: { next: null, first: null },
+      threads: [],
+      threadPages: { next: null, first: null },
+      diffStyle: "unified",
+    });
+    expect(html).toContain(`name="commit_id" value="${old}"`);
+    expect(html).not.toContain(`name="commit_id" value="${HEAD}"`);
+    expect(html).toContain("These are the changes of an older head");
+    expect(html).toContain('href="/ada/demo/pull/7/files"');
+  });
+
+  it("takes a page of patches only for the comparison it listed", () => {
+    const listed = { headSha: HEAD, mergeBaseSha: BASE };
+    expect(sameComparison({ head_sha: HEAD, merge_base_sha: BASE }, listed)).toBe(true);
+    expect(sameComparison({ head_sha: "d".repeat(40), merge_base_sha: BASE }, listed)).toBe(false);
+    // The base moved to a commit the head already has: same head, another comparison.
+    expect(sameComparison({ head_sha: HEAD, merge_base_sha: "d".repeat(40) }, listed)).toBe(false);
   });
 
   it("serves a page's patches alone, never cached", async () => {
@@ -147,7 +235,7 @@ describe("the files page", () => {
         }),
       ],
       pullRequest() as never,
-      new Set([HOSTILE]),
+      new Map([[HOSTILE, HOSTILE]]),
     );
     const html = renderPage(PullFiles, "/ada/demo/pull/7/files", {
       owner: "ada",
@@ -168,7 +256,7 @@ describe("the files page", () => {
       truncated: true,
       pages: { next: null, first: null },
       threads: thread,
-      threadsComplete: true,
+      threadPages: { next: null, first: null },
       diffStyle: "unified",
     });
     expect(html).not.toMatch(ACTIVE_TAG);
@@ -190,8 +278,8 @@ describe("a review thread", () => {
       c: Record<string, unknown>,
       p: typeof pull | { state: "closed"; head: typeof pull.head } = pull,
     ) =>
-      threadsOf([comment({ body: suggestion, ...c })], p, new Set(["a.ts"]))[0]?.comments[0]
-        ?.applicable;
+      threadsOf([comment({ body: suggestion, ...c })], p, new Map([["a.ts", "a.ts"]]))[0]
+        ?.comments[0]?.applicable;
     expect(applicable({})).toBe(true);
     expect(applicable({ side: "LEFT" })).toBe(false);
     expect(applicable({ commit_id: "d".repeat(40) })).toBe(false);
@@ -204,7 +292,7 @@ describe("a review thread", () => {
     const [thread] = threadsOf(
       [comment({ outdated: true, line: null, original_line: 5, start_line: 3 })],
       pull,
-      new Set(["a.ts"]),
+      new Map([["a.ts", "a.ts"]]),
     );
     expect(thread).toMatchObject({ line: null, startLine: null, originalLine: 5, outdated: true });
   });
@@ -249,6 +337,21 @@ describe("diff comments", () => {
     expect(
       (await act({ ...line, side: "RIGHT", start_line: "4", line: "4" })).body,
     ).not.toHaveProperty("start_line");
+  });
+
+  it("on a renamed file's old side name its old path, and its new side its new path", async () => {
+    const renamed = { ...line, path: "new.ts", previous_path: "old.ts", line: "2" };
+    expect((await act({ ...renamed, side: "LEFT" })).body).toMatchObject({
+      path: "old.ts",
+      side: "LEFT",
+    });
+    expect((await act({ ...renamed, side: "RIGHT" })).body).toMatchObject({
+      path: "new.ts",
+      side: "RIGHT",
+    });
+    expect((await act({ ...line, side: "LEFT", line: "2" })).body).toMatchObject({
+      path: "dir/a b.ts",
+    });
   });
 
   it("are refused without asking the API when their lines are not lines", async () => {

@@ -24,10 +24,11 @@ import {
   type PullFilesPage,
   pullPage,
   rawField,
+  sameComparison,
   type Thread,
 } from "../lib/pulls.js";
 import { type ActionResult, loadPull, pullApiOf, send, submitReview } from "../lib/pulls.server.js";
-import { loadThreads } from "../lib/review-threads.server.js";
+import { filesByPath, loadThreads } from "../lib/review-threads.server.js";
 import type { Route } from "./+types/repo.pull.files";
 import { FILES_PER_PAGE, type PagePatches } from "./repo.pull.patches.js";
 
@@ -53,8 +54,14 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   const query = new URLSearchParams({ per_page: String(FILES_PER_PAGE) });
   if (cursor) query.set("cursor", cursor);
   const page = await apiGet<PullFilesPage>(context, request, `${api}/files?${query.toString()}`);
-  const paths = new Set(page.files.map((f) => f.filename));
-  const { threads, complete } = await loadThreads(context, request, api, pull, paths);
+  const { threads, next } = await loadThreads(
+    context,
+    request,
+    api,
+    pull,
+    filesByPath(page.files),
+    url.searchParams.get("comments"),
+  );
   return {
     owner: params.owner,
     repo: params.repo,
@@ -69,7 +76,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     truncated: page.truncated,
     pages: pageLinks(url, "cursor", page.next_cursor),
     threads,
-    threadsComplete: complete,
+    threadPages: pageLinks(url, "comments", next),
     diffStyle:
       url.searchParams.get("style") === "split" ? ("split" as const) : ("unified" as const),
   };
@@ -106,7 +113,8 @@ export async function action({
         {
           body,
           commit_id: field(form, "commit_id"),
-          path: rawField(form, "path"),
+          // The old side of a renamed file is its old path, at the merge base.
+          path: (side === "LEFT" && rawField(form, "previous_path")) || rawField(form, "path"),
           line,
           side,
           ...(start !== undefined && start < line && { start_line: start, start_side: side }),
@@ -162,7 +170,12 @@ type Patches =
   | { state: "loaded"; byName: Map<string, string | null> };
 
 /** Loads the patches of the page `cursor` names, once the page is in the browser. */
-function usePatches(page: string, cursor: string | null, headSha: string): Patches {
+function usePatches(
+  page: string,
+  cursor: string | null,
+  headSha: string,
+  mergeBaseSha: string,
+): Patches {
   const [patches, setPatches] = useState<Patches>({ state: "loading" });
   useEffect(() => {
     const controller = new AbortController();
@@ -176,8 +189,9 @@ function usePatches(page: string, cursor: string | null, headSha: string): Patch
         if (!res.ok || !res.headers.get("Content-Type")?.includes("application/json"))
           throw new Error(`status ${res.status}`);
         const body = (await res.json()) as PagePatches;
-        // The first page follows the head: a push since this page loaded shows other changes.
-        if (body.head_sha !== headSha) return setPatches({ state: "stale" });
+        // The first page follows the branches: a push to either since this page loaded
+        // compares other commits, whose changes are not the ones listed.
+        if (!sameComparison(body, { headSha, mergeBaseSha })) return setPatches({ state: "stale" });
         setPatches({
           state: "loaded",
           byName: new Map(body.patches.map((p) => [p.filename, p.patch])),
@@ -187,7 +201,7 @@ function usePatches(page: string, cursor: string | null, headSha: string): Patch
         if (!controller.signal.aborted) setPatches({ state: "failed" });
       });
     return () => controller.abort();
-  }, [page, cursor, headSha]);
+  }, [page, cursor, headSha, mergeBaseSha]);
   return patches;
 }
 
@@ -315,6 +329,7 @@ function FileSection({
       {canAct && (
         <LineCommentForm
           path={file.filename}
+          previousPath={file.previous_filename}
           headSha={headSha}
           pick={pick}
           open={formOpen}
@@ -395,14 +410,14 @@ export default function PullFiles({ loaderData }: Route.ComponentProps) {
     truncated,
     pages,
     threads,
-    threadsComplete,
+    threadPages,
     diffStyle,
   } = loaderData;
   const page = pullPage(owner, repo, pull.number);
-  const patches = usePatches(page, cursor, headSha);
+  const patches = usePatches(page, cursor, headSha, mergeBaseSha);
   const byPath = useMemo(() => {
     const map = new Map<string, Thread[]>();
-    for (const t of threads) map.set(t.path, [...(map.get(t.path) ?? []), t]);
+    for (const t of threads) map.set(t.file, [...(map.get(t.file) ?? []), t]);
     return map;
   }, [threads]);
   const styleLink = (style: "unified" | "split") => {
@@ -437,11 +452,19 @@ export default function PullFiles({ loaderData }: Route.ComponentProps) {
           More than 3,000 files changed: only the first 3,000 are listed.
         </p>
       )}
-      {!threadsComplete && (
-        <p className="muted" role="note">
-          Only the oldest 1,000 review comments are shown.
+      {headSha !== pull.head.sha && (
+        <p className="error" role="note">
+          These are the changes of an older head, <code>{headSha.slice(0, 7)}</code>: the pull
+          request is now at <code>{pull.head.sha.slice(0, 7)}</code>. Comments and reviews here are
+          of the older head. <Link to={`${page}/files`}>See the latest changes</Link>
         </p>
       )}
+      {(threadPages.next || threadPages.first) && (
+        <p className="muted" role="note">
+          Review comments are shown a batch at a time.
+        </p>
+      )}
+      <Pager links={threadPages} label="Review comment" />
       {files.length === 0 ? (
         <p className="muted">No files changed.</p>
       ) : (
@@ -476,7 +499,9 @@ export default function PullFiles({ loaderData }: Route.ComponentProps) {
       )}
       <Pager links={pages} label="Changed files" />
       {pull.state === "open" && viewer !== null && (
-        <ReviewForm headSha={pull.head.sha} isAuthor={pull.user.id === viewer} />
+        // The review is of the head these changes are of, which may be older than the
+        // pull request's (a later page keeps the comparison it started with).
+        <ReviewForm headSha={headSha} isAuthor={pull.user.id === viewer} />
       )}
     </main>
   );

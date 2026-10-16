@@ -38,6 +38,13 @@ export function meta({ params, loaderData }: Route.MetaArgs): Route.MetaDescript
   ];
 }
 
+/**
+ * Comments, and reviews, a conversation page shows at a time: a body of
+ * 65,536 characters can render to about four times that in HTML, which the
+ * page then holds twice (its markup and its data), so pages stay small.
+ */
+const CONVERSATION_PAGE = 25;
+
 /** Bytes of a conversation form at most: a body of 65,536 characters, URL-encoded, and the rest. */
 const PULL_FORM_MAX_BYTES = 9 * 65_536 + 16 * 1024;
 
@@ -52,13 +59,13 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       context,
       request,
       "GET",
-      `${repoApi}/issues/${number}/comments?${pageQuery(url, "comments")}`,
+      `${repoApi}/issues/${number}/comments?${pageQuery(url, "comments", CONVERSATION_PAGE)}`,
     ),
     apiCall<{ reviews: Review[]; next_cursor: string | null }>(
       context,
       request,
       "GET",
-      `${api}/reviews?${pageQuery(url, "reviews")}`,
+      `${api}/reviews?${pageQuery(url, "reviews", CONVERSATION_PAGE)}`,
     ),
     // For the merge box only: what the base branch's rulesets ask of a merge.
     open ? apiCall<Repo>(context, request, "GET", repoApi) : null,

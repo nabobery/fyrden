@@ -2,12 +2,20 @@
  * One file's changes drawn by the diff renderer (@pierre/diffs), in the
  * browser only: syntax highlighting runs in a pool of web workers with
  * Shiki's JavaScript RegExp engine (no WebAssembly), grammars loaded per
- * language. Its review threads sit under their lines; a click on a line's
- * gutter, or a selection of lines, picks them for a new comment.
+ * language. Only the lines near the screen are in the page: the renderer's
+ * virtualizer follows the window's scroll. Its review threads sit under
+ * their lines; a click on a line's gutter, or a selection of lines, picks
+ * them for a new comment.
  */
-import { type DiffLineAnnotation, FileDiff, WorkerPoolContextProvider } from "@pierre/diffs/react";
+import { Virtualizer } from "@pierre/diffs";
+import {
+  type DiffLineAnnotation,
+  FileDiff,
+  VirtualizerContext,
+  WorkerPoolContextProvider,
+} from "@pierre/diffs/react";
 import DiffsWorker from "@pierre/diffs/worker/worker.js?worker";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Thread } from "../../lib/pulls.js";
 import { fileDiffOf } from "./file-diff.js";
 import { apiSide, rendererSide } from "./patch.js";
@@ -29,6 +37,31 @@ const HIGHLIGHTER = {
   tokenizeMaxLineLength: MAX_TOKENIZED_LINE,
   maxLineDiffLength: MAX_TOKENIZED_LINE,
 };
+
+/** The page's one virtualizer (on the window's scroll), shared by every drawn file. */
+let shared: { virtualizer: Virtualizer; users: number } | null = null;
+
+/** The shared virtualizer, made on first use and cleaned up when its last file goes. */
+function useWindowVirtualizer(): Virtualizer {
+  const [virtualizer] = useState(() => {
+    if (!shared) {
+      const made = new Virtualizer();
+      made.setup(document);
+      shared = { virtualizer: made, users: 0 };
+    }
+    return shared.virtualizer;
+  });
+  useEffect(() => {
+    if (shared?.virtualizer !== virtualizer) return;
+    shared.users++;
+    return () => {
+      if (shared?.virtualizer !== virtualizer || --shared.users > 0) return;
+      virtualizer.cleanUp();
+      shared = null;
+    };
+  }, [virtualizer]);
+  return virtualizer;
+}
 
 export default function FileDiffView({
   path,
@@ -100,18 +133,21 @@ export default function FileDiffView({
       onLineSelected: pick,
     };
   }, [diffStyle, canAct, onPick]);
+  const virtualizer = useWindowVirtualizer();
   if (!fileDiff) return <p className="error">These changes could not be read.</p>;
   return (
-    <WorkerPoolContextProvider poolOptions={POOL} highlighterOptions={HIGHLIGHTER}>
-      <FileDiff<{ thread: number }>
-        fileDiff={fileDiff}
-        options={options}
-        lineAnnotations={annotations}
-        renderAnnotation={(a) => {
-          const thread = threads.find((t) => t.id === a.metadata.thread);
-          return thread ? <ThreadView thread={thread} viewer={viewer} canAct={canAct} /> : null;
-        }}
-      />
-    </WorkerPoolContextProvider>
+    <VirtualizerContext.Provider value={virtualizer}>
+      <WorkerPoolContextProvider poolOptions={POOL} highlighterOptions={HIGHLIGHTER}>
+        <FileDiff<{ thread: number }>
+          fileDiff={fileDiff}
+          options={options}
+          lineAnnotations={annotations}
+          renderAnnotation={(a) => {
+            const thread = threads.find((t) => t.id === a.metadata.thread);
+            return thread ? <ThreadView thread={thread} viewer={viewer} canAct={canAct} /> : null;
+          }}
+        />
+      </WorkerPoolContextProvider>
+    </VirtualizerContext.Provider>
   );
 }
