@@ -376,7 +376,7 @@ export const getPullConflicts = defineOperation({
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/conflicts",
   summary: "Get a pull request's conflicts",
   description:
-    "Fyrden: the conflicts of merging the base branch's tip into an open pull request's head (none when they merge cleanly). Files whose lines conflict in text (`content`, `add_add`) are `editable`: their merged content is given with git's conflict markers, the head's side first (`<<<<<<< head`, `=======`, `>>>>>>> base`), up to 50 files and 4 MiB in all. Any other conflict (a file deleted on one side, a mode, a symlink, a submodule, a binary or too large file, a file and a directory; renames are not followed) is listed but needs a merge made by hand. Resolve them with `conflict_snapshot`, which names the base tip and head they were read at. A head in a fork is read as the base last imported it.",
+    "Fyrden: the conflicts of merging the base branch's tip into an open pull request's head (none when they merge cleanly). Files whose lines conflict in text (`content`, `add_add`) are `editable`: their merged content is given with git's conflict markers, the head's side first, each side labelled with its branch (`<<<<<<< <head branch>`, `=======`, `>>>>>>> <base branch>`), up to 50 files and 4 MiB in all. Any other conflict (a file deleted on one side, a mode, a symlink, a submodule, a binary or too large file, a file and a directory; renames are not followed) is listed but needs a merge made by hand. Resolve them with `conflict_snapshot`, which names the base tip and head they were read at. A head in a fork is read as the base last imported it.",
   input: z.object({ ...RepoInput, pull_number: PullNumber }),
   output: z.object({
     base_sha: z.string(),
