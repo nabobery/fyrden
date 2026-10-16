@@ -736,12 +736,16 @@ export const repoSchema: readonly DoMigration[] = [
   },
   {
     version: 28,
-    // Approvals given for an earlier base: a retarget records the pull
-    // request's last review then, and no approval up to it counts (the
-    // reviews stay listed as they were).
-    name: "retarget_approvals",
+    // What a merge reads of a pull request's reviews. Approvals given for
+    // an earlier base: a retarget records the pull request's last review
+    // then, and no approval up to it counts (the reviews stay listed as
+    // they were). A revision bumped with each review that can count
+    // submitted or dismissed, which a merge compares instead of reading
+    // every review.
+    name: "review_standing",
     sql: `
       ALTER TABLE pull_requests ADD COLUMN approvals_after INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE pull_requests ADD COLUMN reviews_revision INTEGER NOT NULL DEFAULT 0;
     `,
   },
 ];

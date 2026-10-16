@@ -360,6 +360,27 @@ describe("rulesets judge the merge", () => {
     expect(refused.body.detail).toContain("changes were requested");
   });
 
+  it("takes a reviewer's latest review however many it submitted, a request for changes blocking", async () => {
+    await ruleset({ required_approving_review_count: 1 });
+    await open(owner);
+    const head = (await pull()).head.sha;
+    const writer = await collaborator("push");
+    const reviewed = (event: string) =>
+      api("POST", `${path}/pulls/1/reviews`, writer.token, {
+        commit_id: head,
+        event,
+        ...(event !== "APPROVE" && { body: "Again" }),
+      });
+    for (let i = 0; i < 25; i++) expect((await reviewed("APPROVE")).status).toBe(200);
+    expect((await reviewed("REQUEST_CHANGES")).status).toBe(200);
+    expect((await reviewed("COMMENT")).status).toBe(200);
+    const refused = await merge(owner);
+    expect(refused.body.code).toBe("merge_refused");
+    expect(refused.body.detail).toContain("changes were requested");
+    expect((await reviewed("APPROVE")).status).toBe(200);
+    expect((await merge(owner)).status).toBe(200);
+  });
+
   it("refuses a merge method the rule does not allow", async () => {
     await ruleset({ allowed_merge_methods: ["squash"] });
     await open(owner);

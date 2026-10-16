@@ -99,19 +99,30 @@ export class RepoReviews {
   }
 
   /**
-   * What a merge's approval check reads of the pull request's reviews:
-   * those that can count (not comments, not dismissed, not an approval
-   * given before the pull request was retargeted), and a stamp the merge's
-   * commit transaction compares, so a review submitted or dismissed, or a
-   * retarget, meanwhile stops the merge.
+   * What a merge's approval check reads of the pull request's reviews,
+   * and a stamp the merge's commit transaction compares, so a review
+   * submitted or dismissed, or a retarget, meanwhile stops the merge. Of
+   * the reviews that can count (not comments, not dismissed, not an
+   * approval given before the pull request was retargeted), only each
+   * person's latest by themselves and by an agent, of the head and of any
+   * head: every choice the rulesets make among them (stale reviews, agents,
+   * who has write access) takes its review from these, so the work is
+   * bounded by the reviewers, not by how often each reviewed. At the same
+   * moment a request for changes is the latest, as the evaluation has it.
    */
   standing(number: number): { reviews: ReviewFact[]; stamp: string } {
     const reviews = this.deps.git.context.storage.sql
       .exec<Pick<Row, "reviewer_root" | "by_agent" | "commit_sha" | "state" | "submitted_at">>(
-        `SELECT r.reviewer_root, r.by_agent, r.commit_sha, r.state, r.submitted_at
-         FROM reviews r JOIN pull_requests p ON p.number = r.pr_number
-         WHERE r.pr_number = ? AND r.state != 'COMMENTED' AND r.dismissed_at IS NULL
-           AND NOT (r.state = 'APPROVED' AND r.review_id <= p.approvals_after)`,
+        `SELECT reviewer_root, by_agent, commit_sha, state, submitted_at FROM (
+           SELECT r.reviewer_root, r.by_agent, r.commit_sha, r.state, r.submitted_at,
+             row_number() OVER (
+               PARTITION BY r.reviewer_root, r.by_agent, r.commit_sha = p.head_sha
+               ORDER BY r.submitted_at DESC, r.state = 'CHANGES_REQUESTED' DESC
+             ) AS rank
+           FROM reviews r JOIN pull_requests p ON p.number = r.pr_number
+           WHERE r.pr_number = ? AND r.state != 'COMMENTED' AND r.dismissed_at IS NULL
+             AND NOT (r.state = 'APPROVED' AND r.review_id <= p.approvals_after)
+         ) WHERE rank = 1`,
         number,
       )
       .toArray()
@@ -126,18 +137,18 @@ export class RepoReviews {
     return { reviews, stamp: this.stamp(number) };
   }
 
-  /** Changes when any review of the pull request is submitted or changed, or it is retargeted. */
+  /**
+   * Changes when a review that can count is submitted or dismissed, or the
+   * pull request is retargeted; one row read.
+   */
   stamp(number: number): string {
     const row = this.deps.git.context.storage.sql
-      .exec<{ n: number; last: number; versions: number; after: number | null }>(
-        `SELECT count(*) AS n, coalesce(max(review_id), 0) AS last,
-           coalesce(sum(version), 0) AS versions,
-           (SELECT approvals_after FROM pull_requests WHERE number = ?1) AS after
-         FROM reviews WHERE pr_number = ?1`,
+      .exec<{ reviews_revision: number; approvals_after: number }>(
+        "SELECT reviews_revision, approvals_after FROM pull_requests WHERE number = ?",
         number,
       )
-      .one();
-    return `${row.n}:${row.last}:${row.versions}:${row.after}`;
+      .toArray()[0];
+    return row ? `${row.reviews_revision}:${row.approvals_after}` : "";
   }
 
   get(number: number, id: number): ReviewRecord | undefined {
@@ -194,6 +205,7 @@ export class RepoReviews {
         now,
       );
       const submitted = record(row as Row);
+      if (submitted.state !== "COMMENTED") this.#revised(number);
       this.#run(
         "DELETE FROM review_requests WHERE pr_number = ? AND reviewer_id = ?",
         number,
@@ -239,6 +251,7 @@ export class RepoReviews {
         id,
       );
       const dismissed = record(row as Row);
+      this.#revised(number);
       this.#emit("dismissed", dismissed, caller.actor);
       this.deps.events.auditChange("pull_request.dismiss_review", caller.actor, {
         number,
@@ -376,6 +389,14 @@ export class RepoReviews {
       reviewer,
       ...(reviewerRoot !== undefined && { reviewer_root: reviewerRoot }),
     });
+  }
+
+  /** In the transaction of a change of a review that can count: the merge's stamp changes. */
+  #revised(number: number): void {
+    this.#run(
+      "UPDATE pull_requests SET reviews_revision = reviews_revision + 1 WHERE number = ?",
+      number,
+    );
   }
 
   #run(query: string, ...bindings: SqlStorageValue[]): void {

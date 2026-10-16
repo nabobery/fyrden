@@ -1,8 +1,10 @@
 // Reviews of pull requests: who may submit, dismiss and request them, and
 // that each review stays bound to the head commit it reviewed.
 import { env } from "cloudflare:workers";
+import { type ApprovalSettings, evaluateApprovals, type ReviewFact } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
+import type { RepoDO } from "../src/do/RepoDO.js";
 import { api, handleOf, json, user, type Who } from "./helpers/api.js";
 import { principalWithToken, scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
@@ -194,6 +196,120 @@ describe("dismissing reviews", () => {
     expect((await dismiss(writer, approved.body.id)).body.code).toBe("wrong_state");
     expect((await dismiss(writer, comment.body.id)).body.code).toBe("wrong_state");
     expect((await dismiss(writer, 999)).body.code).toBe("review_not_found");
+  });
+});
+
+describe("what a merge reads of the reviews", () => {
+  it("is each reviewer's latest reviews only, however many it submitted, judged as the whole history is", async () => {
+    // Many reviews by three people and their agents, of the head and an earlier one, some at the
+    // same moment, some dismissed or before a retarget; stored as they would be, without a request each.
+    const roots = ["alice", "bob", "carol"];
+    const at = 1_000;
+    const history = await inRepo(env.REPO.getByName(repo.id), (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      for (let i = 0; i < 300; i++)
+        sql.exec(
+          `INSERT INTO reviews (pr_number, reviewer_id, reviewer_root, by_agent, state, commit_sha,
+             submitted_at, dismissed_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
+          roots[i % 3] as string,
+          roots[i % 3] as string,
+          i % 5 === 0 ? 1 : 0,
+          (["APPROVED", "CHANGES_REQUESTED", "COMMENTED"] as const)[(i % 7) % 3],
+          i % 4 === 0 ? fx.c1 : fx.c2,
+          at + Math.floor(i / 6),
+          i % 11 === 0 ? at : null,
+        );
+      sql.exec(
+        "UPDATE pull_requests SET approvals_after = (SELECT max(review_id) - 200 FROM reviews) WHERE number = 1",
+      );
+      const all = sql
+        .exec<{
+          reviewer_root: string;
+          by_agent: number;
+          commit_sha: string;
+          state: ReviewFact["state"];
+          submitted_at: number;
+        }>(
+          `SELECT r.reviewer_root, r.by_agent, r.commit_sha, r.state, r.submitted_at
+           FROM reviews r JOIN pull_requests p ON p.number = r.pr_number
+           WHERE r.pr_number = 1 AND r.state != 'COMMENTED' AND r.dismissed_at IS NULL
+             AND NOT (r.state = 'APPROVED' AND r.review_id <= p.approvals_after)`,
+        )
+        .toArray()
+        .map(
+          (row): ReviewFact => ({
+            reviewerRoot: row.reviewer_root,
+            byAgent: row.by_agent === 1,
+            commitSha: row.commit_sha,
+            state: row.state,
+            submittedAt: row.submitted_at,
+            dismissed: false,
+          }),
+        );
+      return { all, standing: r.reviews.standing(1).reviews };
+    });
+    expect(history.all.length).toBeGreaterThan(100);
+    // At most each person's latest by themselves and by an agent, of the head and of any head.
+    expect(history.standing.length).toBeLessThanOrEqual(roots.length * 4);
+    for (const required of [1, 3])
+      for (const dismissStale of [false, true])
+        for (const requireLastPushApproval of [false, true])
+          for (const allowAgentApprovals of [false, true]) {
+            const settings: ApprovalSettings = {
+              required,
+              dismissStale,
+              requireLastPushApproval,
+              allowAgentApprovals,
+            };
+            for (const eligible of [roots, ["alice", "carol"]]) {
+              const input = {
+                headSha: fx.c2,
+                authorRoot: "bob",
+                lastPush: { pusherRoot: "carol", at: at + 20 },
+                eligibleRoots: new Set(eligible),
+              };
+              expect(evaluateApprovals({ ...input, reviews: history.standing }, settings)).toEqual(
+                evaluateApprovals({ ...input, reviews: history.all }, settings),
+              );
+            }
+          }
+  });
+
+  it("is one review of a reviewer who approved the head a thousand times", async () => {
+    const standing = await inRepo(env.REPO.getByName(repo.id), (r: RepoDO) => {
+      for (let i = 0; i < 1_000; i++)
+        r.git.context.storage.sql.exec(
+          `INSERT INTO reviews (pr_number, reviewer_id, reviewer_root, by_agent, state, commit_sha,
+             submitted_at) VALUES (1, 'dave', 'dave', 0, 'APPROVED', ?, ?)`,
+          fx.c2,
+          i,
+        );
+      return r.reviews.standing(1).reviews;
+    });
+    expect(standing).toEqual([expect.objectContaining({ reviewerRoot: "dave", submittedAt: 999 })]);
+  });
+
+  it("is stamped anew by each review that can count submitted or dismissed, and by a retarget", async () => {
+    const stamp = () => inRepo(env.REPO.getByName(repo.id), (r: RepoDO) => r.reviews.stamp(1));
+    const writer = await collaborator("push");
+    const stamps = [await stamp()];
+    const approved = await review(writer, { event: "APPROVE" });
+    stamps.push(await stamp());
+    // A comment never counts: a merge need not start again for one.
+    await review(writer, { event: "COMMENT", body: "And a note" });
+    expect(await stamp()).toBe(stamps.at(-1));
+    await review(writer, { event: "REQUEST_CHANGES", body: "Wait" });
+    stamps.push(await stamp());
+    await dismiss(writer, approved.body.id);
+    stamps.push(await stamp());
+    expect(
+      (await push([{ old: ZERO, new: fx.c1, ref: "refs/heads/release" }], fx.packEmpty)).report,
+    ).toContain("ok refs/heads/release\n");
+    expect((await api("PATCH", `${path}/pulls/1`, owner.token, { base: "release" })).status).toBe(
+      200,
+    );
+    stamps.push(await stamp());
+    expect(new Set(stamps).size).toBe(stamps.length);
   });
 });
 
