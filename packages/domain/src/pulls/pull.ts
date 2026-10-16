@@ -37,6 +37,11 @@ export const PullRequestRowSchema = z.strictObject({
   headRepoId: z.string().nullable(),
   /** The author lets the base's maintainers write the head branch (in another repository). */
   maintainerCanModify: z.boolean(),
+  /**
+   * The base branch's tip when it opened, reopened or was retargeted; once
+   * closed or merged, the tip it closed or was merged on: what it is
+   * compared from from then on.
+   */
   baseSha: sha,
   headSha: sha,
   /** The head branch was deleted: the pull request stays at its last head revision. */

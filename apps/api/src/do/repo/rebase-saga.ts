@@ -699,8 +699,8 @@ export class RebaseSagas {
           this.deps.withFeed(feedActor, () =>
             this.deps.pulls.markMerged(
               number,
-              tip,
-              "rebase",
+              // Its push moves the branch from `base_tip` only.
+              { sha: tip, base: oidFromHex(row.base_tip), method: "rebase" },
               { ...actor, via: "merge" },
               this.git.context.now(),
             ),

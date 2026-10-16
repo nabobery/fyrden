@@ -13736,7 +13736,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/pulls/{pull_number}/commits": {
       "get": {
-        "description": "The commits a pull request's head has that its base branch does not, oldest first; at most 250 (GitHub's limit).",
+        "description": "The commits a pull request's head has that its base branch does not, oldest first; at most 250 (GitHub's limit). A closed or merged pull request is compared from its base branch as it was when it closed or merged (\`base.sha\`).",
         "operationId": "pulls.commits.list",
         "parameters": [
           {
@@ -14274,7 +14274,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/pulls/{pull_number}/files": {
       "get": {
-        "description": "The files a pull request changes, compared from the merge base of its base branch and head to its head (as GitHub's three-dot comparison), in path order, with each file's patch. At most 3,000 files are listed; renames with unchanged content are found. Pages keep the comparison they started with: the cursor carries \`merge_base_sha\` and \`head_sha\`.",
+        "description": "The files a pull request changes, compared from the merge base of its base branch and head to its head (as GitHub's three-dot comparison), in path order, with each file's patch. At most 3,000 files are listed; renames with unchanged content are found. A closed or merged pull request is compared from its base branch as it was when it closed or merged (\`base.sha\`), whatever the branch does after. Pages keep the comparison they started with: the cursor carries \`merge_base_sha\` and \`head_sha\`.",
         "operationId": "pulls.files.list",
         "parameters": [
           {

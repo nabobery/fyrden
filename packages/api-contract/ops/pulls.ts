@@ -257,7 +257,7 @@ export const listPullFiles = defineOperation({
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/files",
   summary: "List pull request files",
   description:
-    "The files a pull request changes, compared from the merge base of its base branch and head to its head (as GitHub's three-dot comparison), in path order, with each file's patch. At most 3,000 files are listed; renames with unchanged content are found. Pages keep the comparison they started with: the cursor carries `merge_base_sha` and `head_sha`.",
+    "The files a pull request changes, compared from the merge base of its base branch and head to its head (as GitHub's three-dot comparison), in path order, with each file's patch. At most 3,000 files are listed; renames with unchanged content are found. A closed or merged pull request is compared from its base branch as it was when it closed or merged (`base.sha`), whatever the branch does after. Pages keep the comparison they started with: the cursor carries `merge_base_sha` and `head_sha`.",
   input: z.object({
     ...RepoInput,
     pull_number: PullNumber,
@@ -292,7 +292,7 @@ export const listPullCommits = defineOperation({
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/commits",
   summary: "List pull request commits",
   description:
-    "The commits a pull request's head has that its base branch does not, oldest first; at most 250 (GitHub's limit).",
+    "The commits a pull request's head has that its base branch does not, oldest first; at most 250 (GitHub's limit). A closed or merged pull request is compared from its base branch as it was when it closed or merged (`base.sha`).",
   input: z.object({
     ...RepoInput,
     pull_number: PullNumber,

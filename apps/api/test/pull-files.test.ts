@@ -45,7 +45,8 @@ const commit = async (branch: string, changes: Record<string, unknown>[]) => {
   return made.body.commit.sha;
 };
 
-async function branchAt(name: string, sha: string) {
+/** Pushes branch `name` from `old` to `sha` (ZERO deletes it), a force push when it must be. */
+async function branchAt(name: string, sha: string, old = ZERO) {
   const target: PushTarget = {
     repo: { id: repo.id, name: repo.name, stub: env.REPO.getByName(repo.id) },
     owner: {
@@ -56,7 +57,10 @@ async function branchAt(name: string, sha: string) {
   };
   const pushed = await postPush(
     target,
-    pushBody([{ old: ZERO, new: sha, ref: `refs/heads/${name}` }], { pack: fx.packEmpty }),
+    pushBody(
+      [{ old, new: sha, ref: `refs/heads/${name}` }],
+      sha === ZERO ? {} : { pack: fx.packEmpty },
+    ),
   );
   expect(pushed.report).toContain(`ok refs/heads/${name}\n`);
 }
@@ -215,6 +219,68 @@ describe("a pull request whose base branch is gone", () => {
     const listed = await files();
     expect(listed.status).toBe(200);
     expect(listed.body.files.map((f) => f.filename)).toContain("a.txt");
+  });
+});
+
+describe("a merged or closed pull request", () => {
+  const tipOf = async (branch: string) =>
+    (await json<{ commit: { sha: string } }>(api("GET", `${path}/branches/${branch}`, owner.token)))
+      .body.commit.sha;
+  const listed = async () => ({
+    files: (await files()).body.files.map((f) => f.filename),
+    commits: (
+      await json<{ commits: { sha: string }[] }>(api("GET", `${path}/pulls/1/commits`, owner.token))
+    ).body.commits.map((c) => c.sha),
+  });
+  /** Onto a branch of its own, which can be moved and deleted later. */
+  const retargeted = async () => {
+    const tip = await tipOf("main");
+    await branchAt("release", tip);
+    expect((await api("PATCH", `${path}/pulls/1`, owner.token, { base: "release" })).status).toBe(
+      200,
+    );
+    return tip;
+  };
+
+  for (const method of ["merge", "squash", "rebase"] as const)
+    it(`keeps the comparison it was merged with (${method}), though its base branch moves on or goes`, async () => {
+      const tip = await retargeted();
+      const before = await listed();
+      expect(before.files).toHaveLength(5);
+      expect(before.commits).toHaveLength(1);
+      const merged = await json<{ sha: string; merged: boolean }>(
+        api("PUT", `${path}/pulls/1/merge`, owner.token, { merge_method: method }),
+      );
+      expect(merged.body.merged).toBe(true);
+      expect(await listed()).toEqual(before);
+      // Its base is the one it was merged onto, whatever the branch does next.
+      const pull = await json<{ base: { sha: string } }>(
+        api("GET", `${path}/pulls/1`, owner.token),
+      );
+      expect(pull.body.base.sha).toBe(tip);
+      // The branch moves to the head itself (as a merge of it would take it), then goes.
+      const head = before.commits[0] as string;
+      await branchAt("release", head, merged.body.sha);
+      expect(await listed()).toEqual(before);
+      await branchAt("release", ZERO, head);
+      expect(await listed()).toEqual(before);
+    });
+
+  it("is compared from its base as it was when it closed, and from the branch's tip once reopened", async () => {
+    const tip = await retargeted();
+    const before = await listed();
+    expect((await api("PATCH", `${path}/pulls/1`, owner.token, { state: "closed" })).status).toBe(
+      200,
+    );
+    // The base takes the head's commits while it is closed.
+    const head = before.commits[0] as string;
+    await branchAt("release", head, tip);
+    expect(await listed()).toEqual(before);
+    // Reopened, it compares the branch as it is now: nothing is left to merge.
+    expect((await api("PATCH", `${path}/pulls/1`, owner.token, { state: "open" })).status).toBe(
+      200,
+    );
+    expect(await listed()).toEqual({ files: [], commits: [] });
   });
 });
 

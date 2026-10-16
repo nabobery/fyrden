@@ -1626,8 +1626,8 @@ export class RepoDO extends MigratingDO {
             this.feed.within(feedActor, () =>
               this.pulls.markMerged(
                 number,
-                sha,
-                method,
+                // The branch moves from `baseTip` only (its compare-and-set).
+                { sha, base: baseTip, method },
                 { ...actor, via: "merge" },
                 this.git.context.now(),
               ),
@@ -1825,8 +1825,9 @@ export class RepoDO extends MigratingDO {
 
   /**
    * A page of the files a pull request changes. Without `from`, a listing
-   * starts: the merge base of the base branch's tip (else the recorded
-   * base) and the recorded head is worked out now, and kept for the later
+   * starts: the merge base of the base it is compared from (the base
+   * branch's tip while open, see `comparedBase`) and the recorded head is
+   * worked out now, and kept for the later
    * pages when there are any; `from` names such a listing (a cursor this
    * repository gave) and where its next page starts.
    */
@@ -1852,8 +1853,11 @@ export class RepoDO extends MigratingDO {
           head = oidFromHex(kept.head);
         } else {
           head = oidFromHex(pull.headSha);
-          const base = this.pulls.branchTip(pull.baseRef) ?? oidFromHex(pull.baseSha);
-          const found = await mergeBaseOf(this.git.commitGraph, base, head);
+          const found = await mergeBaseOf(
+            this.git.commitGraph,
+            this.pulls.comparedBase(pull),
+            head,
+          );
           if (!found.ok) return found;
           mergeBase = found.value;
         }
@@ -1872,9 +1876,9 @@ export class RepoDO extends MigratingDO {
   }
 
   /**
-   * A page of a pull request's commits, oldest first: from the base
-   * branch's tip (else the recorded base) to the recorded head, kept for
-   * the later pages as a file listing is.
+   * A page of a pull request's commits, oldest first: from the base it is
+   * compared from (`comparedBase`) to the recorded head, kept for the
+   * later pages as a file listing is.
    */
   listPullCommits(
     number: number,
@@ -1895,7 +1899,7 @@ export class RepoDO extends MigratingDO {
         base = oidFromHex(kept.base);
         head = oidFromHex(kept.head);
       } else {
-        base = this.pulls.branchTip(pull.baseRef) ?? oidFromHex(pull.baseSha);
+        base = this.pulls.comparedBase(pull);
         head = oidFromHex(pull.headSha);
       }
       const page = await pullCommits(browse, this.git.commitGraph, {
@@ -2105,7 +2109,8 @@ export class RepoDO extends MigratingDO {
       return { ok: false, code: "commit_unavailable" };
     let at = input.commitId;
     if (input.side === "LEFT") {
-      const base = this.pulls.branchTip(pull.baseRef) ?? oidFromHex(pull.baseSha);
+      // The left side the files listing shows (a merged one's from the base it was merged onto).
+      const base = this.pulls.comparedBase(pull);
       const found = await mergeBaseOf(this.git.commitGraph, base, oidFromHex(input.commitId));
       if (!found.ok) return found;
       at = oidToHex(found.value);

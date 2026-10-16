@@ -270,15 +270,24 @@ export class RepoPulls {
 
   /**
    * In a merge's commit transaction: the pull request is merged into
-   * `sha` by `actor`; it emits `closed` and records the merge.
+   * `sha` by `actor`; it emits `closed` and records the merge, with the
+   * base branch's tip the merge was made on (`base`: the branch has moved
+   * already) as the base the pull request is compared from from now on.
    */
-  markMerged(number: number, sha: Oid, method: string, actor: RefActor, now: number): void {
+  markMerged(
+    number: number,
+    merge: { readonly sha: Oid; readonly base: Oid; readonly method: string },
+    actor: RefActor,
+    now: number,
+  ): void {
+    const { sha, base, method } = merge;
     const rule = PULL_ACTION_RULES.merge;
     const [row] = this.#rows(
-      `UPDATE pull_requests SET state = 'merged', merge_commit_sha = ?, merged_by = ?,
-         merged_at = ?, closed_at = ?, version = version + 1, updated_at = ?
+      `UPDATE pull_requests SET state = 'merged', merge_commit_sha = ?, base_sha = ?,
+         merged_by = ?, merged_at = ?, closed_at = ?, version = version + 1, updated_at = ?
        WHERE number = ? AND state = 'open' RETURNING *`,
       oidToHex(sha),
+      oidToHex(base),
       actor.principal,
       now,
       now,
@@ -693,9 +702,16 @@ export class RepoPulls {
         data = { changes: { maintainer_can_modify: { from: current.maintainerCanModify } } };
         row = set("maintainer_can_modify = ?", patch.maintainerCanModify ? 1 : 0);
         break;
-      case "close":
-        row = set("state = 'closed', closed_at = ?", now);
+      case "close": {
+        // Compared from the base as it is now from here on (as last recorded, when it is gone).
+        const base = this.branchTip(current.baseRef);
+        row = set(
+          "state = 'closed', closed_at = ?, base_sha = ?",
+          now,
+          base ? oidToHex(base) : current.baseSha,
+        );
         break;
+      }
       case "reopen": {
         // The base it had until then: a retarget in the same patch comes after.
         const head = (
@@ -723,6 +739,18 @@ export class RepoPulls {
       ...(action === "retarget" && { base: { from: current.baseRef, to: next.baseRef } }),
     });
     return next;
+  }
+
+  /**
+   * What a pull request's files and commits are compared from: an open
+   * one's base branch tip (the recorded base once the branch is gone); a
+   * closed or merged one's recorded base, the branch's tip when it closed
+   * or merged, whatever the branch does after.
+   */
+  comparedBase(pull: PullRecord): Oid {
+    return (
+      (pull.state === "open" ? this.branchTip(pull.baseRef) : null) ?? oidFromHex(pull.baseSha)
+    );
   }
 
   /** A branch's tip, or null when it does not exist; one row read. */

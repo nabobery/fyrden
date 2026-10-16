@@ -43,7 +43,8 @@ const commitOn = async (branch: string, changes: Record<string, unknown>[], mess
   expect(made.status).toBe(201);
   return made.body.commit.sha;
 };
-async function branchFrom(name: string, sha: string) {
+/** Pushes branch `name` from `old` to `sha` (a force push when it must be). */
+async function branchFrom(name: string, sha: string, old = ZERO) {
   const target: PushTarget = {
     repo: { id: repo.id, name: repo.name, stub: stub() },
     owner: {
@@ -54,7 +55,7 @@ async function branchFrom(name: string, sha: string) {
   };
   const pushed = await postPush(
     target,
-    pushBody([{ old: ZERO, new: sha, ref: `refs/heads/${name}` }], { pack: fx.packEmpty }),
+    pushBody([{ old, new: sha, ref: `refs/heads/${name}` }], { pack: fx.packEmpty }),
   );
   expect(pushed.report).toContain(`ok refs/heads/${name}\n`);
 }
@@ -282,6 +283,40 @@ describe("rebase merges", () => {
     expect((await commitAt("main")).sha).toBe(again.body.sha);
     expect(await file("e.txt")).toBe("e\n");
     expect(await file("b.txt")).toBe("BEE\n");
+  });
+
+  it("keeps the comparison it was rebased onto when it finishes in the background", async () => {
+    const commits: string[] = [];
+    for (const name of ["c", "d"])
+      commits.push(
+        await commitOn("feature", [{ path: `${name}.txt`, content: `${name}\n` }], `Add ${name}`),
+      );
+    await open();
+    const tip = await commitOn("main", [{ path: "b.txt", content: "BEE\n" }], "Shout bee");
+    const listed = async () => ({
+      files: (
+        await json<{ files: { filename: string }[] }>(
+          api("GET", `${path}/pulls/1/files`, owner.token),
+        )
+      ).body.files.map((f) => f.filename),
+      commits: (
+        await json<{ commits: { sha: string }[] }>(
+          api("GET", `${path}/pulls/1/commits`, owner.token),
+        )
+      ).body.commits.map((c) => c.sha),
+    });
+    expect(await listed()).toEqual({ files: ["c.txt", "d.txt"], commits });
+    await setPolicy({ requestCalls: 0, commitsPerSlice: 1 });
+    expect((await rebase()).body).toMatchObject({ code: "merge_in_progress" });
+    await drive();
+    const pull = await json<{ merged: boolean; base: { sha: string } }>(
+      api("GET", `${path}/pulls/1`, owner.token),
+    );
+    expect(pull.body).toMatchObject({ merged: true, base: { sha: tip } });
+    // The base branch then takes the head itself: the merged pull request's listings stay.
+    const merged = (await commitAt("main")).sha;
+    await branchFrom("main", commits[1] as string, merged);
+    expect(await listed()).toEqual({ files: ["c.txt", "d.txt"], commits });
   });
 
   it("releases the request's idempotency key while the rebase goes on", async () => {
