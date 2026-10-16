@@ -112,7 +112,10 @@ request's head is not imported (the pull request keeps its last one). In
 between (only shared objects would make room), the merge job is asked for
 and the import waits for the real sizes: 409 `busy` (try again), or the
 revision is imported once the merges are done; it is refused when the
-merges leave nothing more to tell. A view over its cap all the same (the
+merges leave nothing more to tell. A pack already merged counts as nothing
+new: a later import naming it again reads it through the merged pack, and
+borrows it again only once the merged pack has left the view (dropped by
+the repository's collection). A view over its cap all the same (the
 budget lowered since) leaves the merge job failing, tried again in case a
 collection drops packs.
 

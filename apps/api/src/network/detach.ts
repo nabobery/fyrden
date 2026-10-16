@@ -547,6 +547,8 @@ class DetachSlice {
           cursor.oldNetworkId,
         )
         .toArray();
+      // The view compaction's merges were of the old network's packs: none is read any more.
+      storage.sql.exec("DELETE FROM view_merged");
       for (const oid of dropCommits)
         storage.sql.exec("DELETE FROM commits WHERE oid = ?", oid).toArray();
       if (!git.jobs.checkpoint(job, encodeJson(notify)))

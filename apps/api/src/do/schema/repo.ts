@@ -783,4 +783,21 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX refollow_bases_due ON refollow_bases (next_at);
     `,
   },
+  {
+    version: 30,
+    // The borrowed packs a view compaction merged, each with the pack that
+    // holds its objects now (one hop: merging that one again moves its
+    // packs on to the new output). An import of a head that still names a
+    // merged pack reads it through that pack while the view holds it, and
+    // borrows it again only once that one is gone. Rows go when the row of
+    // the pack they were merged into is deleted, and all of them on detach.
+    name: "view_merged",
+    sql: `
+      CREATE TABLE view_merged (
+        pack_id TEXT PRIMARY KEY,
+        into_pack_id TEXT NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX view_merged_into ON view_merged (into_pack_id);
+    `,
+  },
 ];

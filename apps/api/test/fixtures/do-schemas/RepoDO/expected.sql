@@ -40,6 +40,7 @@ CREATE INDEX reviews_standing_head
 CREATE INDEX revision_imports_waiting ON revision_imports (requested_at, pr_number);
 CREATE UNIQUE INDEX rulesets_name ON rulesets (name);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);
+CREATE INDEX view_merged_into ON view_merged (into_pack_id);
 CREATE TABLE acl_snapshot (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         account_id TEXT NOT NULL DEFAULT '',
@@ -520,6 +521,10 @@ CREATE TABLE uploads (
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
   ) STRICT;
+CREATE TABLE view_merged (
+        pack_id TEXT PRIMARY KEY,
+        into_pack_id TEXT NOT NULL
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE webhook_ids (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         last INTEGER NOT NULL

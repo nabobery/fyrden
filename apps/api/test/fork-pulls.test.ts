@@ -1041,6 +1041,134 @@ describe("the base's view", () => {
     expect(await borrowedLive(stub)).toBe(1);
   });
 
+  describe("after its compaction merged the fork's packs", () => {
+    /** The fork's newest pack with its objects. */
+    const newestForkPack = () =>
+      inRepo(env.REPO.getByName(fork.id), (r: RepoDO) =>
+        r.git.context.storage.sql
+          .exec<{ pack_id: string; object_count: number }>(
+            `SELECT pack_id, object_count FROM packs WHERE origin = 'own' AND state = 'live'
+             ORDER BY created_at DESC, pack_id DESC LIMIT 1`,
+          )
+          .one(),
+      );
+    /** What the base's view compaction merged, and into which pack. */
+    const merged = (stub: DurableObjectStub<RepoDO>) =>
+      inRepo(stub, (r: RepoDO) =>
+        Object.fromEntries(
+          r.git.context.storage.sql
+            .exec<{ pack_id: string; into_pack_id: string }>(
+              "SELECT pack_id, into_pack_id FROM view_merged",
+            )
+            .toArray()
+            .map((m) => [m.pack_id, m.into_pack_id]),
+        ),
+      );
+    /**
+     * Room for one borrowed pack; the pull request borrows the fork's two,
+     * which the compaction merges into one. Answers them and the output.
+     */
+    const borrowAndCompact = async (stub: DurableObjectStub<RepoDO>) => {
+      await inRepo(stub, (r: RepoDO) => {
+        r.packCap = { ...r.packCap, cap: 31 };
+      });
+      await commitOn(contributor, fork.path, "main", [{ path: "c.txt", content: "c\n" }]);
+      expect((await open(contributor, `${contributor.handle}:main`)).status).toBe(201);
+      const sources = await borrowedCounts(stub);
+      expect(sources).toHaveLength(2);
+      await compactView(stub);
+      const [output, ...others] = await borrowedCounts(stub);
+      expect(others).toEqual([]);
+      if (!output) throw new Error("the view holds no output");
+      expect(await merged(stub)).toEqual(
+        Object.fromEntries(sources.map((s) => [s.pack_id, output.pack_id])),
+      );
+      return { sources, output };
+    };
+
+    it("reads them through the output, borrowing only what is new", async () => {
+      const stub = env.REPO.getByName(base.id);
+      const { output } = await borrowAndCompact(stub);
+      // A new commit of the fork, in a pack of its own: a run takes the output and it, no more.
+      const topic = await forkBranch("topic", "d.txt");
+      const added = await newestForkPack();
+      await inRepo(stub, (r: RepoDO) => {
+        r.maintenance = {
+          ...r.maintenance,
+          maxRewriteObjects: output.object_count + added.object_count,
+        };
+      });
+      expect(await open(contributor, `${contributor.handle}:${topic}`)).toMatchObject({
+        status: 201,
+      });
+      expect(await borrowedCounts(stub)).toEqual([output, added]);
+    });
+
+    it("borrows them again once the output is gone from the view", async () => {
+      const stub = env.REPO.getByName(base.id);
+      const { sources, output } = await borrowAndCompact(stub);
+      // The base's collection reached nothing in the output: condemned, then released.
+      await inRepo(stub, (r: RepoDO) => {
+        const now = r.git.context.now();
+        r.git.context.storage.sql.exec(
+          `UPDATE packs SET state = 'condemned', condemned_at = ?, last_touched_at = ?
+           WHERE pack_id = ?`,
+          now,
+          now,
+          output.pack_id,
+        );
+      });
+      await runJob(stub, "retire-packs");
+      expect(await merged(stub)).toEqual({});
+      const topic = await forkBranch("topic", "d.txt");
+      const added = await newestForkPack();
+      expect(await open(contributor, `${contributor.handle}:${topic}`)).toMatchObject({
+        status: 201,
+      });
+      expect(await borrowedCounts(stub)).toEqual([...sources, added]);
+    });
+
+    it("takes the output back at publication, not them, when the collection dropped it meanwhile", async () => {
+      const stub = env.REPO.getByName(base.id);
+      const { output } = await borrowAndCompact(stub);
+      await inRepo(stub, (r: RepoDO) => {
+        r.forkPullHooks.beforePublish = async () => {
+          r.git.context.storage.sql.exec(
+            "UPDATE packs SET state = 'garbage' WHERE pack_id = ?",
+            output.pack_id,
+          );
+        };
+      });
+      const topic = await forkBranch("topic", "d.txt");
+      const added = await newestForkPack();
+      expect(await open(contributor, `${contributor.handle}:${topic}`)).toMatchObject({
+        status: 201,
+      });
+      expect(await borrowedCounts(stub)).toEqual([output, added]);
+    });
+
+    it("reads them through a later output that merged the first", async () => {
+      const stub = env.REPO.getByName(base.id);
+      const { sources, output } = await borrowAndCompact(stub);
+      const topic = await forkBranch("topic", "d.txt");
+      const added = await newestForkPack();
+      expect((await open(contributor, `${contributor.handle}:${topic}`)).status).toBe(201);
+      // The output and the new pack are merged again; the first output's row goes.
+      await compactView(stub);
+      const [later, ...others] = await borrowedCounts(stub);
+      expect(others).toEqual([]);
+      await runJob(stub, "retire-packs");
+      expect((await packStates(stub)).map((p) => p.pack_id)).not.toContain(output.pack_id);
+      expect(await merged(stub)).toEqual(
+        Object.fromEntries([...sources, output, added].map((p) => [p.pack_id, later?.pack_id])),
+      );
+      const next = await forkBranch("next", "e.txt");
+      const newest = await newestForkPack();
+      expect((await open(contributor, `${contributor.handle}:${next}`)).status).toBe(201);
+      expect(await borrowedCounts(stub)).toEqual([later, newest]);
+    });
+  });
+
   it("leaves a compaction that cannot bring the view within its cap failing, not done", async () => {
     const stub = env.REPO.getByName(base.id);
     await open(contributor, `${contributor.handle}:main`);

@@ -75,7 +75,11 @@ import type {
   MemberPack,
   ViewPack,
 } from "../network/types.js";
-import { type CompactSliceInput, viewCompactionHandler } from "../network/view-cap.js";
+import {
+  type CompactSliceInput,
+  forgetMerged,
+  viewCompactionHandler,
+} from "../network/view-cap.js";
 import { platformSigner } from "../signing/platform-key.js";
 import { secretKeys } from "../webhooks/secrets.js";
 import {
@@ -1526,11 +1530,14 @@ export class RepoDO extends MigratingDO {
   /** Repack and garbage-collection budgets and timings. Tests may replace them. */
   maintenance: MaintenancePolicy = MAINTENANCE_DEFAULTS;
   /**
-   * Options of the pack retire job (retention, deletion fence, and the fork
-   * network, which packs it shares are released to). Tests may replace them.
+   * Options of the pack retire job (retention, deletion fence, the fork
+   * network, which packs it shares are released to, and the view
+   * compaction's merges into a pack, forgotten with its row). Tests may
+   * replace them.
    */
   retireOptions: PackRetireOptions = {
     network: networkRetire(this.env, () => this.#repoId()),
+    forget: (packId) => forgetMerged(this.git, packId),
   };
   /** Hooks into garbage-collection slices. For tests. */
   gcHooks: GcHooks = {};

@@ -92,13 +92,21 @@ export interface PackRetireOptions {
    */
   readonly network?: NetworkRetire;
   /**
+   * Called in the transaction that deletes a pack's row (after its bytes
+   * are deleted, or its claim released): drops what the repository records
+   * of it outside the git storage tables.
+   */
+  readonly forget?: (packId: PackId) => void;
+  /**
    * Called after a pack is chosen for deletion and before its bytes are
    * deleted (the gap a network-wide fence must survive). For tests.
    */
   readonly beforeDelete?: (packId: PackId) => Promise<void>;
 }
 
-export const PACK_RETIRE_DEFAULTS: Required<Omit<PackRetireOptions, "beforeDelete" | "network">> = {
+export const PACK_RETIRE_DEFAULTS: Required<
+  Omit<PackRetireOptions, "beforeDelete" | "network" | "forget">
+> = {
   retentionMs: 30 * DAY,
   fetchObjectTtlMs: 60 * 60 * 1000,
   staleOutputTtlMs: DAY,
@@ -143,8 +151,8 @@ export function packRetireHandler(
   return { runSlice: () => retire.runSlice() };
 }
 
-type RetireConfig = Required<Omit<PackRetireOptions, "beforeDelete" | "network">> &
-  Pick<PackRetireOptions, "network">;
+type RetireConfig = Required<Omit<PackRetireOptions, "beforeDelete" | "network" | "forget">> &
+  Pick<PackRetireOptions, "network" | "forget">;
 
 class PackRetire {
   readonly #context: GitStorageContext;
@@ -270,16 +278,7 @@ class PackRetire {
     // a condemned pack gets none afterwards.
     if (!this.#condemnIfUnleased(pack)) return 0;
     await this.git.bucket.delete(keys);
-    const { storage } = this.#context;
-    const written = storage.transactionSync(
-      () =>
-        run(storage, "DELETE FROM leases WHERE pack_id = ?", packId) +
-        run(
-          storage,
-          "DELETE FROM packs WHERE pack_id = ? AND state IN ('condemned', 'discarded')",
-          packId,
-        ),
-    );
+    const written = this.#deleteRow(packId, ["condemned", "discarded"]);
     countRowsWritten(this.#context, "retire.delete", written);
     if (pack.kind === "fetch") this.#countMetric("expired_fetch", 1);
     else if (pack.state === "condemned") this.#countMetric("deleted", 1);
@@ -306,15 +305,30 @@ class PackRetire {
     if (!this.#condemnIfUnleased(pack)) return 0;
     // Condemned and unleased: no new lease can be granted from here on.
     await network.release([{ packId: pack.pack_id as PackId, networkId: pack.network_id }]);
-    const { storage } = this.#context;
-    const written = storage.transactionSync(
-      () =>
-        run(storage, "DELETE FROM leases WHERE pack_id = ?", pack.pack_id) +
-        run(storage, "DELETE FROM packs WHERE pack_id = ? AND state = 'condemned'", pack.pack_id),
-    );
+    const written = this.#deleteRow(pack.pack_id, ["condemned"]);
     countRowsWritten(this.#context, "retire.release", written);
     this.#countMetric("released", 1);
     return 1;
+  }
+
+  /**
+   * In one transaction: the pack's leases, and its row while it is in one
+   * of `states`, with what else records it (`forget`). Returns the rows
+   * written.
+   */
+  #deleteRow(packId: string, states: readonly string[]): number {
+    const { storage } = this.#context;
+    return storage.transactionSync(() => {
+      const leases = run(storage, "DELETE FROM leases WHERE pack_id = ?", packId);
+      const row = run(
+        storage,
+        "DELETE FROM packs WHERE pack_id = ? AND state IN (SELECT value FROM json_each(?))",
+        packId,
+        JSON.stringify(states),
+      );
+      if (row > 0) this.config.forget?.(packId as PackId);
+      return leases + row;
+    });
   }
 
   /**
