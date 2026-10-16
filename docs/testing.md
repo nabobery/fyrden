@@ -75,9 +75,13 @@ a machine short of memory add `--concurrency=1` to heavy runs (`test`,
 - End-to-end tests start `wrangler dev` only through `startWranglerDev`
   (`tools/ci/e2e/wrangler-dev.ts`): ports the OS reports free, taken right
   before the start, and a fresh pair if one was taken meanwhile. Its `stop()`
-  is the only teardown: SIGTERM, SIGKILL if the process outlives a grace
-  period, and it resolves only once the process has closed, so a suite
-  removes the state directory after it, never before.
+  is the only teardown. wrangler runs in a process group of its own (its
+  `bin` script is a launcher that cannot pass SIGKILL on to the CLI and
+  workerd under it), and `stop()` signals the whole group: SIGTERM, SIGKILL
+  after a 10 s grace, resolving only once every process is gone and the
+  output pipes have closed. A suite removes the state directory after it,
+  never before. The e2e `hookTimeout` (60 s, `tools/ci/vitest.e2e.config.ts`)
+  leaves a teardown room for the browser's close, the grace and the cleanup.
 - Run `pnpm turbo run test:shuffle` before review on any change to alarms, the
   outbox, jobs or a test's setup: it runs the workerd suites in random orders.
 
