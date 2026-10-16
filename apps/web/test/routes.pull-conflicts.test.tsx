@@ -288,16 +288,16 @@ describe("resolving conflicts", () => {
     });
   });
 
+  /** What the page says when it cannot know whether the merge was made. */
+  const UNKNOWN =
+    "It is not known whether the merge was made: look at the pull request before sending it again.";
+
   it("answers, keeping the edits, when no answer comes back: the merge may have been made", async () => {
     const { outcome, body } = await resolve({ conflict_snapshot: SNAPSHOT, count: "0" }, () => {
       throw new TypeError("The service binding refused the request.");
     });
     expect(body).toEqual({ conflict_snapshot: SNAPSHOT, files: [] });
-    expect(outcome).toEqual({
-      error:
-        "No answer came back: the merge may or may not have been made. Look at the pull request before sending it again.",
-      snapshot: SNAPSHOT,
-    });
+    expect(outcome).toEqual({ error: UNKNOWN, snapshot: SNAPSHOT });
     // The page keeps its editors and says why; the next read tells whether the merge was made.
     expect(
       conflictsView({
@@ -310,18 +310,29 @@ describe("resolving conflicts", () => {
     ).toMatchObject({ editors: true, showRefusal: true, moved: false });
   });
 
-  it("answers, keeping the edits, when the API's answer cannot be read", async () => {
-    // A refusal is one, its reason unknown.
-    const refused = await resolve(
-      { conflict_snapshot: SNAPSHOT, count: "0" },
+  it("tells a refusal from an answer that cannot prove nothing was made", async () => {
+    // A server error (the merge may be made before it fails), a gateway's page, or a
+    // refusal whose problem cannot be read: the outcome is not known.
+    for (const reply of [
+      () => json({ code: "internal", detail: "Something failed." }, 500),
       () => new Response("<html>Bad gateway</html>", { status: 502 }),
+      () => new Response("not json", { status: 409 }),
+    ]) {
+      const { outcome } = await resolve({ conflict_snapshot: SNAPSHOT, count: "0" }, reply);
+      expect(outcome).toEqual({ error: UNKNOWN, snapshot: SNAPSHOT });
+    }
+    // A refusal with its problem is one.
+    const refused = await resolve({ conflict_snapshot: SNAPSHOT, count: "0" }, () =>
+      json({ code: "too_large", detail: "Too large to merge here." }, 422),
     );
     expect(refused.outcome).toEqual({
-      error: "The conflicts were not resolved.",
+      error: "Too large to merge here.",
       stale: false,
       snapshot: SNAPSHOT,
     });
-    // A success is one, though what it made is not known.
+  });
+
+  it("answers, keeping the edits, when a success's answer cannot be read", async () => {
     for (const reply of ["{", JSON.stringify({ sha: 7 }), ""]) {
       const made = await resolve(
         { conflict_snapshot: SNAPSHOT, count: "0" },

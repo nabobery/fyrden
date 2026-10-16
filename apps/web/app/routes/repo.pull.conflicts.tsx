@@ -183,15 +183,16 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
     };
   // Whatever goes wrong from here is answered (never thrown, which would replace the
   // editors with the error page): what the API did is told apart from what is not known.
+  const unknown = {
+    error:
+      "It is not known whether the merge was made: look at the pull request before sending it again.",
+    snapshot,
+  };
   let res: Response;
   try {
     res = await apiFetch(context, request, "POST", `${pullApiOf(params)}/conflicts`, json);
   } catch {
-    return {
-      error:
-        "No answer came back: the merge may or may not have been made. Look at the pull request before sending it again.",
-      snapshot,
-    };
+    return unknown;
   }
   const body: unknown = await res.json().catch(() => null);
   if (res.status === 201)
@@ -201,7 +202,11 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
           error: "The merge was made, but its answer could not be read: look at the pull request.",
           snapshot,
         };
+  // A refusal is one only as a client error with its problem: a server error can come after
+  // the merge was made (recording the request's outcome can fail), and a gateway's page or
+  // an unreadable problem proves nothing.
   const code = problemCode(body);
+  if (res.status < 400 || res.status >= 500 || code === undefined) return unknown;
   return {
     error: problemDetail(body, "The conflicts were not resolved."),
     stale: code === "head_moved" || code === "base_moved",
