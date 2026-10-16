@@ -98,6 +98,25 @@ describe("access revocations", () => {
     expect([...(named.repos ?? [])].sort()).toEqual([other.id, moving].sort());
   });
 
+  it("leave out a repository released before the removal: its own notice came first", async () => {
+    const { id, login, owner, dev } = await orgWithMember();
+    const made = async (name: string) =>
+      (await api("POST", `/orgs/${login}/repos`, owner.token, { name })).json<{ id: string }>();
+    const [gone, kept] = [await made("gone"), await made("kept")];
+    // Read as held, then released for a transfer before the removal runs.
+    const org = env.ORG.getByName(id);
+    await org.releaseRepo(`transfer-${uniqueId("t")}`, gone.id);
+    await org.removeMember({ principalId: owner.principalId }, dev.principalId, [gone.id, kept.id]);
+    const revoked = (await events(id)).filter((e) => e.type === "access.revoked");
+    expect(revoked.map((e) => e.data)).toEqual([
+      expect.objectContaining({
+        repos: [gone.id],
+        principals: expect.arrayContaining([dev.principalId]),
+      }),
+      expect.objectContaining({ repos: [kept.id], principals: [dev.principalId] }),
+    ]);
+  });
+
   it("name them in events of at most 100 repositories each", async () => {
     const { id, login, owner, dev } = await orgWithMember();
     const held = await Promise.all(Array.from({ length: 250 }, () => directoryRepo(id)));

@@ -444,12 +444,14 @@ export class OrgDO extends MigratingDO {
    * leave. Gone already, it bumps nothing. `held`: the repositories the
    * account holds, as the caller read them from the directory just before
    * (see `heldRepos`); the member's feed forgets them all but those it is a
-   * collaborator of. Read then, they are the ones that matter: one
-   * transferred away since is named all the same (the member lost it
-   * anyway); one transferred in since was never the member's through the
-   * account; one created since is forgotten when the member's feed is next
-   * read (it finds the member cannot read it); one whose transfer ended
-   * before was forgotten with that transfer's own revocation.
+   * collaborator of, and those it released since (their release's own
+   * notice, which named the member, came first, with an earlier time). One
+   * transferred away after the release here is named all the same (the
+   * member lost it anyway). One that arrived between the read and the
+   * removal (created, or transferred in) is not named: the member's feed
+   * forgets it when next read, as it finds the member cannot read it; if
+   * the member can read it again by then, its older items stay, which
+   * shows the member nothing it may not read.
    */
   async removeMember(
     actor: ChangeActor,
@@ -468,7 +470,7 @@ export class OrgDO extends MigratingDO {
       this.#revoked(
         actor,
         [memberId],
-        held.filter((id) => !kept.has(id)),
+        held.filter((id) => !kept.has(id) && !this.#notHere(id)),
         (changed as { version: number }).version,
       );
       return changed;
