@@ -2896,7 +2896,11 @@ export class RepoDO extends MigratingDO {
   writeFiles(input: FileWriteInput): Promise<Browsed<FileWriteResult>> {
     const refused = this.#writeRefusal();
     if (refused) return Promise.resolve(fail(refused.status, refused.code, refused.error));
-    return this.#measured("writeFiles", async () => writeFiles(await this.#writeDeps(), input));
+    return this.#measured("writeFiles", async () => {
+      // Its commit needs the restore generation taken (a cold instance has not yet).
+      await this.checkEpoch();
+      return writeFiles(await this.#writeDeps(), input);
+    });
   }
 
   /** The trees and files of the default branch, for a repository generated from this one. */

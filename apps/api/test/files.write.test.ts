@@ -3,7 +3,11 @@
 // through the push path (compare-and-set on the branch, the token checked
 // again at the commit point).
 
-import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
+import {
+  createExecutionContext,
+  runInDurableObject,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
 import { createLogger } from "@fyrden/adapters-cloudflare/obs";
@@ -12,9 +16,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { writeFiles } from "../src/do/repo/file-writes.js";
+import { allocateEpoch } from "../src/events/epochs.js";
 import { RepoPush } from "../src/git/push/repo-push.js";
 import { agentFor } from "./helpers/agents.js";
-import { api, user } from "./helpers/api.js";
+import { api, handleOf, user } from "./helpers/api.js";
 import { createRepo, ORIGIN, type TestRepo } from "./helpers/git-http.js";
 import { principalWithToken, scopedToken } from "./helpers/principals.js";
 import { inRepo } from "./helpers/repo-git.js";
@@ -294,6 +299,48 @@ describe("several files", () => {
   it("answers a race for the first commit of an empty repository with head_moved", async () => {
     expect(await raceWrites()).toMatchObject({ ok: false, status: 409, code: "head_moved" });
     expect(await readFile("y.txt")).toMatchObject({ text: "y.txt" });
+  });
+});
+
+describe("a restarted repository object", () => {
+  // A repository created through the API (with its identity, which takes restore generations).
+  let made: { id: string; path: string };
+  beforeEach(async () => {
+    const created = await json<{ id: string; name: string }>(
+      call("POST", "/user/repos", { name: uniqueId("restarted") }),
+    );
+    expect(created.status).toBe(201);
+    made = {
+      id: created.body.id,
+      path: `/repos/${handleOf(owner.principalId)}/${created.body.name}`,
+    };
+  });
+  const restart = () =>
+    runInDurableObject(env.REPO.getByName(made.id), (_: RepoDO, state) => state.abort()).catch(
+      () => {},
+    );
+  const write = (path: string) =>
+    json<{ commit: { sha: string } }>(
+      call("POST", `${made.path}/file-commits`, {
+        message: "Write",
+        changes: [{ path, content: `${path}\n` }],
+      }),
+    );
+
+  it("takes a write as its first call", async () => {
+    expect((await write("a.txt")).status).toBe(201);
+    await restart();
+    expect((await write("b.txt")).status).toBe(201);
+  });
+
+  it("takes a write as its first call after a restore, under the new restore generation", async () => {
+    expect((await write("a.txt")).status).toBe(201);
+    const epoch = await allocateEpoch(env.DIRECTORY, made.id);
+    await restart();
+    expect((await write("b.txt")).status).toBe(201);
+    expect(await inRepo(env.REPO.getByName(made.id), (r: RepoDO) => r.events.epochGen())).toBe(
+      epoch,
+    );
   });
 });
 

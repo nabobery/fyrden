@@ -235,7 +235,7 @@ describe("pull requests from forks", () => {
     expect(await refollow(base.id)).toBeUndefined();
     // As a restore to a snapshot from before the opening leaves the fork: no registration, no
     // notice, an older ref state. The runbook takes the next restore generation, and the restored
-    // object, started again, takes it.
+    // object, started again, takes it with its first write.
     const stub = env.REPO.getByName(fork.id);
     await inRepo(stub, (r: RepoDO) => {
       const sql = r.git.context.storage.sql;
@@ -245,7 +245,6 @@ describe("pull requests from forks", () => {
     });
     await allocateEpoch(env.DIRECTORY, fork.id);
     await runInDurableObject(stub, (_: RepoDO, state) => state.abort()).catch(() => {});
-    await env.REPO.getByName(fork.id).checkEpoch();
     const next = await commitOn(contributor, fork.path, "main", [
       { path: "c.txt", content: "c\n" },
     ]);
