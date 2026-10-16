@@ -543,24 +543,34 @@ async function disableGone(deps: DeliveryDeps, policy: AttemptPolicy): Promise<n
 }
 
 /**
- * Deletes the deliveries longest past retention, a batch a run: the bodies
- * of those that were sent first (one bulk delete; an event's deliveries
- * share one, so a body is deleted with the first of them, the others
- * finding it gone), then their attempts and rows. A dropped delivery's
- * body was never stored (it was not sent): its row goes without one.
+ * Deletes the deliveries longest past retention, a batch a run, each
+ * event's whole: the deliveries an event made share its body, so the batch
+ * takes an event only when it holds every delivery that names that body
+ * (one it ends inside of waits for the next run, then first in line). The
+ * bodies go first (one bulk delete; a run that fails after it finds them
+ * gone next time), then the attempts and rows. An event none of whose
+ * deliveries was sent never had its body stored: its rows go without an
+ * R2 delete.
  */
 async function pruneExpired(deps: DeliveryDeps, policy: AttemptPolicy): Promise<number> {
   const { db, env } = deps;
   const { results } = await db
     .prepare(
-      // Through the expiry index, so the batch bounds the rows read.
-      `SELECT delivery_id, payload_key, state = 'dropped' AS dropped FROM webhook_deliveries
-       WHERE expires_at <= ? ORDER BY expires_at LIMIT ?`,
+      // Through the expiry index, so the batch bounds the rows read; then each body's count of
+      // deliveries through its index (an event's hooks, 20 at most).
+      `WITH batch AS (
+         SELECT delivery_id, payload_key, state FROM webhook_deliveries
+         WHERE expires_at <= ?1 ORDER BY expires_at LIMIT ?2),
+       whole AS (
+         SELECT payload_key, max(state != 'dropped') AS sent FROM batch GROUP BY payload_key
+         HAVING count(*) = (SELECT count(*) FROM webhook_deliveries d
+                            WHERE d.payload_key = batch.payload_key))
+       SELECT b.delivery_id, b.payload_key, w.sent FROM batch b JOIN whole w USING (payload_key)`,
     )
     .bind(deps.now(), policy.pruneBatch)
-    .all<{ delivery_id: string; payload_key: string; dropped: number }>();
+    .all<{ delivery_id: string; payload_key: string; sent: number }>();
   if (results.length === 0) return 0;
-  const bodies = [...new Set(results.filter((r) => r.dropped === 0).map((r) => r.payload_key))];
+  const bodies = [...new Set(results.filter((r) => r.sent === 1).map((r) => r.payload_key))];
   if (bodies.length > 0) await env.ASSETS.delete(bodies);
   const ids = JSON.stringify(results.map((r) => r.delivery_id));
   await db.batch([

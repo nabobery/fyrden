@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { HOOK_POLICY } from "../src/do/repo/hooks.js";
 import { EFFECT_POLICY, INLINE_EFFECTS } from "../src/effects/journal.js";
 import { ATTEMPT_POLICY, reconcileWebhooks } from "../src/webhooks/deliver.js";
+import { webhookSink } from "../src/webhooks/sink.js";
 
 /** Runs of the effects cron a day (wrangler.jsonc: `2-59/5 * * * *`, every 5 minutes). */
 const CRON_RUNS_A_DAY = (24 * 60) / 5;
@@ -73,6 +74,8 @@ describe("webhook retention", () => {
     expect(CRON_RUNS_A_DAY * ATTEMPT_POLICY.pruneBatch).toBeGreaterThanOrEqual(made);
     // One bulk R2 delete a run holds every body it deletes (R2 takes up to 1,000 keys a call).
     expect(ATTEMPT_POLICY.pruneBatch).toBeLessThanOrEqual(1_000);
+    // And holds an event whole (it deletes only whole events), so a run always makes progress.
+    expect(ATTEMPT_POLICY.pruneBatch).toBeGreaterThanOrEqual(HOOK_POLICY.maxHooks);
   });
 
   it("keep no backlog across cron runs that each admit a run's worth", async () => {
@@ -122,4 +125,90 @@ describe("webhook retention", () => {
     ).toBe(ATTEMPT_POLICY.pruneBatch);
     for (const key of kept) expect(await env.ASSETS.head(key)).not.toBeNull();
   });
+
+  it("keep an event's body while any of its deliveries is left, a batch ending inside it or not", async () => {
+    const repoId = uniqueId("rep");
+    // The deliveries' messages are kept here, not sent: no consumer attempts them.
+    const quiet = {
+      ...env,
+      WEBHOOKS: { send: async () => {}, sendBatch: async () => {} },
+    } as unknown as Env;
+    // An event to two hooks, made (and made again, as an effect retried) by its effect.
+    const effect = {
+      id: uniqueId("eff"),
+      sink: "webhooks",
+      target: "hooks",
+      attempts: 0,
+      payload: {
+        repoId,
+        eventKey: uniqueId("evt"),
+        event: "push",
+        action: null,
+        private: false,
+        body: { event: "push" },
+        hooks: [
+          { id: 1, v: 1 },
+          { id: 2, v: 1 },
+        ],
+      },
+    };
+    await webhookSink.deliver(effect, quiet, env.ORG_READ);
+    const rows = async () =>
+      (
+        await env.ORG_READ.prepare(
+          "SELECT delivery_id, payload_key FROM webhook_deliveries WHERE repo_id = ? ORDER BY hook_id",
+        )
+          .bind(repoId)
+          .all<{ delivery_id: string; payload_key: string }>()
+      ).results;
+    const made = await rows();
+    expect(made).toHaveLength(2);
+    const key = made[0]?.payload_key as string;
+    // Sent, and past retention; two older deliveries ahead of them.
+    await env.ORG_READ.prepare(
+      "UPDATE webhook_deliveries SET state = 'done', expires_at = 1 WHERE repo_id = ?",
+    )
+      .bind(repoId)
+      .run();
+    await admitOlder(repoId);
+    // A batch of three ends inside the event: the event waits for the next run.
+    const prune = () =>
+      reconcileWebhooks({
+        env: quiet,
+        db: env.ORG_READ,
+        now: () => Date.now(),
+        policy: { ...ATTEMPT_POLICY, pruneBatch: 3 },
+      });
+    await prune();
+    expect(await rows()).toHaveLength(2);
+    expect(await env.ASSETS.head(key)).not.toBeNull();
+    // Its effect retried meanwhile: nothing to make again.
+    await webhookSink.deliver(effect, quiet, env.ORG_READ);
+    expect(await rows()).toEqual(made);
+    // The next run takes the event whole: its rows, then its body.
+    await prune();
+    expect(await rows()).toEqual([]);
+    expect(await env.ASSETS.head(key)).toBeNull();
+    // Made again after that, the event is whole again, its body stored with it.
+    await webhookSink.deliver(effect, quiet, env.ORG_READ);
+    expect(await rows()).toHaveLength(2);
+    expect(await env.ASSETS.head(key)).not.toBeNull();
+    await prune();
+    expect(await rows()).toHaveLength(2);
+  });
 });
+
+/** Two sent deliveries of other events, past retention before any other. */
+async function admitOlder(repoId: string): Promise<void> {
+  for (const n of [0, 1]) {
+    const key = `webhooks/${repoId}/older-${n}.json`;
+    await env.ASSETS.put(key, "{}");
+    await env.ORG_READ.prepare(
+      `INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, private, payload_key,
+         state, attempts, next_attempt_at, created_at, updated_at, expires_at)
+       VALUES (?1, ?2, 1, 'push', 0, ?3, 'done', 1, 0, 0, 0, 0)`,
+    )
+      .bind(`${repoId}-older-${n}`, repoId, key)
+      .run();
+  }
+}
