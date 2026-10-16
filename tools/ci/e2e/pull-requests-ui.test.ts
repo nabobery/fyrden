@@ -102,8 +102,16 @@ beforeAll(async () => {
   await git(["checkout", "-q", "-b", "clash", "main"], work);
   await writeFile(join(work, "README.md"), "# Clash\n");
   await git(["commit", "-q", "-am", "clash"], work);
+  // A branch adding one long file, for the renderer to draw a window of.
+  await git(["checkout", "-q", "-b", "big", "main"], work);
+  await writeFile(
+    join(work, "big.txt"),
+    `${Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`).join("\n")}\n`,
+  );
+  await git(["add", "-A"], work);
+  await git(["commit", "-q", "-m", "big"], work);
   const remote = `http://x-access-token:${token}@127.0.0.1:${stack.port}/${handle}/${name}.git`;
-  await git(["push", "-q", remote, "main", "topic", "clash"], work);
+  await git(["push", "-q", remote, "main", "topic", "clash", "big"], work);
 }, 240_000);
 
 afterAll(async () => {
@@ -264,7 +272,30 @@ describe("pull requests in the web UI", () => {
     await see(editor).toBeFocused();
     await page.getByRole("button", { name: "Keep both" }).focus();
     await page.keyboard.press("Enter");
-    await see(page.getByText("No conflict markers left.")).toBeVisible();
+    await see(page.getByText("No conflict markers left.", { exact: true })).toBeVisible();
+    // The base moves again before the resolution is sent: it is refused, and the edit is
+    // kept with the conflicts it was made against, never sent with a newer snapshot.
+    const again = await rest<{ sha: string }>("GET", `/repos/${handle}/${name}/contents/README.md`);
+    await rest("PUT", `/repos/${handle}/${name}/contents/README.md`, {
+      message: "Retitle again",
+      sha: again.sha,
+      content: Buffer.from("# Main 2\n").toString("base64"),
+    });
+    await page.getByRole("button", { name: "Commit merge" }).click();
+    await see(page.getByRole("alert")).toBeVisible();
+    await see(
+      page.getByText("The branches have moved since these conflicts were read"),
+    ).toBeVisible();
+    await see(editor).toHaveValue("# Clash\n# Main\n");
+    await see(page.getByRole("button", { name: "Commit merge" })).toBeDisabled();
+    await accessible(page, "conflicts moved");
+    await page.getByRole("button", { name: "Read the conflicts again" }).click();
+    await see(editor).toHaveValue("<<<<<<< clash\n# Clash\n=======\n# Main 2\n>>>>>>> main\n");
+    await see(page.getByLabel("README.md (earlier edit, to copy from)")).toHaveValue(
+      "# Clash\n# Main\n",
+    );
+    await editor.focus();
+    await page.getByRole("button", { name: "Keep both" }).click();
     await page.getByRole("button", { name: "Commit merge" }).click();
     await see(page.getByRole("status").filter({ hasText: "Resolved" })).toBeVisible({
       timeout: 30_000,
@@ -280,7 +311,32 @@ describe("pull requests in the web UI", () => {
       "GET",
       `/repos/${handle}/${name}/contents/README.md?ref=clash`,
     );
-    expect(Buffer.from(merged.content, "base64").toString()).toBe("# Clash\n# Main\n");
+    expect(Buffer.from(merged.content, "base64").toString()).toBe("# Clash\n# Main 2\n");
+  });
+
+  it("draws only a window of a long file's lines, following the scroll", async () => {
+    const opened = await rest<{ number: number }>("POST", `/repos/${handle}/${name}/pulls`, {
+      title: "Big",
+      head: "big",
+      base: "main",
+    });
+    await page.goto(`${stack.origin}/${handle}/${name}/pull/${opened.number}/files`);
+    const drawn = page.locator("section.file", { hasText: "big.txt" }).locator("diffs-container");
+    await see(drawn.getByText("line 1", { exact: true })).toBeVisible({ timeout: 30_000 });
+    const mounted = () =>
+      drawn.evaluate(
+        (el) =>
+          (
+            el as unknown as { shadowRoot: { querySelectorAll(s: string): { length: number } } }
+          ).shadowRoot.querySelectorAll("[data-line]").length,
+      );
+    expect(await mounted()).toBeGreaterThan(0);
+    expect(await mounted()).toBeLessThan(1000);
+    // Scrolled to its end, the last lines are drawn, and still only a window of them.
+    await page.keyboard.press("End");
+    await see(drawn.getByText("line 3000", { exact: true })).toBeVisible({ timeout: 30_000 });
+    expect(await mounted()).toBeLessThan(1000);
+    await accessible(page, "a long file");
   });
 
   it("never had a script, style or image refused by the policy on any page", () => {
