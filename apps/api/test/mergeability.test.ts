@@ -183,6 +183,10 @@ describe("mergeability", () => {
     await commitOn("f2", [{ path: "f2.txt", content: "F2\n" }]);
     const ensured: string[] = [];
     await inRepo(stub(), (r: RepoDO) => {
+      // Its place, set apart from any time the move's request can have.
+      r.git.context.storage.sql.exec(
+        "UPDATE mergeability_jobs SET requested_at = 1 WHERE pr_number = 2",
+      );
       const ensure = r.git.jobs.ensure.bind(r.git.jobs);
       r.git.jobs.ensure = (kind, ...rest) => {
         ensured.push(kind);
@@ -193,19 +197,20 @@ describe("mergeability", () => {
     expect(ensured.filter((kind) => kind === "mergeability")).toHaveLength(1);
     const queued = await inRepo(stub(), (r: RepoDO) =>
       r.git.context.storage.sql
-        .exec<{ pr_number: number; seq: number }>(
-          "SELECT pr_number, seq FROM mergeability_jobs ORDER BY requested_at, pr_number",
+        .exec<{ pr_number: number; seq: number; requested_at: number }>(
+          "SELECT pr_number, seq, requested_at FROM mergeability_jobs ORDER BY requested_at, pr_number",
         )
-        .toArray()
-        .map((row) => [row.pr_number, row.seq]),
+        .toArray(),
     );
-    // #2 keeps its place, its request newer.
-    expect(queued).toEqual([
+    // #2 keeps its place, its request newer; the others are queued together behind it.
+    expect(queued.map((row) => [row.pr_number, row.seq])).toEqual([
       [2, 2],
       [1, 1],
       [3, 1],
       [5, 1],
     ]);
+    expect(queued[0]?.requested_at).toBe(1);
+    expect(new Set(queued.slice(1).map((row) => row.requested_at)).size).toBe(1);
     await runJobs();
     for (const number of [1, 2, 3, 5]) expect((await pull(number)).mergeable).toBe(true);
   });
