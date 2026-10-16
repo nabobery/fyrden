@@ -87,6 +87,7 @@ export async function runJob(
         log: createLogger({ test: "maintenance" }),
         retire: repo.retireOptions,
         gc: repo.gcHooks,
+        roots: () => repo.gcRoots(),
       });
       const ran = await git.jobs.runJob(jobId, handlers[kind] as never, git.memory, 0);
       if (ran.state === "busy") return "busy";

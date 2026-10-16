@@ -751,6 +751,17 @@ export class RepoPulls {
     );
   }
 
+  /**
+   * Every recorded base, distinct: garbage collection keeps them, for what
+   * `comparedBase` compares from once the branch no longer reaches them.
+   * (Each head is kept by its pull request's ref.)
+   */
+  recordedBases(): Oid[] {
+    return this.#rows<{ base_sha: string }>("SELECT DISTINCT base_sha FROM pull_requests").map(
+      (row) => oidFromHex(row.base_sha),
+    );
+  }
+
   /** A branch's tip, or null when it does not exist; one row read. */
   branchTip(branch: string): Oid | null {
     return this.#read(`${BRANCHES}${branch}`);

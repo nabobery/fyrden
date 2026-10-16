@@ -7,8 +7,14 @@ import { oidFromHex } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import { RepoBrowse } from "../src/do/repo/browse.js";
-import { PULL_FILES_POLICY, type PullFilesPolicy, pullFiles } from "../src/do/repo/pull-files.js";
+import {
+  PULL_FILES_POLICY,
+  type PullFilesPolicy,
+  pullCommits,
+  pullFiles,
+} from "../src/do/repo/pull-files.js";
 import { api, json, user, type Who } from "./helpers/api.js";
+import { advance, runJob, setPolicy } from "./helpers/maintenance.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
@@ -196,6 +202,24 @@ describe("pull request commits", () => {
     expect([two.body.commits[0]?.sha, three.body.commits[0]?.sha]).toEqual([second, third]);
     expect(three.body.next_cursor).toBeNull();
   });
+
+  it("answers unreadable, as files do, for a base no longer stored", async () => {
+    const { head_sha } = (await files()).body;
+    const listed = await inRepo(env.REPO.getByName(repo.id), async (r) => {
+      const browse = new RepoBrowse({ git: r.git, memoryBlocks: createClockBlockCache() });
+      try {
+        return await pullCommits(browse, r.git.commitGraph, {
+          base: oidFromHex("1".repeat(40)),
+          head: oidFromHex(head_sha),
+          start: 0,
+          limit: 30,
+        });
+      } finally {
+        browse.close();
+      }
+    });
+    expect(listed).toMatchObject({ ok: false, status: 422, code: "unreadable" });
+  });
 });
 
 describe("a pull request whose base branch is gone", () => {
@@ -265,6 +289,26 @@ describe("a merged or closed pull request", () => {
       await branchAt("release", ZERO, head);
       expect(await listed()).toEqual(before);
     });
+
+  it("keeps the base it was merged onto through garbage collection, once no branch reaches it", async () => {
+    const tip = await retargeted();
+    const before = await listed();
+    const merged = await json<{ sha: string }>(api("PUT", `${path}/pulls/1/merge`, owner.token));
+    // Both branches move to the head: only the recorded base still reaches `tip`.
+    const head = before.commits[0] as string;
+    await branchAt("release", head, merged.body.sha);
+    await branchAt("main", head, tip);
+    // Past the reflog's retention, two runs a garbage time to live apart condemn what nothing reaches.
+    const stub = env.REPO.getByName(repo.id);
+    await setPolicy(stub);
+    expect(["done", "scheduled"]).toContain((await runJob(stub, "gc")).state);
+    await advance(stub, 2 * 24 * 60 * 60 * 1000);
+    expect(["done", "scheduled"]).toContain((await runJob(stub, "gc")).state);
+    // The merge commit went (the run did collect), the recorded base did not.
+    expect((await api("GET", `${path}/commits/${merged.body.sha}`, owner.token)).status).toBe(404);
+    expect((await api("GET", `${path}/commits/${tip}`, owner.token)).status).toBe(200);
+    expect(await listed()).toEqual(before);
+  });
 
   it("is compared from its base as it was when it closed, and from the branch's tip once reopened", async () => {
     const tip = await retargeted();

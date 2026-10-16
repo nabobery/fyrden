@@ -94,6 +94,7 @@ class TreesTooLargeError extends Error {
 
 const UNREADABLE = fail(422, "unreadable", "An object the comparison needs cannot be read.");
 const TOO_EXPENSIVE = fail(422, "too_expensive", "The pull request changes too much to list.");
+const COMMIT_GONE = fail(422, "unreadable", "A commit the comparison needs is no longer stored.");
 
 /** The merge base of `base` and `head` (the first git would name), or a failure. */
 export async function mergeBaseOf(
@@ -111,9 +112,8 @@ export async function mergeBaseOf(
   } catch (error) {
     if (error instanceof WalkLimitError)
       return fail(422, "too_expensive", "The base and head are too far apart to compare.");
-    // A commit no longer stored (a base branch deleted, then garbage collected).
-    if (error instanceof MissingCommitError)
-      return fail(422, "unreadable", "A commit the comparison needs is no longer stored.");
+    // A commit no longer stored (garbage collected).
+    if (error instanceof MissingCommitError) return COMMIT_GONE;
     throw error;
   }
 }
@@ -345,6 +345,7 @@ export function pullCommits(
     } catch (error) {
       if (error instanceof WalkLimitError)
         return fail(422, "too_expensive", "The pull request has too many commits to list.");
+      if (error instanceof MissingCommitError) return COMMIT_GONE;
       throw error;
     }
     const rows = graph.readSync(ahead, "verified");

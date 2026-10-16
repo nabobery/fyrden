@@ -2957,6 +2957,11 @@ export class RepoDO extends MigratingDO {
   /** Hooks into garbage-collection slices. For tests. */
   gcHooks: GcHooks = {};
 
+  /** What garbage collection keeps besides what the refs and the reflog reach. */
+  gcRoots(): Oid[] {
+    return this.pulls.recordedBases();
+  }
+
   #log() {
     return createLogger({
       do: "RepoDO",
@@ -3667,6 +3672,7 @@ export class RepoDO extends MigratingDO {
         },
         retire: this.retireOptions,
         gc: this.gcHooks,
+        roots: () => this.gcRoots(),
       }),
     } satisfies Partial<Record<JobKind, JobHandler>>;
   }
