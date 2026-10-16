@@ -63,6 +63,13 @@ export async function apiDownload(
   return new Response(res.ok ? res.body : null, { status: res.status, headers });
 }
 
+/**
+ * The largest JSON request body fyrden-api reads (its `MAX_JSON_BODY_BYTES`,
+ * apps/api/src/http/body.ts; a test checks the two agree): a larger one is
+ * refused before it is parsed, so a page measures what it sends first.
+ */
+export const API_MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
+
 /** Calls `method path` (under `/api`) with an optional JSON body. */
 export async function apiCall<T>(
   context: Readonly<RouterContextProvider>,
@@ -70,6 +77,23 @@ export async function apiCall<T>(
   method: string,
   path: string,
   body?: unknown,
+): Promise<ApiResult<T>> {
+  return apiCallJson<T>(
+    context,
+    request,
+    method,
+    path,
+    body === undefined ? undefined : JSON.stringify(body),
+  );
+}
+
+/** `apiCall` with its body already serialized (to measure it before sending). */
+export async function apiCallJson<T>(
+  context: Readonly<RouterContextProvider>,
+  request: Request,
+  method: string,
+  path: string,
+  json?: string,
 ): Promise<ApiResult<T>> {
   const headers = forwarded(request);
   if (method !== "GET") {
@@ -80,7 +104,7 @@ export async function apiCall<T>(
     new Request(`${new URL(request.url).origin}/api${path}`, {
       method,
       headers,
-      ...(body !== undefined && { body: JSON.stringify(body) }),
+      ...(json !== undefined && { body: json }),
     }),
   );
   const text = await res.text();

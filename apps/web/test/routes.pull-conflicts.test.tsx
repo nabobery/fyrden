@@ -5,7 +5,9 @@
 // and branch names shown as text.
 
 import { describe, expect, it } from "vitest";
+import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../../api/src/http/body.js";
 import { leftText } from "../app/components/conflict-editor.js";
+import { API_MAX_JSON_BODY_BYTES } from "../app/lib/api.server.js";
 import {
   conflictsView,
   lineEnding,
@@ -20,7 +22,7 @@ import {
   loader,
   default as PullConflicts,
 } from "../app/routes/repo.pull.conflicts.js";
-import { formPost, json, ORIGIN } from "./helpers/context.js";
+import { fakeApi, formPost, json, ORIGIN } from "./helpers/context.js";
 import { api, pathOf, pullRequest, VIEWER } from "./helpers/pulls.js";
 import { ACTIVE_TAG, escaped, HOSTILE, renderPage } from "./helpers/render.js";
 
@@ -167,6 +169,7 @@ describe("the conflicts page", () => {
     renderPage(PullConflicts, "/ada/demo/pull/7/conflicts", {
       owner: "ada",
       repo: "demo",
+      number: 7,
       pull: pullRequest({ mergeable: false, mergeable_state: "dirty", ...pull }),
       viewer: VIEWER,
       conflicts: {
@@ -333,6 +336,82 @@ describe("resolving conflicts", () => {
   });
 });
 
+describe("reading the conflicts again", () => {
+  const read = (answer: (r: Request) => Response | Promise<Response>) => {
+    const { context } = fakeApi(answer);
+    return Promise.resolve(
+      loader({
+        request: new Request(`${ORIGIN}/ada/demo/pull/7/conflicts`),
+        context,
+        params,
+      } as never),
+    ).then(
+      (value) => ({ value }),
+      (thrown: unknown) => ({ thrown }),
+    );
+  };
+  const path = (r: Request) => new URL(r.url).pathname;
+  const session = () => json({ user: { id: VIEWER, handle: "ada" } });
+
+  it("answers a failure, never throwing, when the pull request cannot be read", async () => {
+    for (const answer of [
+      (r: Request) => (path(r) === "/auth/session" ? session() : json({ detail: "down" }, 503)),
+      (r: Request) => {
+        if (path(r) === "/auth/session") return session();
+        throw new TypeError("The service binding refused the request.");
+      },
+    ]) {
+      const outcome = await read(answer);
+      expect(outcome).toEqual({
+        value: expect.objectContaining({
+          pull: null,
+          conflicts: null,
+          failure: "The pull request could not be read; try again.",
+        }),
+      });
+    }
+  });
+
+  it("answers a failure, never throwing, when the conflicts cannot be read", async () => {
+    const outcome = await read((r) => {
+      if (path(r) === "/auth/session") return session();
+      if (path(r).endsWith("/conflicts"))
+        throw new TypeError("The service binding refused the request.");
+      return json(pullRequest());
+    });
+    expect(outcome).toEqual({
+      value: expect.objectContaining({
+        conflicts: null,
+        failure: "The conflicts could not be read; try again.",
+      }),
+    });
+    expect((outcome as { value: { pull: unknown } }).value.pull).not.toBeNull();
+  });
+
+  it("still sends a signed-out browser to sign in, and shows a missing pull request as not found", async () => {
+    const signedOut = await read(() => json({}, 401));
+    expect((signedOut as { thrown: Response }).thrown.status).toBe(302);
+    const missing = await read((r) =>
+      path(r) === "/auth/session" ? session() : json({ detail: "Not found" }, 404),
+    );
+    expect((missing as { thrown: { init: { status: number } } }).thrown.init.status).toBe(404);
+  });
+
+  it("shows a first read that failed, with a way to try again", () => {
+    const html = renderPage(PullConflicts, "/ada/demo/pull/7/conflicts", {
+      owner: "ada",
+      repo: "demo",
+      number: 7,
+      pull: null,
+      viewer: null,
+      conflicts: null,
+      failure: "The pull request could not be read; try again.",
+    });
+    expect(html).toContain("The pull request could not be read; try again.");
+    expect(html).toContain("Try again");
+  });
+});
+
 describe("the conflicts page's state", () => {
   const A = "a".repeat(80);
   const B = "b".repeat(80);
@@ -391,29 +470,70 @@ describe("the conflicts form as a browser sends it", () => {
     });
   }
 
-  it("takes newline-heavy LF files near the aggregate limit, sending LF", async () => {
-    // Four files of 1,048,575 line breaks: 4 MiB less 4 bytes as resolved, twice that as sent.
-    const files = 4;
-    const lines = 1024 * 1024 - 1;
+  /** Files of nothing but line breaks, as a browser sends them. */
+  function newlineFiles(files: number, lines: number): Request {
     const fields: Record<string, string> = { conflict_snapshot: SNAPSHOT, count: String(files) };
     for (let i = 0; i < files; i++) {
       fields[`path:${i}`] = `f${i}.txt`;
       fields[`eol:${i}`] = "lf";
       fields[`content:${i}`] = "\n".repeat(lines);
     }
-    const request = multipart(fields);
-    const sentBytes = (await request.clone().arrayBuffer()).byteLength;
-    expect(sentBytes).toBeGreaterThan(8 * 1024 * 1024 - 1024);
-    expect(sentBytes).toBeLessThanOrEqual(CONFLICTS_FORM_MAX_BYTES);
-    const { context, calls } = api({
+    return multipart(fields);
+  }
+
+  /** fyrden-api's resolution, reading its body with the API's own limiter and limit. */
+  const realApi = () =>
+    api({
       "POST /api/repos/ada/demo/pulls/7/conflicts": () =>
         json({ sha: "c".repeat(40), markers: [] }, 201),
     });
-    const outcome = await action({ request, context, params } as never);
+
+  it("uses the API's own JSON body limit", () => {
+    expect(API_MAX_JSON_BODY_BYTES).toBe(MAX_JSON_BODY_BYTES);
+  });
+
+  it("takes newline-heavy LF files within what the API reads, sending LF", async () => {
+    // Three files of 1,048,575 line breaks: about 6 MiB as JSON (each line break escaped).
+    const files = 3;
+    const lines = 1024 * 1024 - 1;
+    const { context, calls } = realApi();
+    const outcome = await action({ request: newlineFiles(files, lines), context, params } as never);
     expect(outcome).toMatchObject({ ok: true });
     const post = calls.find((c) => c.method === "POST");
-    const body = (await post?.json()) as { files: { content: string }[] };
+    if (!post) throw new Error("not sent");
+    // The API's own reader takes it.
+    const read = await readBoundedBody(post.clone(), MAX_JSON_BODY_BYTES);
+    expect(read).toBeDefined();
+    const body = (await post.json()) as { files: { content: string }[] };
     expect(body.files.map((f) => f.content.length)).toEqual(Array(files).fill(lines));
     expect(body.files.every((f) => !f.content.includes("\r"))).toBe(true);
+  }, 60_000);
+
+  it("refuses, without sending them, files within their limits that the API could not read as JSON", async () => {
+    // Four files of 1,048,575 line breaks: 4 MiB less 4 bytes as resolved (within the limits),
+    // about 8 MiB as the browser sends them, and more than the API reads once escaped as JSON.
+    const files = 4;
+    const lines = 1024 * 1024 - 1;
+    const request = newlineFiles(files, lines);
+    const sentBytes = (await request.clone().arrayBuffer()).byteLength;
+    expect(sentBytes).toBeGreaterThan(8 * 1024 * 1024 - 1024);
+    expect(sentBytes).toBeLessThanOrEqual(CONFLICTS_FORM_MAX_BYTES);
+    // What the action would send, measured as the API's reader measures it.
+    const json = JSON.stringify({
+      conflict_snapshot: SNAPSHOT,
+      files: Array.from({ length: files }, (_, i) => ({
+        path: `f${i}.txt`,
+        content: "\n".repeat(lines),
+      })),
+    });
+    const tooLong = new Request(`${ORIGIN}/x`, { method: "POST", body: json });
+    expect(await readBoundedBody(tooLong, MAX_JSON_BODY_BYTES)).toBeUndefined();
+    const { context, calls } = realApi();
+    const outcome = await action({ request, context, params } as never);
+    expect(outcome).toMatchObject({
+      error:
+        "These files are too large to send in one resolution: merge the base branch into the head with git instead.",
+    });
+    expect(calls.filter((c) => c.method === "POST")).toEqual([]);
   }, 60_000);
 });

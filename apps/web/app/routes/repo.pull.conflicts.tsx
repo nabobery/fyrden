@@ -2,7 +2,15 @@ import { useRef, useState } from "react";
 import { Form, Link, redirect, useActionData, useNavigation, useRevalidator } from "react-router";
 import { ConflictEditor } from "../components/conflict-editor.js";
 import { PullHeader } from "../components/pull-header.js";
-import { apiCall, assertSameOrigin, readForm, signedInUser, signInUrl } from "../lib/api.server.js";
+import {
+  API_MAX_JSON_BODY_BYTES,
+  apiCall,
+  apiCallJson,
+  assertSameOrigin,
+  readForm,
+  signedInUser,
+  signInUrl,
+} from "../lib/api.server.js";
 import {
   type Conflicts,
   conflictsView,
@@ -12,12 +20,13 @@ import {
   shellQuote,
   withLineEndings,
 } from "../lib/conflicts.js";
-import { field, problemCode, problemDetail, pullPage, rawField } from "../lib/pulls.js";
+import { utf8Length } from "../lib/continuation.js";
+import { field, problemCode, problemDetail, pullNumber, pullPage, rawField } from "../lib/pulls.js";
 import { loadPull, pullApiOf } from "../lib/pulls.server.js";
 import type { Route } from "./+types/repo.pull.conflicts";
 
 export function meta({ params, loaderData }: Route.MetaArgs): Route.MetaDescriptors {
-  const title = loaderData?.pull.title ?? `#${params.number}`;
+  const title = loaderData?.pull?.title ?? `#${params.number}`;
   return [{ title: `Conflicts · ${title} · ${params.owner}/${params.repo} · Fyrden` }];
 }
 
@@ -39,25 +48,65 @@ export const MAX_RESOLUTION_BYTES = 4 * 1024 * 1024;
  */
 export const CONFLICTS_FORM_MAX_BYTES = 2 * MAX_RESOLUTION_BYTES + 512 * 1024;
 
+/**
+ * Whether a loader's failure is one to show as the error page: a redirect
+ * (signed out) or a pull request not found. Any other (the API down, a
+ * fetch refused, a limit) is shown on the page, which keeps its editors.
+ */
+function fatal(error: unknown): boolean {
+  if (error instanceof Response) return true;
+  return (error as { init?: { status?: number } } | null)?.init?.status === 404;
+}
+
+/**
+ * The pull request and its conflicts, read again after every change: a read
+ * that fails answers `failure` (never throws, but for a redirect or a pull
+ * request not found), so a page re-read in the background keeps the edits
+ * it holds.
+ */
 export async function loader({ request, context, params }: Route.LoaderArgs) {
-  const { pull, viewer } = await loadPull(context, request, params);
-  const base = {
-    owner: params.owner,
-    repo: params.repo,
-    pull,
-    viewer,
-  };
-  if (pull.state !== "open") return { ...base, conflicts: null, failure: null };
-  const read = await apiCall<Conflicts>(context, request, "GET", `${pullApiOf(params)}/conflicts`);
+  const number = pullNumber(params.number);
+  const base = { owner: params.owner, repo: params.repo, number };
+  let loaded: Awaited<ReturnType<typeof loadPull>>;
+  try {
+    loaded = await loadPull(context, request, params);
+  } catch (error) {
+    if (fatal(error)) throw error;
+    return {
+      ...base,
+      pull: null,
+      viewer: null,
+      conflicts: null,
+      failure: "The pull request could not be read; try again.",
+    };
+  }
+  const { pull, viewer } = loaded;
+  if (pull.state !== "open") return { ...base, pull, viewer, conflicts: null, failure: null };
+  let read: Awaited<ReturnType<typeof apiCall<Conflicts>>>;
+  try {
+    read = await apiCall<Conflicts>(context, request, "GET", `${pullApiOf(params)}/conflicts`);
+  } catch {
+    return {
+      ...base,
+      pull,
+      viewer,
+      conflicts: null,
+      failure: "The conflicts could not be read; try again.",
+    };
+  }
   if (read.status === 401) throw redirect(signInUrl(request));
   if (read.status !== 200)
     return {
       ...base,
+      pull,
+      viewer,
       conflicts: null,
       failure: problemDetail(read.body, "The conflicts could not be read; try again."),
     };
   return {
     ...base,
+    pull,
+    viewer,
     conflicts: {
       ...read.body,
       files: read.body.files.map((f) => ({
@@ -113,12 +162,25 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
     files.push({ path, content });
   }
   const message = rawField(form, "commit_message");
-  const result = await apiCall<{ sha: string; markers: string[] }>(
+  // As sent: escaping (a line break is two characters, a control character six) can take
+  // content within its limits past what the API reads.
+  const json = JSON.stringify({
+    conflict_snapshot: snapshot,
+    files,
+    ...(message.trim() && { commit_message: message }),
+  });
+  if (utf8Length(json) > API_MAX_JSON_BODY_BYTES)
+    return {
+      error:
+        "These files are too large to send in one resolution: merge the base branch into the head with git instead.",
+      snapshot,
+    };
+  const result = await apiCallJson<{ sha: string; markers: string[] }>(
     context,
     request,
     "POST",
     `${pullApiOf(params)}/conflicts`,
-    { conflict_snapshot: snapshot, files, ...(message.trim() && { commit_message: message }) },
+    json,
   );
   if (result.status === 201)
     return { ok: true, sha: result.body.sha, markers: result.body.markers };
@@ -142,10 +204,14 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
   const answer = useActionData<typeof action>();
   const navigation = useNavigation();
   const revalidator = useRevalidator();
-  const { owner, repo, pull, viewer, conflicts, failure } = loaderData;
-  const page = pullPage(owner, repo, pull.number);
+  const { owner, repo, number, conflicts, failure } = loaderData;
+  // The pull request as last read: a read that failed (no pull request) keeps the page as it was.
+  const known = useRef({ pull: loaderData.pull, viewer: loaderData.viewer });
+  if (loaderData.pull) known.current = { pull: loaderData.pull, viewer: loaderData.viewer };
+  const { pull, viewer } = known.current;
+  const page = pullPage(owner, repo, number);
   const read = (generation: number): Editing | null =>
-    conflicts && conflicts.files.length > 0
+    pull && conflicts && conflicts.files.length > 0
       ? { conflicts, labels: { head: pull.head.ref, base: pull.base.ref }, generation }
       : null;
   // The editors keep the conflicts they were opened on, snapshot and text together: a later
@@ -158,7 +224,7 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
     adopted: editing?.conflicts.conflict_snapshot ?? null,
     latest: conflicts && conflicts.files.length > 0 ? conflicts.conflict_snapshot : null,
     failure,
-    open: pull.state === "open",
+    open: pull?.state === "open",
     answer,
   });
   const readAgain = () => {
@@ -183,6 +249,23 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
     (f): f is typeof f & { content: string } => f.editable && f.content !== null,
   );
   const stuck = files.filter((f) => !f.editable || f.content === null);
+  // Not read yet at all (the first read failed): what failed, and a way to try again.
+  if (!pull)
+    return (
+      <main className="wide">
+        <h1>Conflicts of pull request #{number}</h1>
+        <p className="error" role="alert">
+          {failure}
+        </p>
+        <button
+          type="button"
+          onClick={() => void revalidator.revalidate()}
+          disabled={revalidator.state !== "idle"}
+        >
+          Try again
+        </button>
+      </main>
+    );
   return (
     <main className="wide">
       <PullHeader owner={owner} repo={repo} pull={pull} viewer={viewer} active="conflicts" />
