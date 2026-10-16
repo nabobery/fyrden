@@ -2,7 +2,7 @@
 // bring the view within its cap when they fit.
 import { describe, expect, it } from "vitest";
 import type { ViewPack } from "../src/network/types.js";
-import { batchOf } from "../src/network/view-cap.js";
+import { batchOf, fitsAfterCompaction } from "../src/network/view-cap.js";
 
 const pack = (id: number, objects: number, unit: string | null = null): ViewPack => ({
   packId: `p${id}`,
@@ -67,5 +67,30 @@ describe("batchOf", () => {
         maxObjects: 500,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("fitsAfterCompaction", () => {
+  it("holds a view within its cap", () => {
+    expect(fitsAfterCompaction([pack(1, 600)], { limit: 1, maxPacks: 16, maxObjects: 500 })).toBe(
+      true,
+    );
+  });
+
+  it("holds a view the compaction's runs bring within its cap, one after another", () => {
+    // Three packs a run: two runs, then their outputs merged.
+    const packs = [1, 2, 3, 4, 5, 6].map((i) => pack(i, 1));
+    expect(fitsAfterCompaction(packs, { limit: 1, maxPacks: 3, maxObjects: 100 })).toBe(true);
+  });
+
+  it("refuses a view whose smallest pair is over the rewrite budget", () => {
+    const packs = [pack(1, 300), pack(2, 300), pack(3, 300)];
+    expect(fitsAfterCompaction(packs, { limit: 2, maxPacks: 16, maxObjects: 500 })).toBe(false);
+  });
+
+  it("refuses a view whose runs' outputs grow too large to merge", () => {
+    // Two runs of 400 objects each fit; their outputs together do not.
+    const packs = [1, 2, 3, 4].map((i) => pack(i, 200));
+    expect(fitsAfterCompaction(packs, { limit: 1, maxPacks: 16, maxObjects: 500 })).toBe(false);
   });
 });

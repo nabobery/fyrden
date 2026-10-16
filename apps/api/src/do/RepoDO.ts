@@ -112,7 +112,7 @@ import type {
   MemberPack,
   ViewPack,
 } from "../network/types.js";
-import { type CompactSliceInput, VIEW_CAP, viewCompactionHandler } from "../network/view-cap.js";
+import { type CompactSliceInput, viewCompactionHandler } from "../network/view-cap.js";
 import { platformSigner } from "../signing/platform-key.js";
 import { type SignedFact, verdicts } from "../signing/verification.js";
 import { secretKeys } from "../webhooks/secrets.js";
@@ -316,6 +316,10 @@ const OPEN_IMPORT_CALLS = 600;
 
 /** Import steps opening a pull request from another repository may take before it gives up. */
 const OPEN_IMPORT_STEPS = 40;
+
+/** Why an import into a repository whose view of borrowed packs is full is refused. */
+const VIEW_FULL_DETAIL =
+  "The repository borrows as many packs from its fork network as it can hold, and they are too large to merge.";
 
 /** The largest file a diff comment's anchor is checked against. */
 const ANCHOR_MAX_BYTES = 1024 * 1024;
@@ -1242,6 +1246,7 @@ export class RepoDO extends MigratingDO {
           | "no_commits"
           | "already_exists"
           | "too_expensive"
+          | "view_full"
           | "busy";
         number?: number;
       }
@@ -1306,7 +1311,7 @@ export class RepoDO extends MigratingDO {
               if (merged) return { ok: false as const, code: "no_commits" as const };
             }
             if (this.git.refStore.state().version !== version) continue;
-            if (!this.ctx.storage.transactionSync(() => readyToPublish(this.git, work)))
+            if (!this.ctx.storage.transactionSync(() => readyToPublish(this.#importDeps(), work)))
               return { ok: false as const, code: "busy" as const };
             const role = this.#roleNow(actor.principal, ceilings);
             const opened = this.feed.within({ root, role, mentioned }, () =>
@@ -1316,7 +1321,8 @@ export class RepoDO extends MigratingDO {
                 { actor, root },
                 () => {
                   // Checked again in the ref transaction: the base's collection may have run.
-                  if (!readyToPublish(this.git, work)) throw new ImportBusy("the import changed");
+                  if (!readyToPublish(this.#importDeps(), work))
+                    throw new ImportBusy("the import changed");
                   publishStaged(this.git, work.importId);
                 },
               ),
@@ -3720,7 +3726,7 @@ export class RepoDO extends MigratingDO {
           this.#blocks ??= createClockBlockCache();
           return this.#blocks;
         },
-        limit: () => VIEW_CAP - this.packCap.cap,
+        ownCap: () => this.packCap.cap,
         record: async (output) => {
           await this.env.NETWORK.getByName(this.git.networkId()).recordCompaction({
             networkId: this.git.networkId(),
@@ -3838,6 +3844,7 @@ export class RepoDO extends MigratingDO {
       env: this.env,
       repoId: () => this.#repoId(),
       ownCap: () => this.packCap.cap,
+      rewriteObjects: () => this.maintenance.maxRewriteObjects,
       log: () => this.#log(),
     };
   }
@@ -4112,7 +4119,7 @@ export class RepoDO extends MigratingDO {
       },
       async (work) =>
         this.ctx.storage.transactionSync(() => {
-          if (!readyToPublish(this.git, work)) return false;
+          if (!readyToPublish(this.#importDeps(), work)) return false;
           publishStaged(this.git, work.importId);
           return true;
         }),
@@ -4120,7 +4127,9 @@ export class RepoDO extends MigratingDO {
     if (!imported.ok)
       return imported.code === "too_expensive"
         ? fail(422, "too_expensive", "The base branch is too far ahead to bring here now.")
-        : BUSY;
+        : imported.code === "view_full"
+          ? fail(422, "view_full", VIEW_FULL_DETAIL)
+          : BUSY;
     return imported.value ? { ok: true, value: true } : BUSY;
   }
 

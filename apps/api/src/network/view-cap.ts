@@ -153,6 +153,22 @@ export function swapCompactedView(
 /** Packs one view compaction merges at most (their indexes are loaded per slice). Proposed. */
 export const MAX_COMPACTION_SOURCES = 16;
 
+/** What a view compaction works within: the borrowed packs the view may hold, and one run's limits. */
+export interface CompactionLimits {
+  readonly limit: number;
+  readonly maxPacks: number;
+  readonly maxObjects: number;
+}
+
+/**
+ * The limits of a view whose own packs are capped at `ownCap`, compacted
+ * within `maxObjects` a run (the maintenance policy's rewrite budget).
+ */
+export function compactionLimits(ownCap: number, maxObjects: number): CompactionLimits {
+  // At least one borrowed pack, even if the own-pack cap was raised to the view cap.
+  return { limit: Math.max(1, VIEW_CAP - ownCap), maxPacks: MAX_COMPACTION_SOURCES, maxObjects };
+}
+
 /**
  * One run's sources for a view of `packs` (borrowed, live) over `limit`:
  * whole units, oldest first, skipping a unit that does not fit what is
@@ -161,10 +177,7 @@ export const MAX_COMPACTION_SOURCES = 16;
  * would bring the view within `limit` or the run is full. Fewer than two
  * packs is no run.
  */
-export function batchOf(
-  packs: readonly ViewPack[],
-  limits: { readonly limit: number; readonly maxPacks: number; readonly maxObjects: number },
-): ViewPack[] {
+export function batchOf(packs: readonly ViewPack[], limits: CompactionLimits): ViewPack[] {
   const needed = packs.length - limits.limit + 1;
   if (needed < 2) return [];
   // Units across the whole view (a unit's packs need not be next to each other), oldest first.
@@ -190,6 +203,37 @@ export function batchOf(
     if (out.length >= 2) return out;
   }
   return [];
+}
+
+/**
+ * Whether the view compaction can bring a view of `packs` (borrowed, live,
+ * oldest first) within `limits.limit`: its runs one after another, each
+ * output a new pack holding its sources' objects. False when a run would
+ * find no batch while the view is still over (no two units fit one run).
+ * Each run takes at least two packs and gives back one, so this ends.
+ */
+export function fitsAfterCompaction(packs: readonly ViewPack[], limits: CompactionLimits): boolean {
+  let view = [...packs];
+  for (let run = 0; view.length > limits.limit; run++) {
+    const [first, ...rest] = batchOf(view, limits);
+    if (!first || rest.length === 0) return false;
+    const batch = [first, ...rest];
+    const merged = new Set(batch.map((p) => p.packId));
+    const output: ViewPack = {
+      ...first,
+      packId: `compacted:${run}`,
+      unitId: null,
+      objectCount: batch.reduce((n, p) => n + (p.objectCount ?? 0), 0),
+    };
+    // An output is newer than every pack of the view.
+    view = [...view.filter((p) => !merged.has(p.packId)), output];
+  }
+  return true;
+}
+
+/** A view over its cap that no compaction run fits (no two of its units within a run's limits). */
+export class ViewOverCap extends Error {
+  override name = "ViewOverCap";
 }
 
 /** The one job compacting a view over its cap (packs borrowed from pull requests' heads). */
@@ -237,8 +281,8 @@ export function viewCompactionHandler(deps: {
   readonly git: RepoGitStorage;
   readonly policy: () => MaintenancePolicy;
   readonly blocks: () => BlockCache;
-  /** Borrowed packs the view may hold (the view cap less the own-pack cap). */
-  readonly limit: () => number;
+  /** Own packs the view may hold (the pack-count cap): the view cap less it may be borrowed. */
+  readonly ownCap: () => number;
   /** Records the compacted pack with the network (as a fork's base compaction is). */
   readonly record: (output: ViewPack) => Promise<void>;
 }): JobHandler {
@@ -312,12 +356,18 @@ export function viewCompactionHandler(deps: {
       if (!cursor.runId || !sources) {
         // A bounded batch at a time (each run loads its sources' indexes): whole units, oldest
         // first; the view is looked at again once it is recorded.
-        sources = batchOf(borrowedLive(), {
-          limit: Math.max(1, deps.limit()),
-          maxPacks: MAX_COMPACTION_SOURCES,
-          maxObjects: deps.policy().maxRewriteObjects,
-        }).map((p) => p.packId);
-        if (sources.length === 0) return { done: true };
+        const view = borrowedLive();
+        const limits = compactionLimits(deps.ownCap(), deps.policy().maxRewriteObjects);
+        sources = batchOf(view, limits).map((p) => p.packId);
+        if (sources.length === 0) {
+          if (view.length <= limits.limit) return { done: true };
+          // Imports refuse packs that would leave the view so; a view over it all the same (the
+          // budget lowered since) fails the job, tried again in case a collection drops packs.
+          throw new ViewOverCap(
+            `the view holds ${view.length} borrowed packs, over its cap of ${limits.limit}, ` +
+              `and no two of them fit one compaction of ${limits.maxObjects} objects`,
+          );
+        }
         // The run's id is stored before its first slice writes anything under it: an eviction
         // leaves nothing a later cleanup cannot find.
         return {

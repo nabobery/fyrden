@@ -4,7 +4,12 @@ import { oidFromBytes, oidFromHex, oidToHex } from "@fyrden/git-core";
 import { GC_JOB_ID, inProgress, scheduleGc } from "../git/maintenance/schedule.js";
 import { liveViewPacks } from "./member.js";
 import type { CommitRowData, ViewPack } from "./types.js";
-import { chooseBaseCompaction, isDetaching, scheduleViewCompaction, VIEW_CAP } from "./view-cap.js";
+import {
+  compactionLimits,
+  fitsAfterCompaction,
+  isDetaching,
+  scheduleViewCompaction,
+} from "./view-cap.js";
 
 /*
  * A pull request's base importing a revision of its head from another
@@ -79,7 +84,7 @@ export interface ImportWork {
 /** An import that cannot go on (it is given up; the pull request keeps its revision). */
 export class ImportFailed extends Error {
   constructor(
-    readonly code: "unknown_commit" | "too_large" | "packs_gone" | "not_member",
+    readonly code: "unknown_commit" | "too_large" | "packs_gone" | "not_member" | "view_full",
     message: string,
   ) {
     super(message);
@@ -98,8 +103,13 @@ export interface ImportDeps {
   readonly repoId: () => string;
   /** Own packs a view may have (the pack-count cap). */
   readonly ownCap: () => number;
+  /** Objects one compaction of the view may rewrite (the maintenance policy's budget). */
+  readonly rewriteObjects: () => number;
   readonly log: () => Logger;
 }
+
+/** What judging the base's view of borrowed packs needs. */
+export type ViewDeps = Pick<ImportDeps, "git" | "ownCap" | "rewriteObjects">;
 
 /** Calls to other objects an invocation may make for imports, and how many it has made. */
 export interface CallBudget {
@@ -170,11 +180,14 @@ export async function runImportStep(
       // Past the lease (paused after sharing), a pack may have been deleted since: from the start.
       if ((work.state.leaseUntil ?? 0) <= git.context.now())
         return { ...work, step: "snapshot", leaseId: null, state: {} };
-      adoptPacks(git, work.state.packs ?? []);
-      const borrowed = liveViewPacks(git).filter((p) => p.origin === "borrowed");
-      const sources = chooseBaseCompaction(borrowed, Math.max(1, VIEW_CAP - deps.ownCap()));
+      const packs = work.state.packs ?? [];
+      const adopted = borrowedWith(git, packs);
+      // Packs it reads already add nothing: a view over its cap all the same takes them.
+      if (adopted.length > borrowedLive(git).length) admit(deps, adopted);
+      adoptPacks(git, packs);
       // Over the cap: compacted on the view's own job; the import goes on meanwhile.
-      if (sources.length > 0) scheduleViewCompaction(git);
+      if (adopted.length > compactionLimits(deps.ownCap(), deps.rewriteObjects()).limit)
+        scheduleViewCompaction(git);
       return { ...work, step: "graph" };
     }
     case "graph": {
@@ -208,7 +221,7 @@ export async function runImportStep(
 }
 
 /** Why an import run within one invocation gave up (its caller answers in its own terms). */
-export type ForegroundRefusal = "too_expensive" | "unknown_commit" | "busy";
+export type ForegroundRefusal = "too_expensive" | "unknown_commit" | "view_full" | "busy";
 
 /**
  * Imports `sha` of `headRepoId` within the caller's invocation: its steps
@@ -243,8 +256,8 @@ export async function importInForeground<T>(
         code:
           error.code === "too_large"
             ? "too_expensive"
-            : error.code === "unknown_commit"
-              ? "unknown_commit"
+            : error.code === "unknown_commit" || error.code === "view_full"
+              ? error.code
               : "busy",
       };
     if (error instanceof ImportBusy) return { ok: false, code: "busy" };
@@ -272,6 +285,47 @@ function leftNetwork(git: RepoGitStorage, work: ImportWork): boolean {
 /** Whether the base's commit graph has `hex` (and so, its whole history). */
 function hasCommit(git: RepoGitStorage, hex: string): boolean {
   return git.commitGraph.readSync([oidFromHex(hex)], "verified")[0] !== undefined;
+}
+
+/** The live borrowed packs of the base's view, oldest first. */
+function borrowedLive(git: RepoGitStorage): ViewPack[] {
+  return liveViewPacks(git).filter((p) => p.origin === "borrowed");
+}
+
+/**
+ * The base's borrowed packs once `packs` are adopted (as `adoptPacks`
+ * does), oldest first: those it reads already count once, and its own
+ * taken back count against the own-pack cap instead.
+ */
+function borrowedWith(git: RepoGitStorage, packs: readonly ViewPack[]): ViewPack[] {
+  const sql = git.context.storage.sql;
+  const added = packs.filter((pack) => {
+    const row = sql
+      .exec<{ state: string; origin: string }>(
+        "SELECT state, origin FROM packs WHERE pack_id = ?",
+        pack.packId,
+      )
+      .toArray()[0];
+    if (!row) return true;
+    if (row.state === "live") return false;
+    return !((HELD as readonly string[]).includes(row.state) && row.origin === "own");
+  });
+  return [...borrowedLive(git), ...added].sort(
+    (a, b) => a.createdAt - b.createdAt || (a.packId < b.packId ? -1 : a.packId > b.packId ? 1 : 0),
+  );
+}
+
+/**
+ * Refuses a borrowed view (`view`, oldest first) the base could not hold:
+ * over its cap with no compaction able to bring it within (no two of its
+ * packs fit one run). Admitted, a view over its cap is compacted later.
+ */
+function admit(deps: ViewDeps, view: readonly ViewPack[]): void {
+  if (!fitsAfterCompaction(view, compactionLimits(deps.ownCap(), deps.rewriteObjects())))
+    throw new ImportFailed(
+      "view_full",
+      "the base's view cannot hold more borrowed packs: they are too large to compact",
+    );
 }
 
 /** Registry states of a pack not finished yet: waited out. */
@@ -371,22 +425,28 @@ function stage(git: RepoGitStorage, importId: string, rows: readonly CommitRowDa
  * pack is gone from the view or the copied history is not whole (the head's
  * graph changed under the copy): the import starts again.
  */
-export function readyToPublish(git: RepoGitStorage, work: ImportWork): boolean {
+export function readyToPublish(deps: ViewDeps, work: ImportWork): boolean {
+  const { git } = deps;
   // Left (or leaving) the network: the head's packs are not the base's to read any more.
   if (leftNetwork(git, work)) throw new ImportFailed("not_member", "the base left its network");
   const sql = git.context.storage.sql;
-  let tookBack = false;
+  let tookBack: "none" | "own" | "borrowed" = "none";
   for (const pack of work.state.packs ?? []) {
-    const state = sql
-      .exec<{ state: string }>("SELECT state FROM packs WHERE pack_id = ?", pack.packId)
-      .toArray()[0]?.state;
-    if (state !== undefined && (HELD as readonly string[]).includes(state)) {
+    const row = sql
+      .exec<{ state: string; origin: string }>(
+        "SELECT state, origin FROM packs WHERE pack_id = ?",
+        pack.packId,
+      )
+      .toArray()[0];
+    if (row && (HELD as readonly string[]).includes(row.state)) {
       git.registry.transition(pack.packId as never, HELD, "live");
-      tookBack = true;
-    } else if (state !== "live") return false;
+      if (tookBack !== "borrowed") tookBack = row.origin === "borrowed" ? "borrowed" : "own";
+    } else if (row?.state !== "live") return false;
   }
-  // Packs taken back may put the view over its cap again (a compaction replaced them meanwhile).
-  if (tookBack) scheduleViewCompaction(git);
+  // Packs taken back may put the view over its cap again (a compaction replaced them meanwhile):
+  // borrowed ones are admitted as when they were adopted.
+  if (tookBack === "borrowed") admit(deps, borrowedLive(git));
+  if (tookBack !== "none") scheduleViewCompaction(git);
   // Every staged commit's parents are staged or in the graph, and the revision is one of them.
   const staged = sql
     .exec<{ oid: ArrayBuffer; parents: ArrayBuffer }>(
@@ -712,7 +772,7 @@ export class PullImports {
     try {
       outcome = git.context.storage.transactionSync((): typeof outcome => {
         if (!this.#unchanged(row)) return "stale";
-        if (!readyToPublish(git, next)) return "restart";
+        if (!readyToPublish(this.deps, next)) return "restart";
         const done = this.deps.publish(row.number, next, row);
         sql.exec("DELETE FROM revision_imports WHERE pr_number = ?", row.number);
         sql.exec("DELETE FROM import_commits WHERE import_id = ?", next.importId);

@@ -3,9 +3,15 @@
 // opens and after each push to the fork's branch, in order, and only for
 // the branch the pull request follows.
 import { env } from "cloudflare:workers";
+import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import {
+  scheduleViewCompaction,
+  VIEW_COMPACT_JOB,
+  viewCompactionHandler,
+} from "../src/network/view-cap.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { packStates, runJob } from "./helpers/maintenance.js";
 import { scopedToken } from "./helpers/principals.js";
@@ -672,6 +678,103 @@ describe("the base's view", () => {
       api("GET", `${base.path}/pulls/1/files`, owner.token),
     );
     expect(files.body.files.map((f) => f.filename)).toEqual(["b.txt", "c.txt", "d.txt", "e.txt"]);
+  });
+
+  const borrowedLive = (stub: DurableObjectStub<RepoDO>) =>
+    inRepo(
+      stub,
+      (r: RepoDO) =>
+        r.git.context.storage.sql
+          .exec<{ n: number }>(
+            "SELECT count(*) AS n FROM packs WHERE origin = 'borrowed' AND state = 'live'",
+          )
+          .one().n,
+    );
+
+  it("refuses a revision whose packs no compaction could make room for, keeping the last one", async () => {
+    const stub = env.REPO.getByName(base.id);
+    // Room for two borrowed packs, and no two of the fork's packs fit one compaction.
+    await inRepo(stub, (r: RepoDO) => {
+      r.packCap = { ...r.packCap, cap: 30 };
+      r.maintenance = { ...r.maintenance, maxRewriteObjects: 1 };
+    });
+    await open(contributor, `${contributor.handle}:main`);
+    const kept = await commitOn(contributor, fork.path, "main", [
+      { path: "c.txt", content: "c\n" },
+    ]);
+    await sync();
+    expect((await pull()).head.sha).toBe(kept);
+    expect(await borrowedLive(stub)).toBe(2);
+    // A third pack: the import is given up, the pull request keeps its revision.
+    const refused = await commitOn(contributor, fork.path, "main", [
+      { path: "d.txt", content: "d\n" },
+    ]);
+    await sync();
+    expect((await pull()).head.sha).toBe(kept);
+    expect(await borrowedLive(stub)).toBe(2);
+    // Opening another pull request on it is refused, with nothing borrowed.
+    await moveForkBranch("topic", ZERO, refused);
+    const opened = await open(contributor, `${contributor.handle}:topic`);
+    expect(opened).toMatchObject({ status: 422, body: { code: "view_full" } });
+    expect(await borrowedLive(stub)).toBe(2);
+  });
+
+  it("refuses to take back packs at publication that the view could no longer hold", async () => {
+    const stub = env.REPO.getByName(base.id);
+    for (const name of ["c", "d"])
+      await commitOn(contributor, fork.path, "main", [
+        { path: `${name}.txt`, content: `${name}\n` },
+      ]);
+    await inRepo(stub, (r: RepoDO) => {
+      r.packCap = { ...r.packCap, cap: 30 };
+      // Between adoption and publication: a compaction replaced a pack the import borrowed (its
+      // output standing in for it here by nothing), and no two packs fit one any more.
+      r.forkPullHooks.beforePublish = async () => {
+        const sql = r.git.context.storage.sql;
+        sql.exec(
+          `UPDATE packs SET state = 'superseded' WHERE pack_id = (SELECT pack_id FROM packs
+             WHERE origin = 'borrowed' AND state = 'live' ORDER BY created_at LIMIT 1)`,
+        );
+        r.maintenance = { ...r.maintenance, maxRewriteObjects: 1 };
+      };
+    });
+    const opened = await open(contributor, `${contributor.handle}:main`);
+    expect(opened).toMatchObject({ status: 422, body: { code: "view_full" } });
+    expect(await borrowedLive(stub)).toBe(2);
+  });
+
+  it("leaves a compaction that cannot bring the view within its cap failing, not done", async () => {
+    const stub = env.REPO.getByName(base.id);
+    await open(contributor, `${contributor.handle}:main`);
+    for (const name of ["c", "d"]) {
+      await commitOn(contributor, fork.path, "main", [
+        { path: `${name}.txt`, content: `${name}\n` },
+      ]);
+      await sync();
+    }
+    expect(await borrowedLive(stub)).toBe(3);
+    // The cap lowered, and the rewrite budget with it, under a view already over it.
+    const job = await inRepo(stub, async (r: RepoDO) => {
+      r.packCap = { ...r.packCap, cap: 30 };
+      const handler = viewCompactionHandler({
+        git: r.git,
+        policy: () => ({ ...r.maintenance, maxRewriteObjects: 1 }),
+        blocks: () => createClockBlockCache(),
+        ownCap: () => r.packCap.cap,
+        record: async () => {},
+      });
+      scheduleViewCompaction(r.git);
+      await r.git.jobs.runJob(VIEW_COMPACT_JOB, handler, r.git.memory, 0);
+      return r.git.context.storage.sql
+        .exec<{ state: string; last_error: string | null }>(
+          "SELECT state, last_error FROM jobs WHERE job_id = ?",
+          VIEW_COMPACT_JOB,
+        )
+        .one();
+    });
+    expect(job.state).not.toBe("done");
+    expect(job.last_error).toMatch(/over its cap/);
+    expect(await borrowedLive(stub)).toBe(3);
   });
 });
 

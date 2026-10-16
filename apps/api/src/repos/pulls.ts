@@ -93,6 +93,12 @@ export function failure(entry: RepoEntry, code: string, number?: number): Operat
         "too_expensive",
         "The head's history is too far from the base's to import here.",
       );
+    case "view_full":
+      return new OperationError(
+        422,
+        "view_full",
+        "The base repository borrows as many packs from its fork network as it can hold, and they are too large to merge.",
+      );
     case "no_commits":
       return new OperationError(
         422,
