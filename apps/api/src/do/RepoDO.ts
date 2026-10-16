@@ -167,10 +167,10 @@ import { RepoReviews } from "./repo/reviews.js";
 import { RepoRulesets, type RuleSuite, type RulesetRecord } from "./repo/rulesets.js";
 import { StorageCharges } from "./repo/storage-charges.js";
 import {
+  TemplateGeneration,
   type TemplateTree,
   type TemplateWriteInput,
   templateTree,
-  writeTemplate,
 } from "./repo/template.js";
 import type { WriteContext, WriteRefusal } from "./repo/write-context.js";
 import { repoSchema } from "./schema/repo.js";
@@ -195,10 +195,6 @@ const DELETION_SLICE = {
 } as const;
 
 /** One repository: refs, packs, its events and audit log. Keyed by the immutable repo id. */
-/** What a generation settled as abandoned answers its own late commit. */
-const GENERATION_ABANDONED =
-  "the generation from the template was abandoned; the repository is being deleted";
-
 export class RepoDO extends MigratingDO {
   static readonly schema = repoSchema;
 
@@ -221,6 +217,9 @@ export class RepoDO extends MigratingDO {
 
   /** Effective roles and the rulesets' judgement of writes. */
   readonly #authority: RepoAuthority;
+
+  /** The repository's generation from a template, while it is pending. */
+  readonly #generation: TemplateGeneration;
 
   /** Changes only an administrator may make: settings, rulesets, webhooks. */
   readonly #admin: RepoAdministration;
@@ -420,6 +419,15 @@ export class RepoDO extends MigratingDO {
       metrics: this.git.context.metrics,
       account: () => this.events.account(),
       pull: (accountId) => this.pullAcl(accountId),
+    });
+    this.#generation = new TemplateGeneration({
+      git: this.git,
+      env: () => this.env,
+      refusesReads: () => this.#refusesReads(),
+      hasGitStorage: () => this.#hasGitStorage(),
+      checkEpoch: () => this.checkEpoch(),
+      writeDeps: () => this.#writeDeps(),
+      hooks: () => this.generationHooks,
     });
     this.#storageCharges = new StorageCharges({
       git: this.git,
@@ -649,13 +657,7 @@ export class RepoDO extends MigratingDO {
     if (!isNetworkId(networkId)) return { ok: false, error: "not a network id" };
     try {
       // Before the storage exists, so no write is ever admitted ahead of the generation.
-      if (templateId !== undefined)
-        this.ctx.storage.sql.exec(
-          `INSERT INTO generation (id, template_id, started_at) VALUES (1, ?, ?)
-           ON CONFLICT (id) DO NOTHING`,
-          templateId,
-          this.git.context.now(),
-        );
+      if (templateId !== undefined) this.#generation.record(templateId);
       recordNetwork(this.ctx.storage, networkId, this.git.context.now());
       if (identity) this.events.assertIdentity(identity);
       this.git.initialize(networkId, defaultBranch);
@@ -1265,7 +1267,7 @@ export class RepoDO extends MigratingDO {
     return this.#measured("freezeForTransfer", async () => {
       await this.checkEpoch();
       // Not while its generation from a template may still finish or fail (and delete it).
-      if (this.#generatingFrom() !== undefined && !this.events.isTransferring())
+      if (this.#generation.templateId() !== undefined && !this.events.isTransferring())
         return { ok: false as const, code: "generating" as const };
       const frozen = this.events.freezeForTransfer(transfer);
       if (frozen === "frozen" || frozen === "landed") return { ok: true as const };
@@ -1430,68 +1432,17 @@ export class RepoDO extends MigratingDO {
   async generateFrom(
     input: TemplateWriteInput,
   ): Promise<Browsed<{ branch: string; commit: string }>> {
-    if (this.#closed || !this.#hasGitStorage() || this.events.isDeleted())
-      return fail(404, "repo_not_found", REPO_DELETED);
-    const templateId = this.#generatingFrom();
-    if (templateId === undefined)
-      return fail(409, "not_generating", "The repository is not being generated from a template.");
-    if (this.#generationAbandoned() !== undefined)
-      return fail(409, "generation_abandoned", GENERATION_ABANDONED);
-    const template = await this.env.REPO.getByName(templateId).templateTree();
+    const template = await this.#generation.template();
     if (!template.ok) return template;
-    await this.generationHooks.beforeWrite?.();
-    return this.#measured("generateFrom", async () => {
-      // Its commit needs the restore generation taken (a cold instance has not yet).
-      await this.checkEpoch();
-      const made = await writeTemplate(await this.#writeDeps(), input, template.value);
-      if (made.ok) this.ctx.storage.sql.exec("DELETE FROM generation");
-      return made;
-    });
+    return this.#measured("generateFrom", () => this.#generation.write(input, template.value));
   }
 
   /**
-   * Settles a generation its request could not confirm: `committed` when
-   * the repository has refs (its first commit was made: nothing else
-   * writes while it is pending), whether or not its marker was cleared;
-   * `abandoned` while it is pending without them, after which its commit
-   * is refused at the commit point, so the repository can be deleted
-   * without losing a late one; `none` otherwise (no repository here, as
-   * after an erase, or no generation). One synchronous transaction, so it
-   * cannot interleave with that commit.
+   * Settles a generation its request could not confirm (see
+   * `TemplateGeneration.abandon`).
    */
   abandonGeneration(): Promise<"committed" | "abandoned" | "none"> {
-    return this.#measured("abandonGeneration", async () =>
-      this.ctx.storage.transactionSync(() => {
-        const committed = this.#hasGitStorage() && this.git.refStore.readRefsSync().refs.size > 0;
-        if (this.#generatingFrom() === undefined)
-          return committed ? ("committed" as const) : ("none" as const);
-        if (committed) {
-          this.ctx.storage.sql.exec("DELETE FROM generation");
-          return "committed" as const;
-        }
-        this.ctx.storage.sql.exec(
-          "UPDATE generation SET abandoned_at = ? WHERE abandoned_at IS NULL",
-          this.git.context.now(),
-        );
-        return "abandoned" as const;
-      }),
-    );
-  }
-
-  /** Why a commit is refused: the generation it would finish was abandoned. */
-  #generationAbandoned(): string | undefined {
-    return this.ctx.storage.sql
-      .exec<{ abandoned_at: number | null }>("SELECT abandoned_at FROM generation")
-      .toArray()[0]?.abandoned_at != null
-      ? GENERATION_ABANDONED
-      : undefined;
-  }
-
-  /** The template this repository is still being generated from, if it is. */
-  #generatingFrom(): string | undefined {
-    return this.ctx.storage.sql
-      .exec<{ template_id: string }>("SELECT template_id FROM generation")
-      .toArray()[0]?.template_id;
+    return this.#measured("abandonGeneration", async () => this.#generation.abandon());
   }
 
   #archiver: RepoArchives | undefined;
@@ -1608,7 +1559,7 @@ export class RepoDO extends MigratingDO {
       await this.acl.roleOf(principal, "write");
       return this.acl.allows(principal, "write") ? undefined : ACCESS_LOST;
     };
-    this.#pushes.frozen = () => this.events.frozen() ?? this.#generationAbandoned();
+    this.#pushes.frozen = () => this.events.frozen() ?? this.#generation.abandoned();
     this.#pushes.rules = this.#authority.pushRules();
     this.#pushes.storage = this.#storageCharges.quota();
     return this.#pushes;
@@ -2225,7 +2176,7 @@ export class RepoDO extends MigratingDO {
       return { status: 404, code: "repo_not_found", error: REPO_DELETED };
     if (this.events.isTransferring())
       return { status: 409, code: "repo_transferring", error: REPO_TRANSFERRING };
-    if (this.#generatingFrom() !== undefined)
+    if (this.#generation.templateId() !== undefined)
       return { status: 404, code: "repo_not_found", error: REPO_DELETED };
     return undefined;
   }
