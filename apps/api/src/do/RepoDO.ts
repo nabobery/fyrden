@@ -28,7 +28,6 @@ import {
   rootIdentity,
 } from "@fyrden/domain";
 import { type BlockCache, type LsRefsArgs, type Oid, oidToHex } from "@fyrden/git-core";
-import { readModelFor } from "../events/read-model.js";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
 import { checkObjectAccess } from "../git/cache/object-check.js";
@@ -115,6 +114,7 @@ import {
   type TreeListing,
   treeListing,
 } from "./repo/contents.js";
+import { readDirectoryEpoch } from "./repo/epoch.js";
 import { type EraseOutcome, eraseRepository, recordNetwork } from "./repo/erase.js";
 import {
   type JobActor,
@@ -2132,57 +2132,9 @@ export class RepoDO extends MigratingDO {
    * commit; a restore runbook calls it to take the new epoch at once.
    */
   async checkEpoch(): Promise<void> {
-    await this.events.checkEpoch(async (recorded) => {
-      const metrics = this.git.context.metrics;
-      const primary = this.env.DIRECTORY.withSession("first-primary");
-      metrics.count("d1.query", { db: "directory", op: "epoch_read" });
-      const epoch = await primary
-        .prepare("SELECT epoch_gen FROM source_epochs WHERE source_id = ?")
-        .bind(this.#repoId())
-        .first<{ epoch_gen: number }>();
-      const epochGen = epoch?.epoch_gen ?? null;
-      if (epochGen === null || epochGen <= recorded) return { epochGen };
-      // Restored: the object may predate a transfer or a rename. What the directory and the
-      // read model's fence say now.
-      metrics.count("d1.query", { db: "directory", op: "epoch_owner" });
-      const row = await primary
-        .prepare(
-          `SELECT r.owner_id, r.name, r.name_gen, r.org_shard,
-             t.transfer_id, t.from_owner, t.to_owner
-           FROM repos r LEFT JOIN repo_transfers t
-             ON t.repo_id = r.id AND t.step NOT IN ('done', 'failed')
-           WHERE r.id = ?`,
-        )
-        .bind(this.#repoId())
-        .first<{
-          owner_id: string;
-          name: string;
-          name_gen: number;
-          org_shard: string;
-          transfer_id: string | null;
-          from_owner: string | null;
-          to_owner: string | null;
-        }>();
-      if (!row) return { epochGen };
-      metrics.count("d1.query", { db: "org", op: "owner_fence" });
-      const fence = await readModelFor(this.env, row.org_shard)
-        .prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
-        .bind(this.#repoId())
-        .first<{ owner_gen: number }>();
-      return {
-        epochGen,
-        owner: {
-          ownerId: row.owner_id,
-          name: row.name,
-          nameGen: row.name_gen,
-          ownerFence: fence?.owner_gen ?? 0,
-          transfer:
-            row.transfer_id && row.from_owner && row.to_owner
-              ? { id: row.transfer_id, from: row.from_owner, to: row.to_owner }
-              : null,
-        },
-      };
-    });
+    await this.events.checkEpoch((recorded) =>
+      readDirectoryEpoch(this.env, this.git.context.metrics, this.#repoId(), recorded),
+    );
     // A new epoch's snapshot goes out even if nothing else is written.
     this.#armOutbox();
   }
