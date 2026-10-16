@@ -285,6 +285,29 @@ repository:
   import's report.
 - At most `GIT_IMPORT_MAX_BYTES` (default 4 GiB) and `GIT_IMPORT_MAX_MS`
   (default 10 minutes) of fetching per import.
+- **A slow source is stopped early.** The fetch runs in the repository's
+  Durable Object, which stays active, and is billed for its duration, while
+  it waits on the source ([platform limit](https://developers.cloudflare.com/queues/platform/limits/):
+  a Durable Object remains active while pending I/O is in flight), so a
+  source that stalls or trickles does not hold it for the
+  whole 10 minutes (Proposed defaults, checked every 5 seconds):
+
+  | Limit | Default | Variable |
+  |---|---|---|
+  | Connecting and listing the branches and tags | 30 s | `GIT_IMPORT_DISCOVERY_MS` |
+  | Nothing received while the pack streams | 60 s (git's upload-pack sends a keepalive every 5 s by default while it prepares the pack) | `GIT_IMPORT_IDLE_MS` |
+  | Pack throughput, over every minute after the first two | at least 16 KiB/s (a 4 GiB import needs about 7 MiB/s to finish in time) | `GIT_IMPORT_MIN_BYTES_PER_SECOND` |
+
+  A pack of B bytes therefore holds the object for at most about
+  3 minutes + B / 16 KiB/s, and never past `GIT_IMPORT_MAX_MS`. A source
+  stopped this way fails the import at once, without a retry, with the error
+  `the source took too long: ...` naming the limit; whatever was stored is
+  removed. The transfer stays in the Durable Object because a Free Worker
+  (a queue consumer too) gets about 10 ms of CPU per invocation: the pack
+  arrives in side-band frames that Worker code must take apart, and framing
+  in Worker code was measured at 2.4 to 3.7 ms of CPU per MiB (see Free and
+  Paid serving; taking frames apart is assumed to cost about as much,
+  unverified).
 - The imported pack is checked like any push.
 
 ## Maintenance and retention
@@ -772,6 +795,9 @@ and the default applies.
 | `GIT_UPLOAD_COMPLETE_WAIT_MS` | 20,000 | 0 | How long one `complete` call waits |
 | `GIT_IMPORT_MAX_BYTES` | 4,294,967,296 (4 GiB) | 32 | Largest pack an import fetches |
 | `GIT_IMPORT_MAX_MS` | 600,000 (10 min) | 1,000 | Longest an import's fetch may take |
+| `GIT_IMPORT_DISCOVERY_MS` | 30,000 | 1,000 | Longest an import's source may take to list its branches and tags |
+| `GIT_IMPORT_IDLE_MS` | 60,000 | 1,000 | Longest an import's source may send nothing while the pack streams |
+| `GIT_IMPORT_MIN_BYTES_PER_SECOND` | 16,384 (16 KiB/s) | 0 | Least an import's pack must bring per second, over every minute after its first two; 0 for no floor |
 | `QUOTA_MAX_REPOS` | 1,000 | 0 | Active repositories an account may have, unless an administrator set its own |
 | `QUOTA_MAX_STORAGE_BYTES` | 1,073,741,824 (1 GiB) | 0 | Bytes an account's pushes may store, unless an administrator set its own |
 | `QUOTA_AGENT_MAX_REPOS` | 100 | 0 | Active repositories one agent may have created acting for users |

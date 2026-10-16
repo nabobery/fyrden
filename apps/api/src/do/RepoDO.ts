@@ -41,6 +41,7 @@ import { answerFetchPlan, FETCH_LEASE_TTL_MS } from "../git/fetch/plan.js";
 import type { FetchPlanReply, FetchPlanRequest } from "../git/fetch/wire.js";
 import { type BeginImport, type ImportRecord, RepoImports } from "../git/import/job.js";
 import { defaultImportNetwork, type ImportNetwork } from "../git/import/network.js";
+import { systemClock, type WatchClock } from "../git/import/watch.js";
 import type { GcHooks } from "../git/maintenance/gc-job.js";
 import { maintenanceHandlers } from "../git/maintenance/handlers.js";
 import { MAINTENANCE_DEFAULTS, type MaintenancePolicy } from "../git/maintenance/policy.js";
@@ -1717,6 +1718,9 @@ export class RepoDO extends MigratingDO {
   /** How imports reach the network: the guarded fetch. Tests may replace it. */
   importNetwork: ImportNetwork = defaultImportNetwork();
 
+  /** The time an import's fetch is watched by (how slow its source may be). Tests may replace it. */
+  importClock: WatchClock = systemClock;
+
   #importer: RepoImports | undefined;
 
   #imports(): RepoImports {
@@ -1728,6 +1732,7 @@ export class RepoDO extends MigratingDO {
       this.git.context.metrics,
       this.#log(),
       () => this.importNetwork,
+      () => this.importClock,
       (principalId) => this.acl.roleOf(principalId, "write"),
       () => this.events.account()?.ownerGen,
       (principal, updates, grantId, head) =>

@@ -51,6 +51,9 @@ export async function startImport(
       maxBytes: tuning.maxImportBytes,
       maxMs: tuning.maxImportMs,
       partBytes: tuning.partBytes,
+      discoveryMs: tuning.importDiscoveryMs,
+      idleMs: tuning.importIdleMs,
+      minBytesPerSecond: tuning.minImportBytesPerSecond,
     },
   });
   if (!begun.ok)
