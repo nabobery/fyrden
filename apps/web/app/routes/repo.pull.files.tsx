@@ -491,7 +491,7 @@ export default function PullFiles({ loaderData }: Route.ComponentProps) {
               ))}
             </ol>
           </nav>
-          <Drafts scope={page}>
+          <Drafts viewer={viewer} page={page}>
             <WindowVirtualizer>
               {files.map((f, i) => (
                 <FileSection

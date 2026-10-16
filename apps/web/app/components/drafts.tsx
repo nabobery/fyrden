@@ -13,7 +13,7 @@ import {
  * form that remounts (a review thread moving between the diff and the list,
  * or drawn again as the diff scrolls) finds its text here again.
  */
-class DraftStore {
+export class DraftStore {
   readonly #text = new Map<string, string>();
   readonly #listeners = new Set<() => void>();
 
@@ -37,9 +37,40 @@ class DraftStore {
 
 const DraftsContext = createContext<{ scope: string; store: DraftStore } | null>(null);
 
-/** Keeps the drafts of the forms under it, for what `scope` names (a pull request). */
-export function Drafts({ scope, children }: { scope: string; children: ReactNode }) {
-  const [store] = useState(() => new DraftStore());
+/** The drafts written by `viewer`. */
+export interface ViewerDrafts {
+  readonly viewer: string | null;
+  readonly store: DraftStore;
+}
+
+/**
+ * The drafts for `viewer`: `held` while it is theirs, else new ones (the
+ * account changed, in another tab: what the other one wrote goes).
+ */
+export function draftsFor(held: ViewerDrafts | undefined, viewer: string | null): ViewerDrafts {
+  return held?.viewer === viewer ? held : { viewer, store: new DraftStore() };
+}
+
+/**
+ * Keeps the drafts of the forms under it, by `page` (a pull request) and by
+ * who writes them: neither a draft nor the answer to sending one is shown
+ * to another account signed in later.
+ */
+export function Drafts({
+  viewer,
+  page,
+  children,
+}: {
+  viewer: string | null;
+  page: string;
+  children: ReactNode;
+}) {
+  const [held, setHeld] = useState(() => draftsFor(undefined, viewer));
+  const drafts = draftsFor(held, viewer);
+  if (drafts !== held) setHeld(drafts);
+  const { store } = drafts;
+  // The viewer is in the keys too: the fetchers sending drafts are the router's, not these.
+  const scope = `${page}#${viewer ?? ""}`;
   const value = useMemo(() => ({ scope, store }), [scope, store]);
   return <DraftsContext.Provider value={value}>{children}</DraftsContext.Provider>;
 }
