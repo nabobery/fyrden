@@ -307,3 +307,13 @@ fieldset {
 fieldset p {
   margin: 0.25rem 0;
 }
+.conflict-file textarea {
+  min-height: 24rem;
+}
+.file-name-inline {
+  overflow-wrap: anywhere;
+}
+.conflict-tools legend {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}

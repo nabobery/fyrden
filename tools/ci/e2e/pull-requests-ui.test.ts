@@ -2,9 +2,10 @@
 // Workers under one wrangler dev: a person opens a pull request from a
 // pushed branch, discusses it, reads its files drawn by the diff renderer
 // (hostile file names and lines staying inert), comments on a line from the
-// keyboard, replies, resolves and applies a suggestion. Every page it visits
-// is checked with axe for WCAG 2.x A and AA. Needs `pnpm --filter
-// @fyrden/web build` first (turbo does it).
+// keyboard, replies, resolves and applies a suggestion, reviews, updates the
+// branch and squash-merges it, and resolves another one's conflict in the
+// web editor. Every page it visits is checked with axe for WCAG 2.x A and
+// AA. Needs `pnpm --filter @fyrden/web build` first (turbo does it).
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -235,6 +236,51 @@ describe("pull requests in the web UI", () => {
     );
     expect(main.commit.message).toMatch(/^Change things \(#1\)/);
     await accessible(page, "merged pull request");
+  });
+
+  it("resolves a conflict in the web editor, from the keyboard", async () => {
+    await rest("POST", `/repos/${handle}/${name}/pulls`, {
+      title: "Clash",
+      head: "clash",
+      base: "main",
+    });
+    // The base changes the same line.
+    const readme = await rest<{ sha: string }>(
+      "GET",
+      `/repos/${handle}/${name}/contents/README.md`,
+    );
+    await rest("PUT", `/repos/${handle}/${name}/contents/README.md`, {
+      message: "Retitle",
+      sha: readme.sha,
+      content: Buffer.from("# Main\n").toString("base64"),
+    });
+    await page.goto(`${stack.origin}/${handle}/${name}/pull/2/conflicts`);
+    await see(page.getByText("1 conflict left in this file.")).toBeVisible();
+    await accessible(page, "conflicts");
+    const editor = page.getByLabel(/^Resolved content of README\.md/);
+    await see(editor).toHaveValue("<<<<<<< clash\n# Clash\n=======\n# Main\n>>>>>>> main\n");
+    await page.getByRole("button", { name: "Next conflict" }).focus();
+    await page.keyboard.press("Enter");
+    await see(editor).toBeFocused();
+    await page.getByRole("button", { name: "Keep both" }).focus();
+    await page.keyboard.press("Enter");
+    await see(page.getByText("No conflict markers left.")).toBeVisible();
+    await page.getByRole("button", { name: "Commit merge" }).click();
+    await see(page.getByRole("status").filter({ hasText: "Resolved" })).toBeVisible({
+      timeout: 30_000,
+    });
+    await accessible(page, "conflicts resolved");
+    // One merge commit on the head branch, the file's line breaks as they were.
+    const head = await rest<{ parents: unknown[] }>(
+      "GET",
+      `/repos/${handle}/${name}/commits/clash`,
+    );
+    expect(head.parents).toHaveLength(2);
+    const merged = await rest<{ content: string }>(
+      "GET",
+      `/repos/${handle}/${name}/contents/README.md?ref=clash`,
+    );
+    expect(Buffer.from(merged.content, "base64").toString()).toBe("# Clash\n# Main\n");
   });
 
   it("never had a script, style or image refused by the policy on any page", () => {

@@ -17,5 +17,6 @@ export default [
   route(":owner/:repo/pull/:number", "routes/repo.pull.tsx"),
   route(":owner/:repo/pull/:number/files", "routes/repo.pull.files.tsx"),
   route(":owner/:repo/pull/:number/files/patches", "routes/repo.pull.patches.ts"),
+  route(":owner/:repo/pull/:number/conflicts", "routes/repo.pull.conflicts.tsx"),
   route(":owner/:repo/settings", "routes/repo.settings.tsx"),
 ] satisfies RouteConfig;
