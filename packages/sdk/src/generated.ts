@@ -1556,6 +1556,33 @@ export type ReposHooksDeliveriesGetOutput = {
   })[];
 };
 
+/** Input of `repos.hooks.deliveries.redeliver`: Redeliver a delivery for a repository webhook. */
+export type ReposHooksDeliveriesRedeliverInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+  delivery_id: string;
+};
+
+/** Output of `repos.hooks.deliveries.redeliver`. */
+export type ReposHooksDeliveriesRedeliverOutput = {
+  /** The delivery's `webhook-id` (the same on every attempt). */
+  id: string;
+  event: string;
+  action: string | null;
+  state: "pending" | "done" | "failed" | "cancelled" | "dropped";
+  /** Why it failed, was cancelled or dropped. */
+  reason: string | null;
+  /** The last attempt's response status. */
+  status_code: number | null;
+  attempts: number;
+  delivered_at: string;
+  next_attempt_at: string | null;
+};
+
 /** Input of `admin.webhooks.reseal`: Seal webhook secrets with the current key. */
 export type AdminWebhooksResealInput = {
   cursor?: string;
@@ -4384,6 +4411,7 @@ export const OPERATIONS = {
   "repos.hooks.secret.drop": { method: "DELETE", path: "/repos/{owner}/{repo}/hooks/{hook_id}/secret/previous", pathParams: ["owner","repo","hook_id"], idempotent: true },
   "repos.hooks.deliveries.list": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries", pathParams: ["owner","repo","hook_id"], idempotent: false, items: "deliveries" },
   "repos.hooks.deliveries.get": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: false },
+  "repos.hooks.deliveries.redeliver": { method: "POST", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: true },
   "admin.webhooks.reseal": { method: "POST", path: "/admin/webhooks/reseal", pathParams: [], idempotent: true },
   "pulls.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: false, items: "pull_requests" },
   "pulls.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: true },
@@ -4560,6 +4588,8 @@ export interface Operations {
   "repos.hooks.deliveries.list": { input: ReposHooksDeliveriesListInput; output: ReposHooksDeliveriesListOutput };
   /** Get a delivery for a repository webhook. One delivery: its body and each attempt (where it was sent, what came back, the first 4 KiB of the response). Administrators only. */
   "repos.hooks.deliveries.get": { input: ReposHooksDeliveriesGetInput; output: ReposHooksDeliveriesGetOutput };
+  /** Redeliver a delivery for a repository webhook. Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only. */
+  "repos.hooks.deliveries.redeliver": { input: ReposHooksDeliveriesRedeliverInput; output: ReposHooksDeliveriesRedeliverOutput };
   /** Seal webhook secrets with the current key. Fyrden: seals again, with `WEBHOOKS_KEY`, webhook secrets sealed with a retired key, a batch of repositories at a time (call again with `cursor` until `next_cursor` is null and `remaining` is 0); `unreadable` counts secrets whose key is gone (rotate those hooks' secrets). Instance administrators only. */
   "admin.webhooks.reseal": { input: AdminWebhooksResealInput; output: AdminWebhooksResealOutput };
   /** List pull requests. The repository's pull requests, newest first. */

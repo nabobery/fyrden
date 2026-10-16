@@ -9106,6 +9106,159 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
     },
+    "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts": {
+      "post": {
+        "description": "Sends a finished delivery (\`done\` or \`failed\`) once more: its original body, the same \`webhook-id\`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 \`delivery_pending\`), while a 410 from its receiver is turning the hook off (409 \`hook_being_disabled\`), for a delivery that was cancelled or dropped (422 \`not_redeliverable\`), once its body is gone (422 \`payload_gone\`), for an inactive hook (422 \`hook_inactive\`), and while the hook has 1,000 deliveries waiting (409 \`too_many_outstanding\`). Administrators only.",
+        "operationId": "repos.hooks.deliveries.redeliver",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "hook_id",
+            "required": true,
+            "schema": {
+              "description": "The webhook's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "path",
+            "name": "delivery_id",
+            "required": true,
+            "schema": {
+              "pattern": "^msg_[0-9a-f]{32}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "attempts": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "delivered_at": {
+                      "type": "string",
+                    },
+                    "event": {
+                      "type": "string",
+                    },
+                    "id": {
+                      "description": "The delivery's \`webhook-id\` (the same on every attempt).",
+                      "type": "string",
+                    },
+                    "next_attempt_at": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "reason": {
+                      "description": "Why it failed, was cancelled or dropped.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "state": {
+                      "enum": [
+                        "pending",
+                        "done",
+                        "failed",
+                        "cancelled",
+                        "dropped",
+                      ],
+                      "type": "string",
+                    },
+                    "status_code": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "The last attempt's response status.",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "event",
+                    "action",
+                    "state",
+                    "reason",
+                    "status_code",
+                    "attempts",
+                    "delivered_at",
+                    "next_attempt_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Accepted",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Redeliver a delivery for a repository webhook",
+        "x-fyrden-permission": "repository_hooks:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}/hooks/{hook_id}/pings": {
       "post": {
         "description": "Sends the webhook a \`ping\` delivery. Administrators only.",

@@ -62,6 +62,8 @@ type Claimed = {
   private: number;
   payload_key: string;
   attempts: number;
+  /** Set for a delivery sent again by hand: its last attempt (else the policy's). */
+  attempt_limit: number | null;
   created_at: number;
 };
 
@@ -124,8 +126,9 @@ export async function attemptDelivery(deps: DeliveryDeps, deliveryId: string): P
       `UPDATE webhook_deliveries SET lease_token = ?1, lease_until = ?2, updated_at = ?3,
          attempts = attempts + 1
        WHERE delivery_id = ?4 AND state = 'pending' AND next_attempt_at <= ?3
-         AND (lease_until IS NULL OR lease_until <= ?3) AND attempts < ?5
-       RETURNING delivery_id, repo_id, hook_id, event, private, payload_key, attempts, created_at`,
+         AND (lease_until IS NULL OR lease_until <= ?3) AND attempts < coalesce(attempt_limit, ?5)
+       RETURNING delivery_id, repo_id, hook_id, event, private, payload_key, attempts,
+         attempt_limit, created_at`,
     )
     .bind(token, now + policy.leaseMs, now, deliveryId, policy.maxAttempts)
     .first<Claimed>();
@@ -297,7 +300,7 @@ async function record(
       next = now + outcome.afterMs;
       break;
     case "retry": {
-      if (attempts >= policy.maxAttempts) {
+      if (attempts >= (delivery.attempt_limit ?? policy.maxAttempts)) {
         state = "failed";
         reason = "attempts_spent";
         break;
@@ -418,7 +421,7 @@ export async function reconcileWebhooks(
        WHERE delivery_id IN (
          SELECT delivery_id FROM webhook_deliveries
          WHERE state = 'pending' AND lease_until IS NOT NULL AND lease_until <= ?1
-           AND attempts >= ?2
+           AND attempts >= coalesce(attempt_limit, ?2)
          LIMIT ?3)`,
     )
     .bind(now, policy.maxAttempts, policy.reconcileBatch)

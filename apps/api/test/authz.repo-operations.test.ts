@@ -97,6 +97,10 @@ const CASES: Record<
     input: {},
     expected: { status: 404, code: "hook_not_found" },
   },
+  "repos.hooks.deliveries.redeliver": {
+    input: {},
+    expected: { status: 404, code: "hook_not_found" },
+  },
   // No pull request exists, and the repository has no branches to open one between.
   "pulls.list": { input: {}, expected: { status: 200 } },
   "pulls.get": { input: {}, expected: { status: 404, code: "pull_not_found" } },

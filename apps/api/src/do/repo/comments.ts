@@ -123,11 +123,13 @@ export class RepoComments {
     if (!current.ok) return current;
     this.deps.git.context.storage.transactionSync(() => {
       this.#rows("DELETE FROM comments WHERE comment_id = ?", id);
+      // Gone, its snapshot carries no row: what it was on, for those told of it.
       this.#emit(
         "deleted",
         { ...current.comment, version: current.comment.version + 1 },
         caller.actor,
         true,
+        { number: current.comment.number, comment_id: id },
       );
       this.deps.events.auditChange("issue_comment.delete", caller.actor, {
         number: current.comment.number,

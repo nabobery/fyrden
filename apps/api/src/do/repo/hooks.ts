@@ -1,4 +1,5 @@
 import type { RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import { webhookEventOf } from "../../webhooks/events.js";
 import {
   newSecret,
   openSecret,
@@ -37,12 +38,6 @@ export const HOOK_POLICY = {
   /** How long a replaced secret still signs, unless dropped sooner. */
   previousSecretMs: 7 * 24 * 60 * 60_000,
 } as const;
-
-/** The repository events each hook event is made from. */
-const EVENT_OF: Readonly<Record<string, HookEvent | "ping">> = {
-  "refs.updated": "push",
-  "webhook.ping": "ping",
-};
 
 /** A hook as the API shows it (never its secrets). */
 export interface HookView {
@@ -449,7 +444,7 @@ export class RepoHooks {
 
   /** The active hooks an event of `type` goes to (a ping, only to its hook). */
   #route(type: string, data: Record<string, unknown> | null) {
-    const event = EVENT_OF[type];
+    const event = webhookEventOf(type)?.event;
     if (!event) return [];
     if (event === "ping") {
       const row = this.#row(Number(data?.hook_id));

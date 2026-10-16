@@ -294,6 +294,32 @@ export const getHookDelivery = defineOperation({
   },
 });
 
+export const redeliverHookDelivery = defineOperation({
+  id: "repos.hooks.deliveries.redeliver",
+  method: "POST",
+  path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts",
+  summary: "Redeliver a delivery for a repository webhook",
+  description:
+    "Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only.",
+  input: z.object({
+    ...RepoInput,
+    hook_id: HookId,
+    delivery_id: z.string().regex(/^msg_[0-9a-f]{32}$/),
+  }),
+  output: Delivery,
+  permission: "repository_hooks:write",
+  principals: ["user", "agent"],
+  rateLimit: "write",
+  idempotency: "key",
+  successStatus: 202,
+  mcp: {
+    tool: "redeliver_webhook_delivery",
+    title: "Redeliver a webhook delivery",
+    description: "Send a finished webhook delivery once more, with its original body.",
+    readOnly: false,
+  },
+});
+
 export const resealHookSecrets = defineOperation({
   id: "admin.webhooks.reseal",
   method: "POST",

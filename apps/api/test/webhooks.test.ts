@@ -6,14 +6,18 @@
 import { env } from "cloudflare:workers";
 import { type DomainEvent, eventKey } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, inject, it, vi } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { effectStatements } from "../src/effects/journal.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { ATTEMPT_POLICY, attemptDelivery, reconcileWebhooks } from "../src/webhooks/deliver.js";
+import { webhookEventOf } from "../src/webhooks/events.js";
 import { openSecret, secretKeys, signature } from "../src/webhooks/secrets.js";
 import { bodyOf, deliveryIdOf, webhookSink } from "../src/webhooks/sink.js";
 import { api, json, user, type Who } from "./helpers/api.js";
+import { scopedToken } from "./helpers/principals.js";
+import { type PushTarget, postPush } from "./helpers/push.js";
+import { pushBody, ZERO } from "./helpers/push-fixtures.js";
 import { inRepo } from "./helpers/repo-git.js";
 
 type HookOut = {
@@ -713,5 +717,299 @@ describe("webhooks", () => {
       expect.objectContaining({ n: 1, status_code: 200, response: "ok" }),
     ]);
     expect(JSON.stringify(one.body)).not.toContain("whsec_");
+  });
+});
+
+describe("pull request webhooks", () => {
+  const fx = inject("pushFixtures");
+  const commitOn = async (branch: string, content: string) => {
+    const made = await json<{ commit: { sha: string } }>(
+      api("POST", `${path}/file-commits`, owner.token, {
+        branch,
+        message: "change",
+        changes: [{ path: "a.txt", content }],
+      }),
+    );
+    expect(made.status).toBe(201);
+    return made.body.commit.sha;
+  };
+  const branchAt = async (name: string, sha: string) => {
+    const target: PushTarget = {
+      repo: { id: repo.id, name: repo.name, stub: stub() },
+      owner: {
+        principalId: owner.principalId,
+        token: await scopedToken(owner.principalId, [], "git"),
+      },
+      path: `/${owner.handle}/${repo.name}.git`,
+    };
+    const pushed = await postPush(
+      target,
+      pushBody([{ old: ZERO, new: sha, ref: `refs/heads/${name}` }], { pack: fx.packEmpty }),
+    );
+    expect(pushed.report).toContain(`ok refs/heads/${name}\n`);
+  };
+  /** The bodies the outbox's events make, in order. */
+  const bodies = async () =>
+    (await outbox())
+      .filter((e) => e.webhooks && e.type !== "webhook.ping")
+      .map((e) => bodyOf(e) as Record<string, unknown>);
+
+  it("tell of pull requests, reviews and comments with their action and snapshot", async () => {
+    await createHook({
+      events: [
+        "pull_request",
+        "pull_request_review",
+        "pull_request_review_comment",
+        "issue_comment",
+      ],
+    });
+    await branchAt("feature", await commitOn("main", "one\n"));
+    const head = await commitOn("feature", "one\ntwo\n");
+    expect(
+      (
+        await api("POST", `${path}/pulls`, owner.token, {
+          title: "A change",
+          head: "feature",
+          base: "main",
+        })
+      ).status,
+    ).toBe(201);
+    await api("PATCH", `${path}/pulls/1`, owner.token, { title: "A better change" });
+    const comment = await json<{ id: number }>(
+      api("POST", `${path}/issues/1/comments`, owner.token, { body: "Looks right." }),
+    );
+    await api("DELETE", `${path}/issues/comments/${comment.body.id}`, owner.token);
+    const diff = await json<{ id: number }>(
+      api("POST", `${path}/pulls/1/comments`, owner.token, {
+        body: "Why?",
+        commit_id: head,
+        path: "a.txt",
+        line: 2,
+      }),
+    );
+    expect(diff.status).toBe(201);
+    expect(
+      (
+        await api("POST", `${path}/pulls/1/reviews`, owner.token, {
+          event: "COMMENT",
+          body: "Ok",
+          commit_id: head,
+        })
+      ).status,
+    ).toBe(200);
+    const made = await bodies();
+    expect(made.map((b) => `${b.event}.${b.action}`)).toEqual([
+      "pull_request.opened",
+      "pull_request.edited",
+      "issue_comment.created",
+      "issue_comment.deleted",
+      "pull_request_review_comment.created",
+      "pull_request_review.submitted",
+    ]);
+    const [opened, edited, created, deleted, onDiff, review] = made;
+    expect(opened).toMatchObject({
+      number: 1,
+      repository: { id: repo.id },
+      sender: { id: owner.principalId },
+      pull_request: {
+        number: 1,
+        state: "open",
+        merged: false,
+        title: "A change",
+        head: { ref: "feature", sha: head, repo_id: null },
+        base: { ref: "main" },
+        user: { id: owner.principalId },
+      },
+    });
+    expect((opened?.pull_request as { created_at?: string } | undefined)?.created_at).toMatch(
+      /^\d{4}-\d\d-\d\dT/,
+    );
+    expect(edited).toMatchObject({
+      pull_request: { title: "A better change" },
+      changes: { title: { from: "A change" } },
+    });
+    expect(created).toMatchObject({
+      number: 1,
+      comment: { id: comment.body.id, body: "Looks right." },
+    });
+    // Gone: what it was on, and its id.
+    expect(deleted).toMatchObject({ number: 1, comment: { id: comment.body.id } });
+    expect(onDiff).toMatchObject({
+      number: 1,
+      comment: { id: diff.body.id, path: "a.txt", line: 2, commit_id: head, side: "RIGHT" },
+    });
+    expect(review).toMatchObject({ number: 1, review: { state: "COMMENTED", body: "Ok" } });
+    // Each made its own delivery, with its action recorded.
+    // One event per run: a run delivers only a few effects itself (the rest wait for the sweep).
+    for (const event of (await outbox()).filter((e) => e.webhooks)) await materialize([event]);
+    const actions = (
+      await env.ORG_READ.prepare(
+        "SELECT event, action FROM webhook_deliveries WHERE repo_id = ? AND event != 'ping'",
+      )
+        .bind(repo.id)
+        .all<{ event: string; action: string }>()
+    ).results.map((r) => `${r.event}.${r.action}`);
+    expect(actions.sort()).toEqual(made.map((b) => `${b.event}.${b.action}`).sort());
+  });
+
+  it("show a dismissed review as dismissed, and tell of a head branch deleted or back", () => {
+    const at = Date.now();
+    const event = {
+      id: { sourceId: repo.id, epochGen: 1, sourceSeq: 7 },
+      type: "pull_request_review.dismissed",
+      at,
+      actor: owner.principalId,
+      actChain: [],
+      ownerGen: 1,
+      entity: {
+        type: "pull_review",
+        id: `${repo.id}#1/reviews/3`,
+        version: 2,
+        deleted: false,
+        row: {
+          id: 3,
+          number: 1,
+          reviewerId: owner.principalId,
+          actChain: [],
+          state: "APPROVED",
+          commitSha: "a".repeat(40),
+          body: null,
+          submittedAt: at,
+          dismissedAt: at,
+          dismissedBy: owner.principalId,
+          dismissalMessage: "stale",
+        },
+      },
+      data: null,
+      stored: false,
+      webhooks: {
+        hooks: [{ id: 1, v: 1 }],
+        repo: { name: repo.name, ownerId: owner.principalId, private: true },
+      },
+    } as unknown as DomainEvent;
+    expect(bodyOf(event)).toMatchObject({
+      action: "dismissed",
+      review: { id: 3, state: "DISMISSED", dismissal_message: "stale" },
+    });
+    for (const action of ["head_ref_deleted", "head_ref_restored"])
+      expect(webhookEventOf(`pull_request.${action}`)).toEqual({ event: "pull_request", action });
+  });
+
+  it("go only to hooks that take the event", async () => {
+    await createHook({ events: ["issue_comment"] });
+    await branchAt("feature", await commitOn("main", "one\n"));
+    await commitOn("feature", "one\ntwo\n");
+    await api("POST", `${path}/pulls`, owner.token, {
+      title: "A change",
+      head: "feature",
+      base: "main",
+    });
+    await api("POST", `${path}/issues/1/comments`, owner.token, { body: "Hi." });
+    expect((await bodies()).map((b) => b.event)).toEqual(["issue_comment"]);
+  });
+});
+
+describe("redelivery", () => {
+  const redeliver = (hook: number, id: string, who: Who = owner) =>
+    json<{ id: string; state: string; code?: string }>(
+      api("POST", `${path}/hooks/${hook}/deliveries/${id}/attempts`, who.token),
+    );
+  /** A hook, its ping delivered once (answered `status`). */
+  const delivered = async (status = 200) => {
+    const hook = (await createHook()).body;
+    await materialize((await outbox()).filter((e) => e.webhooks));
+    const id = ((await deliveries())[0] as { delivery_id: string }).delivery_id;
+    answer = () => new Response("no", { status });
+    await attemptDelivery(deps(), id);
+    return { hook: hook.id, id };
+  };
+
+  it("sends a finished delivery once more: the same id and body, signed now", async () => {
+    const { hook, id } = await delivered(400);
+    expect((await deliveries())[0]).toMatchObject({ state: "failed", attempts: 1 });
+    const again = await redeliver(hook, id);
+    expect(again.status).toBe(202);
+    expect(again.body).toMatchObject({ id, state: "pending" });
+    answer = () => new Response("ok", { status: 200 });
+    await attemptDelivery(deps(Date.now() + 1_000), id);
+    expect(received).toHaveLength(2);
+    expect(received[1]?.headers.get("webhook-id")).toBe(id);
+    expect(received[1]?.body).toBe(received[0]?.body);
+    expect((await deliveries())[0]).toMatchObject({ state: "done", attempts: 2 });
+    const one = await json<{ attempts_made: { n: number; status_code: number }[] }>(
+      api("GET", `${path}/hooks/${hook}/deliveries/${id}`, owner.token),
+    );
+    expect(one.body.attempts_made.map((a) => [a.n, a.status_code])).toEqual([
+      [1, 400],
+      [2, 200],
+    ]);
+  });
+
+  it("makes one attempt only, not the automatic retries", async () => {
+    const { hook, id } = await delivered(400);
+    expect((await redeliver(hook, id)).status).toBe(202);
+    answer = () => new Response("busy", { status: 503 });
+    await attemptDelivery(deps(Date.now() + 1_000), id);
+    expect((await deliveries())[0]).toMatchObject({
+      state: "failed",
+      reason: "attempts_spent",
+      attempts: 2,
+    });
+    // Nothing more is claimed.
+    await attemptDelivery(deps(Date.now() + 10 * 60 * 60_000), id);
+    expect(received).toHaveLength(2);
+  });
+
+  it("refuses a pending delivery, a gone body, other hooks and non-administrators", async () => {
+    const hook = (await createHook()).body;
+    await materialize((await outbox()).filter((e) => e.webhooks));
+    const id = ((await deliveries())[0] as { delivery_id: string }).delivery_id;
+    expect((await redeliver(hook.id, id)).body.code).toBe("delivery_pending");
+    await attemptDelivery(deps(), id);
+    const other = (await createHook()).body;
+    expect((await redeliver(other.id, id)).body.code).toBe("delivery_not_found");
+    const stranger = await user();
+    expect((await redeliver(hook.id, id, stranger)).status).toBe(404);
+    const key = (
+      await env.ORG_READ.prepare("SELECT payload_key FROM webhook_deliveries WHERE delivery_id = ?")
+        .bind(id)
+        .first<{ payload_key: string }>()
+    )?.payload_key as string;
+    await env.ASSETS.delete(key);
+    expect((await redeliver(hook.id, id)).body.code).toBe("payload_gone");
+  });
+
+  it("waits for a hook a 410 is turning off, and refuses an expired delivery", async () => {
+    const { hook, id } = await delivered(400);
+    const set = (column: string, value: number) =>
+      env.ORG_READ.prepare(`UPDATE webhook_deliveries SET ${column} = ? WHERE delivery_id = ?`)
+        .bind(value, id)
+        .run();
+    await set("disable_hook_version", 1);
+    expect((await redeliver(hook, id)).body.code).toBe("hook_being_disabled");
+    await env.ORG_READ.prepare(
+      "UPDATE webhook_deliveries SET disable_hook_version = NULL WHERE delivery_id = ?",
+    )
+      .bind(id)
+      .run();
+    await set("expires_at", Date.now() - 1);
+    expect((await redeliver(hook, id)).body.code).toBe("payload_gone");
+  });
+
+  it("leaves nothing for a claim of an earlier attempt to record", async () => {
+    const { hook, id } = await delivered(400);
+    // A claim of the first round, still running (its lease long gone) when the delivery is sent again.
+    await env.ORG_READ.prepare(
+      "UPDATE webhook_deliveries SET lease_token = 'stale' WHERE delivery_id = ?",
+    )
+      .bind(id)
+      .run();
+    expect((await redeliver(hook, id)).status).toBe(202);
+    const row = await env.ORG_READ.prepare(
+      "SELECT lease_token, attempt_limit, attempts FROM webhook_deliveries WHERE delivery_id = ?",
+    )
+      .bind(id)
+      .first<{ lease_token: string | null; attempt_limit: number; attempts: number }>();
+    expect(row).toEqual({ lease_token: null, attempt_limit: 2, attempts: 1 });
   });
 });

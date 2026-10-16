@@ -244,7 +244,11 @@ export class RepoReviewComments {
         comment.threadId,
         comment.threadId,
       );
-      this.#emit("deleted", { ...comment, version: comment.version + 1 }, caller.actor, true);
+      // Gone, its snapshot carries no row: what it was on, for those told of it.
+      this.#emit("deleted", { ...comment, version: comment.version + 1 }, caller.actor, true, {
+        number: comment.number,
+        comment_id: id,
+      });
       this.deps.events.auditChange("pull_request_review_comment.delete", caller.actor, {
         number: comment.number,
         comment: id,

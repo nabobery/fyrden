@@ -1,5 +1,6 @@
 import { type DomainEvent, eventKey } from "@fyrden/domain";
 import type { Effect, EffectSink, PlannedEffect } from "../effects/journal.js";
+import { entityBody, webhookEventOf } from "./events.js";
 
 /*
  * Webhook deliveries from events. An event names the hooks it goes to
@@ -35,12 +36,6 @@ export const DELIVERY_POLICY = {
 
 const encoder = new TextEncoder();
 
-/** The webhook events a repository event makes. */
-const WEBHOOK_EVENT: Readonly<Record<string, string>> = {
-  "refs.updated": "push",
-  "webhook.ping": "ping",
-};
-
 /** The deliveries an event makes, as its effect carries them. */
 interface PlannedDeliveries {
   readonly repoId: string;
@@ -59,11 +54,12 @@ export interface DeliveryMessage {
 
 /** The body of the delivery an event makes; undefined for no webhook event. */
 export function bodyOf(event: DomainEvent): Record<string, unknown> | undefined {
-  const name = WEBHOOK_EVENT[event.type];
+  const name = webhookEventOf(event.type);
   const routing = event.webhooks;
   if (!name || !routing) return undefined;
   const common = {
-    event: name,
+    event: name.event,
+    ...(name.action !== null && { action: name.action }),
     repository: {
       id: event.id.sourceId,
       name: routing.repo.name,
@@ -76,7 +72,8 @@ export function bodyOf(event: DomainEvent): Record<string, unknown> | undefined 
     position: { epoch: event.id.epochGen, sequence: event.id.sourceSeq },
   };
   const data = event.data ?? {};
-  if (name === "ping") return { ...common, hook_id: data.hook_id };
+  if (name.event === "ping") return { ...common, hook_id: data.hook_id };
+  if (name.event !== "push") return { ...common, ...entityBody(name, event) };
   const refs = (data.refs as { ref: string; old: string | null; new: string | null }[]) ?? [];
   // Listed up to a bound in bytes (long names quoted twice over in the journal stay well under
   // its 2 MB value), the count always: a receiver missing some reads them from the repository.
@@ -140,7 +137,9 @@ export const webhookSink: EffectSink = {
       : encoder.encode(JSON.stringify(JSON.stringify(made))).length > DELIVERY_POLICY.maxBodyBytes
         ? "payload_too_large"
         : undefined;
-    const body = dropped ? { event: made.event, dropped } : made;
+    const body = dropped
+      ? { event: made.event, ...(made.action !== undefined && { action: made.action }), dropped }
+      : made;
     return [
       {
         target: "hooks",
@@ -148,7 +147,7 @@ export const webhookSink: EffectSink = {
           repoId: event.id.sourceId,
           eventKey: eventKey(event.id),
           event: body.event as string,
-          action: null,
+          action: typeof made.action === "string" ? made.action : null,
           private: routing.repo.private,
           body,
           hooks: routing.hooks,

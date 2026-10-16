@@ -11,6 +11,7 @@ import type {
   listHooks,
   Output,
   pingHook,
+  redeliverHookDelivery,
   resealHookSecrets,
   rotateHookSecret,
   updateHook,
@@ -22,6 +23,7 @@ import { repoFor } from "../git/chunked/operations.js";
 import { ownHostsOf } from "../git/import/network.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { secretKeys } from "../webhooks/secrets.js";
+import { DELIVERY_POLICY, type DeliveryMessage } from "../webhooks/sink.js";
 import type { RepoEntry } from "./directory.js";
 import { actorOf } from "./pulls.js";
 
@@ -349,6 +351,84 @@ export async function getHookDeliveryOperation(
       error: a.error,
     })),
   };
+}
+
+/**
+ * Sends a finished delivery once more: one attempt past those it had (its
+ * automatic retries are not run again), from its stored body. A claim of
+ * an earlier attempt still running cannot record anything for it: only a
+ * pending delivery's current claim holder records an attempt.
+ */
+export async function redeliverHookDeliveryOperation(
+  ctx: OpContext,
+  input: Input<typeof redeliverHookDelivery>,
+): Promise<Output<typeof redeliverHookDelivery>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "repository_hooks:write");
+  const hook = unwrap(await stub(ctx, entry, "getHook").getHook(input.hook_id));
+  if (!hook.active)
+    throw new OperationError(422, "hook_inactive", "The hook is not active: turn it on first.");
+  const db = readModelFor(ctx.env, DEFAULT_ORG_SHARD);
+  ctx.metrics.count("d1.query", { db: "org", op: "hooks_redeliver_read" });
+  const found = await db
+    .prepare(
+      `SELECT delivery_id, event, action, state, reason, last_status, attempts, created_at,
+         next_attempt_at, payload_key, expires_at, disable_hook_version
+       FROM webhook_deliveries WHERE delivery_id = ? AND repo_id = ? AND hook_id = ?`,
+    )
+    .bind(input.delivery_id, entry.id, input.hook_id)
+    .first<DeliveryRow & { expires_at: number; disable_hook_version: number | null }>();
+  if (!found)
+    throw new OperationError(
+      404,
+      "delivery_not_found",
+      `No delivery ${input.delivery_id} was found.`,
+    );
+  if (found.state === "pending")
+    throw new OperationError(409, "delivery_pending", "The delivery is still being made.");
+  if (found.state !== "done" && found.state !== "failed")
+    throw new OperationError(
+      422,
+      "not_redeliverable",
+      `A ${found.state} delivery was never sent and cannot be sent again.`,
+    );
+  // Its receiver answered 410: the hook is being turned off (a later change of it settles that).
+  if (found.disable_hook_version !== null)
+    throw new OperationError(
+      409,
+      "hook_being_disabled",
+      "The receiver answered 410 Gone: the hook is being turned off. Change or turn it on again first.",
+    );
+  if (found.expires_at <= Date.now())
+    throw new OperationError(422, "payload_gone", "The delivery's body is no longer kept.");
+  ctx.metrics.count("r2.class_b", { bucket: "fyrden-assets", op: "head_webhook_body" });
+  if (!(await ctx.env.ASSETS.head(found.payload_key)))
+    throw new OperationError(422, "payload_gone", "The delivery's body is no longer kept.");
+  const now = Date.now();
+  ctx.metrics.count("d1.query", { db: "org", op: "hooks_redeliver" });
+  // Only from a finished state (no claim holds it), within the hook's cap of waiting deliveries.
+  const moved = await db
+    .prepare(
+      `UPDATE webhook_deliveries SET state = 'pending', reason = NULL, attempt_limit = attempts + 1,
+         next_attempt_at = ?1, enqueued_at = ?1, lease_token = NULL, lease_until = NULL,
+         updated_at = ?1
+       WHERE delivery_id = ?2 AND repo_id = ?3 AND hook_id = ?4 AND state IN ('done', 'failed')
+         AND expires_at > ?1 AND disable_hook_version IS NULL
+         AND (SELECT count(*) FROM webhook_deliveries
+              WHERE repo_id = ?3 AND hook_id = ?4 AND state = 'pending') < ?5
+       RETURNING delivery_id, event, action, state, reason, last_status, attempts, created_at,
+         next_attempt_at, payload_key`,
+    )
+    .bind(now, input.delivery_id, entry.id, input.hook_id, DELIVERY_POLICY.maxOutstanding)
+    .first<DeliveryRow>();
+  if (!moved)
+    throw new OperationError(
+      409,
+      "too_many_outstanding",
+      "The hook has too many deliveries waiting, or the delivery changed meanwhile; try again later.",
+    );
+  // A message lost here is sent again by the cron (its enqueued time is set).
+  await ctx.env.WEBHOOKS.send({ delivery: moved.delivery_id } satisfies DeliveryMessage);
+  return deliveryOut(moved);
 }
 
 /** Repositories one call of the operator's reseal goes through. */
