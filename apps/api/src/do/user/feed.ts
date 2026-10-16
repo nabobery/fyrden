@@ -5,11 +5,11 @@ import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
  * updated in place by the entries events bring. An entry applies only when
  * it is newer than the item (the thread's feed version), so duplicates and
  * any delivery order leave the same item; an activity item also gathers the
- * ids of what it aggregates (comments, reviews) as a set, and a comment's
- * edit or deletion updates or clears the excerpt taken from it. What only
- * resolves or deletes something the feed never showed is kept as a
+ * ids of what it aggregates (comments, reviews) as a set. Items hold ids,
+ * not text: what a member says is read from the repository when the item
+ * is read. What only resolves something the feed never showed is kept as a
  * tombstone (a row without a sequence number, never read), so that an
- * older entry arriving later cannot bring it back. Every change of a shown
+ * older entry arriving later cannot open it. Every change of a shown
  * item gives it the feed's next sequence number, so a reader that follows
  * the sequence sees each change, late arrivals included. Items and
  * tombstones older than the retention, and items past the cap, are
@@ -27,8 +27,6 @@ export const FEED_POLICY = {
   maxItems: 5_000,
   /** Ids an activity item keeps at most (the greatest). */
   maxMembers: 100,
-  /** Deleted member ids an activity item remembers at most (the latest deleted). */
-  maxDeleted: 100,
   /** Items a sync returns at most. */
   syncItems: 500,
 } as const;
@@ -61,7 +59,8 @@ export interface FeedItem {
   readonly action: string;
   readonly actor: string | null;
   readonly actorTrust: "write" | "read" | "none";
-  readonly excerpt: string | null;
+  /** What the item displays: an activity item's greatest member, else the entry's. */
+  readonly member: string | null;
   readonly members: readonly string[];
   readonly truncated: boolean;
   readonly eventKey: string;
@@ -135,11 +134,8 @@ type Row = {
   action: string;
   actor: string | null;
   actor_trust: "write" | "read" | "none";
-  excerpt: string | null;
   display_member: string | null;
-  display_version: number;
   members: string;
-  deleted: string;
   truncated: number;
   last_event_key: string;
   last_event_at: number;
@@ -170,7 +166,7 @@ function itemOf(row: Row): FeedItem {
     action: row.action,
     actor: row.actor,
     actorTrust: row.actor_trust,
-    excerpt: row.excerpt,
+    member: row.display_member,
     members: JSON.parse(row.members) as string[],
     truncated: row.truncated === 1,
     eventKey: row.last_event_key,
@@ -181,12 +177,6 @@ function itemOf(row: Row): FeedItem {
 }
 
 const WHERE_ITEM = "repo_id = ? AND thread_key = ? AND kind = ?";
-
-/** What a comment's edit or deletion does to the activity items it is a member of. */
-const REDACTIONS = new Set(["comment_edited", "comment_deleted"]);
-
-const isRedaction = (entry: FeedEntry) =>
-  entry.recipient.kind === "activity" && REDACTIONS.has(entry.feed.action);
 
 /** An item's fields that entries change: its row less its key, sequence and acknowledgement. */
 type State = Omit<Row, "repo_id" | "thread_key" | "kind" | "acked_version" | "feed_seq" | "seq_at">;
@@ -213,12 +203,9 @@ function blank(entry: FeedEntry): State {
     version: 0,
     state: "resolved",
     display_member: null,
-    display_version: 0,
-    excerpt: null,
     actor: null,
     actor_trust: entry.feed.actorTrust,
     members: "[]",
-    deleted: "[]",
     truncated: 0,
   };
 }
@@ -241,56 +228,26 @@ function thread(entry: FeedEntry) {
 }
 
 /**
- * An activity item with a member's creation, edit or deletion applied.
- * The members are the greatest 100 created and not deleted; a deleted id
- * is remembered (the latest 100) and never added again. What the item
- * displays (the excerpt, its author and trust) is the greatest member's
- * ever seen, deleted ones included (their excerpt cleared): its creation
- * sets the author (none until it arrives), and its creation or an edit
- * the excerpt, whichever has the newest thread version. So any order of
- * the same entries displays the same.
+ * An activity item with an entry's member added: the members are the
+ * greatest 100, and the item displays the greatest member ever added (its
+ * id, author and the author's access), so any order of the same entries
+ * displays the same.
  */
-function withMember(state: State, entry: FeedEntry, op: "create" | "edit" | "delete"): State {
+function withMember(state: State, entry: FeedEntry): State {
   const { feed } = entry;
   const member = feed.member;
   if (member === null) return state;
-  const version = feed.subject.version;
-  const deleted = JSON.parse(state.deleted) as string[];
-  const gone = op === "delete" || deleted.includes(member);
-  if (op === "edit" && gone) return state;
   let members = JSON.parse(state.members) as string[];
   let truncated = state.truncated === 1;
-  if (op === "delete") members = members.filter((m) => m !== member);
-  else if (!gone && !members.includes(member)) {
+  if (!members.includes(member)) {
     const union = [...members, member].sort(byIdDescending);
     members = union.slice(0, FEED_POLICY.maxMembers);
     truncated ||= union.length > FEED_POLICY.maxMembers;
   }
-  const next: State = {
-    ...state,
-    members: JSON.stringify(members),
-    truncated: truncated ? 1 : 0,
-    deleted:
-      op === "delete" && !deleted.includes(member)
-        ? JSON.stringify([...deleted, member].slice(-FEED_POLICY.maxDeleted))
-        : state.deleted,
-  };
+  const next = { ...state, members: JSON.stringify(members), truncated: truncated ? 1 : 0 };
   const shown = state.display_member;
   if (shown !== null && byIdDescending(member, shown) > 0) return next;
-  const same = shown === member;
-  // A member displayed before its creation arrives has no author yet.
-  const display = {
-    ...next,
-    display_member: member,
-    ...(!same && { actor: null, actor_trust: feed.actorTrust }),
-  };
-  // A deleted member displays no excerpt, whatever version it had.
-  if (op === "delete") return { ...display, excerpt: null, display_version: 0 };
-  const author = op === "create" ? { actor: entry.actor, actor_trust: feed.actorTrust } : undefined;
-  if (gone) return { ...display, ...author, excerpt: null, display_version: 0 };
-  if (same && version <= state.display_version)
-    return op === "create" ? { ...next, ...author } : next;
-  return { ...display, ...author, excerpt: feed.excerpt, display_version: version };
+  return { ...next, display_member: member, actor: entry.actor, actor_trust: feed.actorTrust };
 }
 
 export class Feed {
@@ -306,8 +263,7 @@ export class Feed {
    * replaces the thread's state in the item; an activity item also takes
    * the entry's member (see `withMember`). An item is shown once an entry
    * opens it (see `#applyOne`). A duplicate, or an older version that adds
-   * nothing, writes nothing. A comment's edit or deletion notifies of
-   * nothing.
+   * nothing, writes nothing.
    */
   apply(entries: readonly FeedEntry[]): FeedApplied {
     const now = this.now();
@@ -323,46 +279,21 @@ export class Feed {
       if (entry.occurredAt < now - FEED_POLICY.retentionMs) continue;
       const until = purgedUntil(entry.repoId);
       if (until !== null && entry.occurredAt <= until) continue;
-      const redaction = isRedaction(entry);
-      if (!(redaction ? this.#redact(entry, now) : this.#applyOne(entry, now))) continue;
+      if (!this.#applyOne(entry, now)) continue;
       changed++;
-      if (!redaction && !entry.recipient.silent) notified++;
+      if (!entry.recipient.silent) notified++;
     }
     return { changed, notified };
   }
 
   /**
-   * A comment edited or deleted, for the activity item it is a member of
-   * (see `withMember`); the thread's state is left as it is, whatever the
-   * entry's version (the item is not reopened). For an item the feed does
-   * not have yet, a tombstone keeps it, so a creation arriving later
-   * displays the same. A shown item is sequenced only when what it shows
-   * changed.
-   */
-  #redact(entry: FeedEntry, now: number): boolean {
-    const { feed } = entry;
-    const id = { repoId: entry.repoId, threadKey: feed.threadKey, kind: "activity" } as const;
-    const item = this.#row(id);
-    const before = item ? stateOf(item) : blank(entry);
-    const after = withMember(before, entry, feed.action === "comment_deleted" ? "delete" : "edit");
-    if (item && sameState(before, after)) return false;
-    const shown = item !== undefined && item.feed_seq !== null;
-    // What a reader sees changed, not only what the item remembers.
-    const visible = shown && !sameState({ ...before, deleted: "" }, { ...after, deleted: "" });
-    const seq = visible ? this.#next(false) : (item?.feed_seq ?? null);
-    // A tombstone's retention starts again with each change of what it guards.
-    this.#write(id, after, seq, visible || !shown ? now : (item?.seq_at ?? now));
-    return visible;
-  }
-
-  /**
-   * One entry, other than a comment's edit or deletion. An item the feed
-   * has not shown (none, or a tombstone) is shown, with the newest state
-   * the feed knows of it, once an entry that opens it arrives, whatever
-   * that entry's version; until then, an entry that only resolves keeps
-   * that newest state in a tombstone. So the outcome does not depend on
-   * the order: an item resolved before its opening arrived is shown
-   * resolved, and one that never opened is never shown.
+   * One entry. An item the feed has not shown (none, or a tombstone) is
+   * shown, with the newest state the feed knows of it, once an entry that
+   * opens it arrives, whatever that entry's version; until then, an entry
+   * that only resolves keeps that newest state in a tombstone. So the
+   * outcome does not depend on the order: an item resolved before its
+   * opening arrived is shown resolved, and one that never opened is never
+   * shown.
    */
   #applyOne(entry: FeedEntry, now: number): boolean {
     const { feed, recipient } = entry;
@@ -371,13 +302,11 @@ export class Feed {
     const before = item ? stateOf(item) : blank(entry);
     const newer = feed.subject.version > before.version;
     let after: State = newer ? { ...before, ...thread(entry) } : before;
-    if (recipient.kind === "activity") after = withMember(after, entry, "create");
+    if (recipient.kind === "activity") after = withMember(after, entry);
     else if (newer)
       after = {
         ...after,
         display_member: feed.member,
-        display_version: feed.subject.version,
-        excerpt: feed.excerpt,
         actor: entry.actor,
         actor_trust: feed.actorTrust,
       };

@@ -13,15 +13,13 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * - `feed_items`: one item per repository, thread and kind, updated in
  *   place; every change takes the next sequence number (`feed_seq`), so the
  *   feed in sequence order is the order changes arrived in. A row without
- *   one is a tombstone: never shown, it keeps what resolved or deleted
- *   something the feed has not shown, against older entries arriving
- *   later (`feed_tombstones` finds the oldest for retention). `members`:
- *   the ids an activity item aggregates (JSON, at most 100), `truncated`
- *   once any was dropped; `deleted`: the members deleted (JSON, the latest
- *   100), never added again; `display_member`: the member the item
- *   displays (its excerpt and author: the greatest ever seen), and
- *   `display_version` the thread version its excerpt is of (an older edit
- *   changes nothing); `acked_version`:
+ *   one is a tombstone: never shown, it keeps what resolved something the
+ *   feed has not shown, against older entries arriving later
+ *   (`feed_tombstones` finds the oldest for retention). `members`: the ids
+ *   an activity item aggregates (JSON, at most 100), `truncated` once any
+ *   was dropped; `display_member`: the member the item displays (an
+ *   activity item's greatest, whose author `actor` is), its text read from
+ *   the repository when the item is read; `acked_version`:
  *   the version the feed's owner last acknowledged (0 for none).
  * - `purge_marks`: repositories the owner lost read access to, with when
  *   (`until_at`: entries of events up to then are dropped on arrival) and
@@ -57,11 +55,8 @@ export const userSchema: readonly DoMigration[] = [
         action TEXT NOT NULL,
         actor TEXT,
         actor_trust TEXT NOT NULL CHECK (actor_trust IN ('write', 'read', 'none')),
-        excerpt TEXT,
         display_member TEXT,
-        display_version INTEGER NOT NULL DEFAULT 0,
         members TEXT NOT NULL,
-        deleted TEXT NOT NULL DEFAULT '[]',
         truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
         last_event_key TEXT NOT NULL,
         last_event_at INTEGER NOT NULL,

@@ -4,13 +4,20 @@
 // watermark, acknowledgements, and the feed operations: whose feed a token
 // reads, and items of repositories the caller cannot read now left out.
 
-import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import {
+  createExecutionContext,
+  evictDurableObject,
+  runDurableObjectAlarm,
+  runInDurableObject,
+} from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import fc from "fast-check";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { createApp } from "../src/app.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
+import type { RepoDO } from "../src/do/RepoDO.js";
 import type { UserDO } from "../src/do/UserDO.js";
 import { FEED_POLICY, Feed } from "../src/do/user/feed.js";
 import { encodeFeedCursor, FEED_POLL_AFTER_MS } from "../src/feed/operations.js";
@@ -35,9 +42,7 @@ interface EntryInit {
   occurredAt?: number;
   principal?: string;
   action?: string;
-  excerpt?: string | null;
   actor?: string;
-  threadKey?: string;
 }
 
 /** One recipient's entry, built by hand as the repository would send it. */
@@ -50,7 +55,7 @@ function entry(init: EntryInit): FeedEntry {
     occurredAt: init.occurredAt ?? Date.now(),
     actor: init.actor ?? "usr_actor",
     feed: {
-      threadKey: init.threadKey ?? `pull/${thread}`,
+      threadKey: `pull/${thread}`,
       subject: { kind: "pull", number: thread, title: `Pull ${thread}`, version: init.version },
       action: init.action ?? (kind === "activity" ? "comment" : kind),
       actorRoot: "usr_actor",
@@ -61,7 +66,7 @@ function entry(init: EntryInit): FeedEntry {
             ? String(init.version)
             : null
           : init.member,
-      excerpt: init.excerpt === undefined ? `at version ${init.version}` : init.excerpt,
+      excerpt: null,
     },
     recipient: {
       principal: init.principal ?? "usr_reader",
@@ -97,12 +102,11 @@ function feedIn(storage: Storage, now: () => number = Date.now) {
    * sequence number), a tombstone by what it guards against.
    */
   const state = () =>
-    rows().map(({ feed_seq, seq_at: _, deleted, ...rest }) => {
-      const gone = (JSON.parse(deleted as string) as string[]).sort();
-      return feed_seq === null
-        ? { tombstone: [rest.repo_id, rest.thread_key, rest.kind, rest.version, rest.state], gone }
-        : { ...rest, gone };
-    });
+    rows().map(({ feed_seq, seq_at: _, ...rest }) =>
+      feed_seq === null
+        ? { tombstone: [rest.repo_id, rest.thread_key, rest.kind, rest.version, rest.state] }
+        : rest,
+    );
   const reset = () => {
     storage.sql.exec("DELETE FROM feed_items");
     storage.sql.exec("UPDATE feed_meta SET head_seq = 0, low_watermark = 0, items = 0");
@@ -117,13 +121,7 @@ describe("applying entries", () => {
   it("converges on the same items under any order, duplicates and batch splits", async () => {
     const step = fc.record({
       thread: fc.integer({ min: 1, max: 2 }),
-      kind: fc.constantFrom<FeedKind | "deletion" | "edit">(
-        "activity",
-        "review_requested",
-        "mention",
-        "deletion",
-        "edit",
-      ),
+      kind: fc.constantFrom<FeedKind>("activity", "review_requested", "mention"),
       member: fc.option(fc.integer({ min: 1, max: 40 }).map(String), { nil: null }),
       // Action items open and resolve in any interleaving.
       state: fc.constantFrom<"open" | "resolved">("open", "resolved"),
@@ -136,16 +134,6 @@ describe("applying entries", () => {
       return steps.map(({ kind, state, ...s }) => {
         const version = (versions.get(s.thread) ?? 0) + 1;
         versions.set(s.thread, version);
-        if (kind === "deletion")
-          return entry({ ...s, version, member: s.member ?? "1", action: "comment_deleted" });
-        if (kind === "edit")
-          return entry({
-            ...s,
-            version,
-            member: s.member ?? "1",
-            action: "comment_edited",
-            excerpt: `edited at ${version}`,
-          });
         return entry({ ...s, kind, version, state: kind === "activity" ? "open" : state });
       });
     });
@@ -241,26 +229,6 @@ describe("applying entries", () => {
     });
   });
 
-  it("never adds a comment whose deletion arrived first", async () => {
-    await inFeed((storage) => {
-      const { apply, head, items, rows } = feedIn(storage);
-      const deletion = (member: string) =>
-        entry({ version: 7, member, excerpt: null, silent: true, action: "comment_deleted" });
-      expect(apply([deletion("comment/1")])).toEqual({ changed: 0, notified: 0 });
-      expect(rows()).toMatchObject([{ feed_seq: null, deleted: JSON.stringify(["comment/1"]) }]);
-      expect(head()).toBe(0);
-      // The comment arrives: the item is shown, without it or its excerpt.
-      apply([entry({ version: 3, member: "comment/1", excerpt: "gone" })]);
-      expect(items()).toMatchObject([{ version: 3, members: "[]", excerpt: null }]);
-      apply([entry({ version: 4, member: "comment/2", excerpt: "kept" })]);
-      expect(items()).toMatchObject([{ members: JSON.stringify(["comment/2"]), excerpt: "kept" }]);
-      // Its edit, late too: nothing.
-      const edited = entry({ version: 8, member: "comment/1", action: "comment_edited" });
-      expect(apply([edited]).changed).toBe(0);
-      expect(head()).toBe(2);
-    });
-  });
-
   it("sequences a silent change without counting a notification", async () => {
     await inFeed((storage) => {
       const { apply, head, items } = feedIn(storage);
@@ -296,82 +264,12 @@ describe("applying entries", () => {
     });
   });
 
-  it("updates or clears the excerpt of an edited or deleted comment, and drops a deleted one from the members", async () => {
-    await inFeed((storage) => {
-      const { apply, head, items, rows } = feedIn(storage);
-      const edit = (version: number, member: string, excerpt: string | null, deleted = false) =>
-        entry({
-          version,
-          member,
-          excerpt,
-          silent: true,
-          action: deleted ? "comment_deleted" : "comment_edited",
-        });
-      // An edit for a thread the feed has nothing of shows nothing (a tombstone keeps it).
-      const elsewhere = entry({
-        version: 9,
-        member: "comment/1",
-        threadKey: "pull/9",
-        action: "comment_edited",
-      });
-      expect(apply([elsewhere]).changed).toBe(0);
-      expect(head()).toBe(0);
-      expect(rows()).toMatchObject([{ thread_key: "pull/9", feed_seq: null }]);
-      apply([
-        entry({ version: 1, member: "comment/1", excerpt: "first" }),
-        entry({ version: 2, member: "comment/2", excerpt: "second" }),
-      ]);
-      apply([entry({ kind: "review_requested", version: 2, state: "resolved", priority: "P0" })]);
-      expect(head()).toBe(2);
-      // A member the item does not display (comment/2 is the greatest): nothing changes.
-      expect(apply([edit(3, "comment/1", "first, edited")])).toEqual({ changed: 0, notified: 0 });
-      expect(head()).toBe(2);
-      // The displayed member's edit, whatever the thread's state: replaced, nothing else.
-      expect(apply([edit(4, "comment/2", "second, edited")])).toEqual({ changed: 1, notified: 0 });
-      expect(apply([edit(4, "comment/2", "second, edited")]).changed).toBe(0);
-      // An older edit arriving late changes nothing.
-      expect(apply([edit(3, "comment/2", "second, stale")]).changed).toBe(0);
-      expect(head()).toBe(3);
-      expect(items()).toMatchObject([
-        {
-          kind: "activity",
-          version: 2,
-          state: "open",
-          silent: 0,
-          action: "comment",
-          excerpt: "second, edited",
-          members: JSON.stringify(["comment/2", "comment/1"]),
-        },
-      ]);
-      // Deleting another member drops it and keeps the excerpt; deleting the excerpt's clears it.
-      expect(apply([edit(5, "comment/1", null, true)])).toEqual({ changed: 1, notified: 0 });
-      expect(items()).toMatchObject([
-        { excerpt: "second, edited", members: JSON.stringify(["comment/2"]) },
-      ]);
-      expect(apply([edit(6, "comment/2", null, true)])).toEqual({ changed: 1, notified: 0 });
-      expect(items()).toMatchObject([{ excerpt: null, members: "[]", version: 2 }]);
-      expect(apply([edit(6, "comment/2", null, true)]).changed).toBe(0);
-      expect(head()).toBe(5);
-    });
-  });
-
-  it("displays the greatest member, whatever the order its creation and edits arrive in", async () => {
-    const edited = (version: number, excerpt: string) =>
-      entry({
-        version,
-        member: "comment/20",
-        excerpt,
-        action: "comment_edited",
-        actor: "usr_d",
-        silent: true,
-      });
+  it("displays the greatest member, whatever the order its comments arrive in", async () => {
     const history = [
-      entry({ version: 1, member: "comment/20", excerpt: "twenty", actor: "usr_a" }),
-      entry({ version: 2, member: "comment/3", excerpt: "three", actor: "usr_b" }),
-      entry({ version: 3, member: "review/1", excerpt: "review", actor: "usr_c" }),
-      edited(4, "twenty, again"),
-      edited(5, "twenty, last"),
-      entry({ version: 6, member: null, action: "closed", actor: "usr_e" }),
+      entry({ version: 1, member: "comment/20", actor: "usr_a" }),
+      entry({ version: 2, member: "comment/3", actor: "usr_b" }),
+      entry({ version: 3, member: "review/1", actor: "usr_c" }),
+      entry({ version: 4, member: null, action: "closed", actor: "usr_e" }),
     ];
     await inFeed((storage) => {
       const { apply, items, reset } = feedIn(storage);
@@ -379,20 +277,18 @@ describe("applying entries", () => {
         fc.property(fc.shuffledSubarray(history, { minLength: history.length }), (shuffled) => {
           reset();
           for (const one of shuffled) apply([one]);
-          // "comment/20" is the greatest (longest) id: its author, its newest edit.
+          // "comment/20" is the greatest (longest) id: it and its author are displayed.
           expect(items()).toMatchObject([
             {
               display_member: "comment/20",
-              excerpt: "twenty, last",
               actor: "usr_a",
-              display_version: 5,
-              version: 6,
+              version: 4,
               action: "closed",
               members: JSON.stringify(["comment/20", "comment/3", "review/1"]),
             },
           ]);
         }),
-        { numRuns: 60 },
+        { numRuns: 30 },
       );
     });
   });
@@ -592,6 +488,81 @@ describe("retention", () => {
   });
 });
 
+/**
+ * Texts the members of a test's feed items stand for, by
+ * `<repository>:<member>` (null: gone), laid over what the repository's
+ * object reads (its members here are not real comments). And the
+ * `feedView` calls the reads took, by repository.
+ */
+const said = new Map<string, string | null>();
+const viewCalls = new Map<string, string[][]>();
+/** Repositories that exist only in the directory (no object behind them): readable as their owner's. */
+const directoryOnly = new Set<string>();
+
+/**
+ * `env` whose repository objects count their `feedView` calls and lay
+ * `said` over the excerpts they read; access is the real object's.
+ */
+function withFeedView(base: Env): Env {
+  const view =
+    (repoId: string, stub: DurableObjectStub<RepoDO>) =>
+    async (principal: string, grantId: string | null, members: readonly string[]) => {
+      viewCalls.set(repoId, [...(viewCalls.get(repoId) ?? []), [...members]]);
+      if (directoryOnly.has(repoId))
+        return { readable: true, role: "admin" as const, excerpts: {} };
+      const real = await stub.feedView(principal, grantId, members);
+      if (!real.readable) return real;
+      const excerpts = { ...real.excerpts };
+      for (const m of members) {
+        const known = said.get(`${repoId}:${m}`);
+        if (known !== undefined) excerpts[m] = known;
+      }
+      return { ...real, excerpts };
+    };
+  const repos = new Proxy(base.REPO, {
+    get(target, prop) {
+      if (prop === "getByName")
+        return (repoId: string) => {
+          const stub = target.getByName(repoId);
+          return new Proxy(stub, {
+            get(inner, name) {
+              if (name === "feedView") return view(repoId, stub);
+              const value = Reflect.get(inner, name);
+              return typeof value === "function" ? value.bind(inner) : value;
+            },
+          });
+        };
+      const value = Reflect.get(target, prop);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { ...base, REPO: repos } as Env;
+}
+
+/** A request to the API, its repositories' objects with the `feedView` double. */
+function feedFetch(path: string, headers: Record<string, string>, init: RequestInit = {}) {
+  return createApp().fetch(
+    new Request(`${ORIGIN}/api${path}`, { ...init, headers }),
+    withFeedView(env),
+    createExecutionContext(),
+  );
+}
+
+/** `api`, through `feedFetch`. */
+function feedApi(method: string, path: string, token: string, body?: unknown) {
+  return feedFetch(
+    path,
+    {
+      Authorization: `Bearer ${token}`,
+      ...(method !== "GET" && {
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      }),
+    },
+    { method, ...(body !== undefined && { body: JSON.stringify(body) }) },
+  );
+}
+
 /** An entry for `repoId`, put straight into `principal`'s feed. */
 async function deliverTo(principal: string, init: EntryInit & { repoId: string }) {
   await env.USER.getByName(principal).applyFeed([entry({ ...init, principal })]);
@@ -635,24 +606,25 @@ describe("the feed operations", () => {
   });
 
   it("read the user's own feed with its token or its signed-in session", async () => {
-    const res = await json<FeedOut>(api("GET", "/feed", owner.token));
+    const res = await json<FeedOut>(feedApi("GET", "/feed", owner.token));
     expect(res.status).toBe(200);
     expect(feedNames(res.body)).toEqual([repo.fullName, other.fullName]);
     expect(res.body.next_cursor).toBe(res.body.head_cursor);
     expect(res.body.poll_after_ms).toBeGreaterThan(0);
     const { cookie } = await startSession(env, owner.principalId, { via: "test" });
-    const session = await exports.default.fetch(`${ORIGIN}/api/feed`, {
-      headers: { Cookie: `${SESSION_COOKIE}=${cookie}`, "X-Fyrden-Session": "1" },
+    const session = await feedFetch("/feed", {
+      Cookie: `${SESSION_COOKIE}=${cookie}`,
+      "X-Fyrden-Session": "1",
     });
     expect(feedNames(await session.json<FeedOut>())).toEqual([repo.fullName, other.fullName]);
   });
 
   it("read the represented user's feed with a delegated token, limited to the grant's repositories", async () => {
     const agent = await agentFor(owner, ["pull_requests:read"], [repo.fullName]);
-    const res = await json<FeedOut>(api("GET", "/feed", agent.delegated));
+    const res = await json<FeedOut>(feedApi("GET", "/feed", agent.delegated));
     expect(feedNames(res.body)).toEqual([repo.fullName]);
     // Its cursors name only what it was shown.
-    const mine = await json<FeedOut>(api("GET", "/feed", owner.token));
+    const mine = await json<FeedOut>(feedApi("GET", "/feed", owner.token));
     expect(res.body.head_cursor).not.toBe(mine.body.head_cursor);
 
     // A sub-agent under a narrower grant reads the same user's feed.
@@ -681,12 +653,12 @@ describe("the feed operations", () => {
       }).toString(),
     });
     const { access_token } = await exchanged.json<{ access_token: string }>();
-    expect(feedNames((await json<FeedOut>(api("GET", "/feed", access_token))).body)).toEqual([
+    expect(feedNames((await json<FeedOut>(feedApi("GET", "/feed", access_token))).body)).toEqual([
       repo.fullName,
     ]);
     // A grant without pull request reads shows nothing.
     const narrow = await agentFor(owner, ["metadata:read"]);
-    expect((await json<FeedOut>(api("GET", "/feed", narrow.delegated))).body.items).toEqual([]);
+    expect((await json<FeedOut>(feedApi("GET", "/feed", narrow.delegated))).body.items).toEqual([]);
   });
 
   it("read the agent's own feed with the agent's own token", async () => {
@@ -706,10 +678,10 @@ describe("the feed operations", () => {
       state.storage.sql.exec("UPDATE org_meta SET acl_version = acl_version + 1");
     });
     await deliverTo(agent.id, { repoId: repo.id, thread: 7, version: 1 });
-    const own = await json<FeedOut>(api("GET", "/feed", agent.own));
+    const own = await json<FeedOut>(feedApi("GET", "/feed", agent.own));
     expect(own.body.items.map((i) => i.item_key)).toEqual([`${repo.id}:pull/7:activity`]);
     // The delegated token reads the user's feed instead.
-    const delegated = await json<FeedOut>(api("GET", "/feed", agent.delegated));
+    const delegated = await json<FeedOut>(feedApi("GET", "/feed", agent.delegated));
     expect(delegated.body.items.map((i) => i.item_key)).toEqual([
       `${repo.id}:pull/1:activity`,
       `${other.id}:pull/1:activity`,
@@ -727,18 +699,20 @@ describe("the feed operations", () => {
       priority: "P0",
     });
     const key = `${repo.id}:pull/1:review_requested`;
-    expect(feedNames((await json<FeedOut>(api("GET", "/feed", reader.token))).body)).toEqual([
+    expect(feedNames((await json<FeedOut>(feedApi("GET", "/feed", reader.token))).body)).toEqual([
       repo.fullName,
     ]);
     expect(
-      (await api("POST", "/feed/ack", reader.token, { item_key: key, version: 1 })).status,
+      (await feedApi("POST", "/feed/ack", reader.token, { item_key: key, version: 1 })).status,
     ).toBe(200);
     expect((await api("DELETE", path, owner.token)).status).toBe(200);
-    const list = await json<FeedOut>(api("GET", "/feed", reader.token));
+    const list = await json<FeedOut>(feedApi("GET", "/feed", reader.token));
     expect(list.body.items).toEqual([]);
-    expect((await json<FeedOut>(api("GET", "/feed/sync", reader.token))).body.items).toEqual([]);
+    expect((await json<FeedOut>(feedApi("GET", "/feed/sync", reader.token))).body.items).toEqual(
+      [],
+    );
     expect(
-      await json(api("POST", "/feed/ack", reader.token, { item_key: key, version: 2 })),
+      await json(feedApi("POST", "/feed/ack", reader.token, { item_key: key, version: 2 })),
     ).toMatchObject({ status: 404, body: { code: "feed_item_not_found" } });
   });
 
@@ -746,7 +720,7 @@ describe("the feed operations", () => {
     const key = `${repo.id}:pull/1:activity`;
     const ack = (version: number, item_key = key) =>
       json<{ acked_version: number; code?: string }>(
-        api("POST", "/feed/ack", owner.token, { item_key, version }),
+        feedApi("POST", "/feed/ack", owner.token, { item_key, version }),
       );
     expect(await ack(2)).toMatchObject({ status: 409, body: { code: "version_ahead" } });
     expect(await ack(1)).toMatchObject({
@@ -756,19 +730,17 @@ describe("the feed operations", () => {
     expect((await ack(1, `${repo.id}:pull/1:nonsense`)).status).toBe(404);
     expect((await ack(1, "no-key")).status).toBe(404);
     // Every reader of the feed sees it: the item comes again with the acknowledgement.
-    const res = await json<FeedOut>(api("GET", "/feed", owner.token));
+    const res = await json<FeedOut>(feedApi("GET", "/feed", owner.token));
     expect(res.body.items.at(-1)).toMatchObject({ item_key: key, acked_version: 1 });
   });
 
   it("answer an unchanged page 304 by its ETag, and a changed one in full", async () => {
-    const first = await api("GET", "/feed", owner.token);
+    const first = await feedApi("GET", "/feed", owner.token);
     const etag = first.headers.get("ETag") as string;
     expect(etag).toMatch(/^"[0-9a-f]{32}"$/);
     expect(first.headers.get("Cache-Control")).toBe("private, no-cache");
     const again = (tag: string) =>
-      exports.default.fetch(`${ORIGIN}/api/feed`, {
-        headers: { Authorization: `Bearer ${owner.token}`, "If-None-Match": tag },
-      });
+      feedFetch("/feed", { Authorization: `Bearer ${owner.token}`, "If-None-Match": tag });
     const unchanged = await again(etag);
     expect(unchanged.status).toBe(304);
     expect(unchanged.headers.get("ETag")).toBe(etag);
@@ -779,7 +751,7 @@ describe("the feed operations", () => {
   });
 
   it("refuse a cursor below the low watermark or of another epoch with 410 and where to resync", async () => {
-    const head = await json<FeedOut>(api("GET", "/feed", owner.token));
+    const head = await json<FeedOut>(feedApi("GET", "/feed", owner.token));
     const { e } = JSON.parse(
       atob(head.body.head_cursor.replaceAll("-", "+").replaceAll("_", "/")),
     ) as { e: string };
@@ -787,23 +759,25 @@ describe("the feed operations", () => {
       encodeFeedCursor({ epoch: "another", seq: 1 }),
       encodeFeedCursor({ epoch: e, seq: 1_000_000 }),
     ]) {
-      const res = await json<FeedOut>(api("GET", `/feed?since=${since}`, owner.token));
+      const res = await json<FeedOut>(feedApi("GET", `/feed?since=${since}`, owner.token));
       expect(res).toMatchObject({
         status: 410,
         body: { code: "cursor_expired", resync: "/api/feed/sync" },
       });
     }
-    expect(await json<FeedOut>(api("GET", "/feed?since=not-a-cursor", owner.token))).toMatchObject({
+    expect(
+      await json<FeedOut>(feedApi("GET", "/feed?since=not-a-cursor", owner.token)),
+    ).toMatchObject({
       status: 422,
       body: { code: "invalid_cursor" },
     });
     // Following the cursor: nothing new.
     const next = await json<FeedOut>(
-      api("GET", `/feed?since=${head.body.next_cursor}`, owner.token),
+      feedApi("GET", `/feed?since=${head.body.next_cursor}`, owner.token),
     );
     expect(next.body.items).toEqual([]);
     // Sync gives the cursor to follow from.
-    const synced = await json<FeedOut>(api("GET", "/feed/sync", owner.token));
+    const synced = await json<FeedOut>(feedApi("GET", "/feed/sync", owner.token));
     expect(synced.body.head_cursor).toBe(head.body.head_cursor);
   });
 
@@ -825,7 +799,7 @@ describe("the feed operations", () => {
     });
     const limited = await scopedToken(someone.principalId, [], "pat", [shown.id]);
     const read = async (path: string) => {
-      const res = await api("GET", path, limited);
+      const res = await feedApi("GET", path, limited);
       return {
         etag: res.headers.get("ETag"),
         body: await res.json<FeedOut & { complete?: boolean }>(),
@@ -847,21 +821,22 @@ describe("the feed operations", () => {
     expect(since.body.poll_after_ms).toBe(FEED_POLL_AFTER_MS);
     // Its own repository's items are acknowledged; the other's are not found.
     const ack = (repoId: string) =>
-      api("POST", "/feed/ack", limited, {
+      feedApi("POST", "/feed/ack", limited, {
         item_key: `${repoId}:pull/1:review_requested`,
         version: 1,
       });
     expect((await ack(shown.id)).status).toBe(200);
     expect((await ack(hidden.id)).status).toBe(404);
     // The owner's own token sees both.
-    expect(feedNames((await json<FeedOut>(api("GET", "/feed", someone.token))).body)).toHaveLength(
-      4,
-    );
+    expect(
+      feedNames((await json<FeedOut>(feedApi("GET", "/feed", someone.token))).body),
+    ).toHaveLength(4);
   });
 
   it("continue past their budget of repository checks with a cursor", async () => {
     const someone = await user();
     const repoIds = Array.from({ length: 105 }, () => uniqueId("rep_"));
+    for (const id of repoIds) directoryOnly.add(id);
     await env.DIRECTORY.batch(
       repoIds.map((id) =>
         env.DIRECTORY.prepare(
@@ -873,12 +848,12 @@ describe("the feed operations", () => {
     await env.USER.getByName(someone.principalId).applyFeed(
       repoIds.map((repoId) => entry({ repoId, version: 1, principal: someone.principalId })),
     );
-    const first = await json<FeedOut>(api("GET", "/feed?limit=100", someone.token));
+    const first = await json<FeedOut>(feedApi("GET", "/feed?limit=100", someone.token));
     // 100 repositories checked: the rest is the next page's.
     expect(first.body.items).toHaveLength(100);
     expect(first.body.poll_after_ms).toBe(0);
     const second = await json<FeedOut>(
-      api("GET", `/feed?limit=100&since=${first.body.next_cursor}`, someone.token),
+      feedApi("GET", `/feed?limit=100&since=${first.body.next_cursor}`, someone.token),
     );
     expect(second.body.items.map((i) => i.repo.full_name.split("/")[1])).toEqual(
       repoIds.slice(100).map((id) => id.toLowerCase()),
@@ -890,18 +865,49 @@ describe("the feed operations", () => {
     const someone = await user();
     const made = await repoOf(someone);
     await deliverTo(someone.principalId, { repoId: made.id, version: 1 });
-    const before = await json<FeedOut>(api("GET", "/feed", someone.token));
+    const before = await json<FeedOut>(feedApi("GET", "/feed", someone.token));
     // A restore: the directory allocates the feed's next generation, and the object starts again.
     await env.DIRECTORY.prepare("INSERT INTO source_epochs (source_id, epoch_gen) VALUES (?, 1)")
       .bind(`feed:${someone.principalId}`)
       .run();
     await evictDurableObject(env.USER.getByName(someone.principalId));
     const stale = await json<FeedOut>(
-      api("GET", `/feed?since=${before.body.next_cursor}`, someone.token),
+      feedApi("GET", `/feed?since=${before.body.next_cursor}`, someone.token),
     );
     expect(stale).toMatchObject({ status: 410, body: { code: "cursor_expired" } });
-    const fresh = await json<FeedOut>(api("GET", "/feed", someone.token));
+    const fresh = await json<FeedOut>(feedApi("GET", "/feed", someone.token));
     expect(fresh.body.items).toHaveLength(1);
     expect(fresh.body.head_cursor).not.toBe(before.body.head_cursor);
+  });
+
+  it("show what each item's member says now, read with its repository's check in one call", async () => {
+    const someone = await user();
+    const made = await repoOf(someone);
+    const to = { repoId: made.id, principal: someone.principalId };
+    await env.USER.getByName(someone.principalId).applyFeed([
+      entry({ ...to, version: 1, member: "comment/1" }),
+      entry({ ...to, version: 2, member: "comment/2" }),
+      entry({ ...to, kind: "mention", version: 3, member: "review_comment/7", priority: "P0" }),
+      entry({ ...to, kind: "review_requested", version: 3, member: null, priority: "P0" }),
+    ]);
+    said.set(`${made.id}:comment/2`, "second");
+    said.set(`${made.id}:review_comment/7`, null);
+    const excerpts = async (path: string) =>
+      (
+        await json<{ items: { kind: string; excerpt: string | null }[] }>(
+          feedApi("GET", path, someone.token),
+        )
+      ).body.items.map((i) => [i.kind, i.excerpt]);
+    viewCalls.delete(made.id);
+    // The greatest comment's text; a gone member's none; nothing for an item without one.
+    expect(await excerpts("/feed")).toEqual([
+      ["activity", "second"],
+      ["mention", null],
+      ["review_requested", null],
+    ]);
+    expect(viewCalls.get(made.id)).toEqual([["comment/2", "review_comment/7"]]);
+    // An edit shows at once.
+    said.set(`${made.id}:comment/2`, "second, edited");
+    expect(await excerpts("/feed/sync")).toContainEqual(["activity", "second, edited"]);
   });
 });

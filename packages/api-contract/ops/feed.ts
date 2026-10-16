@@ -29,7 +29,12 @@ export const FeedItem = z.object({
   actor_trust: z
     .enum(["write", "read", "none"])
     .describe("The actor's access to the repository when it acted."),
-  excerpt: z.string().nullable().describe("Plain text, at most 280 characters."),
+  excerpt: z
+    .string()
+    .nullable()
+    .describe(
+      "What the member the item displays says now (plain text, at most 280 characters), read from the repository; null when there is none or it is gone.",
+    ),
   members: z
     .array(z.string())
     .describe("For `activity`: the ids it gathers (comments, reviews), the greatest 100."),

@@ -3027,7 +3027,7 @@ export type FeedListOutput = {
     actor: string | null;
     /** The actor's access to the repository when it acted. */
     actor_trust: "write" | "read" | "none";
-    /** Plain text, at most 280 characters. */
+    /** What the member the item displays says now (plain text, at most 280 characters), read from the repository; null when there is none or it is gone. */
     excerpt: string | null;
     /** For `activity`: the ids it gathers (comments, reviews), the greatest 100. */
     members: string[];
@@ -3082,7 +3082,7 @@ export type FeedSyncOutput = {
     actor: string | null;
     /** The actor's access to the repository when it acted. */
     actor_trust: "write" | "read" | "none";
-    /** Plain text, at most 280 characters. */
+    /** What the member the item displays says now (plain text, at most 280 characters), read from the repository; null when there is none or it is gone. */
     excerpt: string | null;
     /** For `activity`: the ids it gathers (comments, reviews), the greatest 100. */
     members: string[];

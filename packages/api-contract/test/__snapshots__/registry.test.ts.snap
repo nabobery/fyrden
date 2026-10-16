@@ -1524,7 +1524,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "integer",
                           },
                           "excerpt": {
-                            "description": "Plain text, at most 280 characters.",
+                            "description": "What the member the item displays says now (plain text, at most 280 characters), read from the repository; null when there is none or it is gone.",
                             "type": [
                               "string",
                               "null",
@@ -1858,7 +1858,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "integer",
                           },
                           "excerpt": {
-                            "description": "Plain text, at most 280 characters.",
+                            "description": "What the member the item displays says now (plain text, at most 280 characters), read from the repository; null when there is none or it is gone.",
                             "type": [
                               "string",
                               "null",

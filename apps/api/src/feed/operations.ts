@@ -10,12 +10,7 @@ import {
 } from "../do/user/feed.js";
 import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
-import {
-  allowedWithRole,
-  authorizeAtOnce,
-  findReposById,
-  type RepoEntry,
-} from "../repos/directory.js";
+import { allowedWithRole, findReposById, type RepoEntry } from "../repos/directory.js";
 
 /*
  * The activity feed's operations. A feed belongs to a principal id: the
@@ -27,7 +22,10 @@ import {
  * read its pull requests now. Items it may not read are skipped, and
  * nothing says how many: a cursor only ever names an item the caller was
  * shown (or where it started), so it tells nothing of the others, and an
- * answer changes only when what the caller may see does. A check that
+ * answer changes only when what the caller may see does. Items hold ids:
+ * what the member an item displays says (a comment, a review, the pull
+ * request's body) is read from the repository with the check, so an edit
+ * shows at once and a deletion leaves no excerpt. A check that
  * could not be made, or one past the answer's budget, ends the answer
  * there (the cursor never passes an item not checked).
  */
@@ -47,6 +45,11 @@ const READ = "pull_requests:read";
  * feed at most, shown or not, and how many a read takes. Proposed.
  */
 const SCAN = { repoChecks: 100, items: 1_000, page: 200 } as const;
+
+/** Members one repository call reads at most. */
+const VIEW_MEMBERS = 100;
+
+const viewOf = (env: Env, repoId: string) => env.REPO.getByName(repoId);
 
 /** A feed cursor: `base64url({v:1,e,s})`, an epoch and a sequence number, opaque to clients. */
 export function encodeFeedCursor(position: FeedPosition): string {
@@ -86,21 +89,39 @@ const feedOf = (ctx: OpContext) => ctx.env.USER.getByName(ctx.auth.principalId);
 const counted = (ctx: OpContext, method: string) =>
   ctx.metrics.count("do.request", { class: "UserDO", method });
 
-/** What the caller may see of a feed's items, decided once per repository within one answer. */
+/** An item as a check needs it: its repository, and the member it displays. */
+type Displayed = Pick<FeedItem, "repoId" | "member">;
+
+/**
+ * What the caller may see of a feed's items, decided once per repository
+ * within one answer, and what the members they display say.
+ */
 class Visibility {
   readonly #decided = new Map<string, RepoEntry | "denied" | "unknown">();
+  readonly #excerpts = new Map<string, string | null>();
   #checks = 0;
 
   constructor(private readonly ctx: OpContext) {}
 
-  /** Decides the repositories among `repoIds` not decided yet, within the budget of checks. */
-  async decide(repoIds: readonly string[]): Promise<void> {
+  /**
+   * Decides the repositories of `items` not decided yet, within the budget
+   * of checks, reading what their members say at the same time.
+   */
+  async decide(items: readonly Displayed[]): Promise<void> {
     const { env, auth, metrics } = this.ctx;
-    const ids = [...new Set(repoIds)].filter((id) => !this.#decided.has(id));
-    if (ids.length === 0) return;
-    const entries = new Map((await findReposById(env, ids, metrics)).map((e) => [e.id, e]));
+    const members = new Map<string, Set<string>>();
+    for (const { repoId, member } of items) {
+      if (this.#decided.has(repoId)) continue;
+      const set = members.get(repoId) ?? new Set();
+      members.set(repoId, set);
+      if (member !== null && set.size < VIEW_MEMBERS) set.add(member);
+    }
+    if (members.size === 0) return;
+    const entries = new Map(
+      (await findReposById(env, [...members.keys()], metrics)).map((e) => [e.id, e]),
+    );
     const checking: RepoEntry[] = [];
-    for (const id of ids) {
+    for (const id of members.keys()) {
       const entry = entries.get(id);
       // Gone, or outside the token's own limits: no call needed.
       if (!entry || !allowedWithRole(auth, entry, READ, "admin")) this.#decided.set(id, "denied");
@@ -109,13 +130,47 @@ class Visibility {
         checking.push(entry);
       }
     }
-    const decisions = await Promise.all(
-      checking.map((entry) => authorizeAtOnce(env, auth, entry, READ, metrics)),
+    await Promise.all(
+      checking.map(async (entry) => {
+        const view = await this.#view(entry.id, [...(members.get(entry.id) ?? [])]).catch(
+          () => undefined,
+        );
+        this.#decided.set(
+          entry.id,
+          view === undefined
+            ? "unknown"
+            : // A public repository is read without a role there (the token's limits still apply).
+              view.readable && allowedWithRole(auth, entry, READ, view.role ?? "read")
+              ? entry
+              : "denied",
+        );
+      }),
     );
-    checking.forEach((entry, i) => {
-      const decision = decisions[i];
-      this.#decided.set(entry.id, decision === "allowed" ? entry : (decision ?? "unknown"));
+  }
+
+  /** Reads what the members of `items` not read with their repository's check say. */
+  async read(items: readonly Displayed[]): Promise<void> {
+    const missing = new Map<string, Set<string>>();
+    for (const { repoId, member } of items)
+      if (member !== null && !this.#excerpts.has(key(repoId, member)))
+        missing.set(repoId, (missing.get(repoId) ?? new Set()).add(member));
+    const calls = [...missing].flatMap(([repoId, set]) => {
+      const all = [...set];
+      return Array.from({ length: Math.ceil(all.length / VIEW_MEMBERS) }, (_, i) =>
+        this.#view(repoId, all.slice(i * VIEW_MEMBERS, (i + 1) * VIEW_MEMBERS)),
+      );
     });
+    // Their repositories were checked already: a failed read leaves those excerpts null.
+    await Promise.allSettled(calls);
+  }
+
+  async #view(repoId: string, members: readonly string[]) {
+    const { env, auth, metrics } = this.ctx;
+    metrics.count("do.request", { class: "RepoDO", method: "feedView" });
+    const view = await viewOf(env, repoId).feedView(auth.principalId, auth.grantId, members);
+    for (const member of members)
+      this.#excerpts.set(key(repoId, member), view.excerpts[member] ?? null);
+    return view;
   }
 
   /** The repository when the caller may see it; undefined when unknown (not checked). */
@@ -123,7 +178,16 @@ class Visibility {
     const decided = this.#decided.get(repoId);
     return decided === "denied" ? "hidden" : decided === "unknown" ? undefined : decided;
   }
+
+  /** What the item's member says; null for none, or one that is gone. */
+  excerpt(item: Displayed): string | null {
+    return item.member === null
+      ? null
+      : (this.#excerpts.get(key(item.repoId, item.member)) ?? null);
+  }
 }
+
+const key = (repoId: string, member: string) => `${repoId}\n${member}`;
 
 /** Items shown, in order, up to and past `limit` (one more tells that more follow). */
 type Scanned = { item: FeedItem; repo: RepoEntry }[];
@@ -134,17 +198,16 @@ type Scanned = { item: FeedItem; repo: RepoEntry }[];
  * `more`: the feed may have more the caller can see.
  */
 async function scan<P>(
-  ctx: OpContext,
+  visibility: Visibility,
   limit: number,
   read: (after: P | null) => Promise<{ items: readonly FeedItem[]; more: boolean }>,
   position: (item: FeedItem) => P,
 ): Promise<{ shown: Scanned; more: boolean }> {
-  const visibility = new Visibility(ctx);
   const shown: Scanned = [];
   let after: P | null = null;
   for (let scanned = 0; scanned < SCAN.items; ) {
     const page = await read(after);
-    await visibility.decide(page.items.map((item) => item.repoId));
+    await visibility.decide(page.items);
     for (const item of page.items) {
       const repo = visibility.of(item.repoId);
       if (repo === undefined) return { shown, more: true };
@@ -159,7 +222,7 @@ async function scan<P>(
   return { shown, more: true };
 }
 
-function itemOutput(item: FeedItem, repo: RepoEntry): FeedItemOutput {
+function itemOutput(item: FeedItem, repo: RepoEntry, excerpt: string | null): FeedItemOutput {
   return {
     item_key: feedItemKey(item.repoId, item.threadKey, item.kind),
     repo: { id: repo.id, full_name: `${repo.ownerHandle}/${repo.name}` },
@@ -174,7 +237,7 @@ function itemOutput(item: FeedItem, repo: RepoEntry): FeedItemOutput {
     action: item.action,
     actor: item.actor,
     actor_trust: item.actorTrust,
-    excerpt: item.excerpt,
+    excerpt,
     members: [...item.members],
     members_truncated: item.truncated,
     event_at: item.eventAt,
@@ -203,8 +266,9 @@ export async function getFeedOperation(
     repoIds: ctx.auth.repoIds,
   };
   let epoch = since?.epoch;
+  const visibility = new Visibility(ctx);
   const { shown, more } = await scan(
-    ctx,
+    visibility,
     input.limit,
     async (after: FeedPosition | null) => {
       counted(ctx, "listFeed");
@@ -223,8 +287,9 @@ export async function getFeedOperation(
         : (since ?? { epoch: epoch as string, seq: 0 }),
     );
   const page = shown.slice(0, input.limit);
+  await visibility.read(page.map(({ item }) => item));
   return {
-    items: page.map(({ item, repo }) => itemOutput(item, repo)),
+    items: page.map(({ item, repo }) => itemOutput(item, repo, visibility.excerpt(item))),
     next_cursor: at(page.at(-1)?.item),
     head_cursor: at(shown.at(-1)?.item),
     poll_after_ms: more ? 0 : FEED_POLL_AFTER_MS,
@@ -235,8 +300,9 @@ export async function getFeedOperation(
 export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof syncFeed>> {
   const feed = feedOf(ctx);
   let epoch = "";
+  const visibility = new Visibility(ctx);
   const { shown, more } = await scan(
-    ctx,
+    visibility,
     FEED_POLICY.syncItems,
     async (after: SyncPosition | null) => {
       counted(ctx, "syncFeed");
@@ -247,11 +313,12 @@ export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof s
     (item) => ({ open: item.priority === "P0" && item.state === "open", seq: item.seq }),
   );
   const items = shown.slice(0, FEED_POLICY.syncItems);
+  await visibility.read(items.map(({ item }) => item));
   // Following from the greatest item shown misses no change the caller may see; an incomplete
   // sync follows from the start.
   const seq = more ? 0 : Math.max(0, ...items.map(({ item }) => item.seq));
   return {
-    items: items.map(({ item, repo }) => itemOutput(item, repo)),
+    items: items.map(({ item, repo }) => itemOutput(item, repo, visibility.excerpt(item))),
     complete: !more,
     head_cursor: encodeFeedCursor({ epoch, seq }),
     poll_after_ms: FEED_POLL_AFTER_MS,
@@ -281,7 +348,7 @@ export async function ackFeedItemOperation(
   const id = parseItemKey(input.item_key);
   if (!id) throw notFound;
   const visibility = new Visibility(ctx);
-  await visibility.decide([id.repoId]);
+  await visibility.decide([{ repoId: id.repoId, member: null }]);
   const repo = visibility.of(id.repoId);
   if (repo === undefined) throw new Error("the repository's access could not be checked");
   if (repo === "hidden") throw notFound;
