@@ -90,6 +90,7 @@ import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
 import type { AclSnapshot } from "./OrgDO.js";
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
+import { RepoAdministration, type RepoDetails, type RulesetChange } from "./repo/administration.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
 import { RepoAuthority } from "./repo/authority.js";
 import {
@@ -162,12 +163,7 @@ import { hasPrecheckRules } from "./repo/push-rules.js";
 import { REBASE_POLICY, type RebasePolicy, RebaseSagas } from "./repo/rebase-saga.js";
 import { RepoReviewComments } from "./repo/review-comments.js";
 import { RepoReviews } from "./repo/reviews.js";
-import {
-  RepoRulesets,
-  type RuleSuite,
-  type RulesetInput,
-  type RulesetRecord,
-} from "./repo/rulesets.js";
+import { RepoRulesets, type RuleSuite, type RulesetRecord } from "./repo/rulesets.js";
 import { StorageCharges } from "./repo/storage-charges.js";
 import {
   type TemplateTree,
@@ -177,21 +173,6 @@ import {
 } from "./repo/template.js";
 import type { WriteContext, WriteRefusal } from "./repo/write-context.js";
 import { repoSchema } from "./schema/repo.js";
-
-/** Whether a hook URL is plain http (as its parser reads it). */
-function isHttp(url: string): boolean {
-  try {
-    return new URL(url).protocol === "http:";
-  } catch {
-    return true;
-  }
-}
-
-/** What a repository object knows of the repository's details. */
-export interface RepoDetails {
-  readonly headTarget: string | null;
-  readonly description: string | null;
-}
 
 /**
  * Wall-clock budget for one alarm run of background jobs: no new slice
@@ -239,6 +220,9 @@ export class RepoDO extends MigratingDO {
 
   /** Effective roles and the rulesets' judgement of writes. */
   readonly #authority: RepoAuthority;
+
+  /** Changes only an administrator may make: settings, rulesets, webhooks. */
+  readonly #admin: RepoAdministration;
 
   /** The repository as activity feeds read it. */
   readonly #feedView: RepoFeedView;
@@ -463,6 +447,19 @@ export class RepoDO extends MigratingDO {
       acl: this.acl,
       rulesets: () => this.rulesetStore,
       memoryBlocks: () => this.#memoryBlocks(),
+    });
+    this.#admin = new RepoAdministration({
+      git: this.git,
+      acl: this.acl,
+      authority: this.#authority,
+      events: this.events,
+      rulesets: () => this.rulesetStore,
+      details: () => this.details(),
+      checkEpoch: () => this.checkEpoch(),
+      closed: () => this.#closed,
+      writeRefusal: () => this.#writeRefusal(),
+      armOutbox: () => this.#armOutbox(),
+      ensureAuditArchive: () => this.#ensureAuditArchive(),
     });
     this.#feedView = new RepoFeedView({
       git: this.git,
@@ -752,47 +749,7 @@ export class RepoDO extends MigratingDO {
         code: "branch_not_found" | "repo_deleted" | "repo_transferring" | "access_lost";
       }
   > {
-    return this.#measured("updateSettings", async () => {
-      await this.checkEpoch();
-      // The actor administers the repository now: the Worker checked it
-      // before this call; access may have been revoked since. Pulled for a
-      // write, then checked with no await before the change.
-      const principal = input.actor?.principal;
-      // With the owners capping an agent acting (they may have lost access meanwhile too).
-      const ceilings = principal
-        ? await this.#authority.rolesPulled(principal, input.actor?.grantId ?? null)
-        : [];
-      // Its deletion started after the caller found it.
-      if (this.events.isDeleted()) return { ok: false as const, code: "repo_deleted" as const };
-      // The directory refuses a rename while a transfer moves it: no name to record.
-      if (this.events.isTransferring())
-        return { ok: false as const, code: "repo_transferring" as const };
-      if (principal && ![principal, ...ceilings].every((p) => this.acl.allows(p, "admin"))) {
-        // The directory's name is recorded even so: a rename already happened there.
-        if (input.name) this.events.update({ name: input.name, actor: input.actor });
-        this.#armOutbox();
-        this.#ensureAuditArchive();
-        return { ok: false as const, code: "access_lost" as const };
-      }
-      const head =
-        input.defaultBranch === undefined ? undefined : `refs/heads/${input.defaultBranch}`;
-      if (head !== undefined && !this.git.refStore.hasRef(head)) {
-        // The directory's name is recorded even so: it is already in use.
-        if (input.name) this.events.update({ name: input.name, actor: input.actor });
-        this.#armOutbox();
-        this.#ensureAuditArchive();
-        return { ok: false as const, code: "branch_not_found" as const };
-      }
-      this.events.update({
-        ...(input.name && { name: input.name }),
-        ...(input.description !== undefined && { description: input.description }),
-        ...(head !== undefined && { head }),
-        actor: input.actor,
-      });
-      this.#armOutbox();
-      this.#ensureAuditArchive();
-      return { ok: true as const, details: this.details() };
-    });
+    return this.#measured("updateSettings", () => this.#admin.updateSettings(input));
   }
 
   /** The repository's rulesets, created on first use. */
@@ -829,48 +786,8 @@ export class RepoDO extends MigratingDO {
    * Creates, replaces or deletes a ruleset for an administrator (the
    * Worker checked it; checked again here, with no await before the change).
    */
-  changeRuleset(
-    change:
-      | { readonly op: "create"; readonly input: RulesetInput }
-      | { readonly op: "update"; readonly id: number; readonly input: RulesetInput }
-      | { readonly op: "delete"; readonly id: number },
-    actor: RefActor,
-  ): Promise<
-    | { ok: true; record: RulesetRecord | null }
-    | {
-        ok: false;
-        code:
-          | "repo_deleted"
-          | "repo_transferring"
-          | "access_lost"
-          | "not_found"
-          | "name_taken"
-          | "too_many";
-      }
-  > {
-    return this.#measured("changeRuleset", async () => {
-      await this.checkEpoch();
-      // With the owners capping an agent acting (they may have lost access meanwhile too).
-      const ceilings = await this.#authority.rolesPulled(actor.principal, actor.grantId ?? null);
-      if (this.#closed || this.events.isDeleted())
-        return { ok: false as const, code: "repo_deleted" as const };
-      if (this.events.isTransferring())
-        return { ok: false as const, code: "repo_transferring" as const };
-      if (![actor.principal, ...ceilings].every((p) => this.acl.allows(p, "admin")))
-        return { ok: false as const, code: "access_lost" as const };
-      const store = this.rulesetStore;
-      const done =
-        change.op === "create"
-          ? store.create(change.input, actor)
-          : change.op === "update"
-            ? (store.update(change.id, change.input, actor) ?? ("not_found" as const))
-            : store.delete(change.id, actor)
-              ? null
-              : ("not_found" as const);
-      if (typeof done === "string") return { ok: false as const, code: done };
-      this.#ensureAuditArchive();
-      return { ok: true as const, record: done };
-    });
+  changeRuleset(change: RulesetChange, actor: RefActor) {
+    return this.#measured("changeRuleset", () => this.#admin.changeRuleset(change, actor));
   }
 
   /** The repository's webhooks (the Worker checked `repository_hooks:read`). */
@@ -900,11 +817,8 @@ export class RepoDO extends MigratingDO {
       "createHook",
       actor,
       () => this.hooks.prepareSecret(),
-      (prepared) => {
-        if (isHttp(input.url) && this.events.visibility() !== "public")
-          return fail(422, "insecure_url", "A private repository's webhooks need an https URL.");
-        return this.hooks.create(prepared, input, actor);
-      },
+      (prepared) =>
+        this.#admin.insecureHookUrl(input.url) ?? this.hooks.create(prepared, input, actor),
     );
   }
 
@@ -913,11 +827,12 @@ export class RepoDO extends MigratingDO {
     patch: Parameters<RepoHooks["update"]>[1],
     actor: RefActor,
   ): Promise<Browsed<HookView>> {
-    return this.#asHookAdmin("updateHook", actor, undefined, () => {
-      if (patch.url !== undefined && isHttp(patch.url) && this.events.visibility() !== "public")
-        return fail(422, "insecure_url", "A private repository's webhooks need an https URL.");
-      return this.hooks.update(id, patch, actor);
-    });
+    return this.#asHookAdmin(
+      "updateHook",
+      actor,
+      undefined,
+      () => this.#admin.insecureHookUrl(patch.url) ?? this.hooks.update(id, patch, actor),
+    );
   }
 
   deleteHook(id: number, actor: RefActor): Promise<Browsed<true>> {
@@ -977,20 +892,7 @@ export class RepoDO extends MigratingDO {
     prepare: (() => Promise<Browsed<P>>) | undefined,
     change: (prepared: P) => Browsed<T>,
   ): Promise<Browsed<T>> {
-    return this.#measured(method, async () => {
-      await this.checkEpoch();
-      const ceilings = await this.#authority.rolesPulled(actor.principal, actor.grantId ?? null);
-      const prepared = prepare ? await prepare() : ({ ok: true, value: undefined as P } as const);
-      if (!prepared.ok) return prepared;
-      const refusedWrite = this.#writeRefusal();
-      if (refusedWrite) return fail(refusedWrite.status, refusedWrite.code, refusedWrite.error);
-      if (![actor.principal, ...ceilings].every((p) => this.acl.allows(p, "admin")))
-        return fail(404, "repo_not_found", "You no longer administer this repository.");
-      const done = change(prepared.value);
-      this.#armOutbox();
-      this.#ensureAuditArchive();
-      return done;
-    });
+    return this.#measured(method, () => this.#admin.asHookAdmin(actor, prepare, change));
   }
 
   /** The repository's pull requests, newest first, below `before` (a number) when given. */
