@@ -8,6 +8,7 @@ import {
   compactionLimits,
   fitsAfterCompaction,
   isDetaching,
+  runUnderWay,
   scheduleViewCompaction,
 } from "./view-cap.js";
 
@@ -317,11 +318,14 @@ function borrowedWith(git: RepoGitStorage, packs: readonly ViewPack[]): ViewPack
 
 /**
  * Refuses a borrowed view (`view`, oldest first) the base could not hold:
- * over its cap with no compaction able to bring it within (no two of its
- * packs fit one run). Admitted, a view over its cap is compacted later.
+ * over its cap with no compaction able to bring it within, the run under
+ * way included, even were its outputs as small as they can be. Admitted, a
+ * view over its cap is compacted later (and one its outputs leave over it
+ * all the same fails the compaction's job).
  */
 function admit(deps: ViewDeps, view: readonly ViewPack[]): void {
-  if (!fitsAfterCompaction(view, compactionLimits(deps.ownCap(), deps.rewriteObjects())))
+  const limits = compactionLimits(deps.ownCap(), deps.rewriteObjects());
+  if (!fitsAfterCompaction(view, limits, runUnderWay(deps.git)))
     throw new ImportFailed(
       "view_full",
       "the base's view cannot hold more borrowed packs: they are too large to compact",

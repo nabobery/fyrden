@@ -88,9 +88,31 @@ describe("fitsAfterCompaction", () => {
     expect(fitsAfterCompaction(packs, { limit: 2, maxPacks: 16, maxObjects: 500 })).toBe(false);
   });
 
-  it("refuses a view whose runs' outputs grow too large to merge", () => {
-    // Two runs of 400 objects each fit; their outputs together do not.
+  it("holds a view whose runs' outputs may share their sources' objects", () => {
+    // Two runs of 400 objects each; packs holding the same objects pairwise give outputs of 200,
+    // which merge: an output is only known to hold its largest source's objects.
     const packs = [1, 2, 3, 4].map((i) => pack(i, 200));
-    expect(fitsAfterCompaction(packs, { limit: 1, maxPacks: 16, maxObjects: 500 })).toBe(false);
+    expect(fitsAfterCompaction(packs, { limit: 1, maxPacks: 16, maxObjects: 500 })).toBe(true);
+  });
+
+  it("refuses a view whose run under way left an output too large to merge", () => {
+    // The run of the first two finished with every object of both (9); the pack added after it
+    // pairs with nothing. Chosen afresh, the three would fit.
+    const packs = [pack(1, 3), pack(2, 6), pack(3, 3)];
+    const limits = { limit: 1, maxPacks: 16, maxObjects: 10 };
+    expect(fitsAfterCompaction(packs, limits)).toBe(true);
+    expect(fitsAfterCompaction(packs, limits, { sources: ["p1", "p2"], objects: 9 })).toBe(false);
+  });
+
+  it("takes a run under way whose output is not written yet as holding its largest source", () => {
+    const packs = [pack(1, 3), pack(2, 6), pack(3, 3)];
+    const limits = { limit: 1, maxPacks: 16, maxObjects: 10 };
+    expect(fitsAfterCompaction(packs, limits, { sources: ["p1", "p2"] })).toBe(true);
+  });
+
+  it("chooses afresh when a run's sources left the view (the run is discarded)", () => {
+    const packs = [pack(2, 6), pack(3, 3)];
+    const limits = { limit: 1, maxPacks: 16, maxObjects: 10 };
+    expect(fitsAfterCompaction(packs, limits, { sources: ["p1", "p2"], objects: 9 })).toBe(true);
   });
 });

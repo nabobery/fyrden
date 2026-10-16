@@ -205,30 +205,70 @@ export function batchOf(packs: readonly ViewPack[], limits: CompactionLimits): V
   return [];
 }
 
+/** A run of the view's compaction under way: its sources, and its output's objects once written. */
+export interface RunUnderWay {
+  readonly sources: readonly string[];
+  readonly objects?: number;
+}
+
 /**
- * Whether the view compaction can bring a view of `packs` (borrowed, live,
- * oldest first) within `limits.limit`: its runs one after another, each
- * output a new pack holding its sources' objects. False when a run would
- * find no batch while the view is still over (no two units fit one run).
- * Each run takes at least two packs and gives back one, so this ends.
+ * Whether the view compaction may bring a view of `packs` (borrowed, live,
+ * oldest first) within `limits.limit`: the run under way first (`underWay`,
+ * unless its sources left the view, which discards it), then its runs one
+ * after another as the job chooses them. An output holds its sources'
+ * objects without repeats: its count is known once written, and before
+ * that taken at the least it can be (its largest source's), so a view is
+ * refused only when even then a run would find no batch while it is still
+ * over (no two units fit one run). Each run takes at least two packs and
+ * gives back one, so this ends.
  */
-export function fitsAfterCompaction(packs: readonly ViewPack[], limits: CompactionLimits): boolean {
+export function fitsAfterCompaction(
+  packs: readonly ViewPack[],
+  limits: CompactionLimits,
+  underWay?: RunUnderWay,
+): boolean {
   let view = [...packs];
-  for (let run = 0; view.length > limits.limit; run++) {
-    const [first, ...rest] = batchOf(view, limits);
-    if (!first || rest.length === 0) return false;
-    const batch = [first, ...rest];
+  const merge = (batch: readonly ViewPack[], run: number, objects?: number) => {
+    const [first] = batch;
+    if (!first) return;
     const merged = new Set(batch.map((p) => p.packId));
     const output: ViewPack = {
       ...first,
       packId: `compacted:${run}`,
       unitId: null,
-      objectCount: batch.reduce((n, p) => n + (p.objectCount ?? 0), 0),
+      objectCount: objects ?? Math.max(...batch.map((p) => p.objectCount ?? 0)),
     };
     // An output is newer than every pack of the view.
     view = [...view.filter((p) => !merged.has(p.packId)), output];
+  };
+  const running = view.filter((p) => underWay?.sources.includes(p.packId));
+  if (underWay && running.length === underWay.sources.length) merge(running, -1, underWay.objects);
+  for (let run = 0; view.length > limits.limit; run++) {
+    const batch = batchOf(view, limits);
+    if (batch.length < 2) return false;
+    merge(batch, run);
   }
   return true;
+}
+
+/**
+ * The run of the view's compaction under way, if one is (its sources
+ * chosen): with its output's objects once the run is written, waiting to
+ * be swapped in.
+ */
+export function runUnderWay(git: RepoGitStorage): RunUnderWay | undefined {
+  const job = git.jobs.get(VIEW_COMPACT_JOB);
+  if (job?.state !== "queued" && job?.state !== "running") return undefined;
+  const cursor = decodeJson<ViewCompactCursor>(job.cursor);
+  if (!cursor?.sources || (cursor.phase !== "swap" && !cursor.runId)) return undefined;
+  if (cursor.phase === "compact") return { sources: cursor.sources };
+  const objects = git.context.storage.sql
+    .exec<{ object_count: number | null }>(
+      "SELECT object_count FROM packs WHERE pack_id = ?",
+      cursor.outputId ?? "",
+    )
+    .toArray()[0]?.object_count;
+  return { sources: cursor.sources, ...(typeof objects === "number" && { objects }) };
 }
 
 /** A view over its cap that no compaction run fits (no two of its units within a run's limits). */

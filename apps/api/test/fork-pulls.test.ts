@@ -816,6 +816,53 @@ describe("the base's view", () => {
     expect(await borrowedLive(stub)).toBe(2);
   });
 
+  it("refuses packs the compaction's run under way would leave no room for", async () => {
+    const stub = env.REPO.getByName(base.id);
+    // Room for one borrowed pack; a run merges at most 100 objects.
+    await inRepo(stub, (r: RepoDO) => {
+      r.packCap = { ...r.packCap, cap: 31 };
+      r.maintenance = { ...r.maintenance, maxRewriteObjects: 100 };
+    });
+    await commitOn(contributor, fork.path, "main", [{ path: "c.txt", content: "c\n" }]);
+    expect((await open(contributor, `${contributor.handle}:main`)).status).toBe(201);
+    // Its two borrowed packs are over the cap: a run of the compaction merged them, and its
+    // output (100 objects: the most a run takes) waits to be swapped in.
+    await inRepo(stub, (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      const sources = sql
+        .exec<{ pack_id: string }>(
+          "SELECT pack_id FROM packs WHERE origin = 'borrowed' AND state = 'live'",
+        )
+        .toArray()
+        .map((p) => p.pack_id);
+      expect(sources).toHaveLength(2);
+      const now = r.git.context.now();
+      sql.exec(
+        `INSERT INTO packs (pack_id, network_id, r2_key, kind, state, object_count, bytes,
+           created_at, last_touched_at)
+         VALUES ('run-output', ?, 'run-output', 'compact', 'indexing', 100, 1, ?, ?)`,
+        r.git.networkId(),
+        now,
+        now,
+      );
+      const cursor = { phase: "swap", sources, runId: "run", outputId: "run-output" };
+      // Held by a slice that has not finished: the test's admission sees it, no alarm runs it.
+      sql.exec(
+        "UPDATE jobs SET state = 'running', lease_expires_at = ?, cursor = ? WHERE job_id = ?",
+        now + 60 * 60_000,
+        new TextEncoder().encode(JSON.stringify(cursor)),
+        VIEW_COMPACT_JOB,
+      );
+    });
+    // A third pack: chosen afresh, the three would merge; after the run, it pairs with nothing.
+    const third = await commitOn(contributor, fork.path, "main", [
+      { path: "d.txt", content: "d\n" },
+    ]);
+    await moveForkBranch("topic", ZERO, third);
+    const opened = await open(contributor, `${contributor.handle}:topic`);
+    expect(opened).toMatchObject({ status: 422, body: { code: "view_full" } });
+  });
+
   it("leaves a compaction that cannot bring the view within its cap failing, not done", async () => {
     const stub = env.REPO.getByName(base.id);
     await open(contributor, `${contributor.handle}:main`);

@@ -104,10 +104,12 @@ background job merges its oldest borrowed packs into one, at most 16 packs
 and 500,000 objects (the rewrite budget) a run. Importing a pull request's
 head from a fork, or the base tip into a fork's head branch, is refused
 when it would leave more borrowed packs than such merges can bring within
-the cap (no two of them fit one run): opening the pull request, or the
-write to the head branch, answers 422 `view_full`, and a later revision of
-an open pull request's head is not imported (the pull request keeps its
-last one). A view over its cap all the same (the budget lowered since)
+the cap, the merge under way included, even were each merged pack as small
+as it can be (its largest source's objects: packs may share objects):
+opening the pull request, or the write to the head branch, answers 422
+`view_full`, and a later revision of an open pull request's head is not
+imported (the pull request keeps its last one). A view over its cap all
+the same (merged packs larger than that, or the budget lowered since)
 leaves the merge job failing, tried again in case a collection drops
 packs.
 
