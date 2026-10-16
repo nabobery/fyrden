@@ -25,6 +25,7 @@ CREATE INDEX pull_requests_head_repo ON pull_requests (head_repo_id, state, numb
 CREATE INDEX pull_requests_state ON pull_requests (state, number);
 CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
+CREATE INDEX refollow_bases_due ON refollow_bases (next_at);
 CREATE INDEX refs_oid ON refs (oid);
 CREATE INDEX review_comments_pr ON review_comments (pr_number, comment_id);
 CREATE INDEX review_comments_thread ON review_comments (thread_id, comment_id);
@@ -367,6 +368,12 @@ CREATE TABLE reflog (
     upload_id TEXT,
     at INTEGER NOT NULL
   ) STRICT;
+CREATE TABLE refollow_bases (
+        base_repo_id TEXT PRIMARY KEY,
+        after INTEGER NOT NULL DEFAULT 0,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_at INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
 CREATE TABLE refs (
     name TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('direct', 'symbolic')),

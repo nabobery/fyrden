@@ -764,11 +764,23 @@ export const repoSchema: readonly DoMigration[] = [
   },
   {
     version: 29,
-    // The open pull requests whose head is in another repository, a page at
-    // a time in number order (that repository, restored, asks for them).
-    name: "pull_requests_head_repo",
+    // Following a restored head's pull requests again. In the base: its
+    // open pull requests whose head is in another repository, a page at a
+    // time in number order (that repository, restored, asks for them). In
+    // the head's repository: the members of its network still to ask, each
+    // from the pull request it got to, one that could not be asked waiting
+    // until `next_at`.
+    name: "fork_pull_recovery",
     sql: `
       CREATE INDEX pull_requests_head_repo ON pull_requests (head_repo_id, state, number);
+
+      CREATE TABLE refollow_bases (
+        base_repo_id TEXT PRIMARY KEY,
+        after INTEGER NOT NULL DEFAULT 0,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_at INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+      CREATE INDEX refollow_bases_due ON refollow_bases (next_at);
     `,
   },
 ];

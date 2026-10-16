@@ -75,14 +75,23 @@ const MEMBERS_PER_PAGE = 50;
 /** Calls to other objects (and directory reads) one slice of that job makes at most. Proposed. */
 const REFOLLOW_CALLS_PER_SLICE = 20;
 
-/** Where the job asking bases to follow again is: the members left of a page, after the last done. */
+/** When a member that could not be asked is asked again: doubling per failure, at most an hour. */
+const REFOLLOW_RETRY_MS = 30_000;
+const REFOLLOW_RETRY_MAX_MS = 60 * 60_000;
+
+/**
+ * How far the job asking bases to follow again has read the directory: the
+ * last member it took (ids in order), and whether it has taken them all.
+ * The members taken and not asked fully yet are in `refollow_bases`.
+ */
 interface RefollowCursor {
-  /** The last member of the network asked fully (ids in order). */
   readonly last: string;
-  /** Members of the page read, still to ask, the first one from pull request `after` on. */
-  readonly queue: readonly string[];
-  readonly after: number;
+  readonly listed: boolean;
 }
+
+/** Delay before asking again a member asked `attempts` times without an answer. */
+const refollowRetryMs = (attempts: number) =>
+  Math.min(REFOLLOW_RETRY_MAX_MS, REFOLLOW_RETRY_MS * 2 ** Math.max(0, attempts - 1));
 
 /**
  * Ref-state versions within one restore generation, at most (a generation's
@@ -413,32 +422,93 @@ export class PullSource {
    * and is told where the branch is.
    */
   restored(): void {
+    this.deps.git.context.storage.sql.exec("DELETE FROM refollow_bases");
     this.deps.git.jobs.restart("pull_refollow", PULL_REFOLLOW_JOB);
   }
 
   /**
-   * The job asking the network's members to follow again: a page of
-   * members at a time, each asked page by page of its pull requests, within
-   * a few calls a slice. A member that cannot be asked fails the slice,
-   * tried again from where the last one left it.
+   * The job asking the network's members to follow again, within a few
+   * calls a slice: a page of members is taken from the directory once the
+   * members taken before are asked (or waiting), and each is asked page by
+   * page of its pull requests, its progress stored as it goes. A member
+   * that cannot be asked waits (longer after each failure) while the
+   * others go on, and is asked again from where it was until it answers; a
+   * directory that cannot be read is read again later. Done once every
+   * member has answered for all its pull requests.
    */
   refollowHandler(): JobHandler {
     return {
       runSlice: async (job): Promise<SliceResult> => {
-        let cursor = decodeJson<RefollowCursor>(job.cursor) ?? { last: "", queue: [], after: 0 };
+        const { git } = this.deps;
+        const sql = git.context.storage.sql;
+        let cursor = decodeJson<RefollowCursor>(job.cursor) ?? { last: "", listed: false };
+        const save = (): SliceResult => {
+          const next = sql
+            .exec<{ at: number | null }>("SELECT min(next_at) AS at FROM refollow_bases")
+            .one().at;
+          if (next === null && cursor.listed) return { done: true };
+          return {
+            done: false,
+            cursor: encodeJson(cursor),
+            runAfterMs: next === null ? 0 : Math.max(0, next - git.context.now()),
+          };
+        };
         for (let calls = 0; calls < REFOLLOW_CALLS_PER_SLICE; calls++) {
-          const [member, ...rest] = cursor.queue;
-          if (member === undefined) {
-            const page = await this.deps.members(cursor.last, MEMBERS_PER_PAGE);
-            if (page.length === 0) return { done: true };
-            cursor = { ...cursor, queue: page, after: 0 };
+          const due = sql
+            .exec<{ base_repo_id: string; after: number; attempts: number }>(
+              `SELECT base_repo_id, after, attempts FROM refollow_bases WHERE next_at <= ?
+               ORDER BY next_at, base_repo_id LIMIT 1`,
+              git.context.now(),
+            )
+            .toArray()[0];
+          if (!due) {
+            if (cursor.listed) break;
+            let page: string[];
+            try {
+              page = await this.deps.members(cursor.last, MEMBERS_PER_PAGE);
+            } catch (error) {
+              this.deps.log().warn("reading a network's members failed", { error });
+              return { done: false, cursor: encodeJson(cursor), runAfterMs: REFOLLOW_RETRY_MS };
+            }
+            git.context.storage.transactionSync(() => {
+              for (const id of page)
+                sql.exec(
+                  "INSERT INTO refollow_bases (base_repo_id) VALUES (?) ON CONFLICT DO NOTHING",
+                  id,
+                );
+            });
+            cursor = {
+              last: page.at(-1) ?? cursor.last,
+              listed: page.length < MEMBERS_PER_PAGE,
+            };
             continue;
           }
-          const next = await this.deps.followAgain(member, cursor.after);
-          cursor =
-            next === null ? { last: member, queue: rest, after: 0 } : { ...cursor, after: next };
+          let next: number | null;
+          try {
+            next = await this.deps.followAgain(due.base_repo_id, due.after);
+          } catch (error) {
+            this.deps.log().warn("asking a base to follow again failed", {
+              base: due.base_repo_id,
+              error,
+            });
+            sql.exec(
+              "UPDATE refollow_bases SET attempts = ?, next_at = ? WHERE base_repo_id = ?",
+              due.attempts + 1,
+              git.context.now() + refollowRetryMs(due.attempts + 1),
+              due.base_repo_id,
+            );
+            continue;
+          }
+          if (next === null)
+            sql.exec("DELETE FROM refollow_bases WHERE base_repo_id = ?", due.base_repo_id);
+          else
+            sql.exec(
+              "UPDATE refollow_bases SET after = ?, attempts = 0 WHERE base_repo_id = ?",
+              next,
+              due.base_repo_id,
+            );
         }
-        return { done: false, cursor: encodeJson(cursor), runAfterMs: 0 };
+        return save();
       },
     };
   }
