@@ -11,7 +11,7 @@ import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { allocateEpoch } from "../src/events/epochs.js";
-import { PULL_REFOLLOW_JOB } from "../src/network/pull-source.js";
+import { PULL_NOTICES_JOB, PULL_REFOLLOW_JOB } from "../src/network/pull-source.js";
 import {
   scheduleViewCompaction,
   VIEW_COMPACT_JOB,
@@ -254,6 +254,65 @@ describe("pull requests from forks", () => {
     await sync();
     expect(await outgoing()).toEqual([{ generation: 1 }]);
     expect((await pull()).head.sha).toBe(next);
+  });
+
+  it("tell heads and bases of their pull requests within an invocation's budget of internal calls", async () => {
+    // As a restored fork's recovery queues them: 60 pull requests the base asks the fork to follow,
+    // and 60 revisions the fork tells the base (of pull requests the base no longer has open).
+    const budget = 30;
+    const rows = Array.from({ length: 60 }, (_, i) => 1000 + i);
+    await inRepo(env.REPO.getByName(base.id), (r: RepoDO) => {
+      const now = r.git.context.now();
+      for (const n of rows)
+        r.git.context.storage.sql.exec(
+          `INSERT INTO head_follows (pr_number, head_repo_id, head_ref, generation, follow,
+             known_sha, requested_at, revision)
+           VALUES (?, ?, 'main', 1, 1, NULL, ?, 1)`,
+          n,
+          fork.id,
+          now,
+        );
+      r.git.jobs.ensure("pull_follow", "pull-follow");
+    });
+    await inRepo(env.REPO.getByName(fork.id), (r: RepoDO) => {
+      for (const n of rows)
+        r.git.context.storage.sql.exec(
+          `INSERT INTO revision_notices (base_repo_id, pr_number, generation, ref_version, sha,
+             pusher, pusher_grant, pushed)
+           VALUES (?, ?, 1, 1, NULL, NULL, NULL, 0)`,
+          base.id,
+          n,
+        );
+      r.git.jobs.ensure("pull_notices", PULL_NOTICES_JOB);
+    });
+    const count = (id: string, table: string) =>
+      inRepo(
+        env.REPO.getByName(id),
+        (r: RepoDO) =>
+          r.git.context.storage.sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table}`).one()
+            .n,
+      );
+    /** One alarm of `id`, its job queue stopping near `budget` internal calls. */
+    const alarmWithin = (id: string) =>
+      inRepo(env.REPO.getByName(id), async (r: RepoDO) => {
+        Object.assign(r.git, {
+          jobs: new JobQueue(r.git.context, () => {}, {
+            ...DEFAULT_JOB_POLICY,
+            maxInternalCalls: budget,
+          }),
+        });
+        await r.alarm();
+      });
+    await alarmWithin(base.id);
+    const followsLeft = await count(base.id, "head_follows");
+    // Stopped once the budget was spent, at most one slice (20 calls) past it, the rest queued.
+    expect(followsLeft).toBeGreaterThan(0);
+    expect(rows.length - followsLeft).toBeLessThanOrEqual(budget + 20);
+    const notices = await count(fork.id, "revision_notices");
+    await alarmWithin(fork.id);
+    const noticesLeft = await count(fork.id, "revision_notices");
+    expect(noticesLeft).toBeGreaterThan(0);
+    expect(notices - noticesLeft).toBeLessThanOrEqual(budget + 20);
   });
 
   it("ask the network's members again within an invocation's budget of internal calls", async () => {

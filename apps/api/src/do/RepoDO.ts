@@ -571,7 +571,14 @@ export class RepoDO extends MigratingDO {
     this.pullSource = new PullSource({
       git: this.git,
       repoId: () => this.#repoId(),
-      tell: (baseRepoId, notice) => this.env.REPO.getByName(baseRepoId).receiveRevision(notice),
+      tell: (baseRepoId, notice) => {
+        // Counted before it is made (a failure too): the job queue stops near the call budget.
+        this.git.context.metrics.count("do.request", {
+          class: "RepoDO",
+          method: "receiveRevision",
+        });
+        return this.env.REPO.getByName(baseRepoId).receiveRevision(notice);
+      },
       log: () => this.#log(),
       epoch: () => this.events.epochGen(),
       members: (after, limit) =>
@@ -1441,6 +1448,11 @@ export class RepoDO extends MigratingDO {
           .toArray();
         for (const row of rows) {
           const head = this.env.REPO.getByName(row.head_repo_id);
+          // Counted before it is made (a failure too): the job queue stops near the call budget.
+          this.git.context.metrics.count("do.request", {
+            class: "RepoDO",
+            method: row.follow === 1 ? "registerOutgoingPull" : "unregisterOutgoingPull",
+          });
           try {
             if (row.follow === 1) {
               const consent = this.#consentOf(row.pr_number);
