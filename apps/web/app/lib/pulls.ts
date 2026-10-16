@@ -129,7 +129,10 @@ export interface Thread {
   /** The listed file it belongs to (its current name). */
   file: string;
   side: DiffSide;
-  /** The (last) line at the current head; null once the head has moved (outdated). */
+  /**
+   * The (last) line in the current comparison; null once outdated: the head
+   * moved, or, on the old side, the merge base did.
+   */
   line: number | null;
   startLine: number | null;
   /** The line at the commit it was started on. */

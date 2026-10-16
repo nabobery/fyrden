@@ -46,7 +46,9 @@ const PullRequestParameters = z
     require_last_push_approval: z
       .boolean()
       .default(false)
-      .describe("Someone other than the last pusher must approve after the last push."),
+      .describe(
+        "Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count).",
+      ),
     required_review_thread_resolution: z
       .boolean()
       .default(false)

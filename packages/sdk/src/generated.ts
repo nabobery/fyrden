@@ -928,7 +928,7 @@ export type ReposRulesetsListOutput = {
         required_approving_review_count: number;
         /** A push makes earlier reviews stop counting. */
         dismiss_stale_reviews_on_push: boolean;
-        /** Someone other than the last pusher must approve after the last push. */
+        /** Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count). */
         require_last_push_approval: boolean;
         /** Every review thread must be resolved. */
         required_review_thread_resolution: boolean;
@@ -1033,7 +1033,7 @@ export type ReposRulesetsGetOutput = {
       required_approving_review_count: number;
       /** A push makes earlier reviews stop counting. */
       dismiss_stale_reviews_on_push: boolean;
-      /** Someone other than the last pusher must approve after the last push. */
+      /** Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count). */
       require_last_push_approval: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution: boolean;
@@ -1085,7 +1085,7 @@ export type ReposRulesetsCreateInput = {
       required_approving_review_count?: number;
       /** A push makes earlier reviews stop counting. */
       dismiss_stale_reviews_on_push?: boolean;
-      /** Someone other than the last pusher must approve after the last push. */
+      /** Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count). */
       require_last_push_approval?: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution?: boolean;
@@ -1131,7 +1131,7 @@ export type ReposRulesetsCreateOutput = {
       required_approving_review_count: number;
       /** A push makes earlier reviews stop counting. */
       dismiss_stale_reviews_on_push: boolean;
-      /** Someone other than the last pusher must approve after the last push. */
+      /** Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count). */
       require_last_push_approval: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution: boolean;
@@ -1185,7 +1185,7 @@ export type ReposRulesetsUpdateInput = {
       required_approving_review_count?: number;
       /** A push makes earlier reviews stop counting. */
       dismiss_stale_reviews_on_push?: boolean;
-      /** Someone other than the last pusher must approve after the last push. */
+      /** Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count). */
       require_last_push_approval?: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution?: boolean;
@@ -1231,7 +1231,7 @@ export type ReposRulesetsUpdateOutput = {
       required_approving_review_count: number;
       /** A push makes earlier reviews stop counting. */
       dismiss_stale_reviews_on_push: boolean;
-      /** Someone other than the last pusher must approve after the last push. */
+      /** Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count). */
       require_last_push_approval: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution: boolean;
