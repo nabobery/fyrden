@@ -38,6 +38,9 @@ import { factOf } from "./signature.js";
 /** Principals one directory query looks up (D1 binds at most 100 parameters). */
 const OWNER_BATCH = 50;
 
+/** Stands for a commit not made yet in a ruleset precheck (only the update's kind matters there). */
+export const ZERO_ID = "0".repeat(40);
+
 export interface AuthorityDeps {
   readonly git: RepoGitStorage;
   /** The Worker's bindings, read at each use (tests may replace them). */

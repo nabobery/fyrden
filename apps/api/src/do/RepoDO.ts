@@ -25,7 +25,6 @@ import {
   atLeast,
   type CommitIdentity,
   coAuthorTrailers,
-  decidePullAction,
   type Envelope,
   type GitPerson,
   protectsBranch,
@@ -118,7 +117,7 @@ import {
 } from "./org/quotas.js";
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
-import { RepoAuthority } from "./repo/authority.js";
+import { RepoAuthority, ZERO_ID } from "./repo/authority.js";
 import {
   BROWSE_POLICY,
   type Browsed,
@@ -159,7 +158,7 @@ import {
   type RepoIdentity,
   type RepoUpdate,
 } from "./repo/events.js";
-import { excerpt, type FeedActor, type FeedPrincipal, RepoFeed } from "./repo/feed.js";
+import { excerpt, type FeedPrincipal, RepoFeed } from "./repo/feed.js";
 import {
   BUSY,
   type FileWriteDeps,
@@ -171,13 +170,7 @@ import {
   refused as writeRefused,
 } from "./repo/file-writes.js";
 import { type HookForDelivery, type HookView, RepoHooks } from "./repo/hooks.js";
-import {
-  MERGE_POLICY,
-  type MergeMade,
-  type MergePolicy,
-  mergePull,
-  PULL_CHANGED,
-} from "./repo/merge.js";
+import { MERGE_POLICY, type MergeMade, type MergePolicy } from "./repo/merge.js";
 import { MERGEABILITY_POLICY, type PullView, RepoMergeability } from "./repo/mergeability.js";
 import {
   type NewReviewComment,
@@ -185,6 +178,7 @@ import {
   PullDiscussion,
 } from "./repo/pull-discussion.js";
 import { mergeBaseOf, type PullFilesPage, pullCommits, pullFiles } from "./repo/pull-files.js";
+import { type MergePullInput, PullMerging } from "./repo/pull-merging.js";
 import {
   type OpenPull,
   type PullCaller,
@@ -194,15 +188,7 @@ import {
   RepoPulls,
 } from "./repo/pulls.js";
 import { hasPrecheckRules } from "./repo/push-rules.js";
-import {
-  type MergeStamps,
-  REBASE_POLICY,
-  type RebasePolicy,
-  RebaseSagas,
-  rebaseCommits,
-  rebaseJobId,
-  type SagaView,
-} from "./repo/rebase-saga.js";
+import { REBASE_POLICY, type RebasePolicy, RebaseSagas } from "./repo/rebase-saga.js";
 import { RepoReviewComments, type ReviewCommentRecord } from "./repo/review-comments.js";
 import { RepoReviews } from "./repo/reviews.js";
 import {
@@ -227,16 +213,6 @@ const INVALID_LISTING = fail(
   "invalid_cursor",
   "The cursor is not one this API returned, or its listing has expired: start again.",
 );
-
-/** `text` without the line breaks it ends with (a loop: a regex would backtrack on many). */
-function withoutTrailingNewlines(text: string): string {
-  let end = text.length;
-  while (end > 0 && text[end - 1] === "\n") end--;
-  return text.slice(0, end);
-}
-
-/** Stands for a commit not made yet in a ruleset precheck (only the update's kind matters there). */
-const ZERO_ID = "0".repeat(40);
 
 /** Why applying suggestions was refused at the commit point. */
 const SUGGESTIONS_CHANGED =
@@ -304,22 +280,6 @@ const OPEN_IMPORT_STEPS = 40;
 const VIEW_FULL_DETAIL =
   "The repository borrows as many packs from its fork network as it can hold, and they are too large to merge.";
 
-/** A merge of a pull request, as the Worker asks for it. */
-export interface MergePullInput {
-  readonly number: number;
-  readonly method: "merge" | "squash" | "rebase";
-  /** The head the caller reviewed (GitHub's `sha`): the merge fails if the pull request is elsewhere. */
-  readonly expectedHead?: string;
-  readonly commitTitle?: string;
-  readonly commitMessage?: string;
-  /** The head branch's repository's owner's handle (a fork's, or this one's), for the default merge message. */
-  readonly ownerHandle: string;
-  /** Who a merge commit is by: the merger. */
-  readonly mergerIdentity: CommitIdentity;
-  /** Who a squashed commit is by: the pull request's author. */
-  readonly pullAuthorIdentity: CommitIdentity;
-}
-
 /** Why a merge into the head was refused at its commit: the base branch moved meanwhile. */
 const BASE_MOVED_WHILE_MERGING = "the base branch moved while the merge was being made";
 /** Why a merge into the head was refused at its commit: the pull request closed or was retargeted. */
@@ -375,27 +335,6 @@ function headWriteRefused(report: PushReportSummary): Browsed<never> {
     return fail(409, "pull_changed", "The pull request no longer follows this branch.");
   return writeRefused(report);
 }
-
-/** A merge refused while the pull request's rebase merge is under way. */
-const MERGE_IN_PROGRESS = fail(
-  409,
-  "merge_in_progress",
-  "A rebase merge of this pull request is under way; wait for it, or send the rebase request again.",
-);
-
-/** A merge refused because the pull request changed while the request worked it out. */
-const PULL_CHANGED_REFUSAL = fail(
-  409,
-  "pull_changed",
-  "The pull request changed while it was being merged; review it and try the merge again.",
-);
-
-/** Why a request gave up the rebase running before it (another head or base tip, or no driver). */
-const REBASE_REPLACED = fail(
-  409,
-  "pull_changed",
-  "The pull request or its base branch changed while it was being rebased; a new rebase was started.",
-);
 
 /** What a repository object knows of the repository's details. */
 export interface RepoDetails {
@@ -460,6 +399,9 @@ export class RepoDO extends MigratingDO {
 
   /** Review requests, diff threads and the standing a merge is judged by. */
   readonly #discussion: PullDiscussion;
+
+  /** Merges of pull requests into their base branches. */
+  readonly #merging: PullMerging;
 
   /** Pulls the account's ACL snapshot for this repository. Tests may replace it. */
   pullAcl: (accountId: string) => Promise<AclSnapshot>;
@@ -616,7 +558,7 @@ export class RepoDO extends MigratingDO {
         },
         policy: () => this.rebasePolicy,
         hooks: () => this.rebaseHooks,
-        feedActor: (actor) => this.#feedActorOf(actor),
+        feedActor: (actor) => this.#merging.feedActor(actor),
         withFeed: (actor, change) => this.feed.within(actor, change),
       },
       this.git,
@@ -667,6 +609,25 @@ export class RepoDO extends MigratingDO {
       viewed: (pull) => this.#viewed(pull),
       pullChange: (method, actor, change, prepare, texts) =>
         this.#pullChange(method, actor, change, prepare, texts),
+    });
+    this.#merging = new PullMerging({
+      git: this.git,
+      pulls: this.pulls,
+      rebases: this.rebases,
+      discussion: this.#discussion,
+      authority: this.#authority,
+      feed: this.feed,
+      repoId: () => this.#repoId(),
+      checkEpoch: () => this.checkEpoch(),
+      writeRefusal: () => this.#writeRefusal(),
+      writeDeps: () => this.#writeDeps(),
+      committed: () => {
+        this.#armOutbox();
+        this.#ensureAuditArchive();
+      },
+      mergePolicy: () => this.mergePolicy,
+      rebasePolicy: () => this.rebasePolicy,
+      hooks: () => this.mergeHooks,
     });
     // The commit point: the initiating principal may still write, under a
     // snapshot within the write window (a commit without one is the
@@ -1512,276 +1473,9 @@ export class RepoDO extends MigratingDO {
     );
   }
 
-  /**
-   * Merges a pull request into its base branch (a merge commit, or one
-   * squashed commit) for a caller with write access, through the push path:
-   * built from the base branch's tip and the head recorded now, judged by
-   * the rulesets with the pull request's reviews and last push, and
-   * committed only while the pull request, its reviews and the base tip
-   * are as they were (the commit marks it merged).
-   */
+  /** Merges a pull request into its base branch (see `PullMerging.merge`). */
   mergePull(input: MergePullInput, actor: RefActor): Promise<Browsed<MergeMade>> {
-    return this.#measured("mergePull", async () => {
-      await this.checkEpoch();
-      const ceilings = await this.#authority.rolesPulled(actor.principal, actor.grantId ?? null);
-      // Who hears of the merge is decided with it: from access as it is now.
-      const feedActor = await this.#feedActorOf(actor);
-      const refusedWrite = this.#writeRefusal();
-      if (refusedWrite) return fail(refusedWrite.status, refusedWrite.code, refusedWrite.error);
-      const { number, method } = input;
-      const pull = this.pulls.get(number);
-      if (!pull)
-        return fail(404, "pull_not_found", `The repository has no pull request ${number}.`);
-      // A rebase that finished after its request answered: the same answer, merged.
-      const saga = method === "rebase" ? this.rebases.view(number) : undefined;
-      if (
-        saga?.state === "done" &&
-        pull.state === "merged" &&
-        pull.mergeCommitSha === saga.resultSha &&
-        saga.resultSha !== null &&
-        atLeast(this.#authority.roleNow(actor.principal, ceilings), "write")
-      )
-        return { ok: true, value: { sha: saga.resultSha } };
-      const decision = decidePullAction("merge", {
-        state: pull.state,
-        headRefDeleted: false,
-        isAuthor: false,
-        role: this.#authority.roleNow(actor.principal, ceilings),
-      });
-      if (!decision.ok)
-        return decision.refusal === "forbidden"
-          ? fail(403, "forbidden", "Merging a pull request takes write access.")
-          : fail(405, "not_mergeable", `Pull request ${number} is not open.`);
-      if (
-        method !== "rebase" &&
-        this.rebases.view(number)?.state === "running" &&
-        !this.rebases.undriven(number)
-      )
-        return MERGE_IN_PROGRESS;
-      if (pull.draft)
-        return fail(
-          405,
-          "not_mergeable",
-          `Pull request ${number} is a draft; mark it ready for review first.`,
-        );
-      if (input.expectedHead !== undefined && input.expectedHead !== pull.headSha)
-        return fail(409, "head_moved", "The head branch was modified; review it and try again.");
-      const baseTip = this.pulls.branchTip(pull.baseRef);
-      if (!baseTip) return fail(422, "base_not_found", "The base branch does not exist.");
-      const head = oidFromHex(pull.headSha);
-      const walk = { maxCommits: this.mergePolicy.maxCommits };
-      let upToDate: boolean;
-      try {
-        if (await isAncestor(this.git.commitGraph, "verified", head, baseTip, walk))
-          return fail(405, "not_mergeable", "The base branch already contains the head.");
-        upToDate = await isAncestor(this.git.commitGraph, "verified", baseTip, head, walk);
-      } catch (error) {
-        if (!(error instanceof WalkLimitError)) throw error;
-        return fail(
-          422,
-          "too_expensive",
-          "The base branch and the head are too far apart to merge here.",
-        );
-      }
-
-      const { merge, asRead, stamps } = await this.#discussion.standing(
-        number,
-        pull,
-        method,
-        upToDate,
-      );
-      const baseRef = `refs/heads/${pull.baseRef}`;
-      const precheck = await this.#authority.precheckUpdates(
-        actor.principal,
-        [{ ref: baseRef, old: oidToHex(baseTip), new: ZERO_ID }],
-        actor.grantId ?? null,
-        undefined,
-        merge,
-      );
-      if (precheck) return fail(405, "merge_refused", precheck);
-      if (method === "rebase")
-        return this.#rebase(input, actor, { pull, baseRef, baseTip, head, upToDate, asRead });
-
-      // GitHub's default messages; a squash is the pull request author's.
-      const identity: CommitIdentity =
-        method === "squash" ? input.pullAuthorIdentity : input.mergerIdentity;
-      const title =
-        input.commitTitle ??
-        (method === "merge"
-          ? `Merge pull request #${number} from ${input.ownerHandle}/${pull.headRef}`
-          : `${pull.title} (#${number})`);
-      const body = input.commitMessage ?? (method === "merge" ? pull.title : (pull.body ?? ""));
-      const text =
-        body.trim() === "" ? `${title}\n` : `${title}\n\n${withoutTrailingNewlines(body)}\n`;
-      // A title or body may hold NUL; git stops reading a message there.
-      if (text.includes("\0"))
-        return fail(
-          422,
-          "invalid_input",
-          "The pull request's title or body contains NUL; give commit_title and commit_message.",
-        );
-      const message = appendTrailers(text, coAuthorTrailers(text, identity.coAuthors));
-      const made = await mergePull(
-        await this.#writeDeps(),
-        {
-          writer: {
-            principal: actor.principal,
-            tokenId: actor.tokenId ?? "",
-            grantId: actor.grantId ?? null,
-            repoId: this.#repoId(),
-            requestId: actor.requestId ?? null,
-          },
-          method,
-          baseRef,
-          baseTip,
-          head,
-          upToDate,
-          author: identity.author,
-          committer: identity.committer,
-          message,
-          merge,
-          fence: () =>
-            this.pulls.mergeFence(number, pull) &&
-            JSON.stringify(stamps()) === JSON.stringify(asRead)
-              ? undefined
-              : PULL_CHANGED,
-          inCommit: (sha) =>
-            this.feed.within(feedActor, () =>
-              this.pulls.markMerged(
-                number,
-                // The branch moves from `baseTip` only (its compare-and-set).
-                { sha, base: baseTip, method },
-                { ...actor, via: "merge" },
-                this.git.context.now(),
-              ),
-            ),
-          ...(this.mergeHooks.beforeFinish && { beforeFinish: this.mergeHooks.beforeFinish }),
-        },
-        this.mergePolicy,
-      );
-      this.#armOutbox();
-      this.#ensureAuditArchive();
-      return made;
-    });
-  }
-
-  /**
-   * A rebase merge (see `RebaseSagas`): starts the pull request's saga, or
-   * takes up the one running for the same head and base tip, and drives it
-   * as far as this request may. Answers the merge when it is done, its
-   * refusal when it failed, `merge_in_progress` while the alarm goes on.
-   */
-  async #rebase(
-    input: MergePullInput,
-    actor: RefActor,
-    at: {
-      readonly pull: PullRecord;
-      readonly baseRef: string;
-      readonly baseTip: Oid;
-      readonly head: Oid;
-      readonly upToDate: boolean;
-      readonly asRead: MergeStamps;
-    },
-  ): Promise<Browsed<MergeMade>> {
-    const { number } = input;
-    const policy = this.rebasePolicy;
-    // A saga of what this request checked: its head, onto its base branch at its tip.
-    const ours = (saga: SagaView) =>
-      saga.head === at.pull.headSha &&
-      saga.baseRef === at.baseRef &&
-      saga.baseTip === oidToHex(at.baseTip);
-    // The pull request and its base branch are still as this request saw them.
-    const current = () =>
-      this.pulls.mergeFence(number, at.pull) &&
-      this.pulls.branchTip(at.pull.baseRef)?.every((b, i) => b === at.baseTip[i]) === true;
-    let saga = this.rebases.view(number);
-    // Finished while this request waited: its merge, when it was of what this one checked.
-    if (saga?.state === "done" && saga.resultSha)
-      return ours(saga) ? { ok: true, value: { sha: saga.resultSha } } : PULL_CHANGED_REFUSAL;
-    // Failed after an earlier request answered: a request for the same attempt answers why, once
-    // (the next one starts again); a current request for another one starts its own.
-    if (saga?.state === "failed" && saga.failure && !saga.reported) {
-      if (ours(saga)) {
-        if (this.rebases.report(number, saga.sagaId)) return saga.failure;
-      } else if (!current()) return PULL_CHANGED_REFUSAL;
-      else this.rebases.report(number, saga.sagaId);
-    }
-    if (saga?.state === "running" && (!ours(saga) || this.rebases.undriven(number))) {
-      // Only a request that is not itself behind replaces it (checked with no wait before).
-      if (!current()) return PULL_CHANGED_REFUSAL;
-      await this.rebases.abandon(number, saga.sagaId, REBASE_REPLACED);
-      saga = this.rebases.view(number);
-    }
-    if (saga?.state !== "running") {
-      const keyId = (await this.#writeDeps()).signer?.keyId;
-      if (!keyId)
-        return fail(
-          422,
-          "signing_unavailable",
-          "Rebase merges sign every commit they make, and the server has no signing key.",
-        );
-      if (this.rebases.running() >= policy.maxRunning) return BUSY;
-      const commits = await rebaseCommits(this.git.commitGraph, at.baseTip, at.head, {
-        maxCommits: policy.maxCommits,
-        maxWalk: this.mergePolicy.maxCommits,
-      });
-      if (!commits.ok) return commits;
-      const [base] = this.git.commitGraph.readSync([at.baseTip], "verified");
-      if (!base) return fail(422, "unreadable", "An object the merge needs cannot be read.");
-      // Checked again with the start: another request may have started or finished one, or the
-      // pull request or base branch changed, while this one waited.
-      const started = this.rebases.start(
-        {
-          number,
-          pull: at.pull,
-          stamps: at.asRead,
-          actor: {
-            principal: actor.principal,
-            tokenId: actor.tokenId ?? null,
-            grantId: actor.grantId ?? null,
-            onBehalfOf: actor.onBehalfOf ?? null,
-            actChain: actor.actChain ?? [],
-            requestId: actor.requestId ?? null,
-          },
-          baseRef: at.baseRef,
-          baseTip: at.baseTip,
-          baseTree: base.tree,
-          head: at.head,
-          upToDate: at.upToDate,
-          committer: input.mergerIdentity.committer,
-          keyId,
-          commits: commits.value,
-        },
-        current,
-      );
-      if (started === "busy") return BUSY;
-      if (started === "changed") return PULL_CHANGED_REFUSAL;
-    }
-    // The saga this request answers for: one for the head and base tip it checked (another
-    // request may have started one for a newer head meanwhile).
-    const mine = this.rebases.view(number);
-    if (!mine || !ours(mine)) return PULL_CHANGED_REFUSAL;
-    await this.git.jobs.runJob(
-      rebaseJobId(number),
-      this.rebases.handler("request"),
-      this.git.memory,
-      this.git.context.now() + policy.requestMs,
-    );
-    this.#armOutbox();
-    this.#ensureAuditArchive();
-    const now = this.rebases.view(number);
-    // Replaced while it ran (by a request for a newer head): not this request's answer.
-    if (now?.sagaId !== mine.sagaId) return PULL_CHANGED_REFUSAL;
-    if (now.state === "done" && now.resultSha) return { ok: true, value: { sha: now.resultSha } };
-    if (now.state === "failed" && now.failure) {
-      this.rebases.report(number, now.sagaId);
-      return now.failure;
-    }
-    return fail(
-      409,
-      "merge_in_progress",
-      `The rebase is under way (${now.next} of ${now.commits} commits replayed); send the request again, or watch the pull request, to see it merged.`,
-    );
+    return this.#measured("mergePull", () => this.#merging.merge(input, actor));
   }
 
   /**
@@ -3397,21 +3091,6 @@ export class RepoDO extends MigratingDO {
       .bind(JSON.stringify(handles))
       .all<{ id: string; handle: string; root: string }>();
     return new Map(results.map((r) => [r.handle.toLowerCase(), { id: r.id, root: r.root }]));
-  }
-
-  /** `actor` as feeds see the change it makes now (its root identity and role). */
-  async #feedActorOf(actor: Pick<RefActor, "principal" | "grantId">): Promise<FeedActor> {
-    const ceilings = await this.#authority.rolesPulled(actor.principal, actor.grantId ?? null);
-    await this.feed.prepare();
-    return {
-      root: rootIdentity({
-        principalId: actor.principal,
-        grantId: actor.grantId ?? null,
-        ceilingIds: ceilings,
-      }),
-      role: this.#authority.roleNow(actor.principal, ceilings),
-      mentioned: new Map(),
-    };
   }
 
   /**
