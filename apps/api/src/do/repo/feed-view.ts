@@ -21,7 +21,8 @@ import type { RepoReviewComments } from "./review-comments.js";
  * it was found so; or the account's ACL at `(epochGen, aclVersion)`, as
  * pulled at `until`), so the reader's feed may forget it up to then;
  * `denied`, but on nothing a feed may forget it by (an object without an
- * account); `unknown`, not known (no usable ACL snapshot: a pull failed).
+ * account); `unknown`, not known (no usable ACL snapshot: a pull failed;
+ * or a transfer moves it, its old account rid of those who go with it).
  */
 export type FeedViewDenial =
   | { readonly kind: "lost"; readonly loss: Omit<FeedPurge, "repoIds"> }
@@ -49,6 +50,8 @@ export interface FeedViewDeps {
   readonly isPublic: () => boolean;
   /** No read: the repository is gone or going. */
   readonly refusesReads: () => boolean;
+  /** Whether a transfer is moving the repository now. */
+  readonly isTransferring: () => boolean;
 }
 
 export class RepoFeedView {
@@ -85,10 +88,12 @@ export class RepoFeedView {
     const role = authority.roleNow(principal, ceilings);
     const readable = role !== null || this.deps.isPublic();
     if (!readable) {
-      // The snapshot the decision used: a denial without one (a pull failed) is no answer.
+      // The snapshot the decision used: a denial without one (a pull failed) is no answer, nor
+      // one while a transfer moves it (read after the pull: its collaborators may be between
+      // the old account, which let go of them, and the new one).
       const basis = this.deps.acl.basis();
       const denial: FeedViewDenial =
-        basis === "unknown"
+        basis === "unknown" || this.deps.isTransferring()
           ? { kind: "unknown" }
           : basis === "none"
             ? { kind: "denied" }

@@ -14,6 +14,7 @@ import { markDeletions } from "../src/repos/deletion.js";
 import { authorize, renameRepo, resolveRepo } from "../src/repos/directory.js";
 import { advanceTransfer } from "../src/repos/transfer.js";
 import { api, json, user, type Who } from "./helpers/api.js";
+import { entry as feedEntry } from "./helpers/feed.js";
 import { scopedToken } from "./helpers/principals.js";
 import { postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
@@ -365,6 +366,43 @@ describe("repository transfers", () => {
       .bind(repo.id)
       .run();
     expect(await advanceTransfer(env, repo.id)).toEqual({ state: "transferred", error: null });
+  });
+
+  it("leave a collaborator's feed of the repository whole while it moves", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const reader = await user();
+    const collaborators = `/repos/${owner.handle}/${repo.name}/collaborators`;
+    await api("PUT", `${collaborators}/${reader.handle}`, owner.token, { permission: "pull" });
+    await env.USER.getByName(reader.principalId).applyFeed([
+      feedEntry({
+        repoId: repo.id,
+        version: 1,
+        principal: reader.principalId,
+        occurredAt: Date.now() - 1_000,
+      }),
+    ]);
+    const keys = async () =>
+      (
+        await json<{ items: { item_key: string }[] }>(api("GET", "/feed", reader.token))
+      ).body.items.map((i) => i.item_key);
+    const key = `${repo.id}:pull/1:activity`;
+    expect(await keys()).toEqual([key]);
+    // Frozen, and paused right after the old account let go of it and of its collaborators.
+    const orgId = await idOf(await newOrg(owner));
+    const transferId = await pendingTransfer(repo, owner.principalId, orgId, "directory");
+    await env.REPO.getByName(repo.id).freezeForTransfer({
+      transferId,
+      from: owner.principalId,
+      to: orgId,
+    });
+    await env.ORG.getByName(owner.principalId).releaseRepo(transferId, repo.id);
+    // A read now pulls the old account's list, the collaborator gone from it.
+    await runInDurableObject(env.REPO.getByName(repo.id), (r: RepoDO) => r.acl.reset());
+    expect(await keys()).toEqual([]);
+    // The runner moves it on from there: the collaborator goes with it and reads all again.
+    expect(await advanceTransfer(env, repo.id)).toEqual({ state: "transferred", error: null });
+    expect(await keys()).toEqual([key]);
   });
 
   it("finish calling a transfer off when interrupted, and refuse a late freeze of it", async () => {

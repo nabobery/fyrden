@@ -466,6 +466,7 @@ export class RepoDO extends MigratingDO {
       reviewComments: this.reviewComments,
       isPublic: () => this.events.visibility() === "public",
       refusesReads: () => this.#refusesReads(),
+      isTransferring: () => this.events.isTransferring(),
     });
     this.#discussion = new PullDiscussion({
       git: this.git,
