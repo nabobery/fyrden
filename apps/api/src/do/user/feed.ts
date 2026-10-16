@@ -4,9 +4,10 @@ import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
  * A principal's activity feed: one item per repository, thread and kind,
  * updated in place by the entries events bring. An entry applies only when
  * it is newer than the item (the thread's feed version, within the
- * repository's restore generation), so duplicates and
- * any delivery order leave the same item; an activity item also gathers the
- * ids of what it aggregates (comments, reviews) as a set. Items hold ids,
+ * repository's restore generation), so duplicates and any delivery order
+ * leave the same item; an activity item also gathers the ids of what it
+ * aggregates (comments, reviews) as a set, those of the newest generation
+ * only. Items hold ids,
  * not text: what a member says is read from the repository when the item
  * is read. What only resolves something the feed never showed is kept as a
  * tombstone (a row without a sequence number, never read), so that an
@@ -206,7 +207,8 @@ function withMembers(state: State, members: readonly Member[], truncated: boolea
     truncated: truncated ? 1 : 0,
     display_member: greatest?.id ?? null,
     actor: greatest?.actor ?? null,
-    actor_trust: greatest?.trust ?? state.actor_trust,
+    // No member shown: no author, so no access to show (the same whatever came before).
+    actor_trust: greatest?.trust ?? "none",
   };
 }
 
@@ -374,8 +376,13 @@ export class Feed {
       version: before.version,
     });
     let after: State = newer ? { ...before, ...thread(entry) } : before;
-    if (recipient.kind === "activity") after = withMember(after, entry);
-    else if (newer)
+    if (recipient.kind === "activity") {
+      // Members count within the repository's restore generation: an older one's add none, and
+      // a newer one's start the set again (a restored repository's ids may repeat older ones).
+      if (entry.epochGen > before.thread_epoch)
+        after = withMember(withMembers(after, [], false), entry);
+      else if (entry.epochGen === before.thread_epoch) after = withMember(after, entry);
+    } else if (newer)
       after = {
         ...after,
         display_member: feed.member,

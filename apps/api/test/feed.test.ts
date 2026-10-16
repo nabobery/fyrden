@@ -43,6 +43,7 @@ interface EntryInit {
   principal?: string;
   action?: string;
   actor?: string;
+  actorTrust?: "write" | "read" | "none";
   epochGen?: number;
 }
 
@@ -61,7 +62,7 @@ function entry(init: EntryInit): FeedEntry {
       subject: { kind: "pull", number: thread, title: `Pull ${thread}`, version: init.version },
       action: init.action ?? (kind === "activity" ? "comment" : kind),
       actorRoot: "usr_actor",
-      actorTrust: "write",
+      actorTrust: init.actorTrust ?? "write",
       member:
         init.member === undefined
           ? kind === "activity"
@@ -128,7 +129,11 @@ describe("applying entries", () => {
     const step = fc.record({
       thread: fc.integer({ min: 1, max: 2 }),
       kind: fc.constantFrom<FeedKind>("activity", "review_requested", "mention"),
-      member: fc.option(fc.integer({ min: 1, max: 40 }).map(String), { nil: null }),
+      // A comment of its own (its id from the version: a restore's ids repeat older ones).
+      comment: fc.boolean(),
+      // Authors and times differ from event to event.
+      actor: fc.constantFrom("usr_a", "usr_b", "usr_c"),
+      ago: fc.integer({ min: 0, max: 60 * 60 * 1000 }),
       // Action items open and resolve in any interleaving.
       state: fc.constantFrom<"open" | "resolved">("open", "resolved"),
       priority: fc.constantFrom<FeedPriority>("P0", "P1"),
@@ -140,7 +145,8 @@ describe("applying entries", () => {
       .tuple(fc.array(step, { minLength: 1, maxLength: 30 }), fc.nat(40))
       .map(([steps, restore]) => {
         const versions = new Map<string, number>();
-        return steps.map(({ kind, state, ...s }, index) => {
+        const now = Date.now();
+        return steps.map(({ kind, state, comment, ago, ...s }, index) => {
           const epochGen = index >= restore ? 2 : 1;
           const key = `${s.thread}:${epochGen}`;
           const version = (versions.get(key) ?? 0) + 1;
@@ -150,6 +156,8 @@ describe("applying entries", () => {
             kind,
             epochGen,
             version,
+            member: comment ? `comment/${version}` : null,
+            occurredAt: now - ago,
             state: kind === "activity" ? "open" : state,
           });
         });
@@ -274,6 +282,61 @@ describe("applying entries", () => {
       expect(ack(1, 20)).toMatchObject({ item: { ackedEpoch: 1, ackedVersion: 20 } });
       expect(ack(2, 1)).toMatchObject({ item: { ackedEpoch: 2, ackedVersion: 1 } });
       expect(ack(1, 30)).toMatchObject({ item: { ackedEpoch: 2, ackedVersion: 1 } });
+    });
+  });
+
+  it("keeps on an activity item only the members of the repository's newest restore generation", async () => {
+    await inFeed((storage) => {
+      const { apply, items, reset } = feedIn(storage);
+      const t = Date.now();
+      const old = entry({ version: 5, member: "comment/99", actor: "usr_old", occurredAt: t - 9 });
+      const reused = entry({
+        version: 1,
+        member: "comment/1",
+        actor: "usr_old",
+        occurredAt: t - 8,
+      });
+      const restored = entry({
+        epochGen: 2,
+        version: 1,
+        member: "comment/1",
+        actor: "usr_new",
+        occurredAt: t,
+      });
+      for (const order of [
+        [old, reused, restored],
+        [restored, old, reused],
+        [reused, restored, old],
+      ]) {
+        reset();
+        for (const one of order) apply([one]);
+        expect(items()).toMatchObject([
+          { thread_epoch: 2, version: 1, display_member: "comment/1", actor: "usr_new" },
+        ]);
+        expect(JSON.parse(items()[0]?.members as string)).toEqual([
+          { id: "comment/1", at: t, actor: "usr_new", trust: "write" },
+        ]);
+      }
+      // A newer generation's entry with no member shows no one, whatever came before it.
+      const reader = entry({ version: 2, member: "comment/2", actorTrust: "read" });
+      const closed = entry({ epochGen: 3, version: 1, member: null, actorTrust: "write" });
+      for (const order of [
+        [reader, closed],
+        [closed, reader],
+      ]) {
+        reset();
+        for (const one of order) apply([one]);
+        expect(items()).toMatchObject([
+          { thread_epoch: 3, display_member: null, actor: null, actor_trust: "none" },
+        ]);
+      }
+      reset();
+      for (const one of [old, reused, restored]) apply([one]);
+      // A delayed older generation's comment changes nothing.
+      expect(apply([entry({ version: 30, member: "comment/500" })])).toEqual({
+        changed: 0,
+        notified: 0,
+      });
     });
   });
 

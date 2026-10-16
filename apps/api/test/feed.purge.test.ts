@@ -150,6 +150,25 @@ describe("purging a feed", () => {
     expect(await item(first)).toEqual(await item(late));
   });
 
+  it("keeps a restored comment that reuses an older one's id through a purge between them", async () => {
+    const t = Date.now();
+    const old = entry("rep_a", 1, t - 1_000);
+    const restored = { ...entry("rep_a", 1, t), epochGen: 2, actor: "usr_new" };
+    for (const order of [
+      [old, restored],
+      [restored, old],
+    ]) {
+      const stub = env.USER.getByName(uniqueId("usr"));
+      for (const one of order) await stub.applyFeed([one]);
+      await stub.purge(purgeOf(["rep_a"], t - 500, 5));
+      const page = await stub.listFeed(null, 10, {});
+      if (page.expired) throw new Error("expired");
+      expect(page.items).toMatchObject([
+        { epoch: 2, members: ["comment/1"], member: "comment/1", actor: "usr_new" },
+      ]);
+    }
+  });
+
   it("judges a purge by its account's epoch and version, and another account's by its time", async () => {
     const stub = env.USER.getByName(uniqueId("usr"));
     const t = Date.now();
