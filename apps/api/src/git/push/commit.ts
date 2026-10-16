@@ -165,6 +165,8 @@ export function pushCommitter(
       if (result.ok) return { ok: true };
       switch (result.reason) {
         case "version-conflict":
+          // Another push (to any branch) committed first: counted, to tell when that is common.
+          git.context.metrics.count("push.version_retry", { class: git.context.doClass });
           continue;
         case "ref-conflict":
           return { ok: false, reason: "ref-conflict", ref: result.ref };

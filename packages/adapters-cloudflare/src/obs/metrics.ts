@@ -52,6 +52,8 @@ export const METRICS = {
   // Pushes: outcome = committed | partial | rejected | refused | failed;
   // what = pushes | objects | bytes | refs (the value is the amount).
   "git.push": ["outcome", "what"],
+  // A push's commit tried again because another push (to any branch) committed first.
+  "push.version_retry": ["class"],
   // Repack and garbage collection: job = repack | gc | reachability | retire;
   // what = bytes_in | bytes_out | objects | packs_in | packs_out | garbage_objects |
   // garbage_bytes | condemned | deleted | deleted_bytes | expired_fetch | stale_output |
