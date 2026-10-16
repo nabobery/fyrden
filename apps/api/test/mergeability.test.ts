@@ -295,6 +295,21 @@ describe("mergeability", () => {
     expect(kept).toEqual([]);
   });
 
+  it("is worked out again for the new base when the pull request is retargeted", async () => {
+    await branchAt("release", base);
+    await commitOn("release", [{ path: "a.txt", content: "one\ntwo\n3\n" }]);
+    await open("feature");
+    await runJobs();
+    expect((await pull()).mergeable).toBe(true);
+    const retargeted = await api("PATCH", `${path}/pulls/1`, owner.token, { base: "release" });
+    expect(retargeted.status).toBe(200);
+    // The result kept is for the old base: not shown.
+    expect(await pull()).toMatchObject({ mergeable: null, mergeable_state: "unknown" });
+    expect(await queue()).toEqual([1]);
+    await runJobs();
+    expect(await pull()).toMatchObject({ mergeable: false, mergeable_state: "dirty" });
+  });
+
   it("is not queued by reads while its base branch is gone, and is once it is back", async () => {
     await branchAt("release", base);
     await open("feature", { base: "release" });

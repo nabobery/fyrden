@@ -734,4 +734,14 @@ export const repoSchema: readonly DoMigration[] = [
       ALTER TABLE review_requests ADD COLUMN reviewer_root TEXT;
     `,
   },
+  {
+    version: 28,
+    // Approvals given for an earlier base: a retarget records the pull
+    // request's last review then, and no approval up to it counts (the
+    // reviews stay listed as they were).
+    name: "retarget_approvals",
+    sql: `
+      ALTER TABLE pull_requests ADD COLUMN approvals_after INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];

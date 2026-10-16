@@ -316,6 +316,50 @@ describe("rulesets judge the merge", () => {
     expect((await merge(owner)).status).toBe(200);
   });
 
+  it("needs a fresh approval once the pull request is retargeted, keeping the earlier one listed", async () => {
+    await ruleset({ required_approving_review_count: 1 });
+    await branchAt("develop", (await commitAt("main")).sha);
+    await open(owner, { base: "develop" });
+    const head = (await pull()).head.sha;
+    const writer = await collaborator("push");
+    const approve = () =>
+      api("POST", `${path}/pulls/1/reviews`, writer.token, { commit_id: head, event: "APPROVE" });
+    expect((await approve()).status).toBe(200);
+    // Approved for develop, then aimed at main, whose ruleset asks for an approval.
+    const retargeted = await api("PATCH", `${path}/pulls/1`, owner.token, { base: "main" });
+    expect(retargeted.status).toBe(200);
+    const refused = await merge(owner);
+    expect(refused.body.code).toBe("merge_refused");
+    expect(refused.body.detail).toContain("1 approving review is required (0 given)");
+    const listed = await json<{ reviews: { state: string }[] }>(
+      api("GET", `${path}/pulls/1/reviews`, owner.token),
+    );
+    expect(listed.body.reviews.map((r) => r.state)).toEqual(["APPROVED"]);
+    expect((await approve()).status).toBe(200);
+    expect((await merge(owner)).status).toBe(200);
+  });
+
+  it("keeps a request for changes made before a retarget standing", async () => {
+    await ruleset({ required_approving_review_count: 0 });
+    await branchAt("develop", (await commitAt("main")).sha);
+    await open(owner, { base: "develop" });
+    const head = (await pull()).head.sha;
+    const writer = await collaborator("push");
+    expect(
+      (
+        await api("POST", `${path}/pulls/1/reviews`, writer.token, {
+          commit_id: head,
+          event: "REQUEST_CHANGES",
+          body: "Not yet.",
+        })
+      ).status,
+    ).toBe(200);
+    expect((await api("PATCH", `${path}/pulls/1`, owner.token, { base: "main" })).status).toBe(200);
+    const refused = await merge(owner);
+    expect(refused.body.code).toBe("merge_refused");
+    expect(refused.body.detail).toContain("changes were requested");
+  });
+
   it("refuses a merge method the rule does not allow", async () => {
     await ruleset({ allowed_merge_methods: ["squash"] });
     await open(owner);
@@ -401,6 +445,18 @@ describe("a merge whose pull request changes before its commit", () => {
     await during(() =>
       api("PUT", `${path}/pulls/1/reviews/${id}/dismissals`, owner.token, { message: "No" }),
     );
+    await refusedLeavingItOpen("pull_changed");
+  });
+
+  it("is refused when it is retargeted away and back, its approvals gone", async () => {
+    await ruleset({ required_approving_review_count: 1 });
+    await branchAt("develop", (await commitAt("main")).sha);
+    await open(owner);
+    await approveBy(await collaborator("push"));
+    await during(async () => {
+      await api("PATCH", `${path}/pulls/1`, owner.token, { base: "develop" });
+      await api("PATCH", `${path}/pulls/1`, owner.token, { base: "main" });
+    });
     await refusedLeavingItOpen("pull_changed");
   });
 

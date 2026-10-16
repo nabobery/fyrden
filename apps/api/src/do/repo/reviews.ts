@@ -100,15 +100,18 @@ export class RepoReviews {
 
   /**
    * What a merge's approval check reads of the pull request's reviews:
-   * those that can count (not comments, not dismissed), and a stamp the
-   * merge's commit transaction compares, so a review submitted or
-   * dismissed meanwhile stops the merge.
+   * those that can count (not comments, not dismissed, not an approval
+   * given before the pull request was retargeted), and a stamp the merge's
+   * commit transaction compares, so a review submitted or dismissed, or a
+   * retarget, meanwhile stops the merge.
    */
   standing(number: number): { reviews: ReviewFact[]; stamp: string } {
     const reviews = this.deps.git.context.storage.sql
       .exec<Pick<Row, "reviewer_root" | "by_agent" | "commit_sha" | "state" | "submitted_at">>(
-        `SELECT reviewer_root, by_agent, commit_sha, state, submitted_at FROM reviews
-         WHERE pr_number = ? AND state != 'COMMENTED' AND dismissed_at IS NULL`,
+        `SELECT r.reviewer_root, r.by_agent, r.commit_sha, r.state, r.submitted_at
+         FROM reviews r JOIN pull_requests p ON p.number = r.pr_number
+         WHERE r.pr_number = ? AND r.state != 'COMMENTED' AND r.dismissed_at IS NULL
+           AND NOT (r.state = 'APPROVED' AND r.review_id <= p.approvals_after)`,
         number,
       )
       .toArray()
@@ -123,16 +126,18 @@ export class RepoReviews {
     return { reviews, stamp: this.stamp(number) };
   }
 
-  /** Changes when any review of the pull request is submitted or changed. */
+  /** Changes when any review of the pull request is submitted or changed, or it is retargeted. */
   stamp(number: number): string {
     const row = this.deps.git.context.storage.sql
-      .exec<{ n: number; last: number; versions: number }>(
+      .exec<{ n: number; last: number; versions: number; after: number | null }>(
         `SELECT count(*) AS n, coalesce(max(review_id), 0) AS last,
-           coalesce(sum(version), 0) AS versions FROM reviews WHERE pr_number = ?`,
+           coalesce(sum(version), 0) AS versions,
+           (SELECT approvals_after FROM pull_requests WHERE number = ?1) AS after
+         FROM reviews WHERE pr_number = ?1`,
         number,
       )
       .one();
-    return `${row.n}:${row.last}:${row.versions}`;
+    return `${row.n}:${row.last}:${row.versions}:${row.after}`;
   }
 
   get(number: number, id: number): ReviewRecord | undefined {

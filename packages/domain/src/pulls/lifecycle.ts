@@ -28,12 +28,6 @@ export interface PullActionRule {
   readonly event: string;
   /** The audit action it records. */
   readonly audit: string;
-  /** Approvals given before it stop counting. */
-  readonly staleApprovals: boolean;
-  /** Whether the pull request can be merged must be worked out again. */
-  readonly invalidatesMergeability: boolean;
-  /** Starts a new generation: work begun for the earlier one does not apply. */
-  readonly newGeneration: boolean;
 }
 
 /**
@@ -50,9 +44,6 @@ export const PULL_ACTION_RULES: Readonly<Record<PullAction, PullActionRule>> = {
     from: ["open", "closed", "merged"],
     event: "edited",
     audit: "pull_request.edit",
-    staleApprovals: false,
-    invalidatesMergeability: false,
-    newGeneration: false,
   },
   retarget: {
     author: true,
@@ -60,9 +51,6 @@ export const PULL_ACTION_RULES: Readonly<Record<PullAction, PullActionRule>> = {
     from: ["open"],
     event: "edited",
     audit: "pull_request.retarget",
-    staleApprovals: true,
-    invalidatesMergeability: true,
-    newGeneration: false,
   },
   convert_to_draft: {
     author: true,
@@ -70,9 +58,6 @@ export const PULL_ACTION_RULES: Readonly<Record<PullAction, PullActionRule>> = {
     from: ["open"],
     event: "converted_to_draft",
     audit: "pull_request.convert_to_draft",
-    staleApprovals: false,
-    invalidatesMergeability: false,
-    newGeneration: false,
   },
   ready_for_review: {
     author: true,
@@ -80,9 +65,6 @@ export const PULL_ACTION_RULES: Readonly<Record<PullAction, PullActionRule>> = {
     from: ["open"],
     event: "ready_for_review",
     audit: "pull_request.ready_for_review",
-    staleApprovals: false,
-    invalidatesMergeability: false,
-    newGeneration: false,
   },
   close: {
     author: true,
@@ -91,9 +73,6 @@ export const PULL_ACTION_RULES: Readonly<Record<PullAction, PullActionRule>> = {
     to: "closed",
     event: "closed",
     audit: "pull_request.close",
-    staleApprovals: false,
-    invalidatesMergeability: false,
-    newGeneration: false,
   },
   reopen: {
     author: true,
@@ -102,9 +81,6 @@ export const PULL_ACTION_RULES: Readonly<Record<PullAction, PullActionRule>> = {
     to: "open",
     event: "reopened",
     audit: "pull_request.reopen",
-    staleApprovals: false,
-    invalidatesMergeability: true,
-    newGeneration: true,
   },
   merge: {
     author: false,
@@ -113,9 +89,6 @@ export const PULL_ACTION_RULES: Readonly<Record<PullAction, PullActionRule>> = {
     to: "merged",
     event: "closed",
     audit: "pull_request.merge",
-    staleApprovals: false,
-    invalidatesMergeability: false,
-    newGeneration: false,
   },
   // Whether the base's maintainers may write the head branch (in another repository): the
   // author's to give or take back, as GitHub's.
@@ -125,9 +98,6 @@ export const PULL_ACTION_RULES: Readonly<Record<PullAction, PullActionRule>> = {
     from: ["open", "closed"],
     event: "edited",
     audit: "pull_request.maintainer_edits",
-    staleApprovals: false,
-    invalidatesMergeability: false,
-    newGeneration: false,
   },
 };
 

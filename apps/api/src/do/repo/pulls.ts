@@ -690,7 +690,14 @@ export class RepoPulls {
       }
       case "retarget":
         data = { changes: { base: { ref: { from: current.baseRef } } } };
-        row = set("base_ref = ?, base_sha = ?", patch.base, oidToHex(baseTip as Oid));
+        // Approvals given so far were for the other base: none of them counts any more.
+        row = set(
+          `base_ref = ?, base_sha = ?,
+           approvals_after = (SELECT coalesce(max(review_id), 0) FROM reviews WHERE pr_number = ?)`,
+          patch.base,
+          oidToHex(baseTip as Oid),
+          current.number,
+        );
         break;
       case "convert_to_draft":
       case "ready_for_review":
