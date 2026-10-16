@@ -53,7 +53,7 @@ export class UserDO extends MigratingDO {
     after: SyncPosition | null,
     limit: number,
     repoIds: readonly string[] | null,
-  ): Promise<{ epoch: string; items: FeedItem[]; more: boolean }> {
+  ): Promise<{ epoch: string; lowWatermark: number; items: FeedItem[]; more: boolean }> {
     await this.#checkEpoch();
     return this.#feed().sync(after, limit, repoIds);
   }

@@ -10,16 +10,17 @@ import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effect
  * per recipient. Delivered together, the effects' entries are grouped by
  * recipient: one call to each principal's feed applies all its entries,
  * however many events name it. A feed applies an entry once however often
- * it comes, so a retried effect changes nothing it already changed. With
- * the consumer's and the sweeper's bounds (eight effects inline an
- * invocation, four a sweep), a delivery makes at most 800 calls for
- * entries, of the 1,000 an invocation may.
+ * it comes, so a retried effect changes nothing it already changed. The
+ * sink says how many calls an effect makes at most, so the events consumer
+ * delivers itself only what its invocation's calls allow (the sweeper
+ * takes four effects a run, at most 400 calls).
  *
  * An account's `access.revoked` (principals no longer read some of its
  * repositories) is an effect too: delivering it purges those repositories
- * from each principal's feed, up to when access was lost. "All but these"
- * is resolved then, from the directory: the account's repositories but
- * the exceptions and public ones (anyone still reads those).
+ * from each principal's feed, up to when access was lost, as the account
+ * had them at its ACL version. "All but these" is resolved then, from the
+ * directory (the account's repositories but the exceptions), and public
+ * repositories are left out of every purge: anyone still reads those.
  */
 
 /** Feeds called at once while delivering a batch. Proposed. */
@@ -55,6 +56,7 @@ interface PlannedPurge {
     readonly repos: readonly string[] | null;
     readonly allExcept: readonly string[] | null;
     readonly until: number;
+    readonly epochGen: number;
     readonly aclVersion: number;
   };
 }
@@ -86,29 +88,38 @@ function entryCalls(effects: readonly Effect[], env: Env): FeedCall[] {
   }));
 }
 
-/** Each purge's call to each principal's feed, "all but" resolved in one directory query. */
+/**
+ * Each purge's call to each principal's feed. One directory query resolves
+ * "all but" and finds the public repositories, which every purge leaves out.
+ */
 async function purgeCalls(effects: readonly Effect[], env: Env): Promise<FeedCall[]> {
   const purges = effects.map((effect) => ({
     id: effect.id,
     ...(effect.payload as unknown as PlannedPurge).purge,
   }));
   const accounts = [...new Set(purges.filter((p) => p.repos === null).map((p) => p.accountId))];
+  const listed = [...new Set(purges.flatMap((p) => p.repos ?? []))];
   const owned = new Map<string, string[]>();
-  if (accounts.length > 0) {
+  const open = new Set<string>();
+  if (purges.length > 0) {
     const { results } = await env.DIRECTORY.withSession("first-primary")
       .prepare(
-        `SELECT id, owner_id FROM repos
-         WHERE owner_id IN (SELECT value FROM json_each(?)) AND visibility <> 'public'`,
+        `SELECT id, owner_id, visibility FROM repos
+         WHERE owner_id IN (SELECT value FROM json_each(?1))
+           OR id IN (SELECT value FROM json_each(?2))`,
       )
-      .bind(JSON.stringify(accounts))
-      .all<{ id: string; owner_id: string }>();
-    for (const row of results)
-      owned.set(row.owner_id, [...(owned.get(row.owner_id) ?? []), row.id]);
+      .bind(JSON.stringify(accounts), JSON.stringify(listed))
+      .all<{ id: string; owner_id: string; visibility: string }>();
+    for (const row of results) {
+      if (row.visibility === "public") open.add(row.id);
+      else owned.set(row.owner_id, [...(owned.get(row.owner_id) ?? []), row.id]);
+    }
   }
   return purges.flatMap((purge) => {
-    const repoIds =
+    const repoIds = (
       purge.repos ??
-      (owned.get(purge.accountId) ?? []).filter((id) => !purge.allExcept?.includes(id));
+      (owned.get(purge.accountId) ?? []).filter((id) => !purge.allExcept?.includes(id))
+    ).filter((id) => !open.has(id));
     if (repoIds.length === 0) return [];
     return purge.principals.map((principal) => ({
       effects: new Set([purge.id]),
@@ -116,6 +127,8 @@ async function purgeCalls(effects: readonly Effect[], env: Env): Promise<FeedCal
         env.USER.getByName(principal).purge({
           repoIds,
           until: purge.until,
+          accountId: purge.accountId,
+          epochGen: purge.epochGen,
           aclVersion: purge.aclVersion,
         }),
     }));
@@ -141,6 +154,7 @@ export const feedSink: EffectSink = {
               repos: "repos" in data ? data.repos : null,
               allExcept: "all_except" in data ? data.all_except : null,
               until: event.at,
+              epochGen: event.id.epochGen,
               aclVersion: data.acl_version,
             },
           } satisfies PlannedPurge,
@@ -168,6 +182,12 @@ export const feedSink: EffectSink = {
   },
 
   deliverBatch: (effects: readonly Effect[], env: Env) => deliverFeeds(effects, env),
+
+  /** One call per recipient of an event, or per principal a purge names. */
+  calls(planned: PlannedEffect): number {
+    const payload = planned.payload as unknown as PlannedFeed | PlannedPurge;
+    return "purge" in payload ? payload.purge.principals.length : payload.feed.audience.length;
+  },
 };
 
 /**

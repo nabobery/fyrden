@@ -13,6 +13,7 @@ import {
 import { dispatchEffects } from "../effects/dispatcher.js";
 import {
   type EffectSink,
+  effectId,
   effectStatements,
   INLINE_BATCH_EFFECTS,
   INLINE_EFFECTS,
@@ -79,6 +80,29 @@ const QUERIES_PER_EFFECT = 6;
  */
 const QUERIES_PER_BATCH = 4;
 
+/**
+ * Calls to internal services (D1, Durable Objects, R2, queues) one
+ * consumer invocation makes at most: Free allows 1,000 an invocation
+ * (measured, see docs/operations/limits.md); some are left for the rest.
+ * Proposed.
+ */
+export const INVOCATION_CALLS = 900;
+/** Calls applying a message costs besides reading its stored events (its lookup, its batch, a send back). */
+const CALLS_PER_MESSAGE = 3;
+/** Calls one inline effect of a sink delivering one at a time costs at most (its claim, its work, its outcome). */
+const CALLS_PER_EFFECT = 8;
+/** Calls a message's inline effects of batch sinks cost besides their deliveries (as their queries). */
+const CALLS_PER_BATCH = QUERIES_PER_BATCH;
+
+/** The calls applying a message's envelope costs, its deliveries aside. */
+function messageCalls(body: unknown): number {
+  const events = (body as { events?: unknown } | null)?.events;
+  if (!Array.isArray(events)) return CALLS_PER_MESSAGE;
+  return (
+    CALLS_PER_MESSAGE + events.filter((e) => (e as { stored?: unknown })?.stored === true).length
+  );
+}
+
 export interface ConsumerOptions {
   readonly now?: () => number;
   readonly metrics?: Metrics;
@@ -95,6 +119,11 @@ export interface ConsumerOptions {
    * whether one was applied (a message alone is applied whatever it costs).
    */
   readonly queries?: { left: number; applied: boolean };
+  /**
+   * Calls the invocation may still make, shared by its messages, and how
+   * many of them applying the messages after this one needs.
+   */
+  readonly calls?: { left: number; reserved: number };
 }
 
 /**
@@ -116,11 +145,18 @@ export async function consumeEvents(
     ...options,
     inline: options.inline ?? { left: INLINE_EFFECTS, batched: INLINE_BATCH_EFFECTS },
     queries: options.queries ?? { left: INVOCATION_QUERIES, applied: false },
+    calls: options.calls ?? { left: INVOCATION_CALLS, reserved: 0 },
   };
-  for (const message of batch.messages) {
+  const envelopes = batch.messages.map((message) =>
+    isWaiting(message.body) ? message.body.envelope : message.body,
+  );
+  // What applying each message needs, kept for it while the ones before it deliver.
+  const needs = envelopes.map(messageCalls);
+  for (const [i, message] of batch.messages.entries()) {
     try {
       const waiting = isWaiting(message.body) ? message.body : undefined;
-      const envelope = waiting ? waiting.envelope : message.body;
+      const envelope = envelopes[i];
+      if (options.calls) options.calls.reserved = needs.slice(i + 1).reduce((a, b) => a + b, 0);
       const outcome = await applyEnvelope(env, envelope, options);
       if (outcome === "deferred") {
         // A new message, not a retry: waiting for budget is no failure.
@@ -179,6 +215,10 @@ export async function applyEnvelope(
   if (!account && !isId(sourceId, "rep")) return "dropped";
   const queries = options.queries ?? { left: INVOCATION_QUERIES, applied: false };
   if (queries.applied && queries.left < 3) return "deferred";
+  const calls = options.calls ?? { left: INVOCATION_CALLS, reserved: 0 };
+  const applying = messageCalls(parsed.envelope);
+  if (queries.applied && applying > calls.left - calls.reserved) return "deferred";
+  calls.left -= applying;
 
   // An account's read model is the deployment's (one organization for now).
   let shard = DEFAULT_ORG_SHARD;
@@ -227,18 +267,33 @@ export async function applyEnvelope(
   const batching = new Set(sinks.filter((s) => s.deliverBatch).map((s) => s.name));
   const single = inserted.filter((row) => !batching.has(row.sink)).map((row) => row.effect_id);
   const batched = inserted.filter((row) => batching.has(row.sink)).map((row) => row.effect_id);
+  // What the invocation's calls allow now, the later messages' application kept aside.
+  const spare = () => Math.max(0, calls.left - calls.reserved);
   const take = Math.min(
     inline.left,
     single.length,
     Math.max(0, Math.floor(queries.left / QUERIES_PER_EFFECT)),
+    Math.floor(spare() / CALLS_PER_EFFECT),
   );
   inline.left -= take;
   queries.left -= take * QUERIES_PER_EFFECT;
-  // A batch sink's effects go together: a few queries, however many.
-  const takeBatched =
-    queries.left >= QUERIES_PER_BATCH ? Math.min(inline.batched, batched.length) : 0;
-  inline.batched -= takeBatched;
-  if (takeBatched > 0) queries.left -= QUERIES_PER_BATCH;
+  calls.left -= take * CALLS_PER_EFFECT;
+  // A batch sink's effects go together: a few queries however many, and the calls each makes.
+  const costs = batchCalls(sinks, planned);
+  let takeBatched = 0;
+  let batchCost = CALLS_PER_BATCH;
+  if (queries.left >= QUERIES_PER_BATCH)
+    for (const id of batched.slice(0, inline.batched)) {
+      const cost = costs.get(id) ?? 1;
+      if (batchCost + cost > spare()) break;
+      batchCost += cost;
+      takeBatched++;
+    }
+  if (takeBatched > 0) {
+    inline.batched -= takeBatched;
+    queries.left -= QUERIES_PER_BATCH;
+    calls.left -= batchCost;
+  }
   try {
     await dispatchEffects(
       {
@@ -256,6 +311,21 @@ export async function applyEnvelope(
     createLogger({ op: "effects.dispatch" }).warn("dispatching effects failed", { error });
   }
   return "applied";
+}
+
+/** The calls each effect of a batch sink the events plan makes at most, by effect id. */
+function batchCalls(
+  sinks: readonly EffectSink[],
+  events: readonly DomainEvent[],
+): Map<string, number> {
+  const costs = new Map<string, number>();
+  for (const sink of sinks) {
+    if (!sink.deliverBatch) continue;
+    for (const event of events)
+      for (const planned of sink.plan(event))
+        costs.set(effectId(event, sink.name, planned.target), sink.calls?.(planned) ?? 1);
+  }
+  return costs;
 }
 
 export type Snapshot = DomainEvent & { entity: EntitySnapshot };

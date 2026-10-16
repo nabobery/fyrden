@@ -16,14 +16,15 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   one is a tombstone: never shown, it keeps what resolved something the
  *   feed has not shown, against older entries arriving later
  *   (`feed_tombstones` finds the oldest for retention). `members`: the ids
- *   an activity item aggregates (JSON, at most 100), `truncated` once any
- *   was dropped; `display_member`: the member the item displays (an
+ *   an activity item aggregates (JSON, at most 100, each with when and by
+ *   whom it was made), `truncated` once any was dropped; `display_member`: the member the item displays (an
  *   activity item's greatest, whose author `actor` is), its text read from
  *   the repository when the item is read; `acked_version`:
  *   the version the feed's owner last acknowledged (0 for none).
  * - `purge_marks`: repositories the owner lost read access to, with when
- *   (`until_at`: entries of events up to then are dropped on arrival) and
- *   the account's ACL version that said so (an older one changes nothing).
+ *   (`until_at`: entries of events up to then are dropped on arrival), and
+ *   the account that said so at its `(epoch_gen, acl_version)` (an older
+ *   one of the same account changes nothing).
  */
 export const userSchema: readonly DoMigration[] = [
   {
@@ -70,6 +71,8 @@ export const userSchema: readonly DoMigration[] = [
       CREATE TABLE purge_marks (
         repo_id TEXT PRIMARY KEY,
         until_at INTEGER NOT NULL,
+        account_id TEXT NOT NULL,
+        epoch_gen INTEGER NOT NULL,
         acl_version INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;
     `,

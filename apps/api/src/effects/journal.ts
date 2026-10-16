@@ -44,6 +44,12 @@ export interface EffectSink {
    * failed `deliver` is. Idempotent per effect id, as `deliver`.
    */
   deliverBatch?(effects: readonly Effect[], env: Env, db: D1Database): Promise<BatchDelivery>;
+  /**
+   * Calls to other services (Durable Objects, D1) delivering a planned
+   * effect of a batch sink makes at most, so an invocation can bound what
+   * it delivers itself. One when not said.
+   */
+  calls?(planned: PlannedEffect): number;
 }
 
 /** What a batch delivery did: the effects delivered, and the first failure of the rest. */
@@ -91,9 +97,8 @@ export const INLINE_EFFECTS = 2;
  * Effects of sinks that deliver in batches one consumer invocation
  * delivers itself, besides: each message's go in one call, for about four
  * D1 queries whatever their number (a claim, the sink's own lookup, one
- * mark, one retry). Bounded
- * by the calls one delivery makes (a feed effect calls up to 100 feeds;
- * an invocation may make 1,000 calls). Proposed.
+ * mark, one retry), and fewer when the invocation's calls run short (see
+ * the events consumer). Proposed.
  */
 export const INLINE_BATCH_EFFECTS = 8;
 

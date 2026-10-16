@@ -81,6 +81,10 @@ function entry(init: EntryInit): FeedEntry {
 
 type Storage = DurableObjectState["storage"];
 
+/** The member ids of an item's `members` column. */
+const ids = (members: unknown) =>
+  (JSON.parse((members as string | undefined) ?? "[]") as { id: string }[]).map((m) => m.id);
+
 /** A feed on a fresh object's storage, with what the tests read from it. */
 function feedIn(storage: Storage, now: () => number = Date.now) {
   const feed = new Feed(storage.sql, now);
@@ -284,9 +288,9 @@ describe("applying entries", () => {
               actor: "usr_a",
               version: 4,
               action: "closed",
-              members: JSON.stringify(["comment/20", "comment/3", "review/1"]),
             },
           ]);
+          expect(ids(items()[0]?.members)).toEqual(["comment/20", "comment/3", "review/1"]);
         }),
         { numRuns: 30 },
       );
@@ -306,7 +310,7 @@ describe("applying entries", () => {
             for (let at = 0; at < shuffled.length; at += size) apply(shuffled.slice(at, at + size));
             const [item] = items() as { members: string; truncated: number; version: number }[];
             // Ids order as numbers: 31 to 130 are the greatest.
-            expect(JSON.parse(item?.members ?? "[]")).toEqual(
+            expect(ids(item?.members)).toEqual(
               Array.from({ length: 100 }, (_, i) => String(130 - i)),
             );
             expect(item).toMatchObject({ truncated: 1, version: 130 });
@@ -909,5 +913,29 @@ describe("the feed operations", () => {
     // An edit shows at once.
     said.set(`${made.id}:comment/2`, "second, edited");
     expect(await excerpts("/feed/sync")).toContainEqual(["activity", "second, edited"]);
+  });
+
+  it("give a token shown nothing cursors it can follow after retention deleted what it did not see", async () => {
+    const someone = await user();
+    const shown = await repoOf(someone);
+    const hidden = await repoOf(someone);
+    const t0 = Date.now();
+    await deliverTo(someone.principalId, { repoId: hidden.id, version: 1 });
+    vi.setSystemTime(t0 + 3 * DAY);
+    await deliverTo(someone.principalId, { repoId: hidden.id, thread: 2, version: 1 });
+    vi.setSystemTime(t0 + FEED_POLICY.retentionMs + 1_000);
+    // Retention deletes the other repository's first item: the low watermark moves past it.
+    expect(await runDurableObjectAlarm(env.USER.getByName(someone.principalId))).toBe(true);
+    const limited = await scopedToken(someone.principalId, [], "pat", [shown.id]);
+    const synced = await json<FeedOut>(feedApi("GET", "/feed/sync", limited));
+    expect(synced.body.items).toEqual([]);
+    const after = await json<FeedOut>(
+      feedApi("GET", `/feed?since=${synced.body.head_cursor}`, limited),
+    );
+    expect(after).toMatchObject({ status: 200, body: { items: [] } });
+    // A list from the start hands out a cursor it can follow too.
+    const start = await json<FeedOut>(feedApi("GET", "/feed", limited));
+    const next = await feedApi("GET", `/feed?since=${start.body.next_cursor}`, limited);
+    expect(next.status).toBe(200);
   });
 });

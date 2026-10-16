@@ -80,6 +80,12 @@ export type FeedPage =
   | {
       readonly expired: false;
       readonly head: FeedPosition;
+      /**
+       * The greatest sequence number retention deleted: every item still
+       * there comes after it (its order is the sequence's), so a cursor
+       * may start there.
+       */
+      readonly lowWatermark: number;
       readonly items: readonly FeedItem[];
       /** More items follow the page's last one. */
       readonly more: boolean;
@@ -104,10 +110,15 @@ export type FeedAck =
   | { readonly status: "ahead" }
   | { readonly status: "acked"; readonly item: FeedItem };
 
-/** Repositories the owner no longer reads, as of `until` (ms), at an account's ACL version. */
+/**
+ * Repositories the owner no longer reads, as of `until` (ms), as the
+ * account that said so had them at its `(epochGen, aclVersion)`.
+ */
 export interface FeedPurge {
   readonly repoIds: readonly string[];
   readonly until: number;
+  readonly accountId: string;
+  readonly epochGen: number;
   readonly aclVersion: number;
 }
 
@@ -151,6 +162,30 @@ function byIdDescending(a: string, b: string): number {
   return a < b ? 1 : a > b ? -1 : 0;
 }
 
+/** A member of an activity item: its id, and when and by whom it was made. */
+interface Member {
+  readonly id: string;
+  readonly at: number;
+  readonly actor: string | null;
+  readonly trust: Row["actor_trust"];
+}
+
+/**
+ * An activity item's members (the greatest 100, greatest first), and what
+ * it displays: the greatest of them, its author and the author's access.
+ */
+function withMembers(state: State, members: readonly Member[], truncated: boolean): State {
+  const greatest = members[0];
+  return {
+    ...state,
+    members: JSON.stringify(members),
+    truncated: truncated ? 1 : 0,
+    display_member: greatest?.id ?? null,
+    actor: greatest?.actor ?? null,
+    actor_trust: greatest?.trust ?? state.actor_trust,
+  };
+}
+
 function itemOf(row: Row): FeedItem {
   return {
     repoId: row.repo_id,
@@ -167,7 +202,7 @@ function itemOf(row: Row): FeedItem {
     actor: row.actor,
     actorTrust: row.actor_trust,
     member: row.display_member,
-    members: JSON.parse(row.members) as string[],
+    members: (JSON.parse(row.members) as Member[]).map((m) => m.id),
     truncated: row.truncated === 1,
     eventKey: row.last_event_key,
     eventAt: row.last_event_at,
@@ -228,26 +263,26 @@ function thread(entry: FeedEntry) {
 }
 
 /**
- * An activity item with an entry's member added: the members are the
- * greatest 100, and the item displays the greatest member ever added (its
- * id, author and the author's access), so any order of the same entries
- * displays the same.
+ * An activity item with an entry's member added (with when and by whom it
+ * was made, so a purge can take it out again): the members are the
+ * greatest 100, and the item displays the greatest, so any order of the
+ * same entries displays the same.
  */
 function withMember(state: State, entry: FeedEntry): State {
   const { feed } = entry;
-  const member = feed.member;
-  if (member === null) return state;
-  let members = JSON.parse(state.members) as string[];
-  let truncated = state.truncated === 1;
-  if (!members.includes(member)) {
-    const union = [...members, member].sort(byIdDescending);
-    members = union.slice(0, FEED_POLICY.maxMembers);
-    truncated ||= union.length > FEED_POLICY.maxMembers;
-  }
-  const next = { ...state, members: JSON.stringify(members), truncated: truncated ? 1 : 0 };
-  const shown = state.display_member;
-  if (shown !== null && byIdDescending(member, shown) > 0) return next;
-  return { ...next, display_member: member, actor: entry.actor, actor_trust: feed.actorTrust };
+  const id = feed.member;
+  if (id === null) return state;
+  const members = JSON.parse(state.members) as Member[];
+  if (members.some((m) => m.id === id)) return state;
+  const union = [
+    ...members,
+    { id, at: entry.occurredAt, actor: entry.actor, trust: feed.actorTrust },
+  ].sort((a, b) => byIdDescending(a.id, b.id));
+  return withMembers(
+    state,
+    union.slice(0, FEED_POLICY.maxMembers),
+    state.truncated === 1 || union.length > FEED_POLICY.maxMembers,
+  );
 }
 
 export class Feed {
@@ -363,6 +398,7 @@ export class Feed {
     return {
       expired: false,
       head: { epoch: meta.epoch, seq: meta.head_seq },
+      lowWatermark: meta.low_watermark,
       items: rows.slice(0, limit).map(itemOf),
       more: rows.length > limit,
     };
@@ -377,7 +413,7 @@ export class Feed {
     after: SyncPosition | null,
     limit: number,
     repoIds: readonly string[] | null,
-  ): { epoch: string; items: FeedItem[]; more: boolean } {
+  ): { epoch: string; lowWatermark: number; items: FeedItem[]; more: boolean } {
     const rows = this.sql
       .exec<Row>(
         `SELECT * FROM (
@@ -394,8 +430,10 @@ export class Feed {
         repoIds ? JSON.stringify(repoIds) : null,
       )
       .toArray();
+    const meta = this.#meta();
     return {
-      epoch: this.#meta().epoch,
+      epoch: meta.epoch,
+      lowWatermark: meta.low_watermark,
       items: rows.slice(0, limit).map(itemOf),
       more: rows.length > limit,
     };
@@ -430,32 +468,60 @@ export class Feed {
   /**
    * Forgets repositories the owner no longer reads (call within a
    * transaction): their items and tombstones last changed up to `until`
-   * are deleted, and a mark drops entries up to then arriving later. A
-   * repository whose mark has this ACL version or a newer one is left as
-   * it is (a late or repeated purge). Returns the shown items deleted.
+   * are deleted, the members made up to then leave the activity items that
+   * survive (changed since: access given back), and a mark drops entries
+   * up to then arriving later. A repository's mark is replaced only by a
+   * newer purge: of the same account, a newer `(epochGen, aclVersion)`;
+   * of another (the repository was transferred), a later `until`.
+   * Returns the shown items deleted.
    */
   purge(purge: FeedPurge): number {
+    const now = this.now();
     let deleted = 0;
     for (const repoId of new Set(purge.repoIds)) {
       const mark = this.sql
-        .exec<{ acl_version: number }>(
-          "SELECT acl_version FROM purge_marks WHERE repo_id = ?",
+        .exec<{ account_id: string; epoch_gen: number; acl_version: number; until_at: number }>(
+          "SELECT account_id, epoch_gen, acl_version, until_at FROM purge_marks WHERE repo_id = ?",
           repoId,
         )
         .toArray()[0];
-      if (mark && mark.acl_version >= purge.aclVersion) continue;
+      const newer =
+        !mark ||
+        (mark.account_id === purge.accountId
+          ? purge.epochGen > mark.epoch_gen ||
+            (purge.epochGen === mark.epoch_gen && purge.aclVersion > mark.acl_version)
+          : purge.until > mark.until_at);
+      if (!newer) continue;
       for (const row of this.sql.exec<{ feed_seq: number | null }>(
         "DELETE FROM feed_items WHERE repo_id = ? AND last_event_at <= ? RETURNING feed_seq",
         repoId,
         purge.until,
       ))
         if (row.feed_seq !== null) deleted++;
+      for (const row of this.sql
+        .exec<Row>("SELECT * FROM feed_items WHERE repo_id = ? AND kind = 'activity'", repoId)
+        .toArray()) {
+        const members = JSON.parse(row.members) as Member[];
+        const kept = members.filter((m) => m.at > purge.until);
+        if (kept.length === members.length) continue;
+        const shown = row.feed_seq !== null;
+        this.#write(
+          { repoId, threadKey: row.thread_key, kind: row.kind },
+          withMembers(stateOf(row), kept, row.truncated === 1),
+          shown ? this.#next(false) : null,
+          now,
+        );
+      }
       this.sql.exec(
-        `INSERT INTO purge_marks (repo_id, until_at, acl_version) VALUES (?, ?, ?)
+        `INSERT INTO purge_marks (repo_id, until_at, account_id, epoch_gen, acl_version)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (repo_id) DO UPDATE SET until_at = excluded.until_at,
+           account_id = excluded.account_id, epoch_gen = excluded.epoch_gen,
            acl_version = excluded.acl_version`,
         repoId,
         purge.until,
+        purge.accountId,
+        purge.epochGen,
         purge.aclVersion,
       );
     }

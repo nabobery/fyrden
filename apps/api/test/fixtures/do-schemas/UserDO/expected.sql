@@ -34,5 +34,7 @@ CREATE TABLE feed_meta (
 CREATE TABLE purge_marks (
         repo_id TEXT PRIMARY KEY,
         until_at INTEGER NOT NULL,
+        account_id TEXT NOT NULL,
+        epoch_gen INTEGER NOT NULL,
         acl_version INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;

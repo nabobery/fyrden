@@ -76,15 +76,29 @@ function revokedEvent(
   };
 }
 
+const ACCOUNT = "usr_01K742SG00NAWD8WB4RTMJF8H9";
+
+/** A purge of `repoIds` by ACCOUNT (or `accountId`), in its first epoch unless told. */
+const purgeOf = (
+  repoIds: string[],
+  until: number,
+  aclVersion: number,
+  scope: { accountId?: string; epochGen?: number } = {},
+): FeedPurge => ({
+  repoIds,
+  until,
+  accountId: scope.accountId ?? ACCOUNT,
+  epochGen: scope.epochGen ?? 1,
+  aclVersion,
+});
+
 describe("purging a feed", () => {
   it("forgets a repository up to the purge, keeps older entries out, and takes a re-grant's", async () => {
     const stub = env.USER.getByName(uniqueId("usr"));
     const t = Date.now();
     await stub.applyFeed([entry("rep_a", 1, t - 2_000), entry("rep_b", 1, t - 2_000)]);
     await stub.applyFeed([entry("rep_a", 2, t - 1_000)]);
-    expect(await stub.purge({ repoIds: ["rep_a"], until: t - 500, aclVersion: 5 })).toEqual({
-      deleted: 1,
-    });
+    expect(await stub.purge(purgeOf(["rep_a"], t - 500, 5))).toEqual({ deleted: 1 });
     expect(await shown(stub)).toEqual([["rep_b", ["comment/1"]]]);
     // An entry from before the purge arriving late: dropped.
     await stub.applyFeed([entry("rep_a", 3, t - 600)]);
@@ -96,10 +110,7 @@ describe("purging a feed", () => {
       ["rep_a", ["comment/4"]],
     ]);
     // A late purge of an older access version (or the same one again): nothing changes.
-    for (const late of [
-      { repoIds: ["rep_a"], until: t + 1_000, aclVersion: 4 },
-      { repoIds: ["rep_a"], until: t + 1_000, aclVersion: 5 },
-    ] satisfies FeedPurge[])
+    for (const late of [purgeOf(["rep_a"], t + 1_000, 4), purgeOf(["rep_a"], t + 1_000, 5)])
       expect(await stub.purge(late)).toEqual({ deleted: 0 });
     expect(await shown(stub)).toHaveLength(2);
     const items = await runInDurableObject(stub, (_: UserDO, state) =>
@@ -107,15 +118,66 @@ describe("purging a feed", () => {
     );
     expect(items).toEqual({ items: 2 });
     // A newer one applies, its mark kept for the repository.
-    expect(await stub.purge({ repoIds: ["rep_a"], until: t, aclVersion: 6 })).toEqual({
+    expect(await stub.purge(purgeOf(["rep_a"], t, 6))).toEqual({ deleted: 1 });
+    expect(await marks(stub)).toEqual([
+      { repo_id: "rep_a", until_at: t, account_id: ACCOUNT, epoch_gen: 1, acl_version: 6 },
+    ]);
+  });
+
+  it("takes a late purge's members out of an item that survives it, as if the purge came first", async () => {
+    const t = Date.now();
+    const before = { ...entry("rep_a", 1, t - 2_000), actor: "usr_old" };
+    const old = { ...before, feed: { ...before.feed, member: "review_comment/1" } };
+    const fresh = { ...entry("rep_a", 2, t), actor: "usr_new" };
+    const purge = purgeOf(["rep_a"], t - 500, 5);
+    const late = env.USER.getByName(uniqueId("usr"));
+    await late.applyFeed([old]);
+    await late.applyFeed([fresh]);
+    await late.purge(purge);
+    const first = env.USER.getByName(uniqueId("usr"));
+    await first.purge(purge);
+    await first.applyFeed([old, fresh]);
+    const item = async (stub: DurableObjectStub<UserDO>) => {
+      const page = await stub.listFeed(null, 10, {});
+      if (page.expired) throw new Error("expired");
+      return page.items.map((i) => ({ members: i.members, member: i.member, actor: i.actor }));
+    };
+    expect(await item(late)).toEqual([
+      { members: ["comment/2"], member: "comment/2", actor: "usr_new" },
+    ]);
+    expect(await item(first)).toEqual(await item(late));
+  });
+
+  it("judges a purge by its account's epoch and version, and another account's by its time", async () => {
+    const stub = env.USER.getByName(uniqueId("usr"));
+    const t = Date.now();
+    const item = (version: number, at: number) => stub.applyFeed([entry("rep_a", version, at)]);
+    await item(1, t - 5_000);
+    await stub.purge(purgeOf(["rep_a"], t - 4_000, 100));
+    // The account was restored: its versions start again, in a newer epoch.
+    await item(2, t - 3_000);
+    expect(await stub.purge(purgeOf(["rep_a"], t - 2_500, 2, { epochGen: 2 }))).toEqual({
       deleted: 1,
     });
-    const marks = await runInDurableObject(stub, (_: UserDO, state) =>
-      state.storage.sql.exec("SELECT repo_id, until_at, acl_version FROM purge_marks").toArray(),
-    );
-    expect(marks).toEqual([{ repo_id: "rep_a", until_at: t, acl_version: 6 }]);
+    // An older epoch's, however great its version, is behind it.
+    await item(3, t - 2_000);
+    expect(await stub.purge(purgeOf(["rep_a"], t - 1_500, 500))).toEqual({ deleted: 0 });
+    // Transferred: another account's purge counts when it is later than the mark.
+    const other = { accountId: "org_01K742SG00NAWD8WB4RTMJF8H9" };
+    expect(await stub.purge(purgeOf(["rep_a"], t - 2_600, 1, other))).toEqual({ deleted: 0 });
+    expect(await stub.purge(purgeOf(["rep_a"], t - 1_000, 1, other))).toEqual({ deleted: 1 });
+    expect(await marks(stub)).toMatchObject([
+      { repo_id: "rep_a", until_at: t - 1_000, account_id: other.accountId, acl_version: 1 },
+    ]);
   });
 });
+
+const marks = (stub: DurableObjectStub<UserDO>) =>
+  runInDurableObject(stub, (_: UserDO, state) =>
+    state.storage.sql
+      .exec("SELECT repo_id, until_at, account_id, epoch_gen, acl_version FROM purge_marks")
+      .toArray(),
+  );
 
 /**
  * Feeds that record the purges they get (and apply nothing), for a sink
@@ -155,6 +217,7 @@ describe("the feed sink and access revocations", () => {
             repos: ["rep_x"],
             allExcept: null,
             until: event.at,
+            epochGen: 1,
             aclVersion: 3,
           },
         },
@@ -217,8 +280,25 @@ describe("the feed sink and access revocations", () => {
     expect(purges).toHaveLength(1);
     expect(purges[0]?.principal).toBe("usr_dev");
     expect([...(purges[0]?.purge.repoIds ?? [])].sort()).toEqual([kept, internal].sort());
-    expect(purges[0]?.purge).toMatchObject({ until: at, aclVersion: 9 });
-    expect(open).not.toBe(kept);
+    expect(purges[0]?.purge).toMatchObject({
+      until: at,
+      accountId: orgId,
+      epochGen: 1,
+      aclVersion: 9,
+    });
+    // A public repository named outright is left out too: anyone still reads it.
+    purges.length = 0;
+    await applyEnvelope(
+      on,
+      {
+        sourceId: orgId,
+        events: [
+          revokedEvent(orgId, 2, { principals: ["usr_dev"], repos: [kept, open], acl_version: 10 }),
+        ],
+      },
+      { sinks: [feedSink] },
+    );
+    expect(purges.map((p) => p.purge.repoIds)).toEqual([[kept]]);
     const epoch = await env.ORG_READ.prepare(
       "SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?",
     )

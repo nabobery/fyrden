@@ -266,6 +266,7 @@ export async function getFeedOperation(
     repoIds: ctx.auth.repoIds,
   };
   let epoch = since?.epoch;
+  let lowWatermark = 0;
   const visibility = new Visibility(ctx);
   const { shown, more } = await scan(
     visibility,
@@ -275,17 +276,19 @@ export async function getFeedOperation(
       const page = await feed.listFeed(after ?? since, SCAN.page, filter);
       if (page.expired) throw expired();
       epoch = page.head.epoch;
+      lowWatermark = page.lowWatermark;
       return page;
     },
     (item) => ({ epoch: epoch as string, seq: item.seq }),
   );
-  // Positions of items shown only: where the caller started when none was.
+  // Positions of items shown only (where the caller started when none was), never below the
+  // low watermark: what retention deleted is gone for every reader, and such a cursor would
+  // only be refused.
   const at = (item: FeedItem | undefined) =>
-    encodeFeedCursor(
-      item
-        ? { epoch: epoch as string, seq: item.seq }
-        : (since ?? { epoch: epoch as string, seq: 0 }),
-    );
+    encodeFeedCursor({
+      epoch: epoch as string,
+      seq: Math.max(lowWatermark, item?.seq ?? since?.seq ?? 0),
+    });
   const page = shown.slice(0, input.limit);
   await visibility.read(page.map(({ item }) => item));
   return {
@@ -300,6 +303,7 @@ export async function getFeedOperation(
 export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof syncFeed>> {
   const feed = feedOf(ctx);
   let epoch = "";
+  let lowWatermark = 0;
   const visibility = new Visibility(ctx);
   const { shown, more } = await scan(
     visibility,
@@ -308,6 +312,7 @@ export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof s
       counted(ctx, "syncFeed");
       const page = await feed.syncFeed(after, SCAN.page, ctx.auth.repoIds);
       epoch = page.epoch;
+      lowWatermark = page.lowWatermark;
       return page;
     },
     (item) => ({ open: item.priority === "P0" && item.state === "open", seq: item.seq }),
@@ -315,8 +320,9 @@ export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof s
   const items = shown.slice(0, FEED_POLICY.syncItems);
   await visibility.read(items.map(({ item }) => item));
   // Following from the greatest item shown misses no change the caller may see; an incomplete
-  // sync follows from the start.
-  const seq = more ? 0 : Math.max(0, ...items.map(({ item }) => item.seq));
+  // sync follows from the start. Never below the low watermark: what retention deleted is gone
+  // for every reader, so such a cursor would only be refused.
+  const seq = Math.max(lowWatermark, more ? 0 : Math.max(0, ...items.map(({ item }) => item.seq)));
   return {
     items: items.map(({ item, repo }) => itemOutput(item, repo, visibility.excerpt(item))),
     complete: !more,

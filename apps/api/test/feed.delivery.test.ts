@@ -4,7 +4,12 @@
 // claimed at once, retries only what was not delivered, and an invocation
 // stays within Free's D1 queries.
 
-import { createExecutionContext, createMessageBatch, getQueueResult } from "cloudflare:test";
+import {
+  createExecutionContext,
+  createMessageBatch,
+  getQueueResult,
+  runInDurableObject,
+} from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
   createIdFactory,
@@ -15,6 +20,7 @@ import {
   secureRandomBytes,
 } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
+import type { RepoDO } from "../src/do/RepoDO.js";
 import { sweepEffects } from "../src/effects/dispatcher.js";
 import {
   EFFECT_POLICY,
@@ -24,7 +30,12 @@ import {
 } from "../src/effects/journal.js";
 import { EFFECT_SINKS } from "../src/effects/sinks.js";
 import { feedSink } from "../src/feed/sink.js";
-import { applyEnvelope, consumeEvents, EVENTS_QUEUE } from "../src/queues/events-consumer.js";
+import {
+  applyEnvelope,
+  consumeEvents,
+  EVENTS_QUEUE,
+  INVOCATION_CALLS,
+} from "../src/queues/events-consumer.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H8";
@@ -355,5 +366,60 @@ describe("the feed sink", () => {
     expect(count.queries).toBe(3);
     expect(calls.length).toBeLessThanOrEqual(100);
     expect(calls.every((call) => call.entries.length === EFFECT_POLICY.sweepBatch)).toBe(true);
+  });
+
+  it("keeps an invocation's calls within its allowance when events are stored, leaving the rest to the sweeper", async () => {
+    const repos = await Promise.all(Array.from({ length: 5 }, () => listedRepo()));
+    const { on, calls } = recordingFeeds();
+    const count = { queries: 0, payloads: 0 };
+    const measured = {
+      ...on,
+      DIRECTORY: counting(env.DIRECTORY, count),
+      ORG_READ: counting(env.ORG_READ, count),
+      REPO: {
+        getByName: (repoId: string) => ({
+          eventPayload: (key: string) => {
+            count.payloads++;
+            return env.REPO.getByName(repoId).eventPayload(key);
+          },
+        }),
+      },
+    } as unknown as Env;
+    // Five messages of fifty stored events, two of each for 100 recipients of their own.
+    const envelopes = await Promise.all(
+      repos.map(async (repoId, r) => {
+        const events = Array.from({ length: 50 }, (_, i) => {
+          const seq = i + 1;
+          const audience = Array.from({ length: 100 }, (_, n) => `usr_${r}_${seq}_${n}`);
+          return {
+            ...commentEvent(repoId, seq, seq <= 2 ? block(seq, audience) : undefined),
+            stored: true,
+          };
+        });
+        await runInDurableObject(env.REPO.getByName(repoId), (_: RepoDO, state) => {
+          for (const event of events)
+            state.storage.sql.exec(
+              "INSERT INTO event_payloads (event_key, payload, created_at) VALUES (?, ?, 0)",
+              `${repoId}:1:${event.id.sourceSeq}`,
+              JSON.stringify({ row: null, data: { body: "stored" } }),
+            );
+        });
+        return envelope(repoId, events);
+      }),
+    );
+    const batch = createMessageBatch(
+      EVENTS_QUEUE,
+      envelopes.map((body, i) => ({ id: `m${i}`, timestamp: new Date(), attempts: 1, body })),
+    );
+    const ctx = createExecutionContext();
+    await consumeEvents(batch, measured, { sinks: [feedSink], now: () => T0 });
+    expect((await getQueueResult(batch, ctx)).explicitAcks).toHaveLength(5);
+    expect(count.payloads).toBe(250);
+    // Six effects inline (three messages' two), the other four kept for the sweeper.
+    expect(calls).toHaveLength(600);
+    const total = count.queries + count.payloads + calls.length;
+    expect(total).toBeLessThanOrEqual(INVOCATION_CALLS);
+    const states = (await Promise.all(repos.map(effectRows))).flat().map((row) => row.state);
+    expect(states.filter((state) => state === "pending")).toHaveLength(4);
   });
 });
