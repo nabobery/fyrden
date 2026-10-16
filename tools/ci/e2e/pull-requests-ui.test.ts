@@ -8,9 +8,9 @@
 // AA. Needs `pnpm --filter @fyrden/web build` first (turbo does it).
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { mentionsToken } from "@fyrden/domain";
-import { type Page, expect as see } from "@playwright/test";
+import { type Locator, type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { accessible, startWebStack, type WebStack } from "./web-stack.js";
 
@@ -18,6 +18,10 @@ let stack: WebStack;
 let page: Page;
 const handle = "ada";
 const name = "prs";
+/** The working copy branches are pushed from: main is its first commit. */
+let work = "";
+/** The repository's git URL, with a git token. */
+let remote = "";
 /** A file name that is markup wherever it lands unescaped. */
 const HOSTILE_FILE = "<img src=x onerror=window.pwned=1>.md";
 
@@ -79,39 +83,75 @@ async function inert(): Promise<void> {
 
 const lines = (n: number) => Array.from({ length: n }, (_, i) => `const line${i + 1} = ${i + 1};`);
 
+/** Pushes `branch`, made from main's first commit with `files` written over it. */
+async function pushBranch(branch: string, files: Record<string, string>): Promise<void> {
+  await git(["checkout", "-q", "-B", branch, "main"], work);
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(dirname(join(work, path)), { recursive: true });
+    await writeFile(join(work, path), content);
+  }
+  await git(["add", "-A"], work);
+  await git(["commit", "-q", "-m", branch], work);
+  await git(["push", "-q", remote, branch], work);
+}
+
+let topics = 0;
+/** A new branch changing a line of src/app.ts into markup and adding a hostile file name: its name. */
+async function pushTopic(): Promise<string> {
+  const branch = `topic-${++topics}`;
+  const changed = lines(12);
+  changed[2] = `const html = "<script>window.pwned=2</script>";`;
+  await pushBranch(branch, {
+    "src/app.ts": `${changed.join("\n")}\n`,
+    [HOSTILE_FILE]: "<svg onload=window.pwned=3>\n",
+  });
+  return branch;
+}
+
+/** A pull request of `head` into main, opened through REST: its number. */
+async function openPull(head: string, title: string): Promise<number> {
+  const pull = await rest<{ number: number }>("POST", `/repos/${handle}/${name}/pulls`, {
+    title,
+    head,
+    base: "main",
+  });
+  return pull.number;
+}
+
+/** A pull request of a new topic branch, its conversation open in the page: its number. */
+async function visitTopicPull(title: string): Promise<number> {
+  const number = await openPull(await pushTopic(), title);
+  await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}`);
+  return number;
+}
+
+/** A pull request of a new topic branch, its files open in the page: its number and src/app.ts. */
+async function visitTopicFiles(title: string) {
+  const number = await openPull(await pushTopic(), title);
+  await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}/files`);
+  return { number, file: page.locator("section.file", { hasText: "src/app.ts" }) };
+}
+
+/** Opens the form for a comment on lines of `file`, from the keyboard. */
+async function openLineComment(file: Locator): Promise<void> {
+  await file.getByText("Comment on lines").focus();
+  await page.keyboard.press("Enter");
+}
+
 beforeAll(async () => {
   stack = await startWebStack(handle);
   page = stack.page;
   await rest("POST", "/user/repos", { name });
   const { token } = await rest<{ token: string }>("POST", "/user/git-tokens", {});
-  const work = join(stack.scratch, "work");
+  remote = `http://x-access-token:${token}@127.0.0.1:${stack.port}/${handle}/${name}.git`;
+  work = join(stack.scratch, "work");
   await mkdir(join(work, "src"), { recursive: true });
   await git(["init", "-q", "-b", "main", work], stack.scratch);
   await writeFile(join(work, "src/app.ts"), `${lines(12).join("\n")}\n`);
   await writeFile(join(work, "README.md"), "# PRs\n");
   await git(["add", "-A"], work);
   await git(["commit", "-q", "-m", "first"], work);
-  await git(["checkout", "-q", "-b", "topic"], work);
-  const changed = lines(12);
-  changed[2] = `const html = "<script>window.pwned=2</script>";`;
-  await writeFile(join(work, "src/app.ts"), `${changed.join("\n")}\n`);
-  await writeFile(join(work, HOSTILE_FILE), "<svg onload=window.pwned=3>\n");
-  await git(["add", "-A"], work);
-  await git(["commit", "-q", "-m", "change"], work);
-  // A branch whose README conflicts with the base's once the base changes it too.
-  await git(["checkout", "-q", "-b", "clash", "main"], work);
-  await writeFile(join(work, "README.md"), "# Clash\n");
-  await git(["commit", "-q", "-am", "clash"], work);
-  // A branch adding one long file, for the renderer to draw a window of.
-  await git(["checkout", "-q", "-b", "big", "main"], work);
-  await writeFile(
-    join(work, "big.txt"),
-    `${Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`).join("\n")}\n`,
-  );
-  await git(["add", "-A"], work);
-  await git(["commit", "-q", "-m", "big"], work);
-  const remote = `http://x-access-token:${token}@127.0.0.1:${stack.port}/${handle}/${name}.git`;
-  await git(["push", "-q", remote, "main", "topic", "clash", "big"], work);
+  await git(["push", "-q", remote, "main"], work);
 }, 240_000);
 
 afterAll(async () => {
@@ -128,18 +168,22 @@ afterAll(async () => {
 
 describe("pull requests in the web UI", () => {
   it("opens a pull request from a branch, with a hostile title and description", async () => {
-    await page.goto(`${stack.origin}/${handle}/${name}/pulls`);
+    // A repository of its own has none yet.
+    await rest("POST", "/user/repos", { name: "no-pulls" });
+    await page.goto(`${stack.origin}/${handle}/no-pulls/pulls`);
     await see(page.getByText("No open pull requests.")).toBeVisible();
     await accessible(page, "empty pull request list");
+    const branch = await pushTopic();
+    await page.goto(`${stack.origin}/${handle}/${name}/pulls`);
     await page.getByText("New pull request").click();
-    await page.getByLabel("Head branch (with the changes)").fill("topic");
+    await page.getByLabel("Head branch (with the changes)").fill(branch);
     await page.getByLabel("Title").fill("<img src=x onerror=window.pwned=4> Change");
     await page
       .getByLabel("Description (Markdown, optional)")
       .fill("Hello <script>window.pwned=5</script> [x](javascript:window.pwned=6)");
     await accessible(page, "new pull request form");
     await page.getByRole("button", { name: "Open pull request" }).click();
-    await see(page).toHaveURL(`${stack.origin}/${handle}/${name}/pull/1`);
+    await see(page).toHaveURL(new RegExp(`^${stack.origin}/${handle}/${name}/pull/\\d+$`));
     await see(page.getByRole("heading", { level: 1 })).toContainText(
       "<img src=x onerror=window.pwned=4> Change",
     );
@@ -149,6 +193,7 @@ describe("pull requests in the web UI", () => {
   });
 
   it("comments on the conversation, drafts it and makes it ready again", async () => {
+    await visitTopicPull("Discussed");
     await page
       .getByLabel("Comment (Markdown)")
       .fill("Looks **good** <img src=x onerror=window.pwned=7>");
@@ -164,8 +209,9 @@ describe("pull requests in the web UI", () => {
   });
 
   it("draws the files' changes, hostile names and lines as text", async () => {
+    const number = await visitTopicPull("Drawn");
     await page.getByRole("link", { name: "Files changed" }).click();
-    await see(page).toHaveURL(`${stack.origin}/${handle}/${name}/pull/1/files`);
+    await see(page).toHaveURL(`${stack.origin}/${handle}/${name}/pull/${number}/files`);
     await see(page.getByRole("link", { name: HOSTILE_FILE })).toBeVisible();
     // The renderer draws each file into its own element's shadow root.
     await see(page.locator("diffs-container")).toHaveCount(2, { timeout: 30_000 });
@@ -179,9 +225,8 @@ describe("pull requests in the web UI", () => {
   });
 
   it("comments on a line from the keyboard, replies and resolves", async () => {
-    const file = page.locator("section.file", { hasText: "src/app.ts" });
-    await file.getByText("Comment on lines").focus();
-    await page.keyboard.press("Enter");
+    const { file } = await visitTopicFiles("Commented on a line");
+    await openLineComment(file);
     await file.getByLabel("Line", { exact: true }).fill("3");
     await file.getByLabel(/^Comment \(Markdown/).fill("Why *this* line?");
     await file.getByRole("button", { name: "Add comment" }).click();
@@ -197,8 +242,8 @@ describe("pull requests in the web UI", () => {
   });
 
   it("applies a suggested change to the head branch", async () => {
-    const file = page.locator("section.file", { hasText: "src/app.ts" });
-    // The form is still open from the last comment.
+    const { number, file } = await visitTopicFiles("Suggested");
+    await openLineComment(file);
     await file.getByLabel("Line", { exact: true }).fill("3");
     await file.getByLabel(/^Comment \(Markdown/).fill('```suggestion\nconst html = "";\n```');
     await file.getByRole("button", { name: "Add comment" }).click();
@@ -206,7 +251,10 @@ describe("pull requests in the web UI", () => {
     // The head moves: the thread goes outdated and leaves the diff, and the answer stays.
     await see(file.locator(".threads .badge", { hasText: "outdated" }).first()).toBeVisible();
     await see(file.getByRole("status").filter({ hasText: "Suggestion applied." })).toBeVisible();
-    const pull = await rest<{ head: { sha: string } }>("GET", `/repos/${handle}/${name}/pulls/1`);
+    const pull = await rest<{ head: { sha: string } }>(
+      "GET",
+      `/repos/${handle}/${name}/pulls/${number}`,
+    );
     const commit = await rest<{ commit: { message: string } }>(
       "GET",
       `/repos/${handle}/${name}/commits/${pull.head.sha}`,
@@ -215,12 +263,13 @@ describe("pull requests in the web UI", () => {
   });
 
   it("reviews, brings the branch up to date and squashes it into the base", async () => {
+    const number = await openPull(await pushTopic(), "Change things");
     // The base moves on, touching nothing the pull request changes.
     await rest("PUT", `/repos/${handle}/${name}/contents/docs/later.md`, {
       message: "Add docs",
       content: Buffer.from("later\n").toString("base64"),
     });
-    await page.goto(`${stack.origin}/${handle}/${name}/pull/1`);
+    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}`);
     const review = page.locator("section", { has: page.getByRole("heading", { name: "Review" }) });
     // Its author may only comment.
     await see(review.getByLabel("Approve")).toBeDisabled();
@@ -236,7 +285,7 @@ describe("pull requests in the web UI", () => {
     });
     await accessible(page, "merge box");
     await merge.getByLabel("Squash and merge").check();
-    await merge.getByLabel("Commit title (optional)").fill("Change things (#1)");
+    await merge.getByLabel("Commit title (optional)").fill(`Change things (#${number})`);
     await merge.getByRole("button", { name: "Merge pull request" }).click();
     await see(page.locator(".badge.status-merged")).toBeVisible({ timeout: 30_000 });
     await see(page.locator(".timeline-event")).toContainText("Merged");
@@ -244,16 +293,14 @@ describe("pull requests in the web UI", () => {
       "GET",
       `/repos/${handle}/${name}/commits/main`,
     );
-    expect(main.commit.message).toMatch(/^Change things \(#1\)/);
+    expect(main.commit.message.startsWith(`Change things (#${number})`)).toBe(true);
     await accessible(page, "merged pull request");
   });
 
   it("resolves a conflict in the web editor, from the keyboard", async () => {
-    await rest("POST", `/repos/${handle}/${name}/pulls`, {
-      title: "Clash",
-      head: "clash",
-      base: "main",
-    });
+    // A branch whose README conflicts with the base's once the base changes it too.
+    await pushBranch("clash", { "README.md": "# Clash\n" });
+    const number = await openPull("clash", "Clash");
     // The base changes the same line.
     const readme = await rest<{ sha: string }>(
       "GET",
@@ -264,7 +311,7 @@ describe("pull requests in the web UI", () => {
       sha: readme.sha,
       content: Buffer.from("# Main\n").toString("base64"),
     });
-    await page.goto(`${stack.origin}/${handle}/${name}/pull/2/conflicts`);
+    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}/conflicts`);
     await see(page.getByText("1 conflict left in this file.")).toBeVisible();
     await accessible(page, "conflicts");
     const editor = page.getByLabel(/^Resolved content of README\.md/);
@@ -317,12 +364,12 @@ describe("pull requests in the web UI", () => {
   });
 
   it("draws only a window of a long file's lines, following the scroll", async () => {
-    const opened = await rest<{ number: number }>("POST", `/repos/${handle}/${name}/pulls`, {
-      title: "Big",
-      head: "big",
-      base: "main",
+    // One long file, for the renderer to draw a window of.
+    await pushBranch("big", {
+      "big.txt": `${Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`).join("\n")}\n`,
     });
-    await page.goto(`${stack.origin}/${handle}/${name}/pull/${opened.number}/files`);
+    const number = await openPull("big", "Big");
+    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}/files`);
     const drawn = page.locator("section.file", { hasText: "big.txt" }).locator("diffs-container");
     await see(drawn.getByText("line 1", { exact: true })).toBeVisible({ timeout: 30_000 });
     const mounted = () =>

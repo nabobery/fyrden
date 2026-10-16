@@ -38,9 +38,6 @@ let repoId = "";
 let agent: Awaited<ReturnType<typeof delegatedAgent>>;
 /** Where the agent started following. */
 let start = "";
-/** The pull request whose review is asked of the agent's user, and the user's own. */
-let asked = 0;
-let own = 0;
 
 beforeAll(async () => {
   forge = await startForge("feed");
@@ -107,11 +104,12 @@ describe("an agent following its user's activity feed (wrangler dev)", () => {
   }, async () => {
     const feed = new FeedFollower(agent.api, start);
     // A review asked of the agent's user.
-    asked = await askForReview("asked");
+    const asked = await askForReview("asked");
     // Its user's own pull request: changes requested, then approved, then a conflict with main.
     const head = await pushBranch(devGit, devWork, "own", "one\ntwo (dev)\n");
-    own = (await dev.api.call("pulls.create", { ...at(), title: "Own", head: "own", base: "main" }))
-      .number;
+    const own = (
+      await dev.api.call("pulls.create", { ...at(), title: "Own", head: "own", base: "main" })
+    ).number;
     const review = (event: "REQUEST_CHANGES" | "APPROVE", body?: string) =>
       owner.api.call("pulls.reviews.create", {
         ...at(),
@@ -156,9 +154,8 @@ describe("an agent following its user's activity feed (wrangler dev)", () => {
         .map((i) => `${i.item_key}@${i.version}`)
         .sort(),
     ).toEqual(again.map((i) => `${i.item_key}@${i.version}`).sort());
-  });
 
-  it("refuses a forged cursor or one ahead of the feed with 410 and where to resync", async () => {
+    // A sync lists what is open, with a cursor from which nothing has changed since.
     const synced = await agent.api.call("feed.sync", {});
     expect(synced.complete).toBe(true);
     const open = ours(synced.items).map((i) => `${i.thread_key} ${i.kind}`);
@@ -168,18 +165,20 @@ describe("an agent following its user's activity feed (wrangler dev)", () => {
       `pull/${own} merge_conflict`,
     ])
       expect(open).toContain(wanted);
-    // From its cursor, nothing has changed since.
     const caughtUp = await agent.api.call("feed.list", { since: synced.head_cursor });
     expect(caughtUp.items).toEqual([]);
     expect(caughtUp.poll_after_ms).toBeGreaterThan(0);
-    const viaMcp = await agent.mcp.tool<{ items: FeedItem[]; head_cursor: string }>(
+    const syncedViaMcp = await agent.mcp.tool<{ items: FeedItem[]; head_cursor: string }>(
       "sync_feed",
       {},
     );
-    expect(ours(viaMcp.items).map((i) => i.item_key)).toEqual(
+    expect(ours(syncedViaMcp.items).map((i) => i.item_key)).toEqual(
       ours(synced.items).map((i) => i.item_key),
     );
+  });
 
+  it("refuses a forged cursor or one ahead of the feed with 410 and where to resync", async () => {
+    const synced = await agent.api.call("feed.sync", {});
     const cursor = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
     const real = JSON.parse(Buffer.from(synced.head_cursor, "base64url").toString()) as {
       v: number;
@@ -200,8 +199,11 @@ describe("an agent following its user's activity feed (wrangler dev)", () => {
   it("drops a removed collaborator's items, and brings only new ones once access is back", {
     timeout: 240_000,
   }, async () => {
+    // An item of the repository in the feed first.
+    const removed = await askForReview("before-removal");
+    await new FeedFollower(agent.api, start).until(forge, removed, "review_requested", "open");
     const before = ours((await agent.api.call("feed.sync", {})).items);
-    expect(before.length).toBeGreaterThan(0);
+    expect(before.map((i) => i.thread_key)).toContain(`pull/${removed}`);
     await owner.api.call("repos.collaborators.remove", { ...at(), username: dev.handle });
     // Out of sight at once (the feed checks access when read)...
     expect(ours((await agent.api.call("feed.sync", {})).items)).toEqual([]);
