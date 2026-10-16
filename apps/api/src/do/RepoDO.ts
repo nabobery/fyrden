@@ -27,15 +27,7 @@ import {
   type ReviewEvent,
   rootIdentity,
 } from "@fyrden/domain";
-import {
-  type BlockCache,
-  isAncestor,
-  type LsRefsArgs,
-  type Oid,
-  oidFromHex,
-  oidToHex,
-  WalkLimitError,
-} from "@fyrden/git-core";
+import { type BlockCache, type LsRefsArgs, type Oid, oidFromHex, oidToHex } from "@fyrden/git-core";
 import { readModelFor } from "../events/read-model.js";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
@@ -68,13 +60,10 @@ import {
 import type { DetachHooks } from "../network/detach.js";
 import {
   IMPORT_POLICY,
-  ImportBusy,
   type ImportDeps,
   type ImportPolicy,
-  importInForeground,
   PullImports,
   publishStaged,
-  readyToPublish,
 } from "../network/pull-import.js";
 import { type NoticeAnswer, PullSource, type RevisionNotice } from "../network/pull-source.js";
 import { networkMembersAfter, networkRetire, soleNetworkMember } from "../network/repo-client.js";
@@ -110,7 +99,6 @@ import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
 import { RepoAuthority } from "./repo/authority.js";
 import {
-  BROWSE_POLICY,
   type Browsed,
   type CommitView,
   type CompareView,
@@ -149,12 +137,7 @@ import {
   type FileWriteResult,
   writeFiles,
 } from "./repo/file-writes.js";
-import {
-  ForkPulls,
-  OPEN_IMPORT_CALLS,
-  OPEN_IMPORT_STEPS,
-  type PullHeadWrite,
-} from "./repo/fork-pulls.js";
+import { ForkPulls, type PullHeadWrite } from "./repo/fork-pulls.js";
 import {
   type ApplySuggestionsInput,
   HeadBranchWrites,
@@ -171,6 +154,7 @@ import {
 } from "./repo/pull-discussion.js";
 import { mergeBaseOf, type PullFilesPage, pullCommits, pullFiles } from "./repo/pull-files.js";
 import { type MergePullInput, PullMerging } from "./repo/pull-merging.js";
+import { type ForkPullOpened, type PullOpened, PullOpening } from "./repo/pull-opening.js";
 import {
   type OpenPull,
   type PullCaller,
@@ -299,6 +283,9 @@ export class RepoDO extends MigratingDO {
 
   /** Pull requests between this repository and others of its fork network. */
   readonly #forkPulls: ForkPulls;
+
+  /** Pull requests opened, from this repository's branches or another's of its network. */
+  readonly #opening: PullOpening;
 
   /** Pulls the account's ACL snapshot for this repository. Tests may replace it. */
   pullAcl: (accountId: string) => Promise<AclSnapshot>;
@@ -566,6 +553,24 @@ export class RepoDO extends MigratingDO {
         this.#ensureAuditArchive();
       },
       headWriteHooks: () => this.headWriteHooks,
+    });
+    this.#opening = new PullOpening({
+      git: this.git,
+      env,
+      pulls: this.pulls,
+      feed: this.feed,
+      authority: this.#authority,
+      importDeps: () => this.#importDeps(),
+      importPolicy: () => this.importPolicy,
+      headReadable: (headRepoId, root) => this.#headReadable(headRepoId, root),
+      checkEpoch: () => this.checkEpoch(),
+      writeRefusal: () => this.#writeRefusal(),
+      committed: () => {
+        this.#armOutbox();
+        this.#ensureAuditArchive();
+      },
+      viewed: (pull) => this.#viewed(pull),
+      forkPullHooks: () => this.forkPullHooks,
     });
     // The commit point: the initiating principal may still write, under a
     // snapshot within the write window (a commit without one is the
@@ -1051,200 +1056,22 @@ export class RepoDO extends MigratingDO {
     });
   }
 
-  /**
-   * Opens a pull request from one of the repository's branches into
-   * another, for a caller the Worker found may open one (checked again
-   * here, with no await before the commit).
-   */
-  createPull(
-    input: Omit<OpenPull, "baseSha" | "headSha">,
-    actor: RefActor,
-  ): Promise<
-    | { ok: true; record: PullView }
-    | {
-        ok: false;
-        code:
-          | "repo_not_found"
-          | "repo_transferring"
-          | "access_lost"
-          | "base_not_found"
-          | "head_not_found"
-          | "same_branches"
-          | "no_commits"
-          | "already_exists"
-          | "busy";
-        number?: number;
-      }
-  > {
-    return this.#measured("createPull", async () => {
-      await this.checkEpoch();
-      const ceilings = await this.#authority.rolesPulled(actor.principal, actor.grantId ?? null);
-      const root = rootIdentity({
-        principalId: actor.principal,
-        grantId: actor.grantId ?? null,
-        ceilingIds: ceilings,
-      });
-      if (input.baseRef === input.headRef)
-        return { ok: false as const, code: "same_branches" as const };
-      const mentioned = await this.feed.prepare([input.body]);
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const refused = this.#writeRefusal();
-        if (refused) return { ok: false as const, code: refused.code as "repo_not_found" };
-        if (this.#authority.roleNow(actor.principal, ceilings) === null)
-          return { ok: false as const, code: "access_lost" as const };
-        const { version } = this.git.refStore.state();
-        const baseSha = this.pulls.branchTip(input.baseRef);
-        if (!baseSha) return { ok: false as const, code: "base_not_found" as const };
-        const headSha = this.pulls.branchTip(input.headRef);
-        if (!headSha) return { ok: false as const, code: "head_not_found" as const };
-        let merged: boolean;
-        try {
-          merged = await isAncestor(this.git.commitGraph, "verified", headSha, baseSha, {
-            maxCommits: 3 * BROWSE_POLICY.compareMaxCommits,
-          });
-        } catch (error) {
-          // Too far apart to tell cheaply: the head has commits of its own.
-          if (!(error instanceof WalkLimitError)) throw error;
-          merged = false;
-        }
-        if (merged) return { ok: false as const, code: "no_commits" as const };
-        if (this.git.refStore.state().version !== version) continue;
-        const role = this.#authority.roleNow(actor.principal, ceilings);
-        const opened = this.feed.within({ root, role, mentioned }, () =>
-          this.pulls.open({ ...input, baseSha, headSha }, version, { actor, root }),
-        );
-        if (!opened.ok && opened.code === "version-conflict") continue;
-        this.#armOutbox();
-        this.#ensureAuditArchive();
-        return opened.ok ? { ok: true as const, record: this.#viewed(opened.record) } : opened;
-      }
-      return { ok: false as const, code: "busy" as const };
-    });
+  /** Opens a pull request between two of the repository's branches (see `PullOpening.open`). */
+  createPull(input: Omit<OpenPull, "baseSha" | "headSha">, actor: RefActor): Promise<PullOpened> {
+    return this.#measured("createPull", () => this.#opening.open(input, actor));
   }
 
   /**
    * Opens a pull request whose head is a branch of another repository of
-   * the network (`headRepoId`, which the Worker found the caller reads):
-   * the head's revision is imported first (its packs borrowed, its commit
-   * graph copied), then the pull request is opened on it, its rows joining
-   * the graph in the same transaction; the head's repository then tells of
-   * each later revision.
+   * the network, its revision imported first (see `PullOpening.openFromFork`).
    */
   createForkPull(
     input: Omit<OpenPull, "baseSha" | "headSha" | "headRefVersion"> & {
       readonly headRepoId: string;
     },
     actor: RefActor,
-  ): Promise<
-    | { ok: true; record: PullView }
-    | {
-        ok: false;
-        code:
-          | "repo_not_found"
-          | "repo_transferring"
-          | "access_lost"
-          | "base_not_found"
-          | "head_not_found"
-          | "no_commits"
-          | "already_exists"
-          | "too_expensive"
-          | "view_full"
-          | "busy";
-        number?: number;
-      }
-  > {
-    return this.#measured("createForkPull", async () => {
-      await this.checkEpoch();
-      const ceilings = await this.#authority.rolesPulled(actor.principal, actor.grantId ?? null);
-      const root = rootIdentity({
-        principalId: actor.principal,
-        grantId: actor.grantId ?? null,
-        ceilingIds: ceilings,
-      });
-      // What can be refused without importing anything is refused first.
-      const refusedEarly = this.#writeRefusal();
-      if (refusedEarly) return { ok: false as const, code: refusedEarly.code as "repo_not_found" };
-      if (this.#authority.roleNow(actor.principal, ceilings) === null)
-        return { ok: false as const, code: "access_lost" as const };
-      if (!this.pulls.branchTip(input.baseRef))
-        return { ok: false as const, code: "base_not_found" as const };
-      const existing = this.pulls.openBetween(input.headRef, input.baseRef, input.headRepoId);
-      if (existing !== undefined)
-        return { ok: false as const, code: "already_exists" as const, number: existing };
-      const mentioned = await this.feed.prepare([input.body]);
-      const head = this.env.REPO.getByName(input.headRepoId);
-      const tip = await head.pullHeadTip(input.headRef);
-      if (!tip.sha) return { ok: false as const, code: "head_not_found" as const };
-      const imported = await importInForeground(
-        this.#importDeps(),
-        { importId: `open:${crypto.randomUUID()}`, headRepoId: input.headRepoId, sha: tip.sha },
-        {
-          policy: this.importPolicy,
-          maxSteps: OPEN_IMPORT_STEPS,
-          // Calls this invocation makes to other objects: within Free's 1,000, with room to spare.
-          budget: { used: 2, max: OPEN_IMPORT_CALLS },
-        },
-        async (work) => {
-          await this.forkPullHooks.beforePublish?.();
-          // Published, the revision becomes readable through the base: the opener must read the
-          // head's repository still (the Worker checked it before the import began).
-          if (!(await this.#headReadable(input.headRepoId, root)))
-            return { ok: false as const, code: "head_not_found" as const };
-          for (let attempt = 0; attempt < 3; attempt++) {
-            const refused = this.#writeRefusal();
-            if (refused) return { ok: false as const, code: refused.code as "repo_not_found" };
-            if (this.#authority.roleNow(actor.principal, ceilings) === null)
-              return { ok: false as const, code: "access_lost" as const };
-            const { version } = this.git.refStore.state();
-            const baseSha = this.pulls.branchTip(input.baseRef);
-            if (!baseSha) return { ok: false as const, code: "base_not_found" as const };
-            const headSha = oidFromHex(work.sha);
-            // A head the base's graph has already is in its history unless it is ahead of the base.
-            if (this.git.commitGraph.readSync([headSha], "verified")[0]) {
-              let merged: boolean;
-              try {
-                merged = await isAncestor(this.git.commitGraph, "verified", headSha, baseSha, {
-                  maxCommits: 3 * BROWSE_POLICY.compareMaxCommits,
-                });
-              } catch (error) {
-                if (!(error instanceof WalkLimitError)) throw error;
-                merged = false;
-              }
-              if (merged) return { ok: false as const, code: "no_commits" as const };
-            }
-            if (this.git.refStore.state().version !== version) continue;
-            if (!this.ctx.storage.transactionSync(() => readyToPublish(this.#importDeps(), work)))
-              return { ok: false as const, code: "busy" as const };
-            const role = this.#authority.roleNow(actor.principal, ceilings);
-            const opened = this.feed.within({ root, role, mentioned }, () =>
-              this.pulls.open(
-                { ...input, baseSha, headSha, headRefVersion: tip.refVersion },
-                version,
-                { actor, root },
-                () => {
-                  // Checked again in the ref transaction: the base's collection may have run.
-                  if (!readyToPublish(this.#importDeps(), work))
-                    throw new ImportBusy("the import changed");
-                  publishStaged(this.git, work.importId);
-                },
-              ),
-            );
-            if (opened.ok || opened.code !== "version-conflict") return opened;
-          }
-          return { ok: false as const, code: "busy" as const };
-        },
-      );
-      if (!imported.ok)
-        return {
-          ok: false as const,
-          code: imported.code === "unknown_commit" ? "head_not_found" : imported.code,
-        };
-      const opened = imported.value;
-      if (!opened.ok) return opened;
-      this.#armOutbox();
-      this.#ensureAuditArchive();
-      return { ok: true as const, record: this.#viewed(opened.record) };
-    });
+  ): Promise<ForkPullOpened> {
+    return this.#measured("createForkPull", () => this.#opening.openFromFork(input, actor));
   }
 
   /**
