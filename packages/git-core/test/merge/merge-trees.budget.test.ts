@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MergeBudget, mergeTrees } from "../../src/merge/merge-trees.js";
 import type { Oid } from "../../src/object/oid.js";
-import { kinds, stopped, store } from "./support.js";
+import { kinds, listed, stopped, store } from "./support.js";
 
 describe("mergeTrees, budget", () => {
   const files = (s: ReturnType<typeof store>, a: string, b: string) =>
@@ -173,6 +173,58 @@ describe("mergeTrees, budget", () => {
       const s = store();
       const untouched = { ff: "same\n" };
       expect((await merge(s, untouched, untouched, untouched)).kind).toBe("clean");
+    });
+
+    // Reading what one side alone changed would cost as much as diffing it
+    // (a whole added or deleted directory read through), where git takes it
+    // unread: the limit holds for the paths of the directories the merge walks.
+    describe("in a directory only one side changed, taken whole and unread", () => {
+      const [outer, ...inner] = dirs as [string, ...string[]];
+      /** The outermost of the directories over `files`, or none for null. */
+      const top = (s: ReturnType<typeof store>, files: Files | null) =>
+        files &&
+        inner.reduceRight(
+          (oid, dir) => s.tree({ [dir]: { mode: 0o40000, oid } }),
+          s.tree(
+            Object.fromEntries(Object.entries(files).map(([n, t]) => [n, { oid: s.blob(t) }])),
+          ),
+        );
+      /** A root of directory `d` (unless null) and a file `r`. */
+      const root = (s: ReturnType<typeof store>, d: Oid | null, r: string) =>
+        s.tree({ ...(d && { [outer]: { mode: 0o40000, oid: d } }), r: { oid: s.blob(r) } });
+      /** Ours changes the directories as given (null: none of them), theirs only `r`. */
+      const cases: readonly (readonly [string, Files | null, Files | null])[] = [
+        ["changed", { ff: "1\n" }, { ff: "2\n" }],
+        ["added", { g: "1\n" }, { g: "1\n", ff: "new\n" }],
+        ["deleted", { g: "1\n", ff: "1\n" }, { g: "1\n" }],
+        ["added with its directories", null, { ff: "new\n" }],
+        ["deleted with its directories", { ff: "1\n" }, null],
+      ];
+      for (const [what, base, ours] of cases)
+        it(`merges a 4,097-byte path ${what}, reading only the roots`, async () => {
+          const s = store();
+          let trees = 0;
+          const source = {
+            ...s.source,
+            readTree: (oid: Oid) => {
+              trees++;
+              return s.source.readTree(oid);
+            },
+          };
+          const [b, o] = [top(s, base), top(s, ours)];
+          const merged = await mergeTrees(
+            source,
+            root(s, b, "r\n"),
+            root(s, o, "r\n"),
+            root(s, b, "R\n"),
+          );
+          if (merged.kind !== "clean") return expect.fail(JSON.stringify(kinds(merged)));
+          expect(trees).toBe(3);
+          // Ours' directories, as they are, and theirs' `r`.
+          expect(await listed(s, merged.tree, merged.objects)).toEqual(
+            await listed(s, root(s, o, "R\n"), []),
+          );
+        });
     });
   });
 

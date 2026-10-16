@@ -162,9 +162,11 @@ const same = (a: TreeEntry | undefined, b: TreeEntry | undefined) =>
 /**
  * Merges `ours` and `theirs` (trees) from `base` (a tree, or null for
  * none). The path being merged is kept as its names, joined only for a
- * conflict or a file given to `resolve`; a path some side changed, or a
+ * conflict or a file given to `resolve`; a path some side changed in a
+ * directory the merge walks (the root, or one both sides changed), or a
  * directory walked into, longer than {@link DEFAULT_MAX_PATH_BYTES} stops
- * the merge.
+ * the merge. A directory only one side changed is taken whole and unread,
+ * as git takes it, whatever paths are inside.
  */
 export async function mergeTrees(
   source: ObjectSource,
@@ -261,10 +263,11 @@ export async function mergeTrees(
       const oe = om.get(key);
       const te = tm.get(key);
       const name = (oe ?? te ?? be)?.name as Uint8Array;
-      // A path some side changed must fit, joined or not (a tree diff from
-      // the base would list it); one no side changed is left alone, as a
-      // tree diff lists no unchanged path. Every path joined below is one
-      // some side changed, so this is its check too.
+      // A path some side changed must fit, joined or not; one no side
+      // changed is left alone, as a tree diff lists no unchanged path.
+      // Every path joined below is one some side changed, so this is its
+      // check too. Inside a directory one side alone changed nothing is
+      // checked: reading it would cost as much as diffing it.
       if (dirBytes + name.length > DEFAULT_MAX_PATH_BYTES && !(same(oe, be) && same(te, be)))
         throw new MergeLimitError("path");
       let entry: TreeEntry | undefined | null;
