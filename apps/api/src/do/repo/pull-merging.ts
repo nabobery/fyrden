@@ -1,4 +1,4 @@
-import type { RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import type { RefActor } from "@fyrden/adapters-cloudflare/git";
 import {
   atLeast,
   type CommitIdentity,
@@ -14,13 +14,13 @@ import {
   oidToHex,
   WalkLimitError,
 } from "@fyrden/git-core";
-import { type RepoAuthority, ZERO_ID } from "./authority.js";
+import { ZERO_ID } from "./authority.js";
 import { type Browsed, fail } from "./browse.js";
 import type { FeedActor, RepoFeed } from "./feed.js";
-import { BUSY, type FileWriteDeps } from "./file-writes.js";
+import { BUSY } from "./file-writes.js";
 import { type MergeMade, type MergePolicy, mergePull, PULL_CHANGED } from "./merge.js";
 import type { PullDiscussion } from "./pull-discussion.js";
-import type { PullRecord, RepoPulls } from "./pulls.js";
+import type { PullRecord } from "./pulls.js";
 import {
   type MergeStamps,
   type RebasePolicy,
@@ -29,6 +29,7 @@ import {
   rebaseJobId,
   type SagaView,
 } from "./rebase-saga.js";
+import type { WriteContext } from "./write-context.js";
 
 /*
  * A pull request merged into its base branch through the push path, as a
@@ -83,22 +84,10 @@ const REBASE_REPLACED = fail(
   "The pull request or its base branch changed while it was being rebased; a new rebase was started.",
 );
 
-export interface MergingDeps {
-  readonly git: RepoGitStorage;
-  readonly pulls: RepoPulls;
+export interface MergingDeps extends WriteContext {
   readonly rebases: RebaseSagas;
   readonly discussion: PullDiscussion;
-  readonly authority: RepoAuthority;
   readonly feed: RepoFeed;
-  readonly repoId: () => string;
-  /** Takes the directory's epoch (a commit needs it first). */
-  readonly checkEpoch: () => Promise<void>;
-  /** Why the repository takes no change now. */
-  readonly writeRefusal: () => { status: 404 | 409; code: string; error: string } | undefined;
-  /** The write deps of the current invocation. */
-  readonly writeDeps: () => Promise<FileWriteDeps>;
-  /** After a change: what the object does after any it makes (outbox, audit). */
-  readonly committed: () => void;
   readonly mergePolicy: () => MergePolicy;
   readonly rebasePolicy: () => RebasePolicy;
   /** For tests: runs before a merge is committed. */

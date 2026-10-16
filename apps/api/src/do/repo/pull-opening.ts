@@ -1,4 +1,4 @@
-import type { RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import type { RefActor } from "@fyrden/adapters-cloudflare/git";
 import { rootIdentity } from "@fyrden/domain";
 import { isAncestor, oidFromHex, WalkLimitError } from "@fyrden/git-core";
 import {
@@ -9,12 +9,12 @@ import {
   publishStaged,
   readyToPublish,
 } from "../../network/pull-import.js";
-import type { RepoAuthority } from "./authority.js";
 import { BROWSE_POLICY } from "./browse.js";
 import type { RepoFeed } from "./feed.js";
 import { OPEN_IMPORT_CALLS, OPEN_IMPORT_STEPS } from "./fork-pulls.js";
 import type { PullView } from "./mergeability.js";
-import type { OpenPull, PullRecord, RepoPulls } from "./pulls.js";
+import type { OpenPull, PullRecord } from "./pulls.js";
+import type { WriteContext } from "./write-context.js";
 
 /*
  * Pull requests opened: between two of the repository's branches, or from
@@ -61,22 +61,12 @@ export type ForkPullOpened =
       number?: number;
     };
 
-export interface OpeningDeps {
-  readonly git: RepoGitStorage;
-  readonly env: Env;
-  readonly pulls: RepoPulls;
+export interface OpeningDeps extends WriteContext {
   readonly feed: RepoFeed;
-  readonly authority: RepoAuthority;
   readonly importDeps: () => ImportDeps;
   readonly importPolicy: () => ImportPolicy;
   /** Whether `root` reads the repository `headRepoId`, asked of its object. */
   readonly headReadable: (headRepoId: string, root: string) => Promise<boolean>;
-  /** Takes the directory's epoch (a commit needs it first). */
-  readonly checkEpoch: () => Promise<void>;
-  /** Why the repository takes no change now. */
-  readonly writeRefusal: () => { status: 404 | 409; code: string; error: string } | undefined;
-  /** After a change: what the object does after any it makes (outbox, audit). */
-  readonly committed: () => void;
   /** A pull request with whether it merges, as far as that is known now. */
   readonly viewed: (pull: PullRecord) => PullView;
   /** For tests: runs before a revision imported from another repository is published. */
@@ -169,7 +159,7 @@ export class PullOpening {
     if (existing !== undefined)
       return { ok: false as const, code: "already_exists" as const, number: existing };
     const mentioned = await feed.prepare([input.body]);
-    const head = this.deps.env.REPO.getByName(input.headRepoId);
+    const head = this.deps.env().REPO.getByName(input.headRepoId);
     const tip = await head.pullHeadTip(input.headRef);
     if (!tip.sha) return { ok: false as const, code: "head_not_found" as const };
     const imported = await importInForeground(

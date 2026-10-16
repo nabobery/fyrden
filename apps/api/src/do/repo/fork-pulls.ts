@@ -3,7 +3,6 @@ import {
   type JobHandler,
   type MaintainerFor,
   type RefActor,
-  type RepoGitStorage,
 } from "@fyrden/adapters-cloudflare/git";
 import type { Logger } from "@fyrden/adapters-cloudflare/obs";
 import { atLeast } from "@fyrden/domain";
@@ -20,17 +19,10 @@ import {
   releaseLease,
 } from "../../network/pull-import.js";
 import type { NoticeAnswer, PullSource, RevisionNotice } from "../../network/pull-source.js";
-import type { RepoAcl } from "./acl.js";
-import type { RepoAuthority } from "./authority.js";
 import { type Browsed, fail } from "./browse.js";
-import {
-  BUSY,
-  type FileWriteDeps,
-  finishUpload,
-  storeUpload,
-  refused as writeRefused,
-} from "./file-writes.js";
-import type { PullRecord, RepoPulls } from "./pulls.js";
+import { BUSY, finishUpload, storeUpload, refused as writeRefused } from "./file-writes.js";
+import type { PullRecord } from "./pulls.js";
+import type { WriteContext } from "./write-context.js";
 
 /*
  * Pull requests between repositories of a fork network. On the base's
@@ -102,26 +94,12 @@ function headWriteRefused(report: PushReportSummary): Browsed<never> {
   return writeRefused(report);
 }
 
-export interface ForkPullDeps {
-  readonly git: RepoGitStorage;
-  readonly env: Env;
-  readonly acl: RepoAcl;
-  readonly pulls: RepoPulls;
+export interface ForkPullDeps extends WriteContext {
   readonly pullSource: PullSource;
   readonly pullImports: PullImports;
-  readonly authority: RepoAuthority;
   readonly importDeps: () => ImportDeps;
   readonly importPolicy: () => ImportPolicy;
-  readonly repoId: () => string;
   readonly log: () => Logger;
-  /** Takes the directory's epoch (a commit needs it first). */
-  readonly checkEpoch: () => Promise<void>;
-  /** Why the repository takes no change now. */
-  readonly writeRefusal: () => { status: 404 | 409; code: string; error: string } | undefined;
-  /** The write deps of the current invocation. */
-  readonly writeDeps: () => Promise<FileWriteDeps>;
-  /** After a change: what the object does after any it makes (outbox, audit). */
-  readonly committed: () => void;
   /** For tests: runs before a write handed over by the base is finished. */
   readonly headWriteHooks: () => { readonly beforeFinish?: () => Promise<void> };
 }
@@ -189,7 +167,7 @@ export class ForkPulls {
 
   /** The job telling heads' repositories which branches to follow; one not reached is tried later. */
   followHandler(): JobHandler {
-    const { git, env } = this.deps;
+    const { git } = this.deps;
     return {
       runSlice: async () => {
         const sql = git.context.storage.sql;
@@ -210,7 +188,7 @@ export class ForkPulls {
           )
           .toArray();
         for (const row of rows) {
-          const head = env.REPO.getByName(row.head_repo_id);
+          const head = this.deps.env().REPO.getByName(row.head_repo_id);
           // Counted before it is made (a failure too): the job queue stops near the call budget.
           git.context.metrics.count("do.request", {
             class: "RepoDO",

@@ -179,6 +179,7 @@ import {
   templateTree,
   writeTemplate,
 } from "./repo/template.js";
+import type { WriteContext, WriteRefusal } from "./repo/write-context.js";
 import { repoSchema } from "./schema/repo.js";
 import type { FeedPurge } from "./user/feed.js";
 
@@ -494,13 +495,12 @@ export class RepoDO extends MigratingDO {
       pullChange: (method, actor, change, prepare, texts) =>
         this.#pullChange(method, actor, change, prepare, texts),
     });
-    this.#merging = new PullMerging({
+    const writes: WriteContext = {
       git: this.git,
+      env: () => this.env,
+      acl: this.acl,
       pulls: this.pulls,
-      rebases: this.rebases,
-      discussion: this.#discussion,
       authority: this.#authority,
-      feed: this.feed,
       repoId: () => this.#repoId(),
       checkEpoch: () => this.checkEpoch(),
       writeRefusal: () => this.#writeRefusal(),
@@ -509,66 +509,39 @@ export class RepoDO extends MigratingDO {
         this.#armOutbox();
         this.#ensureAuditArchive();
       },
+    };
+    this.#merging = new PullMerging({
+      ...writes,
+      rebases: this.rebases,
+      discussion: this.#discussion,
+      feed: this.feed,
       mergePolicy: () => this.mergePolicy,
       rebasePolicy: () => this.rebasePolicy,
       hooks: () => this.mergeHooks,
     });
     this.#headWrites = new HeadBranchWrites({
-      git: this.git,
-      env,
-      acl: this.acl,
-      pulls: this.pulls,
+      ...writes,
       reviewComments: this.reviewComments,
-      authority: this.#authority,
       memoryBlocks: () => this.#memoryBlocks(),
-      repoId: () => this.#repoId(),
-      checkEpoch: () => this.checkEpoch(),
-      writeRefusal: () => this.#writeRefusal(),
-      writeDeps: () => this.#writeDeps(),
-      committed: () => {
-        this.#armOutbox();
-        this.#ensureAuditArchive();
-      },
       mergePolicy: () => this.mergePolicy,
       suggestionHooks: () => this.suggestionHooks,
       headMergeHooks: () => this.headMergeHooks,
     });
     this.#forkPulls = new ForkPulls({
-      git: this.git,
-      env,
-      acl: this.acl,
-      pulls: this.pulls,
+      ...writes,
       pullSource: this.pullSource,
       pullImports: this.pullImports,
-      authority: this.#authority,
       importDeps: () => this.#importDeps(),
       importPolicy: () => this.importPolicy,
-      repoId: () => this.#repoId(),
       log: () => this.#log(),
-      checkEpoch: () => this.checkEpoch(),
-      writeRefusal: () => this.#writeRefusal(),
-      writeDeps: () => this.#writeDeps(),
-      committed: () => {
-        this.#armOutbox();
-        this.#ensureAuditArchive();
-      },
       headWriteHooks: () => this.headWriteHooks,
     });
     this.#opening = new PullOpening({
-      git: this.git,
-      env,
-      pulls: this.pulls,
+      ...writes,
       feed: this.feed,
-      authority: this.#authority,
       importDeps: () => this.#importDeps(),
       importPolicy: () => this.importPolicy,
       headReadable: (headRepoId, root) => this.#headReadable(headRepoId, root),
-      checkEpoch: () => this.checkEpoch(),
-      writeRefusal: () => this.#writeRefusal(),
-      committed: () => {
-        this.#armOutbox();
-        this.#ensureAuditArchive();
-      },
       viewed: (pull) => this.#viewed(pull),
       forkPullHooks: () => this.forkPullHooks,
     });
@@ -2692,7 +2665,7 @@ export class RepoDO extends MigratingDO {
    * gone or going (or still being generated from a template), 409 while a
    * transfer moves it.
    */
-  #writeRefusal(): { status: 404 | 409; code: string; error: string } | undefined {
+  #writeRefusal(): WriteRefusal | undefined {
     if (this.#closed || !this.#hasGitStorage() || this.events.isDeleted())
       return { status: 404, code: "repo_not_found", error: REPO_DELETED };
     if (this.events.isTransferring())

@@ -1,4 +1,4 @@
-import type { RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import type { RefActor } from "@fyrden/adapters-cloudflare/git";
 import {
   atLeast,
   type CommitIdentity,
@@ -16,8 +16,7 @@ import {
   WalkLimitError,
 } from "@fyrden/git-core";
 import { reauthorizeByToken } from "../../git/push/reauthorize-token.js";
-import type { RepoAcl } from "./acl.js";
-import { type RepoAuthority, ZERO_ID } from "./authority.js";
+import { ZERO_ID } from "./authority.js";
 import { type Browsed, fail, RepoBrowse } from "./browse.js";
 import {
   CONFLICTS_POLICY,
@@ -27,16 +26,12 @@ import {
   parseSnapshot,
   readConflicts,
 } from "./conflicts.js";
-import {
-  type FileWriteDeps,
-  type FileWriteResult,
-  writeFiles,
-  refused as writeRefused,
-} from "./file-writes.js";
+import { type FileWriteResult, writeFiles, refused as writeRefused } from "./file-writes.js";
 import type { MergePolicy } from "./merge.js";
-import type { PullRecord, RepoPulls } from "./pulls.js";
+import type { PullRecord } from "./pulls.js";
 import type { RepoReviewComments, ReviewCommentRecord } from "./review-comments.js";
 import { suggestedChanges } from "./suggestions.js";
+import type { WriteContext } from "./write-context.js";
 
 /*
  * Writes of an open pull request's head branch made through its base
@@ -93,23 +88,9 @@ const PULL_CHANGED_WHILE_MERGING = "the pull request changed while the merge was
 /** An open pull request's head and base tip, as a write of its head branch starts from them. */
 type HeadAt = { readonly pull: PullRecord; readonly head: Oid; readonly baseTip: Oid };
 
-export interface HeadWriteDeps {
-  readonly git: RepoGitStorage;
-  readonly env: Env;
-  readonly acl: RepoAcl;
-  readonly pulls: RepoPulls;
+export interface HeadWriteDeps extends WriteContext {
   readonly reviewComments: RepoReviewComments;
-  readonly authority: RepoAuthority;
   readonly memoryBlocks: () => BlockCache;
-  readonly repoId: () => string;
-  /** Takes the directory's epoch (a commit needs it first). */
-  readonly checkEpoch: () => Promise<void>;
-  /** Why the repository takes no change now. */
-  readonly writeRefusal: () => { status: 404 | 409; code: string; error: string } | undefined;
-  /** The write deps of the current invocation. */
-  readonly writeDeps: () => Promise<FileWriteDeps>;
-  /** After a change: what the object does after any it makes (outbox, audit). */
-  readonly committed: () => void;
   readonly mergePolicy: () => MergePolicy;
   /** For tests: runs before suggestions are written. */
   readonly suggestionHooks: () => { readonly beforeWrite?: () => Promise<void> };
@@ -382,7 +363,6 @@ export class HeadBranchWrites {
     },
     fence: () => string | undefined,
   ): Promise<Browsed<{ sha: string }>> {
-    const { env } = this.deps;
     const writer = {
       principal: actor.principal,
       tokenId: actor.tokenId ?? "",
@@ -390,7 +370,7 @@ export class HeadBranchWrites {
       requestId: actor.requestId ?? null,
     };
     const decision = await reauthorizeByToken(
-      env.DIRECTORY,
+      this.deps.env().DIRECTORY,
       { ...writer, repoId: this.deps.repoId() },
       (principalId) => this.deps.acl.roleOf(principalId, "write"),
     );
@@ -414,19 +394,22 @@ export class HeadBranchWrites {
       );
     const fenced = fence();
     if (fenced) return fail(409, "pull_changed", fenced);
-    return env.REPO.getByName(pull.headRepoId as string).pullHeadWrite({
-      baseRepoId: this.deps.repoId(),
-      number: pull.number,
-      generation: pull.generation,
-      headRef: pull.headRef,
-      old: oidToHex(write.old),
-      commit: oidToHex(write.commit),
-      pack: write.pack,
-      ...(write.materialize && { materialize: oidToHex(write.materialize) }),
-      writer,
-      maintainerAllowed: now.maintainerCanModify,
-      baseDecision: decision,
-    });
+    return this.deps
+      .env()
+      .REPO.getByName(pull.headRepoId as string)
+      .pullHeadWrite({
+        baseRepoId: this.deps.repoId(),
+        number: pull.number,
+        generation: pull.generation,
+        headRef: pull.headRef,
+        old: oidToHex(write.old),
+        commit: oidToHex(write.commit),
+        pack: write.pack,
+        ...(write.materialize && { materialize: oidToHex(write.materialize) }),
+        writer,
+        maintainerAllowed: now.maintainerCanModify,
+        baseDecision: decision,
+      });
   }
 
   /** The base tip merged into the head on the head branch (see `mergeIntoHead`). */
