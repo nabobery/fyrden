@@ -207,6 +207,53 @@ export async function runImportStep(
   }
 }
 
+/** Why an import run within one invocation gave up (its caller answers in its own terms). */
+export type ForegroundRefusal = "too_expensive" | "unknown_commit" | "busy";
+
+/**
+ * Imports `sha` of `headRepoId` within the caller's invocation: its steps
+ * until it can publish, at most `maxSteps` and within `budget` (calls to
+ * other objects, counting those the caller made already), then `publish`,
+ * the caller's own publication (its transaction checks `readyToPublish`
+ * and publishes the staged rows). A step's failure, or one `publish`
+ * throws (`ImportBusy`, `ImportFailed`), is answered as a refusal.
+ * Published or not, the import's staged rows go (none are left once
+ * published) and its lease is released; packs it borrowed are left to a
+ * later collection.
+ */
+export async function importInForeground<T>(
+  deps: ImportDeps,
+  start: Pick<ImportWork, "importId" | "headRepoId" | "sha">,
+  limits: { readonly policy: ImportPolicy; readonly maxSteps: number; readonly budget: CallBudget },
+  publish: (work: ImportWork) => Promise<T>,
+): Promise<{ ok: true; value: T } | { ok: false; code: ForegroundRefusal }> {
+  const { budget } = limits;
+  let work: ImportWork = { ...start, step: "snapshot", leaseId: null, state: {} };
+  try {
+    for (let steps = 0; work.step !== "publish"; steps++) {
+      if (steps >= limits.maxSteps || budget.used >= budget.max)
+        return { ok: false, code: "too_expensive" };
+      work = await runImportStep(deps, work, limits.policy, budget);
+    }
+    return { ok: true, value: await publish(work) };
+  } catch (error) {
+    if (error instanceof ImportFailed)
+      return {
+        ok: false,
+        code:
+          error.code === "too_large"
+            ? "too_expensive"
+            : error.code === "unknown_commit"
+              ? "unknown_commit"
+              : "busy",
+      };
+    if (error instanceof ImportBusy) return { ok: false, code: "busy" };
+    throw error;
+  } finally {
+    await discardImport(deps, work);
+  }
+}
+
 /** The rows staged for an import. */
 function stagedCount(git: RepoGitStorage, importId: string): number {
   return git.context.storage.sql

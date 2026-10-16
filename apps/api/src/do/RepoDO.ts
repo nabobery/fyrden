@@ -91,19 +91,15 @@ import {
 } from "../git/push/repo-push.js";
 import type { DetachHooks } from "../network/detach.js";
 import {
-  collectLater,
-  discardImport,
   IMPORT_POLICY,
   ImportBusy,
   type ImportDeps,
-  ImportFailed,
   type ImportPolicy,
-  type ImportWork,
+  importInForeground,
   PullImports,
   publishStaged,
   readyToPublish,
   releaseLease,
-  runImportStep,
 } from "../network/pull-import.js";
 import { type NoticeAnswer, PullSource, type RevisionNotice } from "../network/pull-source.js";
 import { networkRetire, soleNetworkMember } from "../network/repo-client.js";
@@ -1272,88 +1268,71 @@ export class RepoDO extends MigratingDO {
       const head = this.env.REPO.getByName(input.headRepoId);
       const tip = await head.pullHeadTip(input.headRef);
       if (!tip.sha) return { ok: false as const, code: "head_not_found" as const };
-      const importId = `open:${crypto.randomUUID()}`;
-      // Calls this invocation makes to other objects: within Free's 1,000, with room to spare.
-      const budget = { used: 2, max: OPEN_IMPORT_CALLS };
-      let work: ImportWork = {
-        importId,
-        headRepoId: input.headRepoId,
-        sha: tip.sha,
-        step: "snapshot",
-        leaseId: null,
-        state: {},
-      };
-      let opened: Awaited<ReturnType<RepoPulls["open"]>> | undefined;
-      try {
-        for (let steps = 0; work.step !== "publish"; steps++) {
-          if (steps >= OPEN_IMPORT_STEPS || budget.used >= budget.max)
-            return { ok: false as const, code: "too_expensive" as const };
-          work = await runImportStep(this.#importDeps(), work, this.importPolicy, budget);
-        }
-        await this.forkPullHooks.beforePublish?.();
-        // Published, the revision becomes readable through the base: the opener must read the
-        // head's repository still (the Worker checked it before the import began).
-        if (!(await this.#headReadable(input.headRepoId, root)))
-          return { ok: false as const, code: "head_not_found" as const };
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const refused = this.#writeRefusal();
-          if (refused) return { ok: false as const, code: refused.code as "repo_not_found" };
-          if (this.#roleNow(actor.principal, ceilings) === null)
-            return { ok: false as const, code: "access_lost" as const };
-          const { version } = this.git.refStore.state();
-          const baseSha = this.pulls.branchTip(input.baseRef);
-          if (!baseSha) return { ok: false as const, code: "base_not_found" as const };
-          const headSha = oidFromHex(tip.sha);
-          // A head the base's graph has already is in its history unless it is ahead of the base.
-          if (this.git.commitGraph.readSync([headSha], "verified")[0]) {
-            let merged: boolean;
-            try {
-              merged = await isAncestor(this.git.commitGraph, "verified", headSha, baseSha, {
-                maxCommits: 3 * BROWSE_POLICY.compareMaxCommits,
-              });
-            } catch (error) {
-              if (!(error instanceof WalkLimitError)) throw error;
-              merged = false;
+      const imported = await importInForeground(
+        this.#importDeps(),
+        { importId: `open:${crypto.randomUUID()}`, headRepoId: input.headRepoId, sha: tip.sha },
+        {
+          policy: this.importPolicy,
+          maxSteps: OPEN_IMPORT_STEPS,
+          // Calls this invocation makes to other objects: within Free's 1,000, with room to spare.
+          budget: { used: 2, max: OPEN_IMPORT_CALLS },
+        },
+        async (work) => {
+          await this.forkPullHooks.beforePublish?.();
+          // Published, the revision becomes readable through the base: the opener must read the
+          // head's repository still (the Worker checked it before the import began).
+          if (!(await this.#headReadable(input.headRepoId, root)))
+            return { ok: false as const, code: "head_not_found" as const };
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const refused = this.#writeRefusal();
+            if (refused) return { ok: false as const, code: refused.code as "repo_not_found" };
+            if (this.#roleNow(actor.principal, ceilings) === null)
+              return { ok: false as const, code: "access_lost" as const };
+            const { version } = this.git.refStore.state();
+            const baseSha = this.pulls.branchTip(input.baseRef);
+            if (!baseSha) return { ok: false as const, code: "base_not_found" as const };
+            const headSha = oidFromHex(work.sha);
+            // A head the base's graph has already is in its history unless it is ahead of the base.
+            if (this.git.commitGraph.readSync([headSha], "verified")[0]) {
+              let merged: boolean;
+              try {
+                merged = await isAncestor(this.git.commitGraph, "verified", headSha, baseSha, {
+                  maxCommits: 3 * BROWSE_POLICY.compareMaxCommits,
+                });
+              } catch (error) {
+                if (!(error instanceof WalkLimitError)) throw error;
+                merged = false;
+              }
+              if (merged) return { ok: false as const, code: "no_commits" as const };
             }
-            if (merged) return { ok: false as const, code: "no_commits" as const };
+            if (this.git.refStore.state().version !== version) continue;
+            if (!this.ctx.storage.transactionSync(() => readyToPublish(this.git, work)))
+              return { ok: false as const, code: "busy" as const };
+            const role = this.#roleNow(actor.principal, ceilings);
+            const opened = this.feed.within({ root, role, mentioned }, () =>
+              this.pulls.open(
+                { ...input, baseSha, headSha, headRefVersion: tip.refVersion },
+                version,
+                { actor, root },
+                () => {
+                  // Checked again in the ref transaction: the base's collection may have run.
+                  if (!readyToPublish(this.git, work)) throw new ImportBusy("the import changed");
+                  publishStaged(this.git, work.importId);
+                },
+              ),
+            );
+            if (opened.ok || opened.code !== "version-conflict") return opened;
           }
-          if (this.git.refStore.state().version !== version) continue;
-          if (!this.ctx.storage.transactionSync(() => readyToPublish(this.git, work)))
-            return { ok: false as const, code: "busy" as const };
-          const role = this.#roleNow(actor.principal, ceilings);
-          opened = this.feed.within({ root, role, mentioned }, () =>
-            this.pulls.open(
-              { ...input, baseSha, headSha, headRefVersion: tip.refVersion },
-              version,
-              { actor, root },
-              () => {
-                // Checked again in the ref transaction: the base's collection may have run.
-                if (!readyToPublish(this.git, work)) throw new ImportBusy("the import changed");
-                publishStaged(this.git, importId);
-              },
-            ),
-          );
-          if (!opened.ok && opened.code === "version-conflict") continue;
-          break;
-        }
-      } catch (error) {
-        if (error instanceof ImportFailed)
-          return error.code === "too_large"
-            ? { ok: false as const, code: "too_expensive" as const }
-            : error.code === "unknown_commit"
-              ? { ok: false as const, code: "head_not_found" as const }
-              : { ok: false as const, code: "busy" as const };
-        if (error instanceof ImportBusy) return { ok: false as const, code: "busy" as const };
-        throw error;
-      } finally {
-        if (opened?.ok) {
-          // All the head's packs were borrowed: those no ref reaches go with a later collection.
-          if ((work.state.packs?.length ?? 0) > 0) collectLater(this.git);
-          await releaseLease(this.#importDeps(), work);
-        } else await discardImport(this.#importDeps(), work);
-      }
-      if (!opened) return { ok: false as const, code: "busy" as const };
-      if (!opened.ok) return opened as { ok: false; code: "already_exists"; number: number };
+          return { ok: false as const, code: "busy" as const };
+        },
+      );
+      if (!imported.ok)
+        return {
+          ok: false as const,
+          code: imported.code === "unknown_commit" ? "head_not_found" : imported.code,
+        };
+      const opened = imported.value;
+      if (!opened.ok) return opened;
       this.#armOutbox();
       this.#ensureAuditArchive();
       return { ok: true as const, record: this.#viewed(opened.record) };
@@ -4123,39 +4102,26 @@ export class RepoDO extends MigratingDO {
   async #importFrom(sourceRepoId: string, sha: string): Promise<Browsed<true>> {
     // Even with its commit rows here, its objects may be in packs collected since: always
     // borrowed again (the graph step copies only the commits missing).
-    const importId = `head-write:${crypto.randomUUID()}`;
-    const budget = { used: 0, max: OPEN_IMPORT_CALLS };
-    let work: ImportWork = {
-      importId,
-      headRepoId: sourceRepoId,
-      sha,
-      step: "snapshot",
-      leaseId: null,
-      state: {},
-    };
-    try {
-      for (let steps = 0; work.step !== "publish"; steps++) {
-        if (steps >= OPEN_IMPORT_STEPS || budget.used >= budget.max)
-          return fail(422, "too_expensive", "The base branch is too far ahead to bring here now.");
-        work = await runImportStep(this.#importDeps(), work, this.importPolicy, budget);
-      }
-      const published = this.ctx.storage.transactionSync(() => {
-        if (!readyToPublish(this.git, work)) return false;
-        publishStaged(this.git, importId);
-        return true;
-      });
-      if (!published) return BUSY;
-      return { ok: true, value: true };
-    } catch (error) {
-      if (error instanceof ImportFailed)
-        return error.code === "too_large"
-          ? fail(422, "too_expensive", "The base branch is too far ahead to bring here now.")
-          : BUSY;
-      if (error instanceof ImportBusy) return BUSY;
-      throw error;
-    } finally {
-      await discardImport(this.#importDeps(), work).catch(() => undefined);
-    }
+    const imported = await importInForeground(
+      this.#importDeps(),
+      { importId: `head-write:${crypto.randomUUID()}`, headRepoId: sourceRepoId, sha },
+      {
+        policy: this.importPolicy,
+        maxSteps: OPEN_IMPORT_STEPS,
+        budget: { used: 0, max: OPEN_IMPORT_CALLS },
+      },
+      async (work) =>
+        this.ctx.storage.transactionSync(() => {
+          if (!readyToPublish(this.git, work)) return false;
+          publishStaged(this.git, work.importId);
+          return true;
+        }),
+    );
+    if (!imported.ok)
+      return imported.code === "too_expensive"
+        ? fail(422, "too_expensive", "The base branch is too far ahead to bring here now.")
+        : BUSY;
+    return imported.value ? { ok: true, value: true } : BUSY;
   }
 
   /** A pull request of `baseRepoId` no longer follows a branch here (as of `generation`). */
