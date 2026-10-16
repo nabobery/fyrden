@@ -6,6 +6,7 @@ import type {
 } from "@fyrden/adapters-cloudflare/git";
 import type { Logger } from "@fyrden/adapters-cloudflare/obs";
 import { oidFromHex, oidToHex } from "@fyrden/git-core";
+import { decodeJson, encodeJson } from "../git/maintenance/storage.js";
 import { viewPacks } from "./member.js";
 import type { ViewPack } from "./types.js";
 
@@ -59,6 +60,28 @@ export interface PullSourceDeps {
   readonly log: () => Logger;
   /** The restore generation this repository's object has taken. */
   readonly epoch: () => number;
+  /** Other active repositories of its fork network, by id after `after`, at most `limit`. */
+  readonly members: (after: string, limit: number) => Promise<string[]>;
+  /**
+   * Asks a member to follow again its open pull requests whose head is
+   * here, those numbered after `after` (a page); answers the number to go
+   * on after, or null when it has no more.
+   */
+  readonly followAgain: (baseRepoId: string, after: number) => Promise<number | null>;
+}
+
+/** Members one page of the job asking bases to follow again reads. Proposed. */
+const MEMBERS_PER_PAGE = 50;
+/** Calls to other objects (and directory reads) one slice of that job makes at most. Proposed. */
+const REFOLLOW_CALLS_PER_SLICE = 20;
+
+/** Where the job asking bases to follow again is: the members left of a page, after the last done. */
+interface RefollowCursor {
+  /** The last member of the network asked fully (ids in order). */
+  readonly last: string;
+  /** Members of the page read, still to ask, the first one from pull request `after` on. */
+  readonly queue: readonly string[];
+  readonly after: number;
 }
 
 /**
@@ -382,6 +405,45 @@ export class PullSource {
   }
 
   /**
+   * In the transaction taking a new restore generation: the restored
+   * object may predate registrations its bases made since (their requests
+   * are gone once told), so it would tell them of no push. Every other
+   * member of the network is asked, by the `pull_refollow` job, to follow
+   * again its open pull requests whose head is here: each registers anew
+   * and is told where the branch is.
+   */
+  restored(): void {
+    this.deps.git.jobs.restart("pull_refollow", PULL_REFOLLOW_JOB);
+  }
+
+  /**
+   * The job asking the network's members to follow again: a page of
+   * members at a time, each asked page by page of its pull requests, within
+   * a few calls a slice. A member that cannot be asked fails the slice,
+   * tried again from where the last one left it.
+   */
+  refollowHandler(): JobHandler {
+    return {
+      runSlice: async (job): Promise<SliceResult> => {
+        let cursor = decodeJson<RefollowCursor>(job.cursor) ?? { last: "", queue: [], after: 0 };
+        for (let calls = 0; calls < REFOLLOW_CALLS_PER_SLICE; calls++) {
+          const [member, ...rest] = cursor.queue;
+          if (member === undefined) {
+            const page = await this.deps.members(cursor.last, MEMBERS_PER_PAGE);
+            if (page.length === 0) return { done: true };
+            cursor = { ...cursor, queue: page, after: 0 };
+            continue;
+          }
+          const next = await this.deps.followAgain(member, cursor.after);
+          cursor =
+            next === null ? { last: member, queue: rest, after: 0 } : { ...cursor, after: next };
+        }
+        return { done: false, cursor: encodeJson(cursor), runAfterMs: 0 };
+      },
+    };
+  }
+
+  /**
    * A revision a base imports: the packs that may hold it, read-leased by
    * `holder` for `ttlMs` (so none is deleted before the network records the
    * base's claims), when `sha` is a commit of its graph: the live ones, and
@@ -413,3 +475,6 @@ export class PullSource {
 
 /** The one job telling bases of revisions. */
 export const PULL_NOTICES_JOB = "pull-notices";
+
+/** The one job asking the network's members to follow again after a restore. */
+export const PULL_REFOLLOW_JOB = "pull-refollow";

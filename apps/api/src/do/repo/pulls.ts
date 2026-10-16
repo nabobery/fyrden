@@ -182,6 +182,17 @@ export class RepoPulls {
     return rows.map(record);
   }
 
+  /** Open pull requests whose head is in `headRepoId`, numbered after `after`, at most `limit`. */
+  openFrom(headRepoId: string, after: number, limit: number): PullRecord[] {
+    return this.#rows(
+      `SELECT * FROM pull_requests WHERE state = 'open' AND head_repo_id = ? AND number > ?
+       ORDER BY number LIMIT ?`,
+      headRepoId,
+      after,
+      limit,
+    ).map(record);
+  }
+
   /** The ref store's derived updates: each open pull request's ref follows its head branch. */
   derive(updates: readonly RefUpdate[]): DerivedRefUpdate[] {
     const derived: DerivedRefUpdate[] = [];

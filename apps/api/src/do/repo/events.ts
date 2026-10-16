@@ -173,6 +173,8 @@ export class RepoEvents {
     private readonly git: RepoGitStorage,
     private readonly outbox: Outbox,
     private readonly repoId: () => string,
+    /** In the transaction taking a new restore generation: recovers what the restore may have lost. */
+    private readonly restored: () => void = () => {},
   ) {}
 
   get #storage() {
@@ -288,7 +290,8 @@ export class RepoEvents {
    * transfer or a rename: it takes the owner and name the directory names
    * now (`owner`), the owner in a generation past the read model's fence,
    * so a former owner's account no longer answers for it. Emits a snapshot
-   * under the new epoch. Once per instance; a repository without an
+   * under the new epoch, and runs `restored` in the same transaction.
+   * Once per instance; a repository without an
    * identity has nothing to check.
    */
   checkEpoch(read: (recorded: number) => Promise<EpochCheck>): Promise<void> {
@@ -341,6 +344,7 @@ export class RepoEvents {
           );
         }
         this.#emit("repo.updated", { actor: null, actChain: [], data: null }, true);
+        this.restored();
       }
     });
     this.#epochChecked = true;

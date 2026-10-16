@@ -2,11 +2,14 @@
 // (its packs borrowed, its commit graph copied) when the pull request
 // opens and after each push to the fork's branch, in order, and only for
 // the branch the pull request follows.
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import { allocateEpoch } from "../src/events/epochs.js";
+import { PULL_REFOLLOW_JOB } from "../src/network/pull-source.js";
 import {
   scheduleViewCompaction,
   VIEW_COMPACT_JOB,
@@ -218,6 +221,37 @@ describe("pull requests from forks", () => {
       { path: "d.txt", content: "d\n" },
     ]);
     await sync();
+    expect((await pull()).head.sha).toBe(next);
+  });
+
+  it("follow the fork's branch again after the fork is restored to before the pull request opened", async () => {
+    await open(contributor, `${contributor.handle}:main`);
+    await sync();
+    expect(await outgoing()).toEqual([{ generation: 1 }]);
+    // Only a restore asks the network's members: not a new repository's first epoch.
+    const refollow = (id: string) =>
+      inRepo(env.REPO.getByName(id), (r: RepoDO) => r.git.jobs.get(PULL_REFOLLOW_JOB));
+    expect(await refollow(fork.id)).toBeUndefined();
+    expect(await refollow(base.id)).toBeUndefined();
+    // As a restore to a snapshot from before the opening leaves the fork: no registration, no
+    // notice, an older ref state. The runbook takes the next restore generation, and the restored
+    // object, started again, takes it.
+    const stub = env.REPO.getByName(fork.id);
+    await inRepo(stub, (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      sql.exec("DELETE FROM outgoing_pulls");
+      sql.exec("DELETE FROM revision_notices");
+      sql.exec("UPDATE ref_state SET version = 1 WHERE id = 1");
+    });
+    await allocateEpoch(env.DIRECTORY, fork.id);
+    await runInDurableObject(stub, (_: RepoDO, state) => state.abort()).catch(() => {});
+    await env.REPO.getByName(fork.id).checkEpoch();
+    const next = await commitOn(contributor, fork.path, "main", [
+      { path: "c.txt", content: "c\n" },
+    ]);
+    await runJobs(fork.id);
+    await sync();
+    expect(await outgoing()).toEqual([{ generation: 1 }]);
     expect((await pull()).head.sha).toBe(next);
   });
 

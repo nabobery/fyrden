@@ -102,7 +102,7 @@ import {
   releaseLease,
 } from "../network/pull-import.js";
 import { type NoticeAnswer, PullSource, type RevisionNotice } from "../network/pull-source.js";
-import { networkRetire, soleNetworkMember } from "../network/repo-client.js";
+import { networkMembersAfter, networkRetire, soleNetworkMember } from "../network/repo-client.js";
 import { type CopyStep, type CopyStepInput, RepoNetwork } from "../network/repo-network.js";
 import type {
   CommitPage,
@@ -554,7 +554,12 @@ export class RepoDO extends MigratingDO {
       metrics: this.git.context.metrics,
       doClass: this.git.context.doClass,
     });
-    this.events = new RepoEvents(this.git, this.outbox, () => this.#repoId());
+    this.events = new RepoEvents(
+      this.git,
+      this.outbox,
+      () => this.#repoId(),
+      () => this.pullSource.restored(),
+    );
     this.pulls = new RepoPulls({
       git: this.git,
       events: this.events,
@@ -569,6 +574,10 @@ export class RepoDO extends MigratingDO {
       tell: (baseRepoId, notice) => this.env.REPO.getByName(baseRepoId).receiveRevision(notice),
       log: () => this.#log(),
       epoch: () => this.events.epochGen(),
+      members: (after, limit) =>
+        networkMembersAfter(this.env, this.#repoId(), after, limit, this.git.context.metrics),
+      followAgain: (baseRepoId, after) =>
+        this.env.REPO.getByName(baseRepoId).followHeadAgain(this.#repoId(), after),
     });
     this.pullImports = new PullImports({
       ...this.#importDeps(),
@@ -1374,6 +1383,21 @@ export class RepoDO extends MigratingDO {
       pull.version,
     );
     this.git.jobs.ensure("pull_follow", PULL_FOLLOW_JOB);
+  }
+
+  /**
+   * The head's repository `headRepoId` was restored and may have lost what
+   * it was told: its open pull requests here numbered after `after` (a
+   * page) are followed again, as when opened. Answers the number to go on
+   * after, or null when there are no more.
+   */
+  followHeadAgain(headRepoId: string, after: number): number | null {
+    if (this.#refusesReads()) return null;
+    const pulls = this.pulls.openFrom(headRepoId, after, FOLLOWS_PER_SLICE);
+    this.ctx.storage.transactionSync(() => {
+      for (const pull of pulls) this.#follow(pull);
+    });
+    return pulls.length < FOLLOWS_PER_SLICE ? null : (pulls.at(-1)?.number ?? null);
   }
 
   /** The author's consent to maintainer edits, as the pull request has it now (its version with it). */
@@ -3719,6 +3743,7 @@ export class RepoDO extends MigratingDO {
       pull_notices: this.pullSource.noticesHandler(),
       revision_import: this.pullImports.handler(),
       pull_follow: this.#followHandler(),
+      pull_refollow: this.pullSource.refollowHandler(),
       view_compact: viewCompactionHandler({
         git: this.git,
         policy: () => this.maintenance,

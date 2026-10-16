@@ -283,7 +283,10 @@ describe("restore epochs", () => {
     });
     expect(result.reads).toBe(1);
     expect(result.pending).toBe(1);
-    expect(result.alarm).toBe(result.due);
+    // No later than the snapshot is due (the restore's own jobs may be due first).
+    expect(result.alarm).not.toBeNull();
+    expect(result.due).not.toBeNull();
+    expect(result.alarm).toBeLessThanOrEqual(result.due ?? Number.NaN);
   });
 
   it("refuses a commit before the epoch was checked", async () => {
