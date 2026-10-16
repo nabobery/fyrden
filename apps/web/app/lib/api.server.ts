@@ -154,20 +154,62 @@ export interface SessionUser {
   readonly handle: string;
 }
 
+/** Asks the API who the session cookie `cookie` is. */
+function fetchSession(
+  context: Readonly<RouterContextProvider>,
+  request: Request,
+  cookie: string,
+): Promise<Response> {
+  return binding(context).fetch(
+    new Request(`${new URL(request.url).origin}/auth/session`, { headers: { Cookie: cookie } }),
+  );
+}
+
 /** The signed-in user, if any. */
 export async function signedInUser(
   context: Readonly<RouterContextProvider>,
   request: Request,
 ): Promise<SessionUser | null> {
-  const headers = new Headers();
   const cookie = request.headers.get("Cookie");
   if (!cookie) return null;
-  headers.set("Cookie", cookie);
-  const res = await binding(context).fetch(
-    new Request(`${new URL(request.url).origin}/auth/session`, { headers }),
-  );
+  const res = await fetchSession(context, request, cookie);
   if (!res.ok) return null;
   return ((await res.json()) as { user: SessionUser }).user;
+}
+
+/** Who the session is: a user, no one (as the API says), or not known (the check failed). */
+export type SessionCheck =
+  | { state: "signed-in"; user: SessionUser }
+  | { state: "signed-out" }
+  | { state: "unknown" };
+
+/**
+ * The session, never throwing: for an action that answers on its page when
+ * the check fails, and sends to sign in only a browser known to be signed out.
+ */
+export async function checkSession(
+  context: Readonly<RouterContextProvider>,
+  request: Request,
+): Promise<SessionCheck> {
+  const cookie = request.headers.get("Cookie");
+  if (!cookie) return { state: "signed-out" };
+  let res: Response;
+  try {
+    res = await fetchSession(context, request, cookie);
+  } catch {
+    return { state: "unknown" };
+  }
+  if (res.status === 401) return { state: "signed-out" };
+  const body: unknown = res.ok ? await res.json().catch(() => null) : null;
+  const user = typeof body === "object" && body !== null && "user" in body ? body.user : null;
+  return typeof user === "object" &&
+    user !== null &&
+    "id" in user &&
+    typeof user.id === "string" &&
+    "handle" in user &&
+    typeof user.handle === "string"
+    ? { state: "signed-in", user: { id: user.id, handle: user.handle } }
+    : { state: "unknown" };
 }
 
 /**

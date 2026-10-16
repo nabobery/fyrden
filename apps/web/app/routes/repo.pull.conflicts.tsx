@@ -7,8 +7,8 @@ import {
   apiCall,
   apiFetch,
   assertSameOrigin,
+  checkSession,
   readForm,
-  signedInUser,
   signInUrl,
 } from "../lib/api.server.js";
 import {
@@ -132,8 +132,13 @@ type Answer =
 
 export async function action({ request, context, params }: Route.ActionArgs): Promise<Answer> {
   assertSameOrigin(request);
-  // Signed in before a large form is read.
-  if (!(await signedInUser(context, request))) throw redirect(signInUrl(request));
+  // Signed in before a large form is read. A check that fails sends nothing and keeps the
+  // editors (an error page or a sign-in would drop them); only a browser known to be signed
+  // out is sent to sign in.
+  const session = await checkSession(context, request);
+  if (session.state === "signed-out") throw redirect(signInUrl(request));
+  if (session.state === "unknown")
+    return { error: "Your session could not be checked, so nothing was sent: try again." };
   const form = await readForm(request, CONFLICTS_FORM_MAX_BYTES);
   const snapshot = field(form, "conflict_snapshot");
   if (!/^[0-9a-f]{80}$/.test(snapshot)) return { error: "Read the conflicts again.", stale: true };

@@ -334,6 +334,44 @@ describe("resolving conflicts", () => {
     }
   });
 
+  it("answers, keeping the edits, when the session cannot be checked, sending nothing", async () => {
+    for (const session of [
+      () => {
+        throw new TypeError("The service binding refused the request.");
+      },
+      () => json({ code: "internal", detail: "down" }, 503),
+      () => new Response("not json", { status: 200 }),
+      () => json({ user: null }),
+    ]) {
+      const { context, calls } = fakeApi((r) =>
+        new URL(r.url).pathname === "/auth/session" ? session() : json({}, 201),
+      );
+      const outcome = await action({
+        request: formPost("/ada/demo/pull/7/conflicts", {
+          conflict_snapshot: SNAPSHOT,
+          count: "0",
+        }),
+        context,
+        params,
+      } as never);
+      expect(outcome).toEqual({
+        error: "Your session could not be checked, so nothing was sent: try again.",
+      });
+      expect(calls.map(pathOf)).toEqual(["GET /auth/session"]);
+    }
+  });
+
+  it("sends a browser the session confirms is signed out to sign in", async () => {
+    const { context, calls } = fakeApi(() => json({ code: "unauthorized" }, 401));
+    const thrown = await action({
+      request: formPost("/ada/demo/pull/7/conflicts", { conflict_snapshot: SNAPSHOT, count: "0" }),
+      context,
+      params,
+    } as never).catch((e: unknown) => e);
+    expect((thrown as Response).status).toBe(302);
+    expect(calls.map(pathOf)).toEqual(["GET /auth/session"]);
+  });
+
   it("refuses a file over 1 MiB, or files over 4 MiB in all, without asking the API", async () => {
     const big = "a".repeat(1024 * 1024 + 1);
     const tooLarge = await resolve(
