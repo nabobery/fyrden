@@ -70,6 +70,32 @@ export async function apiDownload(
  */
 export const API_MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
 
+/**
+ * Sends `method path` (under `/api`) with an optional JSON body, already
+ * serialized: the API's response, its body unread (for a caller that tells
+ * a failure to send from an answer it cannot read).
+ */
+export function apiFetch(
+  context: Readonly<RouterContextProvider>,
+  request: Request,
+  method: string,
+  path: string,
+  json?: string,
+): Promise<Response> {
+  const headers = forwarded(request);
+  if (method !== "GET") {
+    headers.set("Content-Type", "application/json");
+    headers.set("Idempotency-Key", crypto.randomUUID());
+  }
+  return binding(context).fetch(
+    new Request(`${new URL(request.url).origin}/api${path}`, {
+      method,
+      headers,
+      ...(json !== undefined && { body: json }),
+    }),
+  );
+}
+
 /** Calls `method path` (under `/api`) with an optional JSON body. */
 export async function apiCall<T>(
   context: Readonly<RouterContextProvider>,
@@ -95,18 +121,7 @@ export async function apiCallJson<T>(
   path: string,
   json?: string,
 ): Promise<ApiResult<T>> {
-  const headers = forwarded(request);
-  if (method !== "GET") {
-    headers.set("Content-Type", "application/json");
-    headers.set("Idempotency-Key", crypto.randomUUID());
-  }
-  const res = await binding(context).fetch(
-    new Request(`${new URL(request.url).origin}/api${path}`, {
-      method,
-      headers,
-      ...(json !== undefined && { body: json }),
-    }),
-  );
+  const res = await apiFetch(context, request, method, path, json);
   const text = await res.text();
   return { status: res.status, body: (text ? JSON.parse(text) : null) as T };
 }

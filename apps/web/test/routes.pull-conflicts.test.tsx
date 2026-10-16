@@ -288,6 +288,52 @@ describe("resolving conflicts", () => {
     });
   });
 
+  it("answers, keeping the edits, when no answer comes back: the merge may have been made", async () => {
+    const { outcome, body } = await resolve({ conflict_snapshot: SNAPSHOT, count: "0" }, () => {
+      throw new TypeError("The service binding refused the request.");
+    });
+    expect(body).toEqual({ conflict_snapshot: SNAPSHOT, files: [] });
+    expect(outcome).toEqual({
+      error:
+        "No answer came back: the merge may or may not have been made. Look at the pull request before sending it again.",
+      snapshot: SNAPSHOT,
+    });
+    // The page keeps its editors and says why; the next read tells whether the merge was made.
+    expect(
+      conflictsView({
+        adopted: SNAPSHOT,
+        latest: SNAPSHOT,
+        failure: null,
+        open: true,
+        answer: outcome,
+      }),
+    ).toMatchObject({ editors: true, showRefusal: true, moved: false });
+  });
+
+  it("answers, keeping the edits, when the API's answer cannot be read", async () => {
+    // A refusal is one, its reason unknown.
+    const refused = await resolve(
+      { conflict_snapshot: SNAPSHOT, count: "0" },
+      () => new Response("<html>Bad gateway</html>", { status: 502 }),
+    );
+    expect(refused.outcome).toEqual({
+      error: "The conflicts were not resolved.",
+      stale: false,
+      snapshot: SNAPSHOT,
+    });
+    // A success is one, though what it made is not known.
+    for (const reply of ["{", JSON.stringify({ sha: 7 }), ""]) {
+      const made = await resolve(
+        { conflict_snapshot: SNAPSHOT, count: "0" },
+        () => new Response(reply, { status: 201 }),
+      );
+      expect(made.outcome, reply).toEqual({
+        error: "The merge was made, but its answer could not be read: look at the pull request.",
+        snapshot: SNAPSHOT,
+      });
+    }
+  });
+
   it("refuses a file over 1 MiB, or files over 4 MiB in all, without asking the API", async () => {
     const big = "a".repeat(1024 * 1024 + 1);
     const tooLarge = await resolve(

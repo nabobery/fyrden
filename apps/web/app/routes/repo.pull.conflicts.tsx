@@ -5,7 +5,7 @@ import { PullHeader } from "../components/pull-header.js";
 import {
   API_MAX_JSON_BODY_BYTES,
   apiCall,
-  apiCallJson,
+  apiFetch,
   assertSameOrigin,
   readForm,
   signedInUser,
@@ -175,21 +175,42 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
         "These files are too large to send in one resolution: merge the base branch into the head with git instead.",
       snapshot,
     };
-  const result = await apiCallJson<{ sha: string; markers: string[] }>(
-    context,
-    request,
-    "POST",
-    `${pullApiOf(params)}/conflicts`,
-    json,
-  );
-  if (result.status === 201)
-    return { ok: true, sha: result.body.sha, markers: result.body.markers };
-  const code = problemCode(result.body);
+  // Whatever goes wrong from here is answered (never thrown, which would replace the
+  // editors with the error page): what the API did is told apart from what is not known.
+  let res: Response;
+  try {
+    res = await apiFetch(context, request, "POST", `${pullApiOf(params)}/conflicts`, json);
+  } catch {
+    return {
+      error:
+        "No answer came back: the merge may or may not have been made. Look at the pull request before sending it again.",
+      snapshot,
+    };
+  }
+  const body: unknown = await res.json().catch(() => null);
+  if (res.status === 201)
+    return isMerge(body)
+      ? { ok: true, sha: body.sha, markers: body.markers }
+      : {
+          error: "The merge was made, but its answer could not be read: look at the pull request.",
+          snapshot,
+        };
+  const code = problemCode(body);
   return {
-    error: problemDetail(result.body, "The conflicts were not resolved."),
+    error: problemDetail(body, "The conflicts were not resolved."),
     stale: code === "head_moved" || code === "base_moved",
     snapshot,
   };
+}
+
+/** The API's answer to a resolution: the merge commit, and the files still holding markers. */
+function isMerge(body: unknown): body is { sha: string; markers: string[] } {
+  if (typeof body !== "object" || body === null || !("sha" in body) || !("markers" in body))
+    return false;
+  const { sha, markers } = body;
+  return (
+    typeof sha === "string" && Array.isArray(markers) && markers.every((m) => typeof m === "string")
+  );
 }
 
 /** What the editor works on: the conflicts as read, and the branch names their markers carry. */
