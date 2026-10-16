@@ -576,8 +576,14 @@ export class RepoDO extends MigratingDO {
       epoch: () => this.events.epochGen(),
       members: (after, limit) =>
         networkMembersAfter(this.env, this.#repoId(), after, limit, this.git.context.metrics),
-      followAgain: (baseRepoId, after) =>
-        this.env.REPO.getByName(baseRepoId).followHeadAgain(this.#repoId(), after),
+      followAgain: (baseRepoId, after) => {
+        // Counted before it is made: the job queue stops starting slices near the call budget.
+        this.git.context.metrics.count("do.request", {
+          class: "RepoDO",
+          method: "followHeadAgain",
+        });
+        return this.env.REPO.getByName(baseRepoId).followHeadAgain(this.#repoId(), after);
+      },
     });
     this.pullImports = new PullImports({
       ...this.#importDeps(),

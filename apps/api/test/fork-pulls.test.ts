@@ -5,6 +5,8 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
+import { DEFAULT_JOB_POLICY, JobQueue } from "@fyrden/adapters-cloudflare/git";
+import { currentInvocation, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
@@ -252,6 +254,44 @@ describe("pull requests from forks", () => {
     await sync();
     expect(await outgoing()).toEqual([{ generation: 1 }]);
     expect((await pull()).head.sha).toBe(next);
+  });
+
+  it("ask the network's members again within an invocation's budget of internal calls", async () => {
+    // More members than one budget asks: repositories of the network as the directory has them
+    // (objects never set up, which answer at once).
+    const prefix = uniqueId("member");
+    await env.DIRECTORY.prepare(
+      `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, state, created_at,
+         updated_at)
+       SELECT ?1 || j.value, r.owner_id, ?1 || j.value, r.network_id, r.org_shard, r.visibility,
+         'active', r.created_at, r.updated_at
+       FROM repos r, json_each(?2) j WHERE r.id = ?3`,
+    )
+      .bind(prefix, JSON.stringify(Array.from({ length: 60 }, (_, i) => i)), fork.id)
+      .run();
+    const budget = 30;
+    const ran = await inRepo(env.REPO.getByName(fork.id), (r: RepoDO) => {
+      r.pullSource.restored();
+      const jobs = new JobQueue(r.git.context, () => {}, {
+        ...DEFAULT_JOB_POLICY,
+        maxInternalCalls: budget,
+      });
+      return measureInvocation(r.git.context.metrics, { where: "do", op: "test" }, async () => {
+        await jobs.runDue(
+          { pull_refollow: r.pullSource.refollowHandler() },
+          r.git.memory,
+          r.git.context.now() + 60_000,
+        );
+        return {
+          calls: currentInvocation()?.tally.internal ?? 0,
+          state: jobs.get(PULL_REFOLLOW_JOB)?.state,
+        };
+      });
+    });
+    // Stopped once the budget was spent, at most one slice (20 calls) past it, the rest left.
+    expect(ran.state).toBe("queued");
+    expect(ran.calls).toBeGreaterThanOrEqual(budget);
+    expect(ran.calls).toBeLessThanOrEqual(budget + 20);
   });
 
   it("are not moved by a branch of the base with the same name", async () => {
