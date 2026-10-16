@@ -36,6 +36,46 @@ export interface WranglerDev {
   stop(): Promise<void>;
 }
 
+/** Signals whose default action ends this process. */
+const ENDING_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+/** The groups `spawnOwned` started and has not stopped yet, by their leader's pid. */
+const owned = new Set<number>();
+
+/**
+ * Kills the owned groups at once, this process ending. In groups of their
+ * own, they would outlive it: an interrupt or a runner's SIGTERM reaches
+ * this process's group, not theirs.
+ */
+function killOwned(): void {
+  for (const pid of owned) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Gone already.
+    }
+  }
+}
+
+/** Kills the owned groups, then lets `signal` end this process as it would have. */
+function onEndingSignal(signal: NodeJS.Signals): void {
+  killOwned();
+  owned.clear();
+  unwatch();
+  // Raised again for its default action, unless another listener handles it.
+  if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+}
+
+/** One set of listeners for all the owned groups, there while any is. */
+function watch(): void {
+  process.on("exit", killOwned);
+  for (const signal of ENDING_SIGNALS) process.on(signal, onEndingSignal);
+}
+
+function unwatch(): void {
+  process.off("exit", killOwned);
+  for (const signal of ENDING_SIGNALS) process.off(signal, onEndingSignal);
+}
+
 /**
  * Spawns `command` as the leader of a process group of its own, with a
  * `stop` (see `WranglerDev.stop`) that signals the whole group, every call
@@ -64,9 +104,12 @@ export function spawnOwned(
       throw error;
     }
   };
-  // Not left behind if the test run itself exits first.
-  const onExit = () => signal("SIGKILL");
-  process.once("exit", onExit);
+  // Not left behind if the test run itself ends first.
+  const pid = child.pid;
+  if (pid !== undefined) {
+    if (owned.size === 0) watch();
+    owned.add(pid);
+  }
   const gone = async () => {
     await closed;
     // A process can outlive the pipes, the launcher's exit or its SIGKILL's delivery.
@@ -87,7 +130,7 @@ export function spawnOwned(
       await all;
     }
     await closed;
-    process.off("exit", onExit);
+    if (pid !== undefined && owned.delete(pid) && owned.size === 0) unwatch();
   };
   let stopping: Promise<void> | undefined;
   return {

@@ -1,6 +1,7 @@
-import type { ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
-import { describe, expect, it } from "vitest";
+import { type AddressInfo, createServer, type Socket } from "node:net";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { spawnOwned } from "../e2e/wrangler-dev.ts";
 
 /** A Node process running `script`, owned as wrangler dev is, once it has printed `ready`. */
@@ -93,5 +94,59 @@ describe("stopping wrangler dev", () => {
     await stop();
     expect(child.exitCode).toBe(0);
     expect(child.signalCode).toBeNull();
+  });
+
+  it.each(["SIGINT", "SIGTERM"] as const)(
+    "ends what it owns when %s ends the process that owns it",
+    async (sig) => {
+      // The owned process runs while connected back: the connection closes once it has ended,
+      // and it ends once the connection is closed (so a failed test leaves nothing running).
+      const server = createServer();
+      onTestFinished(() => {
+        server.close();
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const { port } = server.address() as AddressInfo;
+      const ownedScript = `require("node:net").connect(${port}, "127.0.0.1");`;
+      const controller = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import { spawnOwned } from ${JSON.stringify(new URL("../e2e/wrangler-dev.ts", import.meta.url).href)};
+           spawnOwned(process.execPath, ["-e", ${JSON.stringify(ownedScript)}], {});`,
+        ],
+        { stdio: ["ignore", "ignore", "inherit"] },
+      );
+      const [owned] = (await once(server, "connection")) as [Socket];
+      const closed = once(owned, "close");
+      onTestFinished(() => {
+        if (!owned.closed) owned.destroy();
+      });
+      controller.kill(sig);
+      await once(controller, "exit");
+      // Ended by the signal, as it would have been without the cleanup.
+      expect(controller.signalCode).toBe(sig);
+      await closed;
+    },
+  );
+
+  it("leaves no listeners on the process once what it owns is stopped", async () => {
+    const events = ["exit", "SIGINT", "SIGTERM", "SIGHUP"] as const;
+    const listeners = () => events.map((e) => process.listenerCount(e));
+    const before = listeners();
+    const owned = await Promise.all([
+      started(`console.log("ready"); ${KEEP_RUNNING}`),
+      started(`console.log("ready"); ${KEEP_RUNNING}`),
+    ]);
+    const stopAll = async () => {
+      await Promise.all(owned.map((o) => o.stop()));
+    };
+    onTestFinished(stopAll);
+    // One set for all that is owned, not one a process.
+    expect(listeners()).toEqual(before.map((n) => n + 1));
+    await stopAll();
+    expect(listeners()).toEqual(before);
   });
 });

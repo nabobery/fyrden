@@ -79,9 +79,11 @@ a machine short of memory add `--concurrency=1` to heavy runs (`test`,
   `bin` script is a launcher that cannot pass SIGKILL on to the CLI and
   workerd under it), and `stop()` signals the whole group: SIGTERM, SIGKILL
   after a 10 s grace, resolving only once every process is gone and the
-  output pipes have closed. A suite removes the state directory after it,
-  never before. The e2e `hookTimeout` (60 s, `tools/ci/vitest.e2e.config.ts`)
-  leaves a teardown room for the browser's close, the grace and the cleanup.
+  output pipes have closed. A test run that ends first (it exits, or SIGINT,
+  SIGTERM or SIGHUP ends it) kills the groups it still owns. A suite removes
+  the state directory after it, never before. The e2e `hookTimeout` (60 s,
+  `tools/ci/vitest.e2e.config.ts`) leaves a teardown room for the browser's
+  close, the grace and the cleanup.
 - Run `pnpm turbo run test:shuffle` before review on any change to alarms, the
   outbox, jobs or a test's setup: it runs the workerd suites in random orders.
 
