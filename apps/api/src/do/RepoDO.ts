@@ -550,6 +550,7 @@ export class RepoDO extends MigratingDO {
       events: this.events,
       repoId: () => this.#repoId(),
       stale: (number, open) => this.mergeability.stale(number, open),
+      staleBase: (branch) => this.mergeability.staleBase(branch),
       follow: (pull) => this.#follow(pull),
     });
     this.pullSource = new PullSource({

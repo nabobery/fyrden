@@ -145,6 +145,8 @@ export class RepoPulls {
        * be worked out again (open), or no longer (closed or merged).
        */
       readonly stale?: (number: number, open: boolean) => void;
+      /** In a commit's transaction: base branch `branch` moved, so its open pull requests' too. */
+      readonly staleBase?: (branch: string) => void;
       /**
        * In the transaction of a change of a pull request whose head is in
        * another repository: it opened, closed or reopened, so that
@@ -206,11 +208,7 @@ export class RepoPulls {
       if (!update.name.startsWith(BRANCHES)) continue;
       const branch = update.name.slice(BRANCHES.length);
       // The base branch moved: whether its pull requests merge changes with it.
-      for (const { number } of this.#rows<{ number: number }>(
-        "SELECT number FROM pull_requests WHERE base_ref = ? AND state = 'open'",
-        branch,
-      ))
-        this.deps.stale?.(number, true);
+      this.deps.staleBase?.(branch);
       const deleted = update.newOid === null;
       if (!deleted && update.oldOid !== null) continue;
       for (const row of this.#rows(

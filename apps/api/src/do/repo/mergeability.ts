@@ -88,6 +88,22 @@ export class RepoMergeability {
   }
 
   /**
+   * In the caller's transaction: base branch `branch` moved, so every open
+   * pull request onto it is worked out again, queued by one statement
+   * (however many there are) and the job made to run once.
+   */
+  staleBase(branch: string): void {
+    const queued = this.deps.git.context.storage.sql.exec(
+      `INSERT INTO mergeability_jobs (pr_number, seq, requested_at)
+       SELECT number, 1, ? FROM pull_requests WHERE base_ref = ? AND state = 'open'
+       ON CONFLICT (pr_number) DO UPDATE SET seq = seq + 1`,
+      this.deps.git.context.now(),
+      branch,
+    );
+    if (queued.rowsWritten > 0) this.deps.git.jobs.ensure("mergeability", MERGEABILITY_JOB_ID);
+  }
+
+  /**
    * An open pull request asked for: queued when nothing is known for its
    * current pair and it is not waiting already; when it is waiting, its job
    * is made to run (should it have stopped after failing). Not while the

@@ -168,6 +168,48 @@ describe("mergeability", () => {
     for (const number of numbers) expect((await pull(number)).mergeable).toBe(true);
   });
 
+  it("queues a moved base's open pull requests at once, waking its job once", async () => {
+    await branchAt("release", base);
+    for (const name of ["f1", "f2", "f3", "f4", "f5", "f6"]) {
+      await branchAt(name, base);
+      await commitOn(name, [{ path: `${name}.txt`, content: `${name}\n` }]);
+      await open(name, name === "f6" ? { base: "release" } : {});
+    }
+    await runJobs();
+    // A closed one and one on another base are left out; one already waiting asks again.
+    expect((await api("PATCH", `${path}/pulls/4`, owner.token, { state: "closed" })).status).toBe(
+      200,
+    );
+    await commitOn("f2", [{ path: "f2.txt", content: "F2\n" }]);
+    const ensured: string[] = [];
+    await inRepo(stub(), (r: RepoDO) => {
+      const ensure = r.git.jobs.ensure.bind(r.git.jobs);
+      r.git.jobs.ensure = (kind, ...rest) => {
+        ensured.push(kind);
+        return ensure(kind, ...rest);
+      };
+    });
+    await commitOn("main", [{ path: "z.txt", content: "z\n" }]);
+    expect(ensured.filter((kind) => kind === "mergeability")).toHaveLength(1);
+    const queued = await inRepo(stub(), (r: RepoDO) =>
+      r.git.context.storage.sql
+        .exec<{ pr_number: number; seq: number }>(
+          "SELECT pr_number, seq FROM mergeability_jobs ORDER BY requested_at, pr_number",
+        )
+        .toArray()
+        .map((row) => [row.pr_number, row.seq]),
+    );
+    // #2 keeps its place, its request newer.
+    expect(queued).toEqual([
+      [2, 2],
+      [1, 1],
+      [3, 1],
+      [5, 1],
+    ]);
+    await runJobs();
+    for (const number of [1, 2, 3, 5]) expect((await pull(number)).mergeable).toBe(true);
+  });
+
   it("lets others go first when a pull request moved while it was worked out", async () => {
     await branchAt("other", base);
     await commitOn("other", [{ path: "o.txt", content: "o\n" }]);
