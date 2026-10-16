@@ -28,7 +28,8 @@ export class UserDO extends MigratingDO {
   async applyFeed(entries: readonly FeedEntry[]): Promise<FeedApplied> {
     const feed = this.#feed();
     const applied = this.ctx.storage.transactionSync(() => feed.apply(entries));
-    if (applied.changed > 0) await this.#scheduleRetention(feed);
+    // Even with nothing shown changed: a tombstone may have been written.
+    if (entries.length > 0) await this.#scheduleRetention(feed);
     return applied;
   }
 

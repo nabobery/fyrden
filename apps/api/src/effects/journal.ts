@@ -87,6 +87,15 @@ export const EFFECT_POLICY: EffectPolicy = {
  */
 export const INLINE_EFFECTS = 2;
 
+/**
+ * Effects of sinks that deliver in batches one consumer invocation
+ * delivers itself, besides: each message's go in one call, for about three
+ * D1 queries whatever their number (a claim, one mark, one retry). Bounded
+ * by the calls one delivery makes (a feed effect calls up to 100 feeds;
+ * an invocation may make 1,000 calls). Proposed.
+ */
+export const INLINE_BATCH_EFFECTS = 8;
+
 const SINK_NAME = /^[a-z][a-z_]*$/;
 const MAX_TARGET = 256;
 
@@ -105,7 +114,8 @@ const STATEMENT_BYTES = 1024 * 1024;
  * nothing is journaled for an event of an older epoch or an older ownership
  * generation than the read model has seen. The effects go in as few
  * statements as their size allows (one for an ordinary envelope), each
- * returning the ids it inserted (none for an effect already journaled).
+ * returning the ids (and sinks) it inserted (none for an effect already
+ * journaled).
  */
 export function effectStatements(
   db: D1Database,
@@ -160,7 +170,7 @@ export function effectStatements(
            WHERE (e.value ->> 'epoch') >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?4)
              AND (e.value ->> 'ownerGen') >=
                  coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?4), 0)
-           RETURNING effect_id`,
+           RETURNING effect_id, sink`,
         )
         .bind(now + policy.sweepAfterMs, now, JSON.stringify(rows), sourceId),
     );

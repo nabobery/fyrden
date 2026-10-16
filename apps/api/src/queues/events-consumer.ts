@@ -11,7 +11,12 @@ import {
   type RepoRow,
 } from "@fyrden/domain";
 import { dispatchEffects } from "../effects/dispatcher.js";
-import { type EffectSink, effectStatements, INLINE_EFFECTS } from "../effects/journal.js";
+import {
+  type EffectSink,
+  effectStatements,
+  INLINE_BATCH_EFFECTS,
+  INLINE_EFFECTS,
+} from "../effects/journal.js";
 import { EFFECT_SINKS } from "../effects/sinks.js";
 import { readModelFor } from "../events/read-model.js";
 
@@ -67,14 +72,20 @@ export type ApplyOutcome = "applied" | "dropped" | "unlisted" | "deferred";
 export const INVOCATION_QUERIES = 45;
 /** D1 queries one inline effect delivery costs at most (its claim, its work, its outcome). */
 const QUERIES_PER_EFFECT = 6;
+/** D1 queries a message's inline effects of batch sinks cost at most (a claim, a mark, a retry). */
+const QUERIES_PER_BATCH = 3;
 
 export interface ConsumerOptions {
   readonly now?: () => number;
   readonly metrics?: Metrics;
   /** The effect sinks (default: the deployment's). */
   readonly sinks?: readonly EffectSink[];
-  /** Effects the invocation may still deliver itself, shared by its messages (default: its own). */
-  readonly inline?: { left: number };
+  /**
+   * Effects the invocation may still deliver itself, shared by its
+   * messages (default: its own): of sinks that deliver one at a time, and
+   * of sinks that deliver in batches.
+   */
+  readonly inline?: { left: number; batched: number };
   /**
    * D1 queries the invocation may still spend, shared by its messages, and
    * whether one was applied (a message alone is applied whatever it costs).
@@ -99,7 +110,7 @@ export async function consumeEvents(
   // messages it has.
   options = {
     ...options,
-    inline: options.inline ?? { left: INLINE_EFFECTS },
+    inline: options.inline ?? { left: INLINE_EFFECTS, batched: INLINE_BATCH_EFFECTS },
     queries: options.queries ?? { left: INVOCATION_QUERIES, applied: false },
   };
   for (const message of batch.messages) {
@@ -193,20 +204,28 @@ export async function applyEnvelope(
   queries.left -= statements.length;
   queries.applied = true;
   options.metrics?.count("d1.query", { db: "org", op: "events_apply" }, statements.length);
-  const results = await db.batch<{ effect_id: string }>(statements);
+  const results = await db.batch<{ effect_id: string; sink: string }>(statements);
   // Only the effects this batch inserted: one already journaled keeps its own schedule.
   const inserted = results
     .slice(statements.length - effects.length)
-    .flatMap((result) => result.results.map((row) => row.effect_id));
+    .flatMap((result) => result.results);
   // Journaled with the projection; what cannot be delivered now, the sweeper retries.
-  const inline = options.inline ?? { left: INLINE_EFFECTS };
+  const inline = options.inline ?? { left: INLINE_EFFECTS, batched: INLINE_BATCH_EFFECTS };
+  const batching = new Set(sinks.filter((s) => s.deliverBatch).map((s) => s.name));
+  const single = inserted.filter((row) => !batching.has(row.sink)).map((row) => row.effect_id);
+  const batched = inserted.filter((row) => batching.has(row.sink)).map((row) => row.effect_id);
   const take = Math.min(
     inline.left,
-    inserted.length,
+    single.length,
     Math.max(0, Math.floor(queries.left / QUERIES_PER_EFFECT)),
   );
   inline.left -= take;
   queries.left -= take * QUERIES_PER_EFFECT;
+  // A batch sink's effects go together: a few queries, however many.
+  const takeBatched =
+    queries.left >= QUERIES_PER_BATCH ? Math.min(inline.batched, batched.length) : 0;
+  inline.batched -= takeBatched;
+  if (takeBatched > 0) queries.left -= QUERIES_PER_BATCH;
   try {
     await dispatchEffects(
       {
@@ -218,7 +237,7 @@ export async function applyEnvelope(
         ...(options.metrics && { metrics: options.metrics }),
       },
       // The invocation's bounded share now: the effects cron takes the rest (every five minutes).
-      inserted.slice(0, take),
+      [...single.slice(0, take), ...batched.slice(0, takeBatched)],
     );
   } catch (error) {
     createLogger({ op: "effects.dispatch" }).warn("dispatching effects failed", { error });

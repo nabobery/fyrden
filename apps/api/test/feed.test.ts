@@ -80,19 +80,31 @@ function feedIn(storage: Storage, now: () => number = Date.now) {
     storage.transactionSync(() => feed.apply(entries));
   const head = () =>
     storage.sql.exec<{ head_seq: number }>("SELECT head_seq FROM feed_meta").one().head_seq;
-  /** The items without their sequence numbers (which depend on arrival order). */
-  const items = () =>
+  const rows = (where = "true") =>
     storage.sql
       .exec<Record<string, SqlStorageValue>>(
-        "SELECT * FROM feed_items ORDER BY repo_id, thread_key, kind",
+        `SELECT * FROM feed_items WHERE ${where} ORDER BY repo_id, thread_key, kind`,
       )
-      .toArray()
-      .map(({ feed_seq: _, seq_at: __, ...rest }) => rest);
+      .toArray();
+  /** The shown items without their sequence numbers (which depend on arrival order). */
+  const items = () =>
+    rows("feed_seq IS NOT NULL").map(({ feed_seq: _, seq_at: __, ...rest }) => rest);
+  /**
+   * Every row as it bears on what is shown: an item whole (but its
+   * sequence number), a tombstone by what it guards against.
+   */
+  const state = () =>
+    rows().map(({ feed_seq, seq_at: _, deleted, ...rest }) => {
+      const gone = (JSON.parse(deleted as string) as string[]).sort();
+      return feed_seq === null
+        ? { tombstone: [rest.repo_id, rest.thread_key, rest.kind, rest.version, rest.state], gone }
+        : { ...rest, gone };
+    });
   const reset = () => {
     storage.sql.exec("DELETE FROM feed_items");
     storage.sql.exec("UPDATE feed_meta SET head_seq = 0, low_watermark = 0, items = 0");
   };
-  return { feed, apply, head, items, reset };
+  return { feed, apply, head, rows, items, state, reset };
 }
 
 const inFeed = <T>(fn: (storage: Storage) => T) =>
@@ -102,18 +114,27 @@ describe("applying entries", () => {
   it("converges on the same items under any order, duplicates and batch splits", async () => {
     const step = fc.record({
       thread: fc.integer({ min: 1, max: 2 }),
-      kind: fc.constantFrom<FeedKind>("activity", "review_requested", "mention"),
+      kind: fc.constantFrom<FeedKind | "deletion">(
+        "activity",
+        "review_requested",
+        "mention",
+        "deletion",
+      ),
       member: fc.option(fc.integer({ min: 1, max: 40 }).map(String), { nil: null }),
+      // Action items open and resolve in any interleaving.
+      state: fc.constantFrom<"open" | "resolved">("open", "resolved"),
       priority: fc.constantFrom<FeedPriority>("P0", "P1"),
       silent: fc.boolean(),
     });
     // One event per version of a thread, as the repository numbers them.
     const history = fc.array(step, { minLength: 1, maxLength: 30 }).map((steps) => {
       const versions = new Map<number, number>();
-      return steps.map((s) => {
+      return steps.map(({ kind, state, ...s }) => {
         const version = (versions.get(s.thread) ?? 0) + 1;
         versions.set(s.thread, version);
-        return entry({ ...s, version });
+        if (kind === "deletion")
+          return entry({ ...s, version, member: s.member ?? "1", action: "comment_deleted" });
+        return entry({ ...s, kind, version, state: kind === "activity" ? "open" : state });
       });
     });
     const delivery = history.chain((entries) =>
@@ -125,12 +146,12 @@ describe("applying entries", () => {
       ),
     );
     await inFeed((storage) => {
-      const { apply, items, reset } = feedIn(storage);
+      const { apply, state, reset } = feedIn(storage);
       fc.assert(
         fc.property(delivery, ([entries, shuffled, duplicates, sizes]) => {
           reset();
           apply(entries);
-          const expected = items();
+          const expected = state();
           reset();
           const arrivals = [...shuffled, ...duplicates.map((i) => entries[i] as FeedEntry)];
           for (let at = 0, n = 0; at < arrivals.length; n++) {
@@ -138,9 +159,9 @@ describe("applying entries", () => {
             apply(arrivals.slice(at, at + size));
             at += size;
           }
-          expect(items()).toEqual(expected);
+          expect(state()).toEqual(expected);
         }),
-        { numRuns: 150 },
+        { numRuns: 300 },
       );
     });
   });
@@ -166,16 +187,65 @@ describe("applying entries", () => {
     });
   });
 
-  it("creates nothing for an entry that only resolves an item the feed does not have", async () => {
+  it("shows nothing for an entry that only resolves an item the feed does not have, and keeps it from older entries", async () => {
     await inFeed((storage) => {
-      const { apply, head, items } = feedIn(storage);
+      const { apply, head, items, rows } = feedIn(storage);
       for (const kind of ["review_requested", "approved", "merge_conflict"] as const)
-        expect(apply([entry({ kind, version: 4, state: "resolved", silent: true })])).toEqual({
+        expect(
+          apply([entry({ kind, version: 4, state: "resolved", silent: true, priority: "P0" })]),
+        ).toEqual({
           changed: 0,
           notified: 0,
         });
       expect(items()).toEqual([]);
       expect(head()).toBe(0);
+      expect(storage.sql.exec("SELECT items FROM feed_meta").one()).toEqual({ items: 0 });
+      // A newer resolution updates the tombstone, still unseen.
+      apply([entry({ kind: "approved", version: 5, state: "resolved", priority: "P0" })]);
+      expect(rows("kind = 'approved'")).toMatchObject([{ version: 5, feed_seq: null }]);
+      expect(head()).toBe(0);
+      // The request it resolved arrives late: shown as resolved, as in arrival order.
+      expect(apply([entry({ kind: "review_requested", version: 3, priority: "P0" })])).toEqual({
+        changed: 1,
+        notified: 1,
+      });
+      expect(items()).toMatchObject([{ kind: "review_requested", version: 4, state: "resolved" }]);
+      // A newer opening opens it again.
+      apply([entry({ kind: "merge_conflict", version: 6, priority: "P0" })]);
+      expect(items()).toMatchObject([
+        { kind: "merge_conflict", version: 6, state: "open" },
+        { kind: "review_requested", version: 4, state: "resolved" },
+      ]);
+      expect(head()).toBe(2);
+      // Neither listed, synced nor acknowledged.
+      expect(
+        feedIn(storage)
+          .feed.sync()
+          .items.map((i) => i.kind),
+      ).toEqual(["merge_conflict"]);
+      expect(
+        feedIn(storage).feed.ack({ repoId: "rep_test", threadKey: "pull/1", kind: "approved" }, 5),
+      ).toEqual({ status: "missing" });
+    });
+  });
+
+  it("never adds a comment whose deletion arrived first", async () => {
+    await inFeed((storage) => {
+      const { apply, head, items, rows } = feedIn(storage);
+      const deletion = (member: string) =>
+        entry({ version: 7, member, excerpt: null, silent: true, action: "comment_deleted" });
+      expect(apply([deletion("comment/1")])).toEqual({ changed: 0, notified: 0 });
+      expect(rows()).toMatchObject([{ feed_seq: null, deleted: JSON.stringify(["comment/1"]) }]);
+      expect(head()).toBe(0);
+      // The comment arrives: the item is shown, without it or its excerpt.
+      apply([entry({ version: 3, member: "comment/1", excerpt: "gone" })]);
+      expect(items()).toMatchObject([{ version: 3, members: "[]", excerpt: null }]);
+      apply([entry({ version: 4, member: "comment/2", excerpt: "kept" })]);
+      expect(items()).toMatchObject([{ members: JSON.stringify(["comment/2"]), excerpt: "kept" }]);
+      // Its edit, late too: nothing.
+      const edited = entry({ version: 8, member: "comment/1", action: "comment_edited" });
+      expect(apply([edited]).changed).toBe(0);
+      expect(head()).toBe(2);
     });
   });
 
@@ -225,9 +295,9 @@ describe("applying entries", () => {
           silent: true,
           action: deleted ? "comment_deleted" : "comment_edited",
         });
-      // Neither creates an item.
+      // Neither shows an item.
       expect(apply([edit(9, "comment/1", "new")]).changed).toBe(0);
-      expect(apply([edit(9, "comment/1", null, true)]).changed).toBe(0);
+      expect(apply([edit(9, "comment/9", null, true)]).changed).toBe(0);
       expect(head()).toBe(0);
       apply([
         entry({ version: 1, member: "comment/1", excerpt: "first" }),
@@ -399,6 +469,29 @@ describe("retention", () => {
     // The next alarm is when the remaining item expires.
     const next = await runInDurableObject(stub, (_: UserDO, state) => state.storage.getAlarm());
     expect(next).toBeGreaterThanOrEqual(t0 + 3 * DAY + FEED_POLICY.retentionMs);
+  });
+
+  it("deletes tombstones on the same clock", async () => {
+    const stub = env.USER.getByName(uniqueId("usr"));
+    const t0 = Date.now();
+    await stub.applyFeed([entry({ kind: "approved", version: 2, state: "resolved" })]);
+    const tombstones = () =>
+      runInDurableObject(stub, (_: UserDO, state) =>
+        state.storage.sql.exec("SELECT version FROM feed_items WHERE feed_seq IS NULL").toArray(),
+      );
+    expect(await tombstones()).toEqual([{ version: 2 }]);
+    const alarm = await runInDurableObject(stub, (_: UserDO, state) => state.storage.getAlarm());
+    expect(alarm).toBeGreaterThanOrEqual(t0 + FEED_POLICY.retentionMs);
+    vi.setSystemTime(t0 + FEED_POLICY.retentionMs + 1_000);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await tombstones()).toEqual([]);
+    // Nothing shown was deleted: cursors stay good.
+    expect(
+      await stub.listFeed({ epoch: (await stub.syncFeed()).head.epoch, seq: 0 }, 50, {}),
+    ).toMatchObject({ expired: false, items: [] });
+    expect(await runInDurableObject(stub, (_: UserDO, state) => state.storage.getAlarm())).toBe(
+      null,
+    );
   });
 
   it("trims a feed past its cap, the items changed longest ago first", async () => {

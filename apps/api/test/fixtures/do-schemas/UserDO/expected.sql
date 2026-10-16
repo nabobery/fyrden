@@ -1,3 +1,4 @@
+CREATE INDEX feed_tombstones ON feed_items (seq_at) WHERE feed_seq IS NULL;
 CREATE TABLE feed_items (
         repo_id TEXT NOT NULL,
         thread_key TEXT NOT NULL,
@@ -15,11 +16,12 @@ CREATE TABLE feed_items (
         excerpt TEXT,
         excerpt_member TEXT,
         members TEXT NOT NULL,
+        deleted TEXT NOT NULL DEFAULT '[]',
         truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
         last_event_key TEXT NOT NULL,
         last_event_at INTEGER NOT NULL,
         acked_version INTEGER NOT NULL DEFAULT 0,
-        feed_seq INTEGER NOT NULL UNIQUE,
+        feed_seq INTEGER UNIQUE,
         seq_at INTEGER NOT NULL,
         PRIMARY KEY (repo_id, thread_key, kind)
       ) STRICT, WITHOUT ROWID;

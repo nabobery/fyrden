@@ -6,11 +6,15 @@ import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
  * it is newer than the item (the thread's feed version), so duplicates and
  * any delivery order leave the same item; an activity item also gathers the
  * ids of what it aggregates (comments, reviews) as a set, and a comment's
- * edit or deletion updates or clears the excerpt taken from it. Every
- * change of an item gives it the feed's next sequence number, so a reader
- * that follows the sequence sees each change, late arrivals included. Items
- * older than the retention, or past the cap, are deleted; the low
- * watermark records how far, and a cursor below it has missed changes.
+ * edit or deletion updates or clears the excerpt taken from it. What only
+ * resolves or deletes something the feed never showed is kept as a
+ * tombstone (a row without a sequence number, never read), so that an
+ * older entry arriving later cannot bring it back. Every change of a shown
+ * item gives it the feed's next sequence number, so a reader that follows
+ * the sequence sees each change, late arrivals included. Items and
+ * tombstones older than the retention, and items past the cap, are
+ * deleted; the low watermark records how far, and a cursor below it has
+ * missed changes.
  */
 
 /** Proposed values. */
@@ -21,6 +25,8 @@ export const FEED_POLICY = {
   maxItems: 5_000,
   /** Ids an activity item keeps at most (the greatest). */
   maxMembers: 100,
+  /** Deleted member ids an activity item remembers at most (the latest deleted). */
+  maxDeleted: 100,
   /** Items a sync returns at most. */
   syncItems: 500,
 } as const;
@@ -108,11 +114,13 @@ type Row = {
   excerpt: string | null;
   excerpt_member: string | null;
   members: string;
+  deleted: string;
   truncated: number;
   last_event_key: string;
   last_event_at: number;
   acked_version: number;
-  feed_seq: number;
+  /** Null for a tombstone. */
+  feed_seq: number | null;
   seq_at: number;
 };
 
@@ -143,7 +151,7 @@ function itemOf(row: Row): FeedItem {
     eventKey: row.last_event_key,
     eventAt: row.last_event_at,
     ackedVersion: row.acked_version,
-    seq: row.feed_seq,
+    seq: row.feed_seq as number,
   };
 }
 
@@ -164,11 +172,11 @@ export class Feed {
   /**
    * Applies entries (call within a transaction). Within one call an item's
    * entries apply in version order. An entry older than the retention is
-   * dropped; one for an item the feed does not have creates it, unless it
-   * only resolves (there is nothing to resolve). A newer version replaces
-   * the item's state; an activity item also adds the entry's member. A
-   * duplicate, or an older version that adds nothing, writes nothing. A
-   * comment's edit or deletion (see `#redact`) notifies of nothing.
+   * dropped. A newer version replaces the item's state; an activity item
+   * also adds the entry's member, unless that was deleted. An item is
+   * shown once an entry opens it (see `#applyOne`). A duplicate, or an
+   * older version that adds nothing, writes nothing. A comment's edit or
+   * deletion (see `#redact`) notifies of nothing.
    */
   apply(entries: readonly FeedEntry[]): FeedApplied {
     const now = this.now();
@@ -186,36 +194,83 @@ export class Feed {
   }
 
   /**
-   * A comment edited or deleted, for the activity items it is a member of:
+   * A comment edited or deleted, for the activity item it is a member of:
    * whatever the thread's version, the excerpt taken from it is replaced
-   * (cleared on deletion), and a deletion drops it from the members.
-   * Nothing else changes (the item is not reopened), nothing is created,
-   * and nothing is sequenced unless something changed.
+   * (cleared on deletion). A deletion also drops it from the members and
+   * is remembered (in a tombstone when the feed has no item yet), so the
+   * comment is never added again, whatever arrives later. Nothing else
+   * changes (the item is not reopened), and a shown item is sequenced
+   * only when what it shows changed.
    */
   #redact(entry: FeedEntry, now: number): boolean {
     const { feed } = entry;
+    const member = feed.member;
+    if (member === null) return false;
     const id = { repoId: entry.repoId, threadKey: feed.threadKey, kind: "activity" } as const;
+    const removing = feed.action === "comment_deleted";
     const item = this.#row(id);
-    if (!item || feed.member === null) return false;
-    const deleted = feed.action === "comment_deleted";
+    if (!item) {
+      if (removing) this.#deletionTombstone(entry, member, now);
+      return false;
+    }
     const members = JSON.parse(item.members) as string[];
-    const kept = deleted ? members.filter((m) => m !== feed.member) : members;
+    const deleted = JSON.parse(item.deleted) as string[];
+    if (deleted.includes(member)) return false;
+    const kept = removing ? members.filter((m) => m !== member) : members;
     const excerpt =
-      item.excerpt_member === feed.member ? (deleted ? null : feed.excerpt) : item.excerpt;
-    if (kept.length === members.length && excerpt === item.excerpt) return false;
+      item.excerpt_member === member ? (removing ? null : feed.excerpt) : item.excerpt;
+    const changed = kept.length !== members.length || excerpt !== item.excerpt;
+    if (!changed && !removing) return false;
+    const resequence = changed && item.feed_seq !== null;
     this.sql.exec(
-      `UPDATE feed_items SET members = ?, excerpt = ?, feed_seq = ?, seq_at = ? WHERE ${WHERE_ITEM}`,
+      `UPDATE feed_items SET members = ?, excerpt = ?, deleted = ?, feed_seq = ?, seq_at = ?
+       WHERE ${WHERE_ITEM}`,
       JSON.stringify(kept),
       excerpt,
-      this.#next(false),
-      now,
+      JSON.stringify(removing ? [...deleted, member].slice(-FEED_POLICY.maxDeleted) : deleted),
+      resequence ? this.#next(false) : item.feed_seq,
+      // A tombstone's retention starts again with each change of what it guards.
+      resequence || item.feed_seq === null ? now : item.seq_at,
       id.repoId,
       id.threadKey,
       id.kind,
     );
-    return true;
+    return resequence;
   }
 
+  /** An activity item not shown, that only remembers a deleted member (any entry is newer). */
+  #deletionTombstone(entry: FeedEntry, member: string, now: number): void {
+    const { feed, recipient } = entry;
+    this.sql.exec(
+      `INSERT INTO feed_items (repo_id, thread_key, kind, number, title, version, state, priority,
+         reasons, silent, action, actor, actor_trust, members, deleted, truncated, last_event_key,
+         last_event_at, seq_at)
+       VALUES (?, ?, 'activity', ?, ?, 0, 'resolved', ?, ?, 1, ?, ?, ?, '[]', ?, 0, ?, ?, ?)`,
+      entry.repoId,
+      feed.threadKey,
+      feed.subject.number,
+      feed.subject.title,
+      recipient.priority,
+      JSON.stringify(recipient.reasons),
+      feed.action,
+      entry.actor,
+      feed.actorTrust,
+      JSON.stringify([member]),
+      entry.eventKey,
+      entry.occurredAt,
+      now,
+    );
+  }
+
+  /**
+   * One entry, other than a comment's edit or deletion. An item the feed
+   * has not shown (none, or a tombstone) is shown, with the newest state
+   * the feed knows of it, once an entry that opens it arrives, whatever
+   * that entry's version; until then, an entry that only resolves keeps
+   * that newest state in a tombstone. So the outcome does not depend on
+   * the order: an item resolved before its opening arrived is shown
+   * resolved, and one that never opened is never shown.
+   */
   #applyOne(entry: FeedEntry, now: number): boolean {
     const { feed, recipient } = entry;
     const item = this.#row({
@@ -223,11 +278,19 @@ export class Feed {
       threadKey: feed.threadKey,
       kind: recipient.kind,
     });
-    if (!item && recipient.state === "resolved") return false;
+    const shown = item !== undefined && item.feed_seq !== null;
+    const shows = !shown && recipient.state === "open";
     const newer = !item || feed.subject.version > item.version;
+    const deleted = item ? (JSON.parse(item.deleted) as string[]) : [];
+    const gone = feed.member !== null && deleted.includes(feed.member);
     let members: string[] = item ? (JSON.parse(item.members) as string[]) : [];
     let truncated = item?.truncated === 1;
-    if (recipient.kind === "activity" && feed.member !== null && !members.includes(feed.member)) {
+    if (
+      recipient.kind === "activity" &&
+      feed.member !== null &&
+      !gone &&
+      !members.includes(feed.member)
+    ) {
       const union = [...members, feed.member].sort(byIdDescending);
       members = union.slice(0, FEED_POLICY.maxMembers);
       truncated ||= union.length > FEED_POLICY.maxMembers;
@@ -235,8 +298,8 @@ export class Feed {
     const membersJson = JSON.stringify(members);
     const grew =
       item !== undefined && (membersJson !== item.members || truncated !== (item.truncated === 1));
-    if (!newer && !grew) return false;
-    const seq = this.#next(item === undefined);
+    if (!newer && !grew && !shows) return false;
+    const seq = shown || shows ? this.#next(!shown) : null;
     if (!newer) {
       this.sql.exec(
         `UPDATE feed_items SET members = ?, truncated = ?, feed_seq = ?, seq_at = ? WHERE ${WHERE_ITEM}`,
@@ -248,7 +311,7 @@ export class Feed {
         feed.threadKey,
         recipient.kind,
       );
-      return true;
+      return seq !== null;
     }
     this.sql.exec(
       `INSERT INTO feed_items (repo_id, thread_key, kind, number, title, version, state, priority,
@@ -260,9 +323,10 @@ export class Feed {
          state = excluded.state, priority = excluded.priority, reasons = excluded.reasons,
          silent = excluded.silent, action = excluded.action, actor = excluded.actor,
          actor_trust = excluded.actor_trust, excerpt = excluded.excerpt,
-         excerpt_member = excluded.excerpt_member, members = excluded.members, truncated = excluded.truncated,
-         last_event_key = excluded.last_event_key, last_event_at = excluded.last_event_at,
-         feed_seq = excluded.feed_seq, seq_at = excluded.seq_at`,
+         excerpt_member = excluded.excerpt_member, members = excluded.members,
+         truncated = excluded.truncated, last_event_key = excluded.last_event_key,
+         last_event_at = excluded.last_event_at, feed_seq = excluded.feed_seq,
+         seq_at = excluded.seq_at`,
       entry.repoId,
       feed.threadKey,
       recipient.kind,
@@ -276,7 +340,8 @@ export class Feed {
       feed.action,
       entry.actor,
       feed.actorTrust,
-      feed.excerpt,
+      // A deleted comment's excerpt is not shown again.
+      gone ? null : feed.excerpt,
       feed.member,
       membersJson,
       truncated ? 1 : 0,
@@ -285,7 +350,7 @@ export class Feed {
       seq,
       now,
     );
-    return true;
+    return seq !== null;
   }
 
   /**
@@ -329,7 +394,8 @@ export class Feed {
     const rows = this.sql
       .exec<Row>(
         `SELECT * FROM feed_items
-         WHERE (priority = 'P0' AND state = 'open') OR (priority = 'P1' AND last_event_at >= ?1)
+         WHERE feed_seq IS NOT NULL
+           AND ((priority = 'P0' AND state = 'open') OR (priority = 'P1' AND last_event_at >= ?1))
          ORDER BY (priority = 'P0' AND state = 'open') DESC, feed_seq DESC LIMIT ?2`,
         this.now() - FEED_POLICY.retentionMs,
         FEED_POLICY.syncItems + 1,
@@ -350,7 +416,7 @@ export class Feed {
    */
   ack(id: FeedItemId, version: number): FeedAck {
     const item = this.#row(id);
-    if (!item) return { status: "missing" };
+    if (!item || item.feed_seq === null) return { status: "missing" };
     if (version > item.version) return { status: "ahead" };
     if (version <= item.acked_version) return { status: "acked", item: itemOf(item) };
     const row = this.sql
@@ -369,24 +435,24 @@ export class Feed {
   }
 
   /**
-   * Deletes items past the retention, then the ones changed longest ago
-   * past the cap, raising the low watermark to the greatest sequence
-   * number deleted (call within a transaction).
+   * Deletes items and tombstones past the retention, then the items
+   * changed longest ago past the cap, raising the low watermark to the
+   * greatest sequence number deleted (call within a transaction).
    */
   retain(): void {
     const meta = this.#meta();
     const deleted = this.sql
-      .exec<{ feed_seq: number }>(
+      .exec<{ feed_seq: number | null }>(
         "DELETE FROM feed_items WHERE seq_at < ? RETURNING feed_seq",
         this.now() - FEED_POLICY.retentionMs,
       )
       .toArray()
-      .map((r) => r.feed_seq);
+      .flatMap((r) => (r.feed_seq === null ? [] : [r.feed_seq]));
     const excess = meta.items - deleted.length - FEED_POLICY.maxItems;
     if (excess > 0)
       for (const r of this.sql.exec<{ feed_seq: number }>(
         `DELETE FROM feed_items WHERE feed_seq IN
-           (SELECT feed_seq FROM feed_items ORDER BY feed_seq LIMIT ?)
+           (SELECT feed_seq FROM feed_items WHERE feed_seq IS NOT NULL ORDER BY feed_seq LIMIT ?)
          RETURNING feed_seq`,
         excess,
       ))
@@ -401,14 +467,20 @@ export class Feed {
 
   /**
    * When retention should next run: now when the feed is past its cap,
-   * else when the item changed longest ago expires; null for an empty feed.
+   * else when the item or tombstone changed longest ago expires; null for
+   * an empty feed.
    */
   nextRetention(): number | null {
     if (this.#meta().items > FEED_POLICY.maxItems) return this.now();
-    const oldest = this.sql
-      .exec<{ seq_at: number }>("SELECT seq_at FROM feed_items ORDER BY feed_seq LIMIT 1")
-      .toArray()[0];
-    return oldest ? oldest.seq_at + FEED_POLICY.retentionMs : null;
+    const { item, tombstone } = this.sql
+      .exec<{ item: number | null; tombstone: number | null }>(
+        `SELECT
+           (SELECT seq_at FROM feed_items WHERE feed_seq IS NOT NULL ORDER BY feed_seq LIMIT 1) AS item,
+           (SELECT min(seq_at) FROM feed_items WHERE feed_seq IS NULL) AS tombstone`,
+      )
+      .one();
+    const oldest = [item, tombstone].filter((at) => at !== null);
+    return oldest.length === 0 ? null : Math.min(...oldest) + FEED_POLICY.retentionMs;
   }
 
   #meta(): Meta {

@@ -10,8 +10,9 @@ import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effect
  * recipient: one call to each principal's feed applies all its entries,
  * however many events name it. A feed applies an entry once however often
  * it comes, so a retried effect changes nothing it already changed. With
- * the dispatcher's batches (two effects inline, four a sweep), one
- * delivery makes at most 400 calls, of the 1,000 an invocation may.
+ * the consumer's and the sweeper's bounds (eight effects inline an
+ * invocation, four a sweep), a delivery makes at most 800 calls, of the
+ * 1,000 an invocation may.
  */
 
 /** Feeds called at once while delivering a batch. Proposed. */

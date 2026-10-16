@@ -11,11 +11,15 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   deleted) and how many items it holds.
  * - `feed_items`: one item per repository, thread and kind, updated in
  *   place; every change takes the next sequence number (`feed_seq`), so the
- *   feed in sequence order is the order changes arrived in. `members`: the
- *   ids an activity item aggregates (JSON, at most 100), `truncated` once
- *   any was dropped; `excerpt_member`: the member the excerpt was taken
- *   from (a comment's edit or deletion changes it); `acked_version`: the
- *   version the feed's owner last acknowledged (0 for none).
+ *   feed in sequence order is the order changes arrived in. A row without
+ *   one is a tombstone: never shown, it keeps what resolved or deleted
+ *   something the feed has not shown, against older entries arriving
+ *   later (`feed_tombstones` finds the oldest for retention). `members`:
+ *   the ids an activity item aggregates (JSON, at most 100), `truncated`
+ *   once any was dropped; `deleted`: the members deleted (JSON, the latest
+ *   100), never added again; `excerpt_member`: the member the excerpt was
+ *   taken from (a comment's edit or deletion changes it); `acked_version`:
+ *   the version the feed's owner last acknowledged (0 for none).
  */
 export const userSchema: readonly DoMigration[] = [
   {
@@ -49,14 +53,16 @@ export const userSchema: readonly DoMigration[] = [
         excerpt TEXT,
         excerpt_member TEXT,
         members TEXT NOT NULL,
+        deleted TEXT NOT NULL DEFAULT '[]',
         truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
         last_event_key TEXT NOT NULL,
         last_event_at INTEGER NOT NULL,
         acked_version INTEGER NOT NULL DEFAULT 0,
-        feed_seq INTEGER NOT NULL UNIQUE,
+        feed_seq INTEGER UNIQUE,
         seq_at INTEGER NOT NULL,
         PRIMARY KEY (repo_id, thread_key, kind)
       ) STRICT, WITHOUT ROWID;
+      CREATE INDEX feed_tombstones ON feed_items (seq_at) WHERE feed_seq IS NULL;
     `,
   },
 ];

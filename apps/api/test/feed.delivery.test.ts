@@ -16,7 +16,12 @@ import {
 } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
 import { sweepEffects } from "../src/effects/dispatcher.js";
-import { EFFECT_POLICY } from "../src/effects/journal.js";
+import {
+  EFFECT_POLICY,
+  type EffectSink,
+  INLINE_BATCH_EFFECTS,
+  INLINE_EFFECTS,
+} from "../src/effects/journal.js";
 import { EFFECT_SINKS } from "../src/effects/sinks.js";
 import { feedSink } from "../src/feed/sink.js";
 import { applyEnvelope, consumeEvents, EVENTS_QUEUE } from "../src/queues/events-consumer.js";
@@ -261,6 +266,46 @@ describe("the feed sink", () => {
     });
   });
 
+  it("delivers a batch sink's effects inline besides the other sinks' share", async () => {
+    const repoId = await listedRepo();
+    const { on, calls } = recordingFeeds();
+    const single: string[] = [];
+    const oneByOne: EffectSink = {
+      name: "test_hook",
+      plan: () => [{ target: "hook_1", payload: {} }],
+      deliver: async (effect) => {
+        single.push(effect.id);
+      },
+    };
+    const count = { queries: 0 };
+    const measured = {
+      ...on,
+      DIRECTORY: counting(env.DIRECTORY, count),
+      ORG_READ: counting(env.ORG_READ, count),
+    } as Env;
+    await applyEnvelope(
+      measured,
+      envelope(
+        repoId,
+        [1, 2, 3].map((seq) => commentEvent(repoId, seq, block(seq, [`usr_r${repoId}`]))),
+      ),
+      // Not T0: the effect left pending must not fall due in the global sweep below.
+      { sinks: [oneByOne, feedSink] },
+    );
+    expect(single).toHaveLength(INLINE_EFFECTS);
+    expect(calls.map((call) => call.entries.length)).toEqual([3]);
+    // A lookup, the batch, the claim, a mark per effect delivered alone, one for the feed's.
+    expect(count.queries).toBe(1 + 1 + 1 + INLINE_EFFECTS + 1);
+    expect((await effectRows(repoId)).map((row) => row.state).sort()).toEqual([
+      "done",
+      "done",
+      "done",
+      "done",
+      "done",
+      "pending",
+    ]);
+  });
+
   it("keeps a consumer invocation and a sweep within Free's 50 D1 queries", async () => {
     const repos = await Promise.all(Array.from({ length: 5 }, () => listedRepo()));
     const { on, calls } = recordingFeeds();
@@ -287,12 +332,16 @@ describe("the feed sink", () => {
     const ctx = createExecutionContext();
     await consumeEvents(batch, measured, { sinks: [feedSink], now: () => T0 });
     expect((await getQueueResult(batch, ctx)).explicitAcks).toHaveLength(5);
-    // Per message a directory lookup and a read-model batch; the invocation's two inline
-    // effects, one claim and one mark (Measured in this test).
-    expect(count.queries).toBe(5 * 2 + 2);
-    // The two inline effects went in one call per recipient.
-    expect(calls).toHaveLength(100);
-    expect(calls.every((call) => call.entries.length === 2)).toBe(true);
+    // Per message a directory lookup and a read-model batch; the invocation's eight inline
+    // effects (three messages' worth), a claim and one mark per message.
+    expect(INLINE_BATCH_EFFECTS).toBe(8);
+    expect(count.queries).toBe(5 * 2 + 3 * 2);
+    // Each message's inline effects went in one call per recipient: 3, 3, then 2 entries each.
+    expect(calls).toHaveLength(300);
+    expect(calls.map((call) => call.entries.length)).toEqual([
+      ...Array(200).fill(3),
+      ...Array(100).fill(2),
+    ]);
 
     // The sweeper takes the rest, a batch at a time: a claim, a mark and the prune.
     count.queries = 0;
