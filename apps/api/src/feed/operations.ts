@@ -1,6 +1,6 @@
 import type { ackFeedItem, getFeed, Input, Output, syncFeed } from "@fyrden/api-contract";
 import { FEED_KINDS, type FeedKind, feedItemKey } from "@fyrden/domain";
-import type { FeedViewDenial } from "../do/RepoDO.js";
+import type { FeedViewDenial } from "../do/repo/feed-view.js";
 import {
   FEED_POLICY,
   type FeedFilter,

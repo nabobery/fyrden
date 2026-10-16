@@ -124,7 +124,8 @@ import {
   type RepoIdentity,
   type RepoUpdate,
 } from "./repo/events.js";
-import { excerpt, type FeedPrincipal, RepoFeed } from "./repo/feed.js";
+import { RepoFeed } from "./repo/feed.js";
+import { type FeedViewAnswer, RepoFeedView } from "./repo/feed-view.js";
 import {
   type FileWriteDeps,
   type FileWriteInput,
@@ -176,20 +177,6 @@ import {
 } from "./repo/template.js";
 import type { WriteContext, WriteRefusal } from "./repo/write-context.js";
 import { repoSchema } from "./schema/repo.js";
-import type { FeedPurge } from "./user/feed.js";
-
-/**
- * Why a feed's reader may not read the repository (`feedView`): `lost`,
- * certainly, as `loss` says (the repository gone: no account, and the time
- * it was found so; or the account's ACL at `(epochGen, aclVersion)`, as
- * pulled at `until`), so the reader's feed may forget it up to then;
- * `denied`, but on nothing a feed may forget it by (an object without an
- * account); `unknown`, not known (no usable ACL snapshot: a pull failed).
- */
-export type FeedViewDenial =
-  | { readonly kind: "lost"; readonly loss: Omit<FeedPurge, "repoIds"> }
-  | { readonly kind: "denied" }
-  | { readonly kind: "unknown" };
 
 /** Whether a hook URL is plain http (as its parser reads it). */
 function isHttp(url: string): boolean {
@@ -252,6 +239,9 @@ export class RepoDO extends MigratingDO {
 
   /** Effective roles and the rulesets' judgement of writes. */
   readonly #authority: RepoAuthority;
+
+  /** The repository as activity feeds read it. */
+  readonly #feedView: RepoFeedView;
 
   /** The account's storage quota, as pushes charge it. */
   readonly #storageCharges: StorageCharges;
@@ -408,7 +398,7 @@ export class RepoDO extends MigratingDO {
         this.events.visibility() === "public" || this.acl.lastRoleOf(principal) !== null,
       roleOf: (principal) => this.acl.lastRoleOf(principal),
       refreshAccess: () => this.acl.refresh(),
-      resolveHandles: (handles) => this.#resolveHandles(handles),
+      resolveHandles: (handles) => this.#feedView.resolveHandles(handles),
       metrics: this.git.context.metrics,
     });
     this.events.routeFeed((type, actor, data, row) => this.feed.blockFor(type, actor, data, row));
@@ -473,6 +463,17 @@ export class RepoDO extends MigratingDO {
       acl: this.acl,
       rulesets: () => this.rulesetStore,
       memoryBlocks: () => this.#memoryBlocks(),
+    });
+    this.#feedView = new RepoFeedView({
+      git: this.git,
+      env: () => this.env,
+      acl: this.acl,
+      authority: this.#authority,
+      pulls: this.pulls,
+      comments: this.comments,
+      reviewComments: this.reviewComments,
+      isPublic: () => this.events.visibility() === "public",
+      refusesReads: () => this.#refusesReads(),
     });
     this.#discussion = new PullDiscussion({
       git: this.git,
@@ -2143,102 +2144,16 @@ export class RepoDO extends MigratingDO {
   }
 
   /**
-   * Active users and agents with the (lower-cased) handles, from the
-   * directory, each with the root identity it counts as (a user's agent:
-   * that user).
-   */
-  async #resolveHandles(handles: readonly string[]): Promise<Map<string, FeedPrincipal>> {
-    this.git.context.metrics.count("d1.query", { db: "directory", op: "feed_mentions" });
-    const { results } = await this.env.DIRECTORY.prepare(
-      `SELECT p.id, p.handle,
-         CASE WHEN p.type = 'agent' AND o.type = 'user' THEN o.id ELSE p.id END AS root
-       FROM principals p LEFT JOIN principals o ON o.id = p.owner_id
-       WHERE p.handle COLLATE NOCASE IN (SELECT value FROM json_each(?))
-         AND p.type IN ('user', 'agent') AND p.disabled_at IS NULL`,
-    )
-      .bind(JSON.stringify(handles))
-      .all<{ id: string; handle: string; root: string }>();
-    return new Map(results.map((r) => [r.handle.toLowerCase(), { id: r.id, root: r.root }]));
-  }
-
-  /**
-   * For a reader of an activity feed: whether `principal` (capped by its
-   * grant's owners) reads the repository now, its role, and, if it reads
-   * it, the excerpts of `members` (at most 100): what feed items name of
-   * the repository (`comment/<id>`, `review_comment/<id>`, `review/<id>`,
-   * `pull/<n>` for a pull request's description), read now so an edit or
-   * deletion shows at once (null for one gone or empty). When it does not
-   * read it, `denial` says how sure that is (see `FeedViewDenial`).
+   * For a reader of an activity feed: whether `principal` reads the
+   * repository now, its role, and the excerpts of `members` (see
+   * `RepoFeedView.view`).
    */
   feedView(
     principal: string,
     grantId: string | null,
     members: readonly string[],
-  ): Promise<{
-    readonly readable: boolean;
-    readonly role: RepoRole | null;
-    readonly excerpts: Record<string, string | null>;
-    readonly denial: FeedViewDenial | null;
-  }> {
-    return this.#measured("feedView", async () => {
-      const gone = () => ({
-        readable: false,
-        role: null,
-        excerpts: {},
-        denial: {
-          kind: "lost" as const,
-          loss: { accountId: "", epochGen: 0, aclVersion: 0, until: Date.now() },
-        },
-      });
-      if (this.#refusesReads()) return gone();
-      const ceilings = await this.#authority.rolesPulled(principal, grantId);
-      // Deleted meanwhile (its rows not erased yet): nothing of it is read.
-      if (this.#refusesReads()) return gone();
-      const role = this.#authority.roleNow(principal, ceilings);
-      const readable = role !== null || this.events.visibility() === "public";
-      if (!readable) {
-        // The snapshot the decision used: a denial without one (a pull failed) is no answer.
-        const basis = this.acl.basis();
-        const denial: FeedViewDenial =
-          basis === "unknown"
-            ? { kind: "unknown" }
-            : basis === "none"
-              ? { kind: "denied" }
-              : {
-                  kind: "lost",
-                  loss: {
-                    accountId: basis.accountId,
-                    epochGen: basis.epochGen,
-                    aclVersion: basis.version,
-                    until: basis.pulledAt,
-                  },
-                };
-        return { readable, role, excerpts: {}, denial };
-      }
-      const excerpts: Record<string, string | null> = {};
-      for (const member of members.slice(0, 100)) {
-        const [kind, id] = member.split("/") as [string, string | undefined];
-        const n = Number(id);
-        if (!Number.isSafeInteger(n) || n <= 0) continue;
-        const body =
-          kind === "comment"
-            ? this.comments.get(n)?.body
-            : kind === "review_comment"
-              ? this.reviewComments.get(n)?.body
-              : kind === "pull"
-                ? this.pulls.get(n)?.body
-                : kind === "review"
-                  ? this.ctx.storage.sql
-                      .exec<{ body: string | null }>(
-                        "SELECT body FROM reviews WHERE review_id = ?",
-                        n,
-                      )
-                      .toArray()[0]?.body
-                  : undefined;
-        excerpts[member] = excerpt(body);
-      }
-      return { readable, role, excerpts, denial: null };
-    });
+  ): Promise<FeedViewAnswer> {
+    return this.#measured("feedView", () => this.#feedView.view(principal, grantId, members));
   }
 
   /** Whether `principalId` may read this repository (public, or a role here). */
