@@ -27,6 +27,7 @@ import { encodeJson } from "../../git/maintenance/storage.js";
 import { reauthorizeByToken } from "../../git/push/reauthorize-token.js";
 import { PUSH_BUSY, PUSH_CANCELLED, PUSH_EXPIRED } from "../../git/push/repo-push.js";
 import { type Browsed, type BrowseFailure, fail } from "./browse.js";
+import type { FeedActor } from "./feed.js";
 import {
   FILE_WRITE_POLICY,
   type FileWriteDeps,
@@ -145,6 +146,9 @@ export interface RebaseDeps {
   /** After a commit: what the object does after any commit it makes (outbox, audit). */
   readonly committed: () => void;
   readonly policy: () => RebasePolicy;
+  /** `actor` as activity feeds see the merge it makes, and the merge's commit made with it. */
+  readonly feedActor: (actor: Pick<RefActor, "principal" | "grantId">) => Promise<FeedActor>;
+  readonly withFeed: <R>(actor: FeedActor, change: () => R) => R;
   /** For tests: runs before the final push is committed, and right after. */
   readonly hooks: () => {
     readonly beforeFinalize?: () => Promise<void>;
@@ -670,6 +674,7 @@ export class RebaseSagas {
     const tip = oidFromHex(row.tip);
     // A runner that lost the job leaves the push to the one that took it over.
     if (!this.git.jobs.checkpoint(job, this.#cursor(row))) return this.#later(row, 0);
+    const feedActor = await this.deps.feedActor(actor);
     await this.deps.hooks().beforeFinalize?.();
     let response: Uint8Array;
     try {
@@ -691,12 +696,14 @@ export class RebaseSagas {
           return JSON.stringify(standing.stamps()) === row.stamps_json ? undefined : PULL_CHANGED;
         },
         inCommit: () => {
-          this.deps.pulls.markMerged(
-            number,
-            tip,
-            "rebase",
-            { ...actor, via: "merge" },
-            this.git.context.now(),
+          this.deps.withFeed(feedActor, () =>
+            this.deps.pulls.markMerged(
+              number,
+              tip,
+              "rebase",
+              { ...actor, via: "merge" },
+              this.git.context.now(),
+            ),
           );
           if (!this.#settle(row, "done", null, row.tip))
             throw new Error("the rebase is no longer this run's");

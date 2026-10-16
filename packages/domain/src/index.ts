@@ -12,6 +12,7 @@ export * from "./principals/token.js";
 export * from "./pulls/approvals.js";
 export * from "./pulls/comment.js";
 export * from "./pulls/lifecycle.js";
+export * from "./pulls/mentions.js";
 export * from "./pulls/pull.js";
 export * from "./pulls/review.js";
 export * from "./pulls/review-comment.js";

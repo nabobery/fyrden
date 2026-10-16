@@ -4,7 +4,7 @@ import {
   type RefActor,
   type RepoGitStorage,
 } from "@fyrden/adapters-cloudflare/git";
-import { type EntitySnapshot, REPO_ENTITY, type RepoRow } from "@fyrden/domain";
+import { type EntitySnapshot, type FeedBlock, REPO_ENTITY, type RepoRow } from "@fyrden/domain";
 import { oidToHex } from "@fyrden/git-core";
 import type { NewEvent, Outbox } from "../base/outbox.js";
 
@@ -13,6 +13,14 @@ export type HookRouter = (
   type: string,
   data: Record<string, unknown> | null,
 ) => readonly { readonly id: number; readonly v: number }[];
+
+/** What an event means for activity feeds (in its transaction), or undefined for nothing. */
+export type FeedRouter = (
+  type: string,
+  actor: string | null,
+  data: Record<string, unknown> | null,
+  row: Record<string, unknown> | null,
+) => FeedBlock | undefined;
 
 /** A repository's snapshot as a read-model rebuild takes it. */
 export interface RepoExport {
@@ -158,6 +166,9 @@ export class RepoEvents {
   /** The webhooks an event of `type` goes to (see `routeHooks`). */
   #hooksFor: HookRouter = () => [];
 
+  /** What an event means for activity feeds (see `routeFeed`). */
+  #feedFor: FeedRouter = () => undefined;
+
   constructor(
     private readonly git: RepoGitStorage,
     private readonly outbox: Outbox,
@@ -171,6 +182,11 @@ export class RepoEvents {
   /** Names the webhooks each event goes to, at their configuration versions. */
   routeHooks(router: HookRouter): void {
     this.#hooksFor = router;
+  }
+
+  /** Says, with each event, what it means for principals' activity feeds. */
+  routeFeed(router: FeedRouter): void {
+    this.#feedFor = router;
   }
 
   #meta(): MetaRow | undefined {
@@ -758,6 +774,15 @@ export class RepoEvents {
     );
     const hooks =
       meta.owner_id !== null && meta.name !== null ? this.#hooksFor(type, event.data) : [];
+    const feed =
+      meta.owner_id === null
+        ? undefined
+        : this.#feedFor(
+            type,
+            event.actor,
+            event.data,
+            typeof snapshot === "object" ? (snapshot.row as Record<string, unknown> | null) : null,
+          );
     this.outbox.append(
       { sourceId: meta.repo_id, epochGen: meta.epoch_gen, sourceSeq: meta.source_seq },
       {
@@ -773,6 +798,7 @@ export class RepoEvents {
             },
           },
         }),
+        ...(feed && { feed }),
         type,
         at: this.git.context.now(),
         ownerGen: meta.owner_gen,

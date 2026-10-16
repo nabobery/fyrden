@@ -277,13 +277,16 @@ export class RepoReviews {
       const now = this.deps.git.context.now();
       for (const id of added) {
         this.#run(
-          "INSERT INTO review_requests (pr_number, reviewer_id, requested_by, requested_at) VALUES (?, ?, ?, ?)",
+          `INSERT INTO review_requests (pr_number, reviewer_id, requested_by, requested_at,
+             reviewer_root) VALUES (?, ?, ?, ?, ?)`,
           number,
           id,
           caller.actor.principal,
           now,
+          reviewers.find((r) => r.id === id)?.root ?? id,
         );
-        this.#emitRequest("review_requested", number, id, caller.actor);
+        const root = reviewers.find((r) => r.id === id)?.root ?? id;
+        this.#emitRequest("review_requested", number, id, caller.actor, root);
       }
       if (added.length > 0)
         this.deps.events.auditChange("pull_request.request_reviewers", caller.actor, {
@@ -306,12 +309,21 @@ export class RepoReviews {
     const removed = [...new Set(reviewerIds)].filter((id) => requested.has(id));
     this.deps.git.context.storage.transactionSync(() => {
       for (const id of removed) {
-        this.#run(
-          "DELETE FROM review_requests WHERE pr_number = ? AND reviewer_id = ?",
+        const [gone] = this.deps.git.context.storage.sql
+          .exec<{ reviewer_root: string | null }>(
+            "DELETE FROM review_requests WHERE pr_number = ? AND reviewer_id = ? RETURNING reviewer_root",
+            number,
+            id,
+          )
+          .toArray();
+        this.#count(1);
+        this.#emitRequest(
+          "review_request_removed",
           number,
           id,
+          caller.actor,
+          gone?.reviewer_root ?? undefined,
         );
-        this.#emitRequest("review_request_removed", number, id, caller.actor);
       }
       if (removed.length > 0)
         this.deps.events.auditChange("pull_request.remove_review_request", caller.actor, {
@@ -346,8 +358,19 @@ export class RepoReviews {
     });
   }
 
-  #emitRequest(event: string, number: number, reviewer: string, actor: RefActor): void {
-    this.deps.events.emitActivity(`pull_request.${event}`, actor, { number, reviewer });
+  #emitRequest(
+    event: string,
+    number: number,
+    reviewer: string,
+    actor: RefActor,
+    /** The root identity the reviewer counts as, when known (a user's agent: that user). */
+    reviewerRoot?: string,
+  ): void {
+    this.deps.events.emitActivity(`pull_request.${event}`, actor, {
+      number,
+      reviewer,
+      ...(reviewerRoot !== undefined && { reviewer_root: reviewerRoot }),
+    });
   }
 
   #run(query: string, ...bindings: SqlStorageValue[]): void {

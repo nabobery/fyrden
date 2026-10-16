@@ -103,6 +103,30 @@ export class RepoAcl {
   }
 
   /**
+   * Pulls a snapshot unless one within the read TTL is stored, so that
+   * `lastRoleOf` answers from it (a failed pull leaves the stored one).
+   */
+  async refresh(): Promise<void> {
+    const account = this.deps.account();
+    if (account) await this.#snapshot(account, "read");
+  }
+
+  /**
+   * `principalId`'s role from the snapshot as last pulled, however long
+   * ago (never one below the floor), or null: for what may be a little
+   * stale without harm (who a feed tells, which feeds check again when
+   * read). Pulls nothing.
+   */
+  lastRoleOf(principalId: string): RepoRole | null {
+    const account = this.deps.account();
+    if (!account) return null;
+    if (principalId === account.accountId || ownsUserAccount(principalId, account.ownerId))
+      return "admin";
+    const row = this.#usable(account.accountId, Number.POSITIVE_INFINITY);
+    return row ? (this.#roles(row).get(principalId) ?? null) : null;
+  }
+
+  /**
    * The repository moved to another account: the old account's snapshot
    * and version floor mean nothing there; the next decision pulls afresh.
    */

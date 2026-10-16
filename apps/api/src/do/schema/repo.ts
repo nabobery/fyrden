@@ -708,4 +708,30 @@ export const repoSchema: readonly DoMigration[] = [
       ALTER TABLE head_follows ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    version: 27,
+    // Activity feeds: each pull request's feed version (bumped by every
+    // change of it that means something for a feed, so feeds apply them in
+    // order), and who takes part in it (its author, reviewers asked or
+    // reviewing, commenters, the mentioned; 100 at most), told of its
+    // activity.
+    name: "feed",
+    sql: `
+      CREATE TABLE feed_threads (
+        thread_key TEXT PRIMARY KEY,
+        version INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE feed_participants (
+        number INTEGER NOT NULL,
+        principal TEXT NOT NULL,
+        -- The root identity it counts as (the user its agents act for).
+        root TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        joined_seq INTEGER NOT NULL,
+        PRIMARY KEY (number, principal)
+      ) STRICT;
+      -- The root identity each reviewer asked counts as (a user's agent: that user).
+      ALTER TABLE review_requests ADD COLUMN reviewer_root TEXT;
+    `,
+  },
 ];

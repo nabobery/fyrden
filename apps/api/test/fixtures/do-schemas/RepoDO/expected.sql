@@ -130,6 +130,19 @@ CREATE TABLE event_payloads (
         payload TEXT NOT NULL CHECK (json_valid(payload)),
         created_at INTEGER NOT NULL
       , sent_at INTEGER) STRICT;
+CREATE TABLE feed_participants (
+        number INTEGER NOT NULL,
+        principal TEXT NOT NULL,
+        -- The root identity it counts as (the user its agents act for).
+        root TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        joined_seq INTEGER NOT NULL,
+        PRIMARY KEY (number, principal)
+      ) STRICT;
+CREATE TABLE feed_threads (
+        thread_key TEXT PRIMARY KEY,
+        version INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE generation (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         template_id TEXT NOT NULL,
@@ -385,7 +398,7 @@ CREATE TABLE review_requests (
         pr_number INTEGER NOT NULL,
         reviewer_id TEXT NOT NULL,
         requested_by TEXT NOT NULL,
-        requested_at INTEGER NOT NULL,
+        requested_at INTEGER NOT NULL, reviewer_root TEXT,
         PRIMARY KEY (pr_number, reviewer_id)
       ) STRICT;
 CREATE TABLE review_threads (

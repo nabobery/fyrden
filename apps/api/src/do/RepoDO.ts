@@ -179,6 +179,7 @@ import {
   type RepoIdentity,
   type RepoUpdate,
 } from "./repo/events.js";
+import { excerpt, type FeedActor, type FeedPrincipal, RepoFeed } from "./repo/feed.js";
 import {
   BUSY,
   type FileWriteDeps,
@@ -520,6 +521,7 @@ export class RepoDO extends MigratingDO {
 
   /** The repository's webhooks. */
   readonly hooks: RepoHooks;
+  readonly feed: RepoFeed;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -579,7 +581,11 @@ export class RepoDO extends MigratingDO {
       log: () => this.#log(),
       takesChanges: () => this.#writeRefusal() === undefined,
       writable: () => this.#writeRefusal() === undefined && this.events.canEmit(),
-      beforeWrite: () => this.mergeabilityHooks.beforeWrite?.(),
+      // Who hears of a conflict is decided with the write: from access as it is now.
+      beforeWrite: async () => {
+        await this.feed.prepare();
+        await this.mergeabilityHooks.beforeWrite?.();
+      },
     });
     this.hooks = new RepoHooks({
       git: this.git,
@@ -587,6 +593,16 @@ export class RepoDO extends MigratingDO {
       repoId: () => this.#repoId(),
       keys: () => secretKeys(this.env),
     });
+    this.feed = new RepoFeed({
+      git: this.git,
+      mayRead: (principal) =>
+        this.events.visibility() === "public" || this.acl.lastRoleOf(principal) !== null,
+      roleOf: (principal) => this.acl.lastRoleOf(principal),
+      refreshAccess: () => this.acl.refresh(),
+      resolveHandles: (handles) => this.#resolveHandles(handles),
+      metrics: this.git.context.metrics,
+    });
+    this.events.routeFeed((type, actor, data, row) => this.feed.blockFor(type, actor, data, row));
     this.rebases = new RebaseSagas(
       {
         writeDeps: () => this.#writeDeps(),
@@ -601,6 +617,8 @@ export class RepoDO extends MigratingDO {
         },
         policy: () => this.rebasePolicy,
         hooks: () => this.rebaseHooks,
+        feedActor: (actor) => this.#feedActorOf(actor),
+        withFeed: (actor, change) => this.feed.within(actor, change),
       },
       this.git,
     );
@@ -1154,6 +1172,7 @@ export class RepoDO extends MigratingDO {
       });
       if (input.baseRef === input.headRef)
         return { ok: false as const, code: "same_branches" as const };
+      const mentioned = await this.feed.prepare([input.body]);
       for (let attempt = 0; attempt < 3; attempt++) {
         const refused = this.#writeRefusal();
         if (refused) return { ok: false as const, code: refused.code as "repo_not_found" };
@@ -1176,7 +1195,10 @@ export class RepoDO extends MigratingDO {
         }
         if (merged) return { ok: false as const, code: "no_commits" as const };
         if (this.git.refStore.state().version !== version) continue;
-        const opened = this.pulls.open({ ...input, baseSha, headSha }, version, { actor, root });
+        const role = this.#roleNow(actor.principal, ceilings);
+        const opened = this.feed.within({ root, role, mentioned }, () =>
+          this.pulls.open({ ...input, baseSha, headSha }, version, { actor, root }),
+        );
         if (!opened.ok && opened.code === "version-conflict") continue;
         this.#armOutbox();
         this.#ensureAuditArchive();
@@ -1234,6 +1256,7 @@ export class RepoDO extends MigratingDO {
       const existing = this.pulls.openBetween(input.headRef, input.baseRef, input.headRepoId);
       if (existing !== undefined)
         return { ok: false as const, code: "already_exists" as const, number: existing };
+      const mentioned = await this.feed.prepare([input.body]);
       const head = this.env.REPO.getByName(input.headRepoId);
       const tip = await head.pullHeadTip(input.headRef);
       if (!tip.sha) return { ok: false as const, code: "head_not_found" as const };
@@ -1285,15 +1308,18 @@ export class RepoDO extends MigratingDO {
           if (this.git.refStore.state().version !== version) continue;
           if (!this.ctx.storage.transactionSync(() => readyToPublish(this.git, work)))
             return { ok: false as const, code: "busy" as const };
-          opened = this.pulls.open(
-            { ...input, baseSha, headSha, headRefVersion: tip.refVersion },
-            version,
-            { actor, root },
-            () => {
-              // Checked again in the ref transaction: the base's collection may have run.
-              if (!readyToPublish(this.git, work)) throw new ImportBusy("the import changed");
-              publishStaged(this.git, importId);
-            },
+          const role = this.#roleNow(actor.principal, ceilings);
+          opened = this.feed.within({ root, role, mentioned }, () =>
+            this.pulls.open(
+              { ...input, baseSha, headSha, headRefVersion: tip.refVersion },
+              version,
+              { actor, root },
+              () => {
+                // Checked again in the ref transaction: the base's collection may have run.
+                if (!readyToPublish(this.git, work)) throw new ImportBusy("the import changed");
+                publishStaged(this.git, importId);
+              },
+            ),
           );
           if (!opened.ok && opened.code === "version-conflict") continue;
           break;
@@ -1450,15 +1476,21 @@ export class RepoDO extends MigratingDO {
         code: Exclude<PullChangeFailure, "already_exists"> | PullChangeRefusal | "busy";
       }
   > {
-    return this.#pullChange("changePull", actor, (caller) => {
-      const changed = this.pulls.change(number, patch, caller);
-      // Nothing awaits between the read and the commit: a conflict means a
-      // concurrent change no retry here could see past.
-      if (changed.ok) return { ok: true as const, record: this.#viewed(changed.record) };
-      return changed.code === "version-conflict"
-        ? { ok: false as const, code: "busy" as const }
-        : changed;
-    });
+    return this.#pullChange(
+      "changePull",
+      actor,
+      (caller) => {
+        const changed = this.pulls.change(number, patch, caller);
+        // Nothing awaits between the read and the commit: a conflict means a
+        // concurrent change no retry here could see past.
+        if (changed.ok) return { ok: true as const, record: this.#viewed(changed.record) };
+        return changed.code === "version-conflict"
+          ? { ok: false as const, code: "busy" as const }
+          : changed;
+      },
+      undefined,
+      [patch.body],
+    );
   }
 
   /**
@@ -1473,6 +1505,8 @@ export class RepoDO extends MigratingDO {
     return this.#measured("mergePull", async () => {
       await this.checkEpoch();
       const ceilings = await this.#rolesPulled(actor.principal, actor.grantId ?? null);
+      // Who hears of the merge is decided with it: from access as it is now.
+      const feedActor = await this.#feedActorOf(actor);
       const refusedWrite = this.#writeRefusal();
       if (refusedWrite) return fail(refusedWrite.status, refusedWrite.code, refusedWrite.error);
       const { number, method } = input;
@@ -1588,12 +1622,14 @@ export class RepoDO extends MigratingDO {
               ? undefined
               : PULL_CHANGED,
           inCommit: (sha) =>
-            this.pulls.markMerged(
-              number,
-              sha,
-              method,
-              { ...actor, via: "merge" },
-              this.git.context.now(),
+            this.feed.within(feedActor, () =>
+              this.pulls.markMerged(
+                number,
+                sha,
+                method,
+                { ...actor, via: "merge" },
+                this.git.context.now(),
+              ),
             ),
           ...(this.mergeHooks.beforeFinish && { beforeFinish: this.mergeHooks.beforeFinish }),
         },
@@ -1900,8 +1936,12 @@ export class RepoDO extends MigratingDO {
     },
     actor: RefActor,
   ) {
-    return this.#pullChange("submitReview", actor, (caller) =>
-      this.reviews.submit(number, input, caller),
+    return this.#pullChange(
+      "submitReview",
+      actor,
+      (caller) => this.reviews.submit(number, input, caller),
+      undefined,
+      [input.body],
     );
   }
 
@@ -1967,13 +2007,23 @@ export class RepoDO extends MigratingDO {
   }
 
   createComment(number: number, body: string, actor: RefActor) {
-    return this.#pullChange("createComment", actor, (caller) =>
-      this.comments.create(number, body, caller),
+    return this.#pullChange(
+      "createComment",
+      actor,
+      (caller) => this.comments.create(number, body, caller),
+      undefined,
+      [body],
     );
   }
 
   editComment(id: number, body: string, actor: RefActor) {
-    return this.#pullChange("editComment", actor, (caller) => this.comments.edit(id, body, caller));
+    return this.#pullChange(
+      "editComment",
+      actor,
+      (caller) => this.comments.edit(id, body, caller),
+      undefined,
+      [body],
+    );
   }
 
   deleteComment(id: number, actor: RefActor) {
@@ -2025,13 +2075,18 @@ export class RepoDO extends MigratingDO {
           ? this.#withHead(this.reviewComments.start(number, anchor.value, input.body, caller))
           : anchor,
       () => this.#checkedAnchor(number, input),
+      [input.body],
     );
   }
 
   /** Replies in the thread of comment `to`. */
   replyReviewComment(number: number, to: number, body: string, actor: RefActor) {
-    return this.#pullChange("replyReviewComment", actor, (caller) =>
-      this.#withHead(this.reviewComments.reply(number, to, body, caller)),
+    return this.#pullChange(
+      "replyReviewComment",
+      actor,
+      (caller) => this.#withHead(this.reviewComments.reply(number, to, body, caller)),
+      undefined,
+      [body],
     );
   }
 
@@ -2072,8 +2127,12 @@ export class RepoDO extends MigratingDO {
   }
 
   editReviewComment(id: number, body: string, actor: RefActor) {
-    return this.#pullChange("editReviewComment", actor, (caller) =>
-      this.#withHead(this.reviewComments.edit(id, body, caller)),
+    return this.#pullChange(
+      "editReviewComment",
+      actor,
+      (caller) => this.#withHead(this.reviewComments.edit(id, body, caller)),
+      undefined,
+      [body],
     );
   }
 
@@ -2524,6 +2583,8 @@ export class RepoDO extends MigratingDO {
     actor: RefActor,
     change: (caller: PullCaller, prepared: P) => R,
     prepare?: () => Promise<P>,
+    /** Texts the change writes, whose mentions its activity-feed entries name. */
+    texts: readonly (string | null | undefined)[] = [],
   ): Promise<R | { ok: false; code: PullChangeRefusal }> {
     return this.#measured(method, async () => {
       await this.checkEpoch();
@@ -2534,12 +2595,15 @@ export class RepoDO extends MigratingDO {
         ceilingIds: ceilings,
       });
       const prepared = (prepare ? await prepare() : undefined) as P;
+      const mentioned = await this.feed.prepare(texts);
       const refused = this.#writeRefusal();
       if (refused)
         return { ok: false as const, code: refused.code as "repo_not_found" | "repo_transferring" };
       const role = this.#roleNow(actor.principal, ceilings);
       if (role === null) return { ok: false as const, code: "access_lost" as const };
-      const result = change({ actor, root, role }, prepared);
+      const result = this.feed.within({ root, role, mentioned }, () =>
+        change({ actor, root, role }, prepared),
+      );
       this.#armOutbox();
       this.#ensureAuditArchive();
       return result;
@@ -3692,6 +3756,91 @@ export class RepoDO extends MigratingDO {
    */
   #headReadable(headRepoId: string, root: string): Promise<boolean> {
     return this.env.REPO.getByName(headRepoId).readableBy(root);
+  }
+
+  /**
+   * Active users and agents with the (lower-cased) handles, from the
+   * directory, each with the root identity it counts as (a user's agent:
+   * that user).
+   */
+  async #resolveHandles(handles: readonly string[]): Promise<Map<string, FeedPrincipal>> {
+    this.git.context.metrics.count("d1.query", { db: "directory", op: "feed_mentions" });
+    const { results } = await this.env.DIRECTORY.prepare(
+      `SELECT p.id, p.handle,
+         CASE WHEN p.type = 'agent' AND o.type = 'user' THEN o.id ELSE p.id END AS root
+       FROM principals p LEFT JOIN principals o ON o.id = p.owner_id
+       WHERE p.handle COLLATE NOCASE IN (SELECT value FROM json_each(?))
+         AND p.type IN ('user', 'agent') AND p.disabled_at IS NULL`,
+    )
+      .bind(JSON.stringify(handles))
+      .all<{ id: string; handle: string; root: string }>();
+    return new Map(results.map((r) => [r.handle.toLowerCase(), { id: r.id, root: r.root }]));
+  }
+
+  /** `actor` as feeds see the change it makes now (its root identity and role). */
+  async #feedActorOf(actor: Pick<RefActor, "principal" | "grantId">): Promise<FeedActor> {
+    const ceilings = await this.#rolesPulled(actor.principal, actor.grantId ?? null);
+    await this.feed.prepare();
+    return {
+      root: rootIdentity({
+        principalId: actor.principal,
+        grantId: actor.grantId ?? null,
+        ceilingIds: ceilings,
+      }),
+      role: this.#roleNow(actor.principal, ceilings),
+      mentioned: new Map(),
+    };
+  }
+
+  /**
+   * For a reader of an activity feed: whether `principal` (capped by its
+   * grant's owners) reads the repository now, its role, and, if it reads
+   * it, the excerpts of `members` (at most 100): what feed items name of
+   * the repository (`comment/<id>`, `review_comment/<id>`, `review/<id>`,
+   * `pull/<n>` for a pull request's description), read now so an edit or
+   * deletion shows at once (null for one gone or empty).
+   */
+  feedView(
+    principal: string,
+    grantId: string | null,
+    members: readonly string[],
+  ): Promise<{
+    readonly readable: boolean;
+    readonly role: RepoRole | null;
+    readonly excerpts: Record<string, string | null>;
+  }> {
+    return this.#measured("feedView", async () => {
+      if (this.#refusesReads()) return { readable: false, role: null, excerpts: {} };
+      const ceilings = await this.#rolesPulled(principal, grantId);
+      // Deleted meanwhile (its rows not erased yet): nothing of it is read.
+      if (this.#refusesReads()) return { readable: false, role: null, excerpts: {} };
+      const role = this.#roleNow(principal, ceilings);
+      const readable = role !== null || this.events.visibility() === "public";
+      if (!readable) return { readable, role, excerpts: {} };
+      const excerpts: Record<string, string | null> = {};
+      for (const member of members.slice(0, 100)) {
+        const [kind, id] = member.split("/") as [string, string | undefined];
+        const n = Number(id);
+        if (!Number.isSafeInteger(n) || n <= 0) continue;
+        const body =
+          kind === "comment"
+            ? this.comments.get(n)?.body
+            : kind === "review_comment"
+              ? this.reviewComments.get(n)?.body
+              : kind === "pull"
+                ? this.pulls.get(n)?.body
+                : kind === "review"
+                  ? this.ctx.storage.sql
+                      .exec<{ body: string | null }>(
+                        "SELECT body FROM reviews WHERE review_id = ?",
+                        n,
+                      )
+                      .toArray()[0]?.body
+                  : undefined;
+        excerpts[member] = excerpt(body);
+      }
+      return { readable, role, excerpts };
+    });
   }
 
   /** Whether `principalId` may read this repository (public, or a role here). */

@@ -259,6 +259,7 @@ export class RepoMergeability {
     this.deps.events.emitActivity("pull_request.mergeability", null, {
       number: pull.number,
       state,
+      previous_state: previous ?? null,
       mergeable: view.mergeable,
       mergeable_state: view.mergeableState,
       base_sha: oidToHex(baseTip),
