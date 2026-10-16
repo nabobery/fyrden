@@ -1,4 +1,5 @@
 import { latin1 } from "../diff/text.js";
+import { DEFAULT_MAX_PATH_BYTES } from "../diff/tree-diff.js";
 import { createSha1Hasher } from "../hash/sha1.js";
 import { hashObject } from "../object/object.js";
 import { type Oid, oidEquals, oidToHex } from "../object/oid.js";
@@ -81,9 +82,17 @@ export interface LinesConflict {
   readonly theirs: Uint8Array;
 }
 
+export type MergeLimit = "trees" | "files" | "output" | "path" | "conflicts";
+
 export class MergeLimitError extends Error {
-  constructor(readonly limit: "trees" | "files" | "output") {
-    super(`the merge needs more ${limit} than it may use`);
+  constructor(readonly limit: MergeLimit) {
+    super(
+      limit === "path"
+        ? "a path is longer than the merge may follow"
+        : limit === "conflicts"
+          ? "the merge has more conflicts than it may report"
+          : `the merge needs more ${limit} than it may use`,
+    );
     this.name = "MergeLimitError";
   }
 }
@@ -93,12 +102,18 @@ export class MergeBudget {
   trees = 0;
   fileMerges = 0;
   outputBytes = 0;
+  conflicts = 0;
+  conflictBytes = 0;
 
   constructor(
     readonly maxTrees = 2_000,
     readonly maxFileMerges = 1_000,
     /** Bytes of new objects the operation keeps for writing. */
     readonly maxOutputBytes = 16 * 1024 * 1024,
+    /** Conflicts the operation keeps to report, whatever their kind. */
+    readonly maxConflicts = 1_000,
+    /** Bytes of their paths, in all (each is kept as bytes and as text). */
+    readonly maxConflictBytes = 1024 * 1024,
   ) {}
 
   tree(): void {
@@ -112,6 +127,13 @@ export class MergeBudget {
   output(bytes: number): void {
     this.outputBytes += bytes;
     if (this.outputBytes > this.maxOutputBytes) throw new MergeLimitError("output");
+  }
+
+  /** One conflict kept, at a path of `pathBytes` bytes. */
+  conflict(pathBytes: number): void {
+    this.conflictBytes += pathBytes;
+    if (++this.conflicts > this.maxConflicts || this.conflictBytes > this.maxConflictBytes)
+      throw new MergeLimitError("conflicts");
   }
 }
 
@@ -137,7 +159,12 @@ function kindOf(mode: number): Kind {
 const same = (a: TreeEntry | undefined, b: TreeEntry | undefined) =>
   a === undefined || b === undefined ? a === b : a.mode === b.mode && oidEquals(a.oid, b.oid);
 
-/** Merges `ours` and `theirs` (trees) from `base` (a tree, or null for none). */
+/**
+ * Merges `ours` and `theirs` (trees) from `base` (a tree, or null for
+ * none). The path being merged is kept as its names, joined only for a
+ * conflict or a file given to `resolve`, and none longer than
+ * {@link DEFAULT_MAX_PATH_BYTES} is followed.
+ */
 export async function mergeTrees(
   source: ObjectSource,
   base: Oid | null,
@@ -150,6 +177,10 @@ export async function mergeTrees(
   const conflicts: MergeConflict[] = [];
   // New objects by id: content made twice is kept once.
   const objects = new Map<string, NewObject>();
+  /** The directories walked into, by name. */
+  const dirs: Uint8Array[] = [];
+  /** Their joined length with a `/` after each. */
+  let dirBytes = 0;
 
   const read = async (oid: Oid | null | undefined) => {
     if (!oid) return [];
@@ -165,13 +196,28 @@ export async function mergeTrees(
     }
     return oid;
   };
+  /** The full path of `name` in the directory being merged. */
+  const pathOf = (name: Uint8Array): Uint8Array => {
+    if (dirBytes + name.length > DEFAULT_MAX_PATH_BYTES) throw new MergeLimitError("path");
+    const out = new Uint8Array(dirBytes + name.length);
+    let at = 0;
+    for (const dir of dirs) {
+      out.set(dir, at);
+      at += dir.length;
+      out[at++] = SLASH;
+    }
+    out.set(name, at);
+    return out;
+  };
   const conflict = (
     kind: ConflictKind,
-    path: Uint8Array,
+    name: Uint8Array,
     b: TreeEntry | undefined,
     o: TreeEntry | undefined,
     t: TreeEntry | undefined,
   ) => {
+    const path = pathOf(name);
+    budget.conflict(path.length);
     const side = (e: TreeEntry | undefined) => (e ? { mode: e.mode, oid: e.oid } : null);
     conflicts.push({
       kind,
@@ -184,12 +230,12 @@ export async function mergeTrees(
   };
 
   /**
-   * The merged tree of three directories at `prefix` (null for one a side
-   * does not have): its id, "empty" when nothing is left in it (git keeps
-   * no empty directory), or null when something in it conflicts.
+   * The merged tree of three directories at the path being merged (null
+   * for one a side does not have): its id, "empty" when nothing is left in
+   * it (git keeps no empty directory), or null when something in it
+   * conflicts.
    */
   const mergeDir = async (
-    prefix: Uint8Array,
     b: Oid | null,
     o: Oid | null,
     t: Oid | null,
@@ -215,18 +261,17 @@ export async function mergeTrees(
       const oe = om.get(key);
       const te = tm.get(key);
       const name = (oe ?? te ?? be)?.name as Uint8Array;
-      const path = new Uint8Array([...prefix, ...name]);
       let entry: TreeEntry | undefined | null;
       if (same(oe, te)) {
         // Both changed a directory alike: written again inside, as git
         // does, so its legacy modes come out as the index gives them.
         entry =
           oe && isTreeMode(oe.mode) && !same(oe, be)
-            ? await asDir(path, oe.name, be && isTreeMode(be.mode) ? be.oid : null, oe.oid, oe.oid)
+            ? await asDir(oe.name, be && isTreeMode(be.mode) ? be.oid : null, oe.oid, oe.oid)
             : oe;
       } else if (same(oe, be)) entry = te;
       else if (same(te, be)) entry = oe;
-      else entry = await mergeEntry(path, be, oe, te);
+      else entry = await mergeEntry(name, be, oe, te);
       if (entry === null) clean = false;
       else if (entry) merged.push(entry);
       // What stays, or what a conflict leaves standing on either side.
@@ -239,10 +284,7 @@ export async function mergeTrees(
       if (!dirNames.has(name)) continue;
       conflict(
         "file_directory",
-        new Uint8Array([
-          ...prefix,
-          ...((om.get(name) ?? tm.get(name) ?? bm.get(name))?.name ?? []),
-        ]),
+        (om.get(name) ?? tm.get(name) ?? bm.get(name))?.name ?? new Uint8Array(0),
         bm.get(name) ?? bm.get(`${name}/`),
         om.get(name) ?? om.get(`${name}/`),
         tm.get(name) ?? tm.get(`${name}/`),
@@ -254,22 +296,34 @@ export async function mergeTrees(
     return write("tree", encodeTree(merged));
   };
 
-  /** A directory merged in place of an entry: its entry, none when emptied, or null for a conflict. */
+  /**
+   * Directory `name` merged in place of an entry: its entry, none when
+   * emptied, or null for a conflict. Its path and the slash after it
+   * must fit in the longest path.
+   */
   const asDir = async (
-    path: Uint8Array,
     name: Uint8Array,
     b: Oid | null,
     o: Oid | null,
     t: Oid | null,
   ): Promise<TreeEntry | undefined | null> => {
-    const dir = await mergeDir(new Uint8Array([...path, SLASH]), b, o, t);
+    if (dirBytes + name.length + 1 > DEFAULT_MAX_PATH_BYTES) throw new MergeLimitError("path");
+    dirs.push(name);
+    dirBytes += name.length + 1;
+    let dir: Oid | "empty" | null;
+    try {
+      dir = await mergeDir(b, o, t);
+    } finally {
+      dirs.pop();
+      dirBytes -= name.length + 1;
+    }
     if (dir === null) return null;
     return dir === "empty" ? undefined : { mode: 0o40000, name, oid: dir };
   };
 
   /** One name both sides changed: its merged entry, undefined for none, or null for a conflict. */
   const mergeEntry = async (
-    path: Uint8Array,
+    name: Uint8Array,
     b: TreeEntry | undefined,
     o: TreeEntry | undefined,
     t: TreeEntry | undefined,
@@ -280,16 +334,16 @@ export async function mergeTrees(
       // file the other side changed is the conflict (an unchanged one goes).
       const kept = (o ?? t) as TreeEntry;
       if (baseTree && kindOf(kept.mode) === "tree")
-        return asDir(path, kept.name, baseTree, o ? o.oid : null, t ? t.oid : null);
+        return asDir(kept.name, baseTree, o ? o.oid : null, t ? t.oid : null);
       // One side deleted what the other changed.
-      conflict("modify_delete", path, b, o, t);
+      conflict("modify_delete", name, b, o, t);
       return null;
     }
     const [ok, tk] = [kindOf(o.mode), kindOf(t.mode)];
-    if (ok === "tree" && tk === "tree") return asDir(path, o.name, baseTree, o.oid, t.oid);
+    if (ok === "tree" && tk === "tree") return asDir(o.name, baseTree, o.oid, t.oid);
     if (ok !== tk || ok === "link" || ok === "submodule") {
       // A symlink or submodule changed differently on both sides, or a change of kind.
-      conflict(ok === "link" || tk === "link" ? "symlink" : "submodule", path, b, o, t);
+      conflict(ok === "link" || tk === "link" ? "symlink" : "submodule", name, b, o, t);
       return null;
     }
     // Both regular files: the mode and the content each from the side that changed it.
@@ -299,7 +353,7 @@ export async function mergeTrees(
     else if (o.mode === baseFile?.mode) mode = t.mode;
     else if (t.mode === baseFile?.mode) mode = o.mode;
     else {
-      conflict("mode", path, b, o, t);
+      conflict("mode", name, b, o, t);
       return null;
     }
     if (oidEquals(o.oid, t.oid)) return { mode, name: o.name, oid: o.oid };
@@ -313,7 +367,7 @@ export async function mergeTrees(
       await source.readBlob(t.oid, maxFileBytes),
     ];
     if (!baseBytes || !oursBytes || !theirsBytes) {
-      conflict("too_large", path, b, o, t);
+      conflict("too_large", name, b, o, t);
       return null;
     }
     const merged = mergeFiles(baseBytes, oursBytes, theirsBytes);
@@ -321,7 +375,12 @@ export async function mergeTrees(
       return { mode, name: o.name, oid: await write("blob", merged.bytes) };
     const given =
       merged.kind === "conflict"
-        ? options.resolve?.({ path, base: baseBytes, ours: oursBytes, theirs: theirsBytes })
+        ? options.resolve?.({
+            path: pathOf(name),
+            base: baseBytes,
+            ours: oursBytes,
+            theirs: theirsBytes,
+          })
         : undefined;
     if (given) return { mode, name: o.name, oid: await write("blob", given) };
     conflict(
@@ -332,7 +391,7 @@ export async function mergeTrees(
           : baseFile
             ? "content"
             : "add_add",
-      path,
+      name,
       b,
       o,
       t,
@@ -340,7 +399,7 @@ export async function mergeTrees(
     return null;
   };
 
-  const tree = await mergeDir(new Uint8Array(0), base, ours, theirs);
+  const tree = await mergeDir(base, ours, theirs);
   if (tree === null || conflicts.length > 0) return { kind: "conflicts", conflicts };
   // Nothing left at all: the empty tree.
   const root = tree === "empty" ? await write("tree", encodeTree([])) : tree;
