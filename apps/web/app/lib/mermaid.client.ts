@@ -1,7 +1,10 @@
 /**
  * Draws a page's Mermaid code blocks: strict mode (no scripts or links) and
  * labels as SVG text, never HTML (strict mode alone keeps sanitized HTML in
- * labels). A client-only module: the server build never carries Mermaid.
+ * labels). Each drawing is shown as an image, never put in the page as
+ * markup: an SVG image runs nothing and loads nothing, whatever got past
+ * Mermaid's sanitizing. A client-only module: the server build never
+ * carries Mermaid.
  */
 /** Mermaid's own keys no diagram may set (its default `secure` list, 12.x). */
 const SECURE_KEYS = [
@@ -40,11 +43,12 @@ export async function drawDiagrams(blocks: Element[], isCancelled: () => boolean
       const { svg } = await mermaid.render(`mermaid-${drawn++}`, code.textContent ?? "");
       // The component may have gone (or rendered again) while this one was drawn.
       if (isCancelled()) return;
+      const image = document.createElement("img");
+      image.alt = "Diagram";
+      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
       const figure = document.createElement("figure");
       figure.className = "mermaid";
-      figure.setAttribute("role", "img");
-      figure.setAttribute("aria-label", "Diagram");
-      figure.innerHTML = svg;
+      figure.appendChild(image);
       code.parentElement?.replaceWith(figure);
     } catch {
       // A diagram Mermaid cannot draw stays as its source.

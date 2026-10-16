@@ -560,16 +560,16 @@ describe("pull requests in the web UI", () => {
     });
     await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}`);
     const description = page.locator("section", { has: page.locator("#pull-description") });
-    await see(description.locator("figure.mermaid svg")).toHaveCount(1, { timeout: 30_000 });
+    await see(description.locator("figure.mermaid img")).toHaveCount(1, { timeout: 30_000 });
     await page
       .getByLabel("Comment (Markdown)")
       .fill("```mermaid\ngraph LR\n  Here --> There\n```\n");
     await page.getByRole("button", { name: "Comment", exact: true }).click();
     const timeline = page.locator(".timeline");
-    await see(timeline.locator("figure.mermaid svg")).toHaveCount(1, { timeout: 30_000 });
-    await see(description.locator("figure.mermaid svg")).toHaveCount(1);
-    await see(description.locator("figure.mermaid")).toContainText("Start");
-    await see(timeline.locator("figure.mermaid")).toContainText("There");
+    await see(timeline.locator("figure.mermaid img")).toHaveCount(1, { timeout: 30_000 });
+    await see(description.locator("figure.mermaid img")).toHaveCount(1);
+    await see(description.locator("figure.mermaid img")).toHaveAttribute("src", /Start/);
+    await see(timeline.locator("figure.mermaid img")).toHaveAttribute("src", /There/);
   });
 
   it("never had a script, style or image refused by the policy on any page", () => {

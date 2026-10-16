@@ -75,7 +75,7 @@ describe("the web UI", () => {
     await page.goto(`${origin}/ada/demo`);
     await see(page.getByRole("heading", { name: "Demo", exact: true })).toBeVisible();
     await see(page.locator(".markdown table")).toBeVisible();
-    await see(page.locator("figure.mermaid svg")).toBeVisible({ timeout: 20_000 });
+    await see(page.locator("figure.mermaid img")).toBeVisible({ timeout: 20_000 });
     await accessible("repository with README");
     // The clone URL, copied as shown.
     await page.getByRole("button", { name: "Copy" }).click();
@@ -144,9 +144,9 @@ describe("the web UI", () => {
     await page.getByRole("button", { name: "Commit" }).click();
     await see(page).toHaveURL(/\/ada\/demo\/blob\/main\/README\.md$/);
     await page.goto(`${origin}/ada/demo`);
-    await see(page.locator("figure.mermaid svg")).toHaveCount(3, { timeout: 20_000 });
-    const node = page.locator("figure.mermaid g.node").first();
-    if ((await node.count()) > 0) await node.click();
+    await see(page.locator("figure.mermaid img")).toHaveCount(3, { timeout: 20_000 });
+    // Drawings are images: none of their markup is in the page to act on.
+    expect(await page.locator(".markdown svg").count()).toBe(0);
     // Nothing the README holds ran, or made an element of its own.
     expect(await page.evaluate(() => (globalThis as { pwned?: unknown }).pwned)).toBeUndefined();
     expect(
