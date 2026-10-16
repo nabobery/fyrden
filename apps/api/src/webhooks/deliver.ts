@@ -482,6 +482,7 @@ async function resendLate(
   let finished = 0;
   const spent = `attempts >= ${attemptCap("?4", "?5")}`;
   for (const row of late.results) {
+    // Unclaimed still: a claim made since the read keeps its schedule, and may be the last.
     const moved = await db
       .prepare(
         `UPDATE webhook_deliveries SET next_attempt_at = ?1, enqueued_at = ?1, updated_at = ?1,
@@ -490,6 +491,7 @@ async function resendLate(
            lease_token = CASE WHEN ${spent} THEN NULL ELSE lease_token END,
            lease_until = CASE WHEN ${spent} THEN NULL ELSE lease_until END
          WHERE delivery_id = ?2 AND state = 'pending' AND next_attempt_at = ?3
+           AND (lease_until IS NULL OR lease_until <= ?1)
          RETURNING state`,
       )
       .bind(now, row.delivery_id, row.next_attempt_at, policy.maxAttempts, policy.maxTotalAttempts)

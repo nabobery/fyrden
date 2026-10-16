@@ -307,6 +307,69 @@ describe("webhooks", () => {
     });
   });
 
+  it("keep a last attempt claimed after the cron read them late, its answer recorded", async () => {
+    await t.createHook();
+    await t.materialize((await t.outbox()).filter((e) => e.webhooks));
+    const [ping] = await t.deliveries();
+    const id = (ping as { delivery_id: string }).delivery_id;
+    // Late (first in the cron's order), with its last attempt to make.
+    await env.ORG_READ.prepare(
+      "UPDATE webhook_deliveries SET next_attempt_at = 0, attempts = ? WHERE delivery_id = ?",
+    )
+      .bind(ATTEMPT_POLICY.maxAttempts - 1, id)
+      .run();
+    let release = () => {};
+    let entered = () => {};
+    const inFetch = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    vi.stubGlobal("fetch", async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+        entered();
+      });
+      return new Response("ok", { status: 200 });
+    });
+    const now = Date.now();
+    // The cron's first read is its late deliveries: once it has them, a message claims the
+    // last attempt (its request held) before the cron goes on.
+    let consumer: Promise<void> | undefined;
+    const afterRead = (statement: D1PreparedStatement): D1PreparedStatement =>
+      new Proxy(statement, {
+        get(target, prop) {
+          if (prop === "bind") return (...values: unknown[]) => afterRead(target.bind(...values));
+          if (prop === "all")
+            return async () => {
+              const read = await target.all<{ delivery_id: string }>();
+              if (!consumer) {
+                expect(read.results.map((r) => r.delivery_id)).toContain(id);
+                consumer = attemptDelivery(t.deps(now), id);
+                await inFetch;
+              }
+              return read;
+            };
+          const value = Reflect.get(target, prop);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    const paused: D1Database = new Proxy(env.ORG_READ, {
+      get(target, prop) {
+        if (prop === "prepare") return (sql: string) => afterRead(target.prepare(sql));
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    await reconcileWebhooks({ ...t.deps(now), db: paused });
+    release();
+    await consumer;
+    expect((await t.deliveries())[0]).toMatchObject({
+      state: "done",
+      reason: null,
+      attempts: ATTEMPT_POLICY.maxAttempts,
+      last_status: 200,
+    });
+  });
+
   it("let a hook that cannot be turned off yet wait behind others", async () => {
     const stuck = (await t.createHook()).body;
     const other = (await t.createHook()).body;
