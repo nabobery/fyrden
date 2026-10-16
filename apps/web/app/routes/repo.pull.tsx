@@ -6,9 +6,15 @@ import { PullHeader } from "../components/pull-header.js";
 import { inOrder, Timeline, type TimelineItem } from "../components/pull-timeline.js";
 import { ReviewForm } from "../components/review-form.js";
 import { apiCall, assertSameOrigin, bodyOf, readForm } from "../lib/api.server.js";
-import { renderMarkdown } from "../lib/markdown.js";
+import {
+  type Continuation,
+  readContinuation,
+  utf8Length,
+  within,
+  writeContinuation,
+} from "../lib/continuation.js";
 import { type ListedRuleset, mergeRules } from "../lib/merge.server.js";
-import { pageLinks, pageQuery } from "../lib/pages.js";
+import { pageLinks } from "../lib/pages.js";
 import {
   field,
   type IssueComment,
@@ -38,12 +44,14 @@ export function meta({ params, loaderData }: Route.MetaArgs): Route.MetaDescript
   ];
 }
 
-/**
- * Comments, and reviews, a conversation page shows at a time: a body of
- * 65,536 characters can render to about four times that in HTML, which the
- * page then holds twice (its markup and its data), so pages stay small.
- */
+/** Comments, and reviews, read from the API at a time: one page of each per navigation. */
 const CONVERSATION_PAGE = 25;
+/**
+ * Markdown source (UTF-8 bytes) one response carries at most, for the
+ * comments and for the reviews each (the page renders it in the browser):
+ * the rest of an API page follows on the next navigation.
+ */
+const SOURCE_BUDGET = 256 * 1024;
 
 /** Bytes of a conversation form at most: a body of 65,536 characters, URL-encoded, and the rest. */
 const PULL_FORM_MAX_BYTES = 9 * 65_536 + 16 * 1024;
@@ -54,18 +62,25 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   const api = pullApiOf(params);
   const repoApi = repoApiPath(params.owner, params.repo);
   const open = pull.state === "open";
+  const commentsAt = readContinuation(url.searchParams.get("comments"));
+  const reviewsAt = readContinuation(url.searchParams.get("reviews"));
+  const page = (at: Continuation) => {
+    const query = new URLSearchParams({ per_page: String(CONVERSATION_PAGE) });
+    if (at.cursor) query.set("cursor", at.cursor);
+    return query.toString();
+  };
   const [comments, reviews, repo, rulesets] = await Promise.all([
     apiCall<{ comments: IssueComment[]; next_cursor: string | null }>(
       context,
       request,
       "GET",
-      `${repoApi}/issues/${number}/comments?${pageQuery(url, "comments", CONVERSATION_PAGE)}`,
+      `${repoApi}/issues/${number}/comments?${page(commentsAt)}`,
     ),
     apiCall<{ reviews: Review[]; next_cursor: string | null }>(
       context,
       request,
       "GET",
-      `${api}/reviews?${pageQuery(url, "reviews", CONVERSATION_PAGE)}`,
+      `${api}/reviews?${page(reviewsAt)}`,
     ),
     // For the merge box only: what the base branch's rulesets ask of a merge.
     open ? apiCall<Repo>(context, request, "GET", repoApi) : null,
@@ -79,19 +94,33 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       : null;
   const commentPage = bodyOf(comments, request);
   const reviewPage = bodyOf(reviews, request);
+  const shownComments = within(
+    commentPage.comments,
+    commentsAt,
+    (c) => utf8Length(c.body),
+    SOURCE_BUDGET,
+    commentPage.next_cursor,
+  );
+  const shownReviews = within(
+    reviewPage.reviews,
+    reviewsAt,
+    (r) => utf8Length(r.body ?? ""),
+    SOURCE_BUDGET,
+    reviewPage.next_cursor,
+  );
   const items: TimelineItem[] = [
-    ...commentPage.comments.map(
+    ...shownComments.items.map(
       (c): TimelineItem => ({
         kind: "comment",
         id: c.id,
         at: c.created_at,
         author: c.user.id,
         agents: c.performed_via_agents,
-        html: renderMarkdown(c.body),
+        body: c.body,
         edited: c.updated_at > c.created_at,
       }),
     ),
-    ...reviewPage.reviews.map(
+    ...shownReviews.items.map(
       (r): TimelineItem => ({
         kind: "review",
         id: r.id,
@@ -100,7 +129,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
         agents: r.performed_via_agents,
         state: r.state,
         commit: r.commit_id,
-        html: r.body ? renderMarkdown(r.body) : null,
+        body: r.body,
         dismissal: r.dismissal,
       }),
     ),
@@ -119,10 +148,18 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     repo: params.repo,
     pull,
     viewer,
-    bodyHtml: pull.body ? renderMarkdown(pull.body) : null,
+    body: pull.body,
     timeline: inOrder(items),
-    commentPages: pageLinks(url, "comments", commentPage.next_cursor),
-    reviewPages: pageLinks(url, "reviews", reviewPage.next_cursor),
+    commentPages: pageLinks(
+      url,
+      "comments",
+      shownComments.next && writeContinuation(shownComments.next),
+    ),
+    reviewPages: pageLinks(
+      url,
+      "reviews",
+      shownReviews.next && writeContinuation(shownReviews.next),
+    ),
     rules,
   };
 }
@@ -205,7 +242,7 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
   const result = useActionData<typeof action>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
-  const { owner, repo, pull, viewer, bodyHtml, timeline, commentPages, reviewPages, rules } =
+  const { owner, repo, pull, viewer, body, timeline, commentPages, reviewPages, rules } =
     loaderData;
   const isAuthor = viewer !== null && pull.user.id === viewer;
   const open = pull.state === "open";
@@ -216,7 +253,7 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
         <h2 id="pull-description" className="visually-hidden">
           Description
         </h2>
-        {bodyHtml ? <Markdown html={bodyHtml} /> : <p className="muted">No description.</p>}
+        {body ? <Markdown source={body} /> : <p className="muted">No description.</p>}
         <details>
           <summary>Edit title and description</summary>
           <Form method="post">

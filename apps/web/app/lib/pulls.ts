@@ -176,8 +176,8 @@ export interface ThreadComment {
   id: number;
   author: string;
   agents: string[];
-  /** Its Markdown rendered (safe HTML). */
-  html: string;
+  /** Its Markdown source (rendered in the browser). */
+  body: string;
   at: number;
   /** It holds a suggested change that can be applied to the head now. */
   applicable: boolean;

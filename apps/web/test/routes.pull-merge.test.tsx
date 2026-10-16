@@ -136,7 +136,7 @@ describe("the conversation's merge box", () => {
       repo: "demo",
       pull: pullRequest(pull),
       viewer,
-      bodyHtml: null,
+      body: null,
       timeline: [],
       commentPages: { next: null, first: null },
       reviewPages: { next: null, first: null },

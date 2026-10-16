@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderMarkdown } from "../app/lib/markdown.js";
+import { renderMarkdown } from "../app/lib/markdown.client.js";
 
 describe("README rendering", () => {
   it("renders GitHub-flavored Markdown", () => {

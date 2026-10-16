@@ -77,7 +77,7 @@ export function ThreadView({
               {c.agents.length > 0 && <> (via {c.agents.join(", ")})</>}{" "}
               <time dateTime={new Date(c.at).toISOString()}>{when(c.at)}</time>
             </p>
-            <Markdown html={c.html} />
+            <Markdown source={c.body} />
             {c.applicable && canAct && (
               <apply.Form method="post">
                 <input type="hidden" name="intent" value="apply" />

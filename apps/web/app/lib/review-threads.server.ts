@@ -1,26 +1,29 @@
 import { parseSuggestion } from "@fyrden/domain";
 import type { RouterContextProvider } from "react-router";
 import { apiGet } from "./api.server.js";
-import { renderMarkdown } from "./markdown.js";
+import {
+  type Continuation,
+  readContinuation,
+  utf8Length,
+  within,
+  writeContinuation,
+} from "./continuation.js";
 import type { PullRequest, ReviewComment, Thread } from "./pulls.js";
 
-/** Review comments read a page at a time. */
+/** Review comments read from the API at a time: one page per navigation. */
 const COMMENTS_PER_PAGE = 30;
-/** Pages read for one files page at most. */
-const MAX_COMMENT_PAGES = 20;
 /**
- * Rendered comment HTML (characters) one files page holds at most: a body of
- * 65,536 characters can render to about four times that (each `<` escaped),
- * so a count of comments alone bounds nothing. Reading stops at the end of
- * the page that passes it; the rest is a continuation.
+ * Markdown source (UTF-8 bytes) of the shown comments one response carries
+ * at most (the page renders it in the browser); the rest of the API's page
+ * follows on the next navigation.
  */
-const MAX_RENDERED_CHARS = 2 * 1024 * 1024;
+const SOURCE_BUDGET = 512 * 1024;
 
 /**
- * Review threads on the listed files, from a pull request's diff comments
- * read from `cursor` (the first page when null) a page at a time, until the
- * pages or the rendered HTML reach their bounds: each thread anchored where
- * its first comment is. `next` continues where reading stopped.
+ * Review threads on the listed files, from one page of a pull request's
+ * diff comments: from where `continuation` says (the first page when
+ * null), as many as fit the source budget. `next` continues from the first
+ * comment left out, so none is skipped.
  */
 export async function loadThreads(
   context: Readonly<RouterContextProvider>,
@@ -28,25 +31,28 @@ export async function loadThreads(
   api: string,
   pull: Pick<PullRequest, "state" | "head">,
   files: ReadonlyMap<string, string>,
-  cursor: string | null,
+  continuation: string | null,
 ): Promise<{ threads: Thread[]; next: string | null }> {
-  const threads = new Map<number, Thread>();
-  const budget = { chars: 0 };
-  let next = cursor;
-  let pages = 0;
-  do {
-    const query = new URLSearchParams({ per_page: String(COMMENTS_PER_PAGE) });
-    if (next) query.set("cursor", next);
-    const page = await apiGet<{ comments: ReviewComment[]; next_cursor: string | null }>(
-      context,
-      request,
-      `${api}/comments?${query.toString()}`,
-    );
-    addComments(threads, page.comments, pull, files, budget);
-    next = page.next_cursor;
-    pages++;
-  } while (next && pages < MAX_COMMENT_PAGES && budget.chars < MAX_RENDERED_CHARS);
-  return { threads: [...threads.values()], next };
+  const at: Continuation = readContinuation(continuation);
+  const query = new URLSearchParams({ per_page: String(COMMENTS_PER_PAGE) });
+  if (at.cursor) query.set("cursor", at.cursor);
+  const page = await apiGet<{ comments: ReviewComment[]; next_cursor: string | null }>(
+    context,
+    request,
+    `${api}/comments?${query.toString()}`,
+  );
+  // Comments on other files cost nothing here: they are not sent.
+  const shown = within(
+    page.comments,
+    at,
+    (c) => (files.has(c.path) ? utf8Length(c.body) : 0),
+    SOURCE_BUDGET,
+    page.next_cursor,
+  );
+  return {
+    threads: threadsOf(shown.items, pull, files),
+    next: shown.next && writeContinuation(shown.next),
+  };
 }
 
 /** Comments grouped into their threads (on the listed files only), in the order they were started. */
@@ -56,7 +62,7 @@ export function threadsOf(
   files: ReadonlyMap<string, string>,
 ): Thread[] {
   const threads = new Map<number, Thread>();
-  addComments(threads, comments, pull, files, { chars: 0 });
+  addComments(threads, comments, pull, files);
   return [...threads.values()];
 }
 
@@ -80,7 +86,6 @@ function addComments(
   comments: readonly ReviewComment[],
   pull: Pick<PullRequest, "state" | "head">,
   files: ReadonlyMap<string, string>,
-  budget: { chars: number },
 ): void {
   for (const c of comments) {
     const file = files.get(c.path);
@@ -102,13 +107,11 @@ function addComments(
       };
       threads.set(c.thread_id, thread);
     }
-    const html = renderMarkdown(c.body);
-    budget.chars += html.length;
     thread.comments.push({
       id: c.id,
       author: c.user.id,
       agents: c.performed_via_agents,
-      html,
+      body: c.body,
       at: c.created_at,
       // As the API applies them: on the head's side, at the current head, while open.
       applicable:

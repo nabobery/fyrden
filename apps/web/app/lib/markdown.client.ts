@@ -1,21 +1,13 @@
 import { micromark } from "micromark";
 import { gfm, gfmHtml } from "micromark-extension-gfm";
+import type { MarkdownPlace } from "./markdown-place.js";
 import { encodePath, withoutTrailingSlashes } from "./types.js";
 
-/** Where a Markdown file is: its repository's page, the ref (encoded) and its directory. */
-export interface MarkdownPlace {
-  /** `/{owner}/{repo}`. */
-  readonly base: string;
-  /** The ref as the file's own URL has it (encoded). */
-  readonly ref: string;
-  /** The file's directory in the repository, "" at its top. */
-  readonly dir: string;
-}
-
 /**
- * GitHub-flavored Markdown (a README) as HTML that is safe to put in a
- * page: raw HTML in the source is escaped, not passed through, and link
- * and image URLs keep only safe protocols (micromark's defaults; a
+ * GitHub-flavored Markdown (a README, a comment) as HTML that is safe to
+ * put in a page, in the browser only (see `components/markdown.tsx`): raw
+ * HTML in the source is escaped, not passed through, and link and image
+ * URLs keep only safe protocols (micromark's defaults; a
  * `javascript:` link loses its URL). Mermaid diagrams stay as
  * `language-mermaid` code blocks, which the page renders on the client.
  * With `at`, links into the repository go to its files at the same ref
@@ -34,12 +26,6 @@ export function renderMarkdown(source: string, at?: MarkdownPlace): string {
     / (href|src)="([^"]*)"/g,
     (_, name: string, url: string) => ` ${name}="${local(url, at, name === "src")}"`,
   );
-}
-
-/** The directory of a file's path ("" at the top). */
-export function dirOf(path: string): string {
-  const slash = path.lastIndexOf("/");
-  return slash < 0 ? "" : path.slice(0, slash);
 }
 
 /** A link's or image's URL (as micromark wrote it: encoded, `&` escaped) in the repository. */

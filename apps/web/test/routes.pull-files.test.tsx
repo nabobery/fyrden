@@ -90,58 +90,67 @@ describe("the files page", () => {
     expect(JSON.stringify(data)).not.toContain("@@ -1 +1 @@");
   });
 
-  it("follows review comments a page at a time, up to its bound", async () => {
-    let served = 0;
+  it("reads one page of review comments a navigation, within a source budget, losing none", async () => {
+    // Bodies of 64 KiB: eight fit the budget of 512 KiB.
+    const body = "x".repeat(64 * 1024);
+    const all = Array.from({ length: 30 }, (_, i) =>
+      comment({ id: i + 1, thread_id: i + 1, body: `${i + 1}${body}` }),
+    );
+    const read: string[] = [];
+    const { context, calls } = api({
+      "GET /api/repos/ada/demo/pulls/7": () => json(pullRequest()),
+      "GET /api/repos/ada/demo/pulls/7/files": () => filesPage([file("a.ts")]),
+      "GET /api/repos/ada/demo/pulls/7/comments": () => json({ comments: all, next_cursor: "p2" }),
+    });
+    const shown: number[] = [];
+    let at: string | null = null;
+    for (let navigation = 0; navigation < 10; navigation++) {
+      const query: string = at ? `?comments=${encodeURIComponent(at)}` : "";
+      const before = calls.length;
+      const data = await loader({
+        request: new Request(`${ORIGIN}/ada/demo/pull/7/files${query}`),
+        context,
+        params,
+      } as never);
+      const asked = calls
+        .slice(before)
+        .map(pathOf)
+        .filter((p) => p.includes("/comments"));
+      // One page of the API's listing a navigation, never more.
+      expect(asked).toHaveLength(1);
+      read.push(...asked);
+      const sent = data.threads.flatMap((t) => t.comments);
+      expect(sent.reduce((n, c) => n + c.body.length, 0)).toBeLessThanOrEqual(512 * 1024);
+      shown.push(...sent.map((c) => c.id));
+      const next = data.threadPages.next;
+      if (!next) break;
+      at = new URL(`${ORIGIN}${next}`).searchParams.get("comments");
+      if (at?.endsWith(":p2")) break;
+    }
+    // Every comment of the API's page, once each, in order; then its next page.
+    expect(shown).toEqual(all.map((c) => c.id));
+    expect(at).toBe("0:p2");
+    expect(read[0]).toBe("GET /api/repos/ada/demo/pulls/7/comments?per_page=30");
+    expect(new Set(read.slice(1))).toEqual(
+      new Set(["GET /api/repos/ada/demo/pulls/7/comments?per_page=30"]),
+    );
+  });
+
+  it("sends review comments as their Markdown source, never rendered", async () => {
     const { context } = api({
       "GET /api/repos/ada/demo/pulls/7": () => json(pullRequest()),
       "GET /api/repos/ada/demo/pulls/7/files": () => filesPage([file("a.ts")]),
-      "GET /api/repos/ada/demo/pulls/7/comments": () => {
-        served++;
-        return json({
-          comments: [comment({ id: served, thread_id: served })],
-          next_cursor: "more",
-        });
-      },
+      "GET /api/repos/ada/demo/pulls/7/comments": () =>
+        json({ comments: [comment({ body: "**bold**" })], next_cursor: null }),
     });
     const data = await loader({
       request: new Request(`${ORIGIN}/ada/demo/pull/7/files`),
       context,
       params,
     } as never);
-    expect(served).toBe(20);
-    expect(data.threadPages.next).toBe("/ada/demo/pull/7/files?comments=more");
-    expect(data.threads).toHaveLength(20);
-  });
-
-  // Rendering 30 bodies of 64 KiB takes seconds under a parallel run: a bound on work, not time.
-  it("stops reading comments once their rendered HTML passes its bound, and continues from there", {
-    timeout: 60_000,
-  }, async () => {
-    // A body of 65,536 `<` renders to about four times as much HTML.
-    const huge = "<".repeat(65_536);
-    const { context, calls } = api({
-      "GET /api/repos/ada/demo/pulls/7": () => json(pullRequest()),
-      "GET /api/repos/ada/demo/pulls/7/files": () => filesPage([file("a.ts")]),
-      "GET /api/repos/ada/demo/pulls/7/comments": () =>
-        json({
-          comments: Array.from({ length: 30 }, (_, i) =>
-            comment({ id: i + 1, thread_id: i + 1, body: huge }),
-          ),
-          next_cursor: "p2",
-        }),
-    });
-    const data = await loader({
-      request: new Request(`${ORIGIN}/ada/demo/pull/7/files?comments=p1`),
-      context,
-      params,
-    } as never);
-    const read = calls.map(pathOf).filter((p) => p.includes("/comments"));
-    // Read from the page asked for, and one page (30 comments) passes the bound: no more.
-    expect(read).toEqual(["GET /api/repos/ada/demo/pulls/7/comments?per_page=30&cursor=p1"]);
-    const rendered = data.threads.flatMap((t) => t.comments).reduce((n, c) => n + c.html.length, 0);
-    expect(rendered).toBeGreaterThan(2 * 1024 * 1024);
-    expect(rendered).toBeLessThan(10 * 1024 * 1024);
-    expect(data.threadPages.next).toBe("/ada/demo/pull/7/files?comments=p2");
+    expect(data.threads[0]?.comments[0]?.body).toBe("**bold**");
+    expect(JSON.stringify(data)).not.toContain("<strong>");
+    expect(data.threadPages.next).toBeNull();
   });
 
   it("shows a renamed file's old-side threads with it", () => {

@@ -210,8 +210,11 @@ describe("a pull request's conversation", () => {
       "merged",
     ]);
     expect(data.timeline[2]).toMatchObject({ edited: true, agents: ["agt_x"] });
-    expect(data.commentPages.next).toBe("/ada/demo/pull/7?comments=more");
-    expect(data.bodyHtml).toBe("<p>Some <strong>words</strong></p>");
+    // The next navigation reads the API's next page from its start.
+    expect(data.commentPages.next).toBe("/ada/demo/pull/7?comments=0%3Amore");
+    // Markdown goes as its source: the page renders it in the browser.
+    expect(data.body).toBe("Some **words**");
+    expect(JSON.stringify(data)).not.toContain("<strong>");
   });
 
   it("renders hostile titles, bodies, comments, reviews and branch names inert", async () => {
@@ -272,7 +275,7 @@ describe("a pull request's conversation", () => {
     const base = {
       owner: "ada",
       repo: "demo",
-      bodyHtml: null,
+      body: null,
       timeline: [],
       commentPages: { next: null, first: null },
       reviewPages: { next: null, first: null },

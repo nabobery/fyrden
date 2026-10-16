@@ -1,7 +1,7 @@
 import { when, who } from "../lib/pulls.js";
 import { Markdown } from "./markdown.js";
 
-/** One event of a pull request's conversation, its Markdown already rendered (safe HTML). */
+/** One event of a pull request's conversation, with its Markdown source. */
 export type TimelineItem =
   | {
       kind: "comment";
@@ -9,7 +9,7 @@ export type TimelineItem =
       at: number;
       author: string;
       agents: string[];
-      html: string;
+      body: string;
       edited: boolean;
     }
   | {
@@ -20,7 +20,7 @@ export type TimelineItem =
       agents: string[];
       state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
       commit: string;
-      html: string | null;
+      body: string | null;
       dismissal: { by: string; message: string; at: number } | null;
     }
   | { kind: "closed" | "merged"; at: number; by: string | null; commit: string | null };
@@ -69,7 +69,7 @@ export function Timeline({ items, viewer }: { items: TimelineItem[]; viewer: str
                   <time dateTime={new Date(item.at).toISOString()}>{when(item.at)}</time>
                   {item.edited && " (edited)"}
                 </header>
-                <Markdown html={item.html} />
+                <Markdown source={item.body} />
               </article>
             </li>
           );
@@ -85,7 +85,7 @@ export function Timeline({ items, viewer }: { items: TimelineItem[]; viewer: str
                   {REVIEW_LABEL[item.state]} at <code>{item.commit.slice(0, 7)}</code>{" "}
                   <time dateTime={new Date(item.at).toISOString()}>{when(item.at)}</time>
                 </header>
-                {item.html && <Markdown html={item.html} />}
+                {item.body && <Markdown source={item.body} />}
                 {item.dismissal && (
                   <p className="muted">
                     Dismissed by {who(item.dismissal.by, viewer)} {when(item.dismissal.at)}:{" "}
