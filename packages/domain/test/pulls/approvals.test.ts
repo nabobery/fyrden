@@ -145,6 +145,25 @@ describe("evaluateApprovals", () => {
     );
   });
 
+  it("never takes an approval of an earlier head as approving the last push, though it still counts", () => {
+    const lastPush = { pusherRoot: "bob", at: ++clock };
+    // Submitted after the push, from a page that still showed the earlier head.
+    const ofEarlier = review("alice", "APPROVED", { commitSha: OLD });
+    for (const required of [0, 1])
+      expect(
+        evaluateApprovals(
+          input([ofEarlier], { lastPush }),
+          settings({ required, requireLastPushApproval: true }),
+        ),
+      ).toMatchObject({ approvals: 1, lastPushApproved: false, satisfied: false });
+    expect(
+      evaluateApprovals(
+        input([ofEarlier, review("carol", "APPROVED")], { lastPush }),
+        settings({ requireLastPushApproval: true }),
+      ),
+    ).toMatchObject({ approvals: 2, lastPushApproved: true, satisfied: true });
+  });
+
   it("lets a request for changes stand over an approval made at the same moment, in any order", () => {
     const at = ++clock;
     const both = [

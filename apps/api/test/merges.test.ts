@@ -297,6 +297,25 @@ describe("rulesets judge the merge", () => {
     expect((await merge(owner)).status).toBe(200);
   });
 
+  it("never takes an approval of an earlier head, submitted after the last push, as approving it", async () => {
+    await ruleset({ require_last_push_approval: true });
+    await open(owner);
+    const earlier = (await pull()).head.sha;
+    const writer = await collaborator("push");
+    await commitOn(writer, "feature", [{ path: "d.txt", content: "more\n" }]);
+    const head = (await pull()).head.sha;
+    const other = await collaborator("push");
+    const approve = (sha: string) =>
+      api("POST", `${path}/pulls/1/reviews`, other.token, { commit_id: sha, event: "APPROVE" });
+    // From a page that still showed the earlier head: it reviewed none of the push.
+    expect((await approve(earlier)).status).toBe(200);
+    const refused = await merge(owner);
+    expect(refused.body.code).toBe("merge_refused");
+    expect(refused.body.detail).toContain("last push");
+    expect((await approve(head)).status).toBe(200);
+    expect((await merge(owner)).status).toBe(200);
+  });
+
   it("refuses a merge method the rule does not allow", async () => {
     await ruleset({ allowed_merge_methods: ["squash"] });
     await open(owner);

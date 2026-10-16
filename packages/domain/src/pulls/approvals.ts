@@ -5,7 +5,7 @@
  * an eligible request for changes blocks until that person approves or it
  * is dismissed. Three settings stay separate: how many approvals, whether a
  * push makes earlier reviews stale, and whether someone other than the
- * last pusher must approve after the last push.
+ * last pusher must approve the head after the last push.
  */
 
 export const REVIEW_STATES = ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"] as const;
@@ -48,7 +48,7 @@ export interface ApprovalSettings {
   readonly required: number;
   /** A review of an earlier head no longer counts (approvals and requests for changes alike). */
   readonly dismissStale: boolean;
-  /** Someone other than the last pusher must approve after the last push. */
+  /** Someone other than the last pusher must approve the head after the last push. */
   readonly requireLastPushApproval: boolean;
   /** Reviews submitted by agents count; by default only people's do. */
   readonly allowAgentApprovals: boolean;
@@ -59,7 +59,11 @@ export interface ApprovalOutcome {
   readonly approvals: number;
   /** Roots whose standing review requests changes. */
   readonly changesRequested: readonly string[];
-  /** Whether an approval after the last push came from someone other than its pusher (false when the push is unknown). */
+  /**
+   * Whether someone other than the last pusher approved the head itself
+   * after that push (false when the push is unknown): an approval of an
+   * earlier head, however late, never reviewed what the push brought.
+   */
   readonly lastPushApproved: boolean;
   readonly satisfied: boolean;
   /** Why it is not satisfied, for the refusal; empty when it is. */
@@ -95,7 +99,12 @@ export function evaluateApprovals(
   const push = input.lastPush;
   const lastPushApproved =
     push !== null &&
-    approving.some((r) => r.submittedAt > push.at && r.reviewerRoot !== push.pusherRoot);
+    approving.some(
+      (r) =>
+        r.commitSha === input.headSha &&
+        r.submittedAt > push.at &&
+        r.reviewerRoot !== push.pusherRoot,
+    );
   const reasons: string[] = [];
   if (approving.length < settings.required)
     reasons.push(
