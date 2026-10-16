@@ -1,7 +1,7 @@
 /**
  * Whether a pull request's reviews meet a ruleset's review requirements,
  * as GitHub counts them: one vote per person (root identity), their latest
- * review that is not a comment and not dismissed; the author never counts;
+ * review (in submission order) that is not a comment and not dismissed; the author never counts;
  * an eligible request for changes blocks until that person approves or it
  * is dismissed. Three settings stay separate: how many approvals, whether a
  * push makes earlier reviews stale, and whether someone other than the
@@ -20,12 +20,14 @@ export interface ReviewFact {
   /** The head commit it reviewed. */
   readonly commitSha: string;
   readonly state: ReviewState;
-  /**
-   * When it was submitted, on the same clock as `lastPush.at`. Two reviews
-   * of one person at the same moment resolve the cautious way: a request
-   * for changes stands over an approval.
-   */
+  /** When it was submitted, on the same clock as `lastPush.at`. */
   readonly submittedAt: number;
+  /**
+   * Its place in the order reviews were submitted, larger for later (the
+   * review's id): a person's latest review is the one with the largest,
+   * even at the same moment, however the reviews are listed.
+   */
+  readonly seq: number;
   readonly dismissed: boolean;
 }
 
@@ -74,8 +76,8 @@ export function evaluateApprovals(
   input: ApprovalInput,
   settings: ApprovalSettings,
 ): ApprovalOutcome {
-  // Each root's standing review: the latest that counts; at the same moment,
-  // a request for changes, so the order reviews are listed in never matters.
+  // Each root's standing review: the last submitted that counts, so the order
+  // reviews are listed in never matters.
   const standing = new Map<string, ReviewFact>();
   for (const review of input.reviews) {
     if (review.dismissed || review.state === "COMMENTED") continue;
@@ -84,12 +86,7 @@ export function evaluateApprovals(
     if (!input.eligibleRoots.has(review.reviewerRoot)) continue;
     if (review.byAgent && !settings.allowAgentApprovals) continue;
     const current = standing.get(review.reviewerRoot);
-    if (
-      !current ||
-      review.submittedAt > current.submittedAt ||
-      (review.submittedAt === current.submittedAt && review.state === "CHANGES_REQUESTED")
-    )
-      standing.set(review.reviewerRoot, review);
+    if (!current || review.seq > current.seq) standing.set(review.reviewerRoot, review);
   }
   const approving = [...standing.values()].filter((r) => r.state === "APPROVED");
   const changesRequested = [...standing.values()]

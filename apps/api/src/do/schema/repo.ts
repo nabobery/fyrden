@@ -741,14 +741,25 @@ export const repoSchema: readonly DoMigration[] = [
     // then, and no approval up to it counts (the reviews stay listed as
     // they were). A revision bumped with each review that can count
     // submitted or dismissed, which a merge compares instead of reading
-    // every review. The merge base a base-side thread's lines are of (the
-    // comparison it was started on), so it goes outdated when the base
-    // branch moves the merge base though the head stays.
+    // every review, and the indexes it finds each reviewer's latest reviews
+    // by (of any head and of one head), seeking rather than reading them
+    // all. The merge base a base-side thread's lines are of (the comparison
+    // it was started on), so it goes outdated when the base branch moves
+    // the merge base though the head stays. Everything starts empty, with
+    // no backfill, only because the pull request tables it extends (from
+    // version 16) ship in the same release: no store holds reviews made
+    // before it.
     name: "review_standing",
     sql: `
       ALTER TABLE pull_requests ADD COLUMN approvals_after INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE pull_requests ADD COLUMN reviews_revision INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE review_threads ADD COLUMN merge_base_sha TEXT;
+      CREATE INDEX reviews_standing
+        ON reviews (pr_number, reviewer_root, by_agent, state, review_id)
+        WHERE dismissed_at IS NULL;
+      CREATE INDEX reviews_standing_head
+        ON reviews (pr_number, reviewer_root, by_agent, commit_sha, state, review_id)
+        WHERE dismissed_at IS NULL;
     `,
   },
 ];

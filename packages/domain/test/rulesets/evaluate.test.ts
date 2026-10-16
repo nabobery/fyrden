@@ -293,6 +293,7 @@ describe("pull request merges", () => {
           commitSha: head,
           state: "APPROVED" as const,
           submittedAt: i + 1,
+          seq: i + 1,
           dismissed: false,
         })),
       },

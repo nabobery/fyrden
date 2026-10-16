@@ -17,6 +17,43 @@ import type { PullCaller, PullRecord, RepoPulls } from "./pulls.js";
 /** The entity type review snapshots travel as in events. */
 export const REVIEW_ENTITY = "pull_request_review";
 
+/** One seek for one reviewer's last review in `filter`, by itself or by an agent (`k`). */
+const latest = (filter: string) =>
+  `SELECT (SELECT review_id FROM reviews
+     WHERE pr_number = ?1 AND reviewer_root = k.root AND by_agent = k.by_agent
+       AND dismissed_at IS NULL AND ${filter}
+     ORDER BY review_id DESC LIMIT 1) FROM keys k`;
+
+/**
+ * What `standing` reads (?1 the pull request, ?2 its head, ?3 the last
+ * review before its retarget): the reviewers one seek at a time (each next
+ * root after the last), then for each, by itself and by an agent, its last
+ * request for changes and its last approval since the retarget, of any
+ * head and of the head. The index's order is submission order.
+ */
+export const STANDING_REVIEWS_SQL = `
+  WITH RECURSIVE roots(root) AS (
+    SELECT (SELECT reviewer_root FROM reviews WHERE pr_number = ?1 AND dismissed_at IS NULL
+            ORDER BY reviewer_root LIMIT 1)
+    UNION ALL
+    SELECT (SELECT reviewer_root FROM reviews WHERE pr_number = ?1 AND dismissed_at IS NULL
+              AND reviewer_root > roots.root ORDER BY reviewer_root LIMIT 1)
+    FROM roots WHERE roots.root IS NOT NULL
+  ),
+  keys(root, by_agent) AS (
+    SELECT root, 0 FROM roots WHERE root IS NOT NULL
+    UNION ALL
+    SELECT root, 1 FROM roots WHERE root IS NOT NULL
+  ),
+  picks(id) AS (
+    ${latest("state = 'CHANGES_REQUESTED'")}
+    UNION ALL ${latest("state = 'APPROVED' AND review_id > ?3")}
+    UNION ALL ${latest("commit_sha = ?2 AND state = 'CHANGES_REQUESTED'")}
+    UNION ALL ${latest("commit_sha = ?2 AND state = 'APPROVED' AND review_id > ?3")}
+  )
+  SELECT review_id, reviewer_root, by_agent, commit_sha, state, submitted_at FROM reviews
+  WHERE review_id IN (SELECT id FROM picks)`;
+
 export interface ReviewRecord {
   readonly id: number;
   readonly number: number;
@@ -104,36 +141,40 @@ export class RepoReviews {
    * submitted or dismissed, or a retarget, meanwhile stops the merge. Of
    * the reviews that can count (not comments, not dismissed, not an
    * approval given before the pull request was retargeted), only each
-   * person's latest by themselves and by an agent, of the head and of any
-   * head: every choice the rulesets make among them (stale reviews, agents,
-   * who has write access) takes its review from these, so the work is
-   * bounded by the reviewers, not by how often each reviewed. At the same
-   * moment a request for changes is the latest, as the evaluation has it.
+   * person's last submitted request for changes and approval, by
+   * themselves and by an agent, of the head and of any head: every choice
+   * the rulesets make among them (stale reviews, agents, who has write
+   * access) takes its review from these, as it would from all of them.
+   * Found by seeking the indexes, so the work follows the reviewers, not
+   * how often each reviewed.
    */
   standing(number: number): { reviews: ReviewFact[]; stamp: string } {
-    const reviews = this.deps.git.context.storage.sql
-      .exec<Pick<Row, "reviewer_root" | "by_agent" | "commit_sha" | "state" | "submitted_at">>(
-        `SELECT reviewer_root, by_agent, commit_sha, state, submitted_at FROM (
-           SELECT r.reviewer_root, r.by_agent, r.commit_sha, r.state, r.submitted_at,
-             row_number() OVER (
-               PARTITION BY r.reviewer_root, r.by_agent, r.commit_sha = p.head_sha
-               ORDER BY r.submitted_at DESC, r.state = 'CHANGES_REQUESTED' DESC
-             ) AS rank
-           FROM reviews r JOIN pull_requests p ON p.number = r.pr_number
-           WHERE r.pr_number = ? AND r.state != 'COMMENTED' AND r.dismissed_at IS NULL
-             AND NOT (r.state = 'APPROVED' AND r.review_id <= p.approvals_after)
-         ) WHERE rank = 1`,
+    const { sql } = this.deps.git.context.storage;
+    const pull = sql
+      .exec<{ head_sha: string; approvals_after: number }>(
+        "SELECT head_sha, approvals_after FROM pull_requests WHERE number = ?",
         number,
       )
-      .toArray()
-      .map((row) => ({
-        reviewerRoot: row.reviewer_root,
-        byAgent: row.by_agent === 1,
-        commitSha: row.commit_sha,
-        state: row.state,
-        submittedAt: row.submitted_at,
-        dismissed: false,
-      }));
+      .toArray()[0];
+    const reviews = pull
+      ? sql
+          .exec<
+            Pick<
+              Row,
+              "review_id" | "reviewer_root" | "by_agent" | "commit_sha" | "state" | "submitted_at"
+            >
+          >(STANDING_REVIEWS_SQL, number, pull.head_sha, pull.approvals_after)
+          .toArray()
+          .map((row) => ({
+            reviewerRoot: row.reviewer_root,
+            byAgent: row.by_agent === 1,
+            commitSha: row.commit_sha,
+            state: row.state,
+            submittedAt: row.submitted_at,
+            seq: row.review_id,
+            dismissed: false,
+          }))
+      : [];
     return { reviews, stamp: this.stamp(number) };
   }
 

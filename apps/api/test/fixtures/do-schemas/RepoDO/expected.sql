@@ -29,6 +29,12 @@ CREATE INDEX review_comments_pr ON review_comments (pr_number, comment_id);
 CREATE INDEX review_comments_thread ON review_comments (thread_id, comment_id);
 CREATE INDEX review_threads_pr ON review_threads (pr_number, thread_id);
 CREATE INDEX reviews_pr ON reviews (pr_number, review_id);
+CREATE INDEX reviews_standing
+        ON reviews (pr_number, reviewer_root, by_agent, state, review_id)
+        WHERE dismissed_at IS NULL;
+CREATE INDEX reviews_standing_head
+        ON reviews (pr_number, reviewer_root, by_agent, commit_sha, state, review_id)
+        WHERE dismissed_at IS NULL;
 CREATE INDEX revision_imports_waiting ON revision_imports (requested_at, pr_number);
 CREATE UNIQUE INDEX rulesets_name ON rulesets (name);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);

@@ -1,10 +1,16 @@
 // Reviews of pull requests: who may submit, dismiss and request them, and
 // that each review stays bound to the head commit it reviewed.
 import { env } from "cloudflare:workers";
-import { type ApprovalSettings, evaluateApprovals, type ReviewFact } from "@fyrden/domain";
+import {
+  type ApprovalSettings,
+  evaluateApprovals,
+  REVIEW_STATES,
+  type ReviewFact,
+} from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import { STANDING_REVIEWS_SQL } from "../src/do/repo/reviews.js";
 import { api, handleOf, json, user, type Who } from "./helpers/api.js";
 import { principalWithToken, scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
@@ -200,37 +206,45 @@ describe("dismissing reviews", () => {
 });
 
 describe("what a merge reads of the reviews", () => {
-  it("is each reviewer's latest reviews only, however many it submitted, judged as the whole history is", async () => {
-    // Many reviews by three people and their agents, of the head and an earlier one, some at the
-    // same moment, some dismissed or before a retarget; stored as they would be, without a request each.
-    const roots = ["alice", "bob", "carol"];
-    const at = 1_000;
-    const history = await inRepo(env.REPO.getByName(repo.id), (r: RepoDO) => {
+  type Stored = {
+    readonly root: string;
+    readonly state: ReviewFact["state"];
+    readonly at: number;
+    readonly sha?: string;
+    readonly agent?: boolean;
+    readonly dismissed?: boolean;
+  };
+  /**
+   * Stores `reviews` of pull request 1 in the order given (as submitted, without a request each),
+   * with approvals up to `approvalsAfter` given before a retarget; then reads what a merge reads,
+   * and every review that could count, as facts.
+   */
+  const stored = (reviews: readonly Stored[], approvalsAfter = 0) =>
+    inRepo(env.REPO.getByName(repo.id), (r: RepoDO) => {
       const sql = r.git.context.storage.sql;
-      for (let i = 0; i < 300; i++)
+      for (const review of reviews)
         sql.exec(
           `INSERT INTO reviews (pr_number, reviewer_id, reviewer_root, by_agent, state, commit_sha,
              submitted_at, dismissed_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
-          roots[i % 3] as string,
-          roots[i % 3] as string,
-          i % 5 === 0 ? 1 : 0,
-          (["APPROVED", "CHANGES_REQUESTED", "COMMENTED"] as const)[(i % 7) % 3],
-          i % 4 === 0 ? fx.c1 : fx.c2,
-          at + Math.floor(i / 6),
-          i % 11 === 0 ? at : null,
+          review.root,
+          review.root,
+          review.agent ? 1 : 0,
+          review.state,
+          review.sha ?? fx.c2,
+          review.at,
+          review.dismissed ? review.at : null,
         );
-      sql.exec(
-        "UPDATE pull_requests SET approvals_after = (SELECT max(review_id) - 200 FROM reviews) WHERE number = 1",
-      );
+      sql.exec("UPDATE pull_requests SET approvals_after = ? WHERE number = 1", approvalsAfter);
       const all = sql
         .exec<{
+          review_id: number;
           reviewer_root: string;
           by_agent: number;
           commit_sha: string;
           state: ReviewFact["state"];
           submitted_at: number;
         }>(
-          `SELECT r.reviewer_root, r.by_agent, r.commit_sha, r.state, r.submitted_at
+          `SELECT r.review_id, r.reviewer_root, r.by_agent, r.commit_sha, r.state, r.submitted_at
            FROM reviews r JOIN pull_requests p ON p.number = r.pr_number
            WHERE r.pr_number = 1 AND r.state != 'COMMENTED' AND r.dismissed_at IS NULL
              AND NOT (r.state = 'APPROVED' AND r.review_id <= p.approvals_after)`,
@@ -243,14 +257,17 @@ describe("what a merge reads of the reviews", () => {
             commitSha: row.commit_sha,
             state: row.state,
             submittedAt: row.submitted_at,
+            seq: row.review_id,
             dismissed: false,
           }),
         );
       return { all, standing: r.reviews.standing(1).reviews };
     });
-    expect(history.all.length).toBeGreaterThan(100);
-    // At most each person's latest by themselves and by an agent, of the head and of any head.
-    expect(history.standing.length).toBeLessThanOrEqual(roots.length * 4);
+  /** The facts a merge reads judge as the whole history does, under every ruleset setting. */
+  const judgedAsHistory = (
+    history: { all: ReviewFact[]; standing: ReviewFact[] },
+    lastPushAt: number,
+  ) => {
     for (const required of [1, 3])
       for (const dismissStale of [false, true])
         for (const requireLastPushApproval of [false, true])
@@ -261,11 +278,14 @@ describe("what a merge reads of the reviews", () => {
               requireLastPushApproval,
               allowAgentApprovals,
             };
-            for (const eligible of [roots, ["alice", "carol"]]) {
+            for (const eligible of [
+              ["alice", "bob", "carol"],
+              ["alice", "carol"],
+            ]) {
               const input = {
                 headSha: fx.c2,
                 authorRoot: "bob",
-                lastPush: { pusherRoot: "carol", at: at + 20 },
+                lastPush: { pusherRoot: "carol", at: lastPushAt },
                 eligibleRoots: new Set(eligible),
               };
               expect(evaluateApprovals({ ...input, reviews: history.standing }, settings)).toEqual(
@@ -273,20 +293,109 @@ describe("what a merge reads of the reviews", () => {
               );
             }
           }
+  };
+
+  it("is each reviewer's latest reviews only, however many it submitted, judged as the whole history is", async () => {
+    // Many reviews by three people and their agents, of the head and an earlier one, many at
+    // the same moment, some dismissed, the earlier ones before a retarget.
+    const roots = ["alice", "bob", "carol"];
+    const at = 1_000;
+    const reviews = Array.from(
+      { length: 300 },
+      (_, i): Stored => ({
+        root: roots[i % 3] as string,
+        agent: i % 5 === 0,
+        state: REVIEW_STATES[(i % 7) % 3] as ReviewFact["state"],
+        sha: i % 4 === 0 ? fx.c1 : fx.c2,
+        at: at + Math.floor(i / 6),
+        dismissed: i % 11 === 0,
+      }),
+    );
+    const before = await inRepo(env.REPO.getByName(repo.id), (r: RepoDO) =>
+      r.git.context.storage.sql
+        .exec<{ last: number }>("SELECT coalesce(max(review_id), 0) AS last FROM reviews")
+        .one(),
+    );
+    const history = await stored(reviews, before.last + 100);
+    expect(history.all.length).toBeGreaterThan(100);
+    // At most each person's latest request for changes and approval, by themselves and by an
+    // agent, of the head and of any head.
+    expect(history.standing.length).toBeLessThanOrEqual(roots.length * 8);
+    judgedAsHistory(history, at + 20);
   });
 
-  it("is one review of a reviewer who approved the head a thousand times", async () => {
-    const standing = await inRepo(env.REPO.getByName(repo.id), (r: RepoDO) => {
-      for (let i = 0; i < 1_000; i++)
-        r.git.context.storage.sql.exec(
-          `INSERT INTO reviews (pr_number, reviewer_id, reviewer_root, by_agent, state, commit_sha,
-             submitted_at) VALUES (1, 'dave', 'dave', 0, 'APPROVED', ?, ?)`,
-          fx.c2,
-          i,
-        );
-      return r.reviews.standing(1).reviews;
+  // A person's reviews at the same moment, after the last push, in both orders submitted.
+  const sameMoment: Record<string, Stored[]> = {
+    "the head, then an earlier head": [
+      { root: "alice", state: "APPROVED", at: 200 },
+      { root: "alice", state: "APPROVED", at: 200, sha: fx.c1 },
+    ],
+    "her agent the earlier head, then she the head": [
+      { root: "alice", state: "APPROVED", at: 200, sha: fx.c1, agent: true },
+      { root: "alice", state: "APPROVED", at: 200 },
+    ],
+    "a request for changes, then an approval": [
+      { root: "alice", state: "CHANGES_REQUESTED", at: 200 },
+      { root: "alice", state: "APPROVED", at: 200 },
+    ],
+  };
+  for (const [name, reviews] of Object.entries(sameMoment))
+    for (const order of ["as written", "reversed"])
+      it(`judges reviews at one moment by the order submitted, as the whole history does: ${name}, ${order}`, async () => {
+        const history = await stored(order === "reversed" ? [...reviews].reverse() : reviews);
+        judgedAsHistory(history, 100);
+        const lastPushApproved = (s: Partial<ApprovalSettings> = {}) =>
+          evaluateApprovals(
+            {
+              reviews: history.standing,
+              headSha: fx.c2,
+              authorRoot: "bob",
+              lastPush: { pusherRoot: "carol", at: 100 },
+              eligibleRoots: new Set(["alice"]),
+            },
+            {
+              required: 0,
+              dismissStale: false,
+              requireLastPushApproval: true,
+              allowAgentApprovals: true,
+              ...s,
+            },
+          ).lastPushApproved;
+        // Her last review decides: an approval of the head approves the last push.
+        const last = (order === "reversed" ? reviews[0] : reviews.at(-1)) as Stored;
+        expect(lastPushApproved()).toBe(last.state === "APPROVED" && last.sha === undefined);
+      });
+
+  it("finds each reviewer's latest by seeking the index, however many it submitted", async () => {
+    const dave = Array.from(
+      { length: 1_000 },
+      (_, i): Stored => ({ root: "dave", state: "APPROVED", at: i, sha: i % 2 ? fx.c1 : fx.c2 }),
+    );
+    const { standing } = await stored([
+      ...dave,
+      { root: "erin", state: "CHANGES_REQUESTED", at: 5, agent: true },
+    ]);
+    expect(standing).toEqual([
+      expect.objectContaining({ reviewerRoot: "dave", commitSha: fx.c2, submittedAt: 998 }),
+      expect.objectContaining({ reviewerRoot: "dave", commitSha: fx.c1, submittedAt: 999 }),
+      expect.objectContaining({ reviewerRoot: "erin", state: "CHANGES_REQUESTED" }),
+    ]);
+    const { plan, rowsRead } = await inRepo(env.REPO.getByName(repo.id), (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      const bindings = [1, fx.c2, 0];
+      const plan = sql
+        .exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${STANDING_REVIEWS_SQL}`, ...bindings)
+        .toArray()
+        .map((row) => row.detail);
+      const cursor = sql.exec(STANDING_REVIEWS_SQL, ...bindings);
+      cursor.toArray();
+      return { plan, rowsRead: cursor.rowsRead };
     });
-    expect(standing).toEqual([expect.objectContaining({ reviewerRoot: "dave", submittedAt: 999 })]);
+    // Seeks only: no sort, no scan of the reviews, whatever their number.
+    expect(plan.join("\n")).not.toMatch(/TEMP B-TREE|SCAN reviews/);
+    expect(plan.join("\n")).toMatch(/reviews_standing_head/);
+    expect(plan.join("\n")).toMatch(/reviews_standing /);
+    expect(rowsRead).toBeLessThan(100);
   });
 
   it("is stamped anew by each review that can count submitted or dismissed, and by a retarget", async () => {
