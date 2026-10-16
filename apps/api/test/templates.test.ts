@@ -13,6 +13,7 @@ import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, inject, it } from "vitest";
 import { createApp } from "../src/app.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import { allocateEpoch } from "../src/events/epochs.js";
 import { GENERATION_POLICY, settleStaleGenerations } from "../src/repos/generate.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { ORIGIN } from "./helpers/git-http.js";
@@ -265,6 +266,39 @@ describe("templates", () => {
     expect(commits.body.commits).toHaveLength(1);
     expect(await generatingSince(owner.handle, name)).toBeNull();
   });
+
+  for (const restored of [false, true])
+    it(`commit through an object restarted just before its first commit${restored ? ", after a restore" : ""}`, async () => {
+      await api("PATCH", path, owner.token, { is_template: true });
+      const name = uniqueId("gen");
+      let epoch: number | undefined;
+      const res = await generateThrough(
+        (stub, id) =>
+          id === template.id
+            ? stub
+            : replacing(stub, "generateFrom", async (_, input) => {
+                if (restored) epoch = await allocateEpoch(env.DIRECTORY, id);
+                await runInDurableObject(stub, (_: RepoDO, state) => state.abort()).catch(() => {});
+                // The restarted object's first call.
+                return env.REPO.getByName(id).generateFrom(
+                  input as Parameters<RepoDO["generateFrom"]>[0],
+                );
+              }),
+        path,
+        owner.token,
+        { name },
+      );
+      expect(res.status).toBe(201);
+      const made = await res.json<Repo>();
+      const commits = await json<{ commits: unknown[] }>(
+        api("GET", `/repos/${owner.handle}/${name}/commits`, owner.token),
+      );
+      expect(commits.body.commits).toHaveLength(1);
+      if (epoch !== undefined)
+        expect(
+          await runInDurableObject(env.REPO.getByName(made.id), (r: RepoDO) => r.events.epochGen()),
+        ).toBe(epoch);
+    });
 
   it("settle a generation whose request never finished: deleted once it is overdue", async () => {
     await api("PATCH", path, owner.token, { is_template: true });

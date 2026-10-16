@@ -2936,6 +2936,8 @@ export class RepoDO extends MigratingDO {
     if (!template.ok) return template;
     await this.generationHooks.beforeWrite?.();
     return this.#measured("generateFrom", async () => {
+      // Its commit needs the restore generation taken (a cold instance has not yet).
+      await this.checkEpoch();
       const made = await writeTemplate(await this.#writeDeps(), input, template.value);
       if (made.ok) this.ctx.storage.sql.exec("DELETE FROM generation");
       return made;
