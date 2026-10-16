@@ -59,11 +59,16 @@ function git(args: string[], cwd: string): Promise<string> {
   });
 }
 
-async function rest<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function rest<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  token = stack.token,
+): Promise<T> {
   const res = await fetch(`${stack.origin}/api${path}`, {
     method,
     headers: {
-      Authorization: `Bearer ${stack.token}`,
+      Authorization: `Bearer ${token}`,
       ...(body !== undefined && {
         "Content-Type": "application/json",
         "Idempotency-Key": crypto.randomUUID(),
@@ -108,14 +113,37 @@ async function pushTopic(): Promise<string> {
   return branch;
 }
 
-/** A pull request of `head` into main, opened through REST: its number. */
-async function openPull(head: string, title: string): Promise<number> {
-  const pull = await rest<{ number: number }>("POST", `/repos/${handle}/${name}/pulls`, {
-    title,
-    head,
-    base: "main",
-  });
+/** A pull request of `head` into main, opened through REST (by ada unless `token` is another's): its number. */
+async function openPull(
+  head: string,
+  title: string,
+  { body, token }: { body?: string; token?: string } = {},
+): Promise<number> {
+  const pull = await rest<{ number: number }>(
+    "POST",
+    `/repos/${handle}/${name}/pulls`,
+    { title, head, base: "main", body },
+    token,
+  );
   return pull.number;
+}
+
+/** Commits a new file to `branch` through the API: its pull request's head moves. */
+async function pushFile(branch: string, path: string): Promise<void> {
+  await rest("PUT", `/repos/${handle}/${name}/contents/${path}`, {
+    message: `Add ${path}`,
+    branch,
+    content: Buffer.from(`${path}\n`).toString("base64"),
+  });
+}
+
+/** The pull request's head now. */
+async function headOf(number: number): Promise<string> {
+  const pull = await rest<{ head: { sha: string } }>(
+    "GET",
+    `/repos/${handle}/${name}/pulls/${number}`,
+  );
+  return pull.head.sha;
 }
 
 /** A pull request of a new topic branch, its conversation open in the page: its number. */
@@ -396,6 +424,48 @@ describe("pull requests in the web UI", () => {
     await page.keyboard.press("End");
     await see(drawn.getByText("line 3000", { exact: true })).toBeVisible({ timeout: 30_000 });
     expect(await mounted()).toBeLessThan(1000);
+  });
+
+  it("asks for the verdict again when the head moves under an unfinished review", async () => {
+    // Someone else's pull request, so ada may approve it.
+    const author = await rest<{ id: string }>("POST", "/admin/users", { handle: "bo" });
+    const { token } = await rest<{ token: string }>("POST", `/admin/users/${author.id}/tokens`, {
+      type: "pat",
+      scopes: [],
+      expires_in_days: 1,
+    });
+    await rest("PUT", `/repos/${handle}/${name}/collaborators/bo`, { permission: "pull" });
+    await pushBranch("verdict", { "verdict.txt": "first\n" });
+    const number = await openPull("verdict", "Verdict", { token });
+    const first = await headOf(number);
+    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}`);
+    const review = page.locator("section", { has: page.getByRole("heading", { name: "Review" }) });
+    await see(review.locator("legend")).toContainText(first.slice(0, 7));
+    await review.getByLabel("Approve").check();
+    await review.getByLabel(/^Review comment/).fill("Read the first version.");
+    // The head moves, and the page reads the pull request again (after another change).
+    await pushFile("verdict", "second.txt");
+    const moved = await headOf(number);
+    await page.getByRole("button", { name: "Convert to draft" }).click();
+    await see(page.locator(".badge.status-draft")).toBeVisible();
+    // The draft is now of the new head, its text kept and its verdict asked for again.
+    await see(review.locator("legend")).toContainText(moved.slice(0, 7));
+    await see(review.getByRole("alert")).toContainText(
+      `The pull request moved to ${moved.slice(0, 7)}`,
+    );
+    await see(review.getByLabel("Approve")).not.toBeChecked();
+    await see(review.getByLabel("Comment", { exact: true })).toBeChecked();
+    await see(review.getByLabel(/^Review comment/)).toHaveValue("Read the first version.");
+    await accessible(page, "review of a moved head");
+    await review.getByLabel("Approve").check();
+    await review.getByRole("button", { name: "Submit review" }).click();
+    await see(review.getByRole("status")).toHaveText("Review submitted.");
+    await see(review.getByRole("alert")).toHaveCount(0);
+    const { reviews } = await rest<{ reviews: { state: string; commit_id: string }[] }>(
+      "GET",
+      `/repos/${handle}/${name}/pulls/${number}/reviews`,
+    );
+    expect(reviews.map((r) => [r.state, r.commit_id])).toEqual([["APPROVED", moved]]);
   });
 
   it("never had a script, style or image refused by the policy on any page", () => {
