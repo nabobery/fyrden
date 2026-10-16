@@ -103,6 +103,9 @@ export async function hashToken(token: string): Promise<string> {
 /** A Fyrden token in plain text. */
 export const TOKEN_IN_TEXT = new RegExp(PREFIX_SOURCE + BODY_SOURCE, "g");
 const TOKEN_PREFIX = new RegExp(PREFIX_SOURCE);
+/** A webhook signing secret in plain text (`whsec_` and its base64 bytes). */
+export const WEBHOOK_SECRET_IN_TEXT = /whsec_[A-Za-z0-9+/]{16,}={0,2}/g;
+const WEBHOOK_SECRET_PREFIX = /whsec_/;
 /** Runs of base64 or base64url characters long enough to hide a token prefix. */
 export const BASE64_RUN = /[A-Za-z0-9+/_-]{16,}={0,2}/g;
 
@@ -142,14 +145,15 @@ export function base64RunHasToken(run: string): boolean {
   for (let offset = 0; offset < 4 && offset < body.length; offset++) {
     const aligned = body.slice(offset);
     const decoded = decodeBase64(aligned.slice(0, aligned.length - (aligned.length % 4)));
-    if (decoded && TOKEN_PREFIX.test(decoded)) return true;
+    if (decoded && (TOKEN_PREFIX.test(decoded) || WEBHOOK_SECRET_PREFIX.test(decoded))) return true;
   }
   return false;
 }
 
-/** True when text contains a token in plain, percent-encoded or base64 form. */
+/** True when text contains a token or a webhook secret in plain, percent-encoded or base64 form. */
 export function mentionsToken(text: string): boolean {
   const decoded = decodeAsciiPercent(text);
   if (new RegExp(TOKEN_IN_TEXT.source).test(decoded)) return true;
+  if (new RegExp(WEBHOOK_SECRET_IN_TEXT.source).test(decoded)) return true;
   return (decoded.match(BASE64_RUN) ?? []).some(base64RunHasToken);
 }

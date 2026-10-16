@@ -88,6 +88,19 @@ import {
   putContentsOperation,
 } from "../repos/file-writes.js";
 import { generateRepoOperation } from "../repos/generate.js";
+import {
+  createHookOperation,
+  deleteHookOperation,
+  dropPreviousHookSecretOperation,
+  getHookDeliveryOperation,
+  getHookOperation,
+  listHookDeliveriesOperation,
+  listHooksOperation,
+  pingHookOperation,
+  resealHookSecretsOperation,
+  rotateHookSecretOperation,
+  updateHookOperation,
+} from "../repos/hooks.js";
 import { listAccountRepos } from "../repos/listing.js";
 import { networkSource, repoOutput, starCounts, visibleParents } from "../repos/output.js";
 import {
@@ -336,6 +349,17 @@ export const handlers: Handlers = {
   "pulls.create": createPullOperation,
   "pulls.get": getPullOperation,
   "pulls.update": updatePullOperation,
+  "repos.hooks.list": listHooksOperation,
+  "repos.hooks.get": getHookOperation,
+  "repos.hooks.create": createHookOperation,
+  "repos.hooks.update": updateHookOperation,
+  "repos.hooks.delete": deleteHookOperation,
+  "repos.hooks.pings.create": pingHookOperation,
+  "repos.hooks.secret.rotate": rotateHookSecretOperation,
+  "repos.hooks.secret.drop": dropPreviousHookSecretOperation,
+  "repos.hooks.deliveries.list": listHookDeliveriesOperation,
+  "repos.hooks.deliveries.get": getHookDeliveryOperation,
+  "admin.webhooks.reseal": resealHookSecretsOperation,
   "pulls.merge": mergePullOperation,
   "pulls.conflicts.get": getPullConflictsOperation,
   "pulls.conflicts.resolve": resolvePullConflictsOperation,

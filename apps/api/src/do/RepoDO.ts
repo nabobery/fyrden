@@ -116,6 +116,7 @@ import type {
 import { type CompactSliceInput, VIEW_CAP, viewCompactionHandler } from "../network/view-cap.js";
 import { platformSigner } from "../signing/platform-key.js";
 import { type SignedFact, verdicts } from "../signing/verification.js";
+import { secretKeys } from "../webhooks/secrets.js";
 import {
   AUDIT_ARCHIVE_JOB,
   AUDIT_ARCHIVE_POLICY,
@@ -183,6 +184,7 @@ import {
   writeFiles,
   refused as writeRefused,
 } from "./repo/file-writes.js";
+import { type HookForDelivery, type HookView, RepoHooks } from "./repo/hooks.js";
 import {
   MERGE_POLICY,
   type MergeMade,
@@ -345,6 +347,15 @@ const BASE_MOVED_WHILE_MERGING = "the base branch moved while the merge was bein
 /** Why a merge into the head was refused at its commit: the pull request closed or was retargeted. */
 const PULL_CHANGED_WHILE_MERGING = "the pull request changed while the merge was being made";
 
+/** Whether a hook URL is plain http (as its parser reads it). */
+function isHttp(url: string): boolean {
+  try {
+    return new URL(url).protocol === "http:";
+  } catch {
+    return true;
+  }
+}
+
 /** A merge refused while the pull request's rebase merge is under way. */
 const MERGE_IN_PROGRESS = fail(
   409,
@@ -460,6 +471,9 @@ export class RepoDO extends MigratingDO {
   /** Rebase merges of pull requests, made over several steps. */
   readonly rebases: RebaseSagas;
 
+  /** The repository's webhooks. */
+  readonly hooks: RepoHooks;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.metricsDataset = env.METRICS;
@@ -519,6 +533,12 @@ export class RepoDO extends MigratingDO {
       takesChanges: () => this.#writeRefusal() === undefined,
       writable: () => this.#writeRefusal() === undefined && this.events.canEmit(),
       beforeWrite: () => this.mergeabilityHooks.beforeWrite?.(),
+    });
+    this.hooks = new RepoHooks({
+      git: this.git,
+      events: this.events,
+      repoId: () => this.#repoId(),
+      keys: () => secretKeys(this.env),
     });
     this.rebases = new RebaseSagas(
       {
@@ -893,6 +913,126 @@ export class RepoDO extends MigratingDO {
       if (typeof done === "string") return { ok: false as const, code: done };
       this.#ensureAuditArchive();
       return { ok: true as const, record: done };
+    });
+  }
+
+  /** The repository's webhooks (the Worker checked `repository_hooks:read`). */
+  listHooks(): Browsed<HookView[]> {
+    if (this.#refusesReads()) return fail(404, "repo_not_found", REPO_DELETED);
+    return { ok: true, value: this.hooks.list() };
+  }
+
+  getHook(id: number): Browsed<HookView> {
+    if (this.#refusesReads()) return fail(404, "repo_not_found", REPO_DELETED);
+    const hook = this.hooks.get(id);
+    return hook
+      ? { ok: true, value: hook }
+      : fail(404, "hook_not_found", `The repository has no webhook ${id}.`);
+  }
+
+  /**
+   * Adds a webhook for an administrator (the Worker checked
+   * `repository_hooks:write` and the URL; checked again here). Its secret
+   * is in the answer, once.
+   */
+  createHook(
+    input: Parameters<RepoHooks["create"]>[1],
+    actor: RefActor,
+  ): Promise<Browsed<{ hook: HookView; secret: string }>> {
+    return this.#asHookAdmin(
+      "createHook",
+      actor,
+      () => this.hooks.prepareSecret(),
+      (prepared) => {
+        if (isHttp(input.url) && this.events.visibility() !== "public")
+          return fail(422, "insecure_url", "A private repository's webhooks need an https URL.");
+        return this.hooks.create(prepared, input, actor);
+      },
+    );
+  }
+
+  updateHook(
+    id: number,
+    patch: Parameters<RepoHooks["update"]>[1],
+    actor: RefActor,
+  ): Promise<Browsed<HookView>> {
+    return this.#asHookAdmin("updateHook", actor, undefined, () => {
+      if (patch.url !== undefined && isHttp(patch.url) && this.events.visibility() !== "public")
+        return fail(422, "insecure_url", "A private repository's webhooks need an https URL.");
+      return this.hooks.update(id, patch, actor);
+    });
+  }
+
+  deleteHook(id: number, actor: RefActor): Promise<Browsed<true>> {
+    return this.#asHookAdmin("deleteHook", actor, undefined, () => this.hooks.delete(id, actor));
+  }
+
+  pingHook(id: number, actor: RefActor): Promise<Browsed<true>> {
+    return this.#asHookAdmin("pingHook", actor, undefined, () => this.hooks.ping(id, actor));
+  }
+
+  /** A new signing secret for the hook (in the answer, once); the previous one signs a week more. */
+  rotateHookSecret(id: number, actor: RefActor): Promise<Browsed<{ secret: string }>> {
+    return this.#asHookAdmin(
+      "rotateHookSecret",
+      actor,
+      () => this.hooks.prepareSecret(id),
+      (prepared) => this.hooks.rotateSecret(prepared, actor),
+    );
+  }
+
+  dropPreviousHookSecret(id: number, actor: RefActor): Promise<Browsed<true>> {
+    return this.#asHookAdmin("dropPreviousHookSecret", actor, undefined, () =>
+      this.hooks.dropPreviousSecret(id, actor),
+    );
+  }
+
+  /** What a delivery attempt needs of the hook now (its open secrets included); `gone` once deleted. */
+  hookForDelivery(id: number): Promise<HookForDelivery> {
+    // Erased (or being erased): gone for good, not unavailable.
+    if (this.#refusesReads()) return Promise.resolve({ kind: "gone" as const });
+    return this.#measured("hookForDelivery", async () => {
+      if (this.#refusesReads()) return { kind: "gone" as const };
+      return this.hooks.forDelivery(id, this.events.visibility() !== "public");
+    });
+  }
+
+  /** Turns the hook off after its receiver answered 410 Gone (unless it changed since). */
+  disableHook(id: number, configVersion: number, reason: string): boolean {
+    // Erased: no hook left to turn off.
+    if (this.#refusesReads()) return false;
+    return this.hooks.disable(id, configVersion, reason);
+  }
+
+  /** Seals again, with the current key, secrets sealed with a retired one (an operator's step). */
+  resealHookSecrets(limit: number) {
+    return this.#measured("resealHookSecrets", () => this.hooks.reseal(limit));
+  }
+
+  /**
+   * Runs `change` for an administrator of a writable repository: what it
+   * needs made first (`prepare`, which may wait), then the checks and the
+   * change with no wait between them.
+   */
+  #asHookAdmin<P, T>(
+    method: string,
+    actor: RefActor,
+    prepare: (() => Promise<Browsed<P>>) | undefined,
+    change: (prepared: P) => Browsed<T>,
+  ): Promise<Browsed<T>> {
+    return this.#measured(method, async () => {
+      await this.checkEpoch();
+      const ceilings = await this.#rolesPulled(actor.principal, actor.grantId ?? null);
+      const prepared = prepare ? await prepare() : ({ ok: true, value: undefined as P } as const);
+      if (!prepared.ok) return prepared;
+      const refusedWrite = this.#writeRefusal();
+      if (refusedWrite) return fail(refusedWrite.status, refusedWrite.code, refusedWrite.error);
+      if (![actor.principal, ...ceilings].every((p) => this.acl.allows(p, "admin")))
+        return fail(404, "repo_not_found", "You no longer administer this repository.");
+      const done = change(prepared.value);
+      this.#armOutbox();
+      this.#ensureAuditArchive();
+      return done;
     });
   }
 

@@ -70,7 +70,10 @@ const WORKER_NOT_FOUND = /code: 10007|worker does not exist|not found/i;
  * Any other failure is an error: treating it as "no secrets" would make the
  * deploy replace the existing bootstrap secret.
  */
-async function workerSecrets(runner: WranglerRunner, worker: string): Promise<Set<string> | null> {
+export async function workerSecrets(
+  runner: WranglerRunner,
+  worker: string,
+): Promise<Set<string> | null> {
   const args = ["secret", "list", "--name", worker, "--format", "json"];
   const result = await runner.run(args);
   if (result.code === 0)
@@ -168,6 +171,9 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   }
   // The platform's commit signing key: made here once, never shown, kept across deploys.
   if (!existing?.has("SIGNING_KEY")) upload.SIGNING_KEY = signingKey();
+  // The key webhook secrets are sealed with: made once, never shown; replace
+  // it only as docs/operations/webhooks.md says, or every hook's secret is lost.
+  if (!existing?.has("WEBHOOKS_KEY")) upload.WEBHOOKS_KEY = signingKey();
   if (Object.keys(upload).length > 0) {
     secretsDir = await mkdtemp(join(tmpdir(), "fyrden-secrets-"));
     const file = join(secretsDir, "secrets.json");

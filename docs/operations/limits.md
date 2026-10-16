@@ -652,6 +652,25 @@ Pull requests between branches of one repository
 | Review threads (`/pulls/{number}/threads`, MCP `resolve_thread`) | Resolved or unresolved by the pull request's author or write access and above; `required_review_thread_resolution` in a ruleset refuses a merge while any is unresolved, outdated ones included |
 | Conversation comments | `/issues/{number}/comments` on pull requests (issues share them once they exist; MCP `comment_on_pull_request`, `list_comments`, `update_comment`, `delete_comment`). Anyone who reads the repository comments, on open or closed pull requests; the author of a comment edits and deletes its own, write access and above anyone's. Body 1-65,536 characters. A deletion removes the comment |
 
+## Webhooks
+
+Repository webhooks (`/repos/{owner}/{repo}/hooks`), for administrators
+(`repository_hooks:read` and `:write`). Operating them (the key their
+secrets are sealed with, its rotation and restore) is in
+[webhooks.md](webhooks.md).
+
+| What | Value |
+|---|---|
+| Hooks | 20 per repository; repository hooks only |
+| Events | `ping` (on creation and `POST …/pings`), `push` (one delivery per push event, listing its ref updates: up to 500 an event, as many as fit in 128 KiB as stored; `refs_count` counts them all and `refs_truncated` says when some are left out), `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment` accepted as subscriptions (their deliveries come with the pull request events) |
+| URL | https, or http for a public repository only; never this deployment's hosts or a private, loopback or link-local address; checked when set and again on every attempt; redirects are refused, not followed. A host whose name changes between the check and the connection is not caught (no DNS rebinding protection is claimed) |
+| Signing | Standard Webhooks v1: `webhook-id` (the delivery's id, the same on every attempt), `webhook-timestamp`, `webhook-signature` (HMAC-SHA256 with the hook's secret; both secrets for a week after a rotation, or until the previous one is dropped). The secret (`whsec_…`) is made by the server and shown once (REST only, never over MCP) |
+| Payload | Fyrden's own shape (`event`, `repository` as it was when the event happened, `sender`, `position`, event fields); at most 192 KiB as the server stores it (escaped twice: about 90 KiB of plain JSON; larger: `dropped`); deliveries are unordered: `position` (epoch and sequence) orders them |
+| Attempts | Each attempt has 10 seconds (lookup, request, the first 4 KiB of the answer). 2xx: done. 408, 429, 5xx, a timeout or an unreachable host: tried again with exponential backoff and jitter from 1 minute up to 6 hours, `Retry-After` honoured up to 1 hour; 8 attempts in all. 410 Gone: failed, and the hook turned off (`disabled_reason`) unless it changed meanwhile. Other 4xx and refused URLs: failed. A deleted or inactive hook: the delivery is cancelled. A private repository's event never goes over http |
+| Waiting deliveries | 1,000 per hook; more are `dropped` (visible in the delivery list). This is not a daily capacity: on Workers Free each attempt costs about three queue operations (of 10,000 a day), a few D1 queries and an R2 read |
+| Delivery log | Deliveries, their attempts (URL, status, duration, 4 KiB of the answer, no request header values) and their bodies are kept 30 days, then deleted (bodies first) by the cron |
+| Loss boundary | Events reach deliveries through the events queue: an outage of its consumer longer than the queue keeps messages (24 hours on Free) loses those events before any delivery exists |
+
 ## Idempotent requests
 
 A REST write (any method but GET) sent with an `Idempotency-Key` header runs

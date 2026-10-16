@@ -62,6 +62,29 @@ export const DomainEventSchema = z
      * them by event id, and the consumer fetches them.
      */
     stored: z.boolean(),
+    /**
+     * The repository's webhooks the event goes to (each at the configuration
+     * version it had then), and what a delivery says of the repository, as
+     * it was when the event happened. Absent when no hook takes the event.
+     */
+    webhooks: z
+      .strictObject({
+        hooks: z
+          .array(
+            z.strictObject({
+              id: z.number().int().positive(),
+              v: z.number().int().positive(),
+            }),
+          )
+          .min(1)
+          .max(20),
+        repo: z.strictObject({
+          name: short,
+          ownerId: short,
+          private: z.boolean(),
+        }),
+      })
+      .optional(),
   })
   .superRefine((event, ctx) => {
     const { entity, stored } = event;

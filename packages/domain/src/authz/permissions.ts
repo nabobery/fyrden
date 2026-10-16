@@ -196,6 +196,22 @@ export const PERMISSIONS = {
     implies: ["metadata:read"],
     writes: true,
   },
+  "repository_hooks:read": {
+    resource: "repo",
+    minRole: "admin",
+    summary: "Read the repository's webhooks and their deliveries.",
+    principals: PRINCIPAL_TYPES,
+    implies: ["metadata:read"],
+    writes: false,
+  },
+  "repository_hooks:write": {
+    resource: "repo",
+    minRole: "admin",
+    summary: "Create, change, ping and delete the repository's webhooks; rotate their secrets.",
+    principals: PRINCIPAL_TYPES,
+    implies: ["repository_hooks:read"],
+    writes: true,
+  },
 } as const satisfies Record<string, PermissionDef>;
 
 export type Permission = keyof typeof PERMISSIONS;

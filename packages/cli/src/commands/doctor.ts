@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { AccountError, pinAccount, resolveAccount } from "../account.ts";
 import { readApiConfig, resourcePlan } from "../resources.ts";
 import { WranglerError, type WranglerRunner } from "../wrangler.ts";
+import { workerSecrets } from "./deploy.ts";
 import { provision } from "./provision.ts";
 
 /**
@@ -51,6 +52,11 @@ export async function doctor(
     );
     return { authenticated: true, missing: ["unknown"] };
   }
+  // The key webhook secrets are sealed with (deploy makes it when there is none).
+  const secrets = await workerSecrets(runner, config.name).catch(() => null);
+  if (secrets && !secrets.has("WEBHOOKS_KEY"))
+    log("WARN WEBHOOKS_KEY is not set: webhooks cannot be created (fyrden deploy makes it)");
+  else if (secrets) log("ok   WEBHOOKS_KEY is set");
   // wrangler has no read-only check for this; deploy names it if it is off.
   log("info Workers Analytics Engine must be enabled once in the dashboard");
   log(

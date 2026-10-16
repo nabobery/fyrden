@@ -78,8 +78,12 @@ export async function sweepEffects(deps: DispatchDeps): Promise<number> {
     .all<Row>();
   const delivered = await deliverAll(deps, results, token);
   deps.metrics?.count("d1.query", { db: "org", op: "effects_prune" });
+  // Failed ones too, after the same time (their payloads go with them).
   await deps.db
-    .prepare("DELETE FROM effects WHERE state = 'done' AND done_at <= ?")
+    .prepare(
+      `DELETE FROM effects WHERE (state = 'done' AND done_at <= ?1)
+         OR (state = 'failed' AND next_attempt_at <= ?1)`,
+    )
     .bind(now - policy.retentionMs)
     .run();
   return delivered;
@@ -107,7 +111,7 @@ async function deliverOne(deps: DispatchDeps, row: Row, token: string): Promise<
   };
   try {
     if (!sink) throw new Error(`no sink named ${row.sink}`);
-    await sink.deliver(effect, deps.env);
+    await sink.deliver(effect, deps.env, deps.db);
   } catch (error) {
     deps.log?.warn("delivering an effect failed", {
       effectId: row.effect_id,

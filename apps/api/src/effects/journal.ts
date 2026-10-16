@@ -31,8 +31,11 @@ export interface EffectSink {
   readonly name: string;
   /** The effects an event requires; none for events the sink ignores. */
   plan(event: DomainEvent): readonly PlannedEffect[];
-  /** Delivers one effect. Must be idempotent per `effect.id`; throws to retry later. */
-  deliver(effect: Effect, env: Env): Promise<void>;
+  /**
+   * Delivers one effect (`db`: the read model it is journaled in). Must be
+   * idempotent per `effect.id`; throws to retry later.
+   */
+  deliver(effect: Effect, env: Env, db: D1Database): Promise<void>;
 }
 
 /** Proposed values. */
@@ -59,8 +62,16 @@ export const EFFECT_POLICY: EffectPolicy = {
   maxAttempts: 20,
   leaseMs: 5 * 60 * 1000,
   retentionMs: 7 * 24 * 60 * 60 * 1000,
-  sweepBatch: 50,
+  // Each costs about five D1 queries; Free allows 50 an invocation, the cron's other tasks included.
+  sweepBatch: 4,
 };
+
+/**
+ * Effects one consumer invocation delivers itself, whatever its batch;
+ * the rest wait for the sweeper (each costs about five D1 queries, of 50
+ * an invocation on Free).
+ */
+export const INLINE_EFFECTS = 2;
 
 const SINK_NAME = /^[a-z][a-z_]*$/;
 const MAX_TARGET = 256;
@@ -70,11 +81,17 @@ export function effectId(event: DomainEvent, sink: string, target: string): stri
   return `${eventKey(event.id)}:${sink}:${target}`;
 }
 
+const encoder = new TextEncoder();
+
+/** The bytes of effects one journal statement carries at most (a D1 value holds 2 MB). */
+const STATEMENT_BYTES = 1024 * 1024;
+
 /**
  * The journal inserts for an envelope's events, guarded like projections:
  * nothing is journaled for an event of an older epoch or an older ownership
- * generation than the read model has seen. Each statement returns the id
- * it inserted (none for an effect already journaled).
+ * generation than the read model has seen. The effects go in as few
+ * statements as their size allows (one for an ordinary envelope), each
+ * returning the ids it inserted (none for an effect already journaled).
  */
 export function effectStatements(
   db: D1Database,
@@ -84,36 +101,53 @@ export function effectStatements(
   now: number,
   policy: EffectPolicy = EFFECT_POLICY,
 ): D1PreparedStatement[] {
-  const statements: D1PreparedStatement[] = [];
+  type Row = {
+    id: string;
+    sink: string;
+    target: string;
+    payload: string;
+    epoch: number;
+    ownerGen: number;
+  };
+  const chunks: Row[][] = [[]];
+  let bytes = 0;
   for (const sink of sinks) {
     if (!SINK_NAME.test(sink.name)) throw new Error(`invalid sink name ${sink.name}`);
     for (const event of events)
       for (const planned of sink.plan(event)) {
         if (planned.target.length === 0 || planned.target.length > MAX_TARGET)
           throw new Error(`invalid effect target for sink ${sink.name}`);
-        const id = effectId(event, sink.name, planned.target);
-        statements.push(
-          db
-            .prepare(
-              `INSERT OR IGNORE INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
-               SELECT ?1, ?2, ?3, ?4, ?5, ?6
-               WHERE ?7 >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?8)
-                 AND ?9 >= coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?8), 0)
-               RETURNING effect_id`,
-            )
-            .bind(
-              id,
-              sink.name,
-              planned.target,
-              JSON.stringify(planned.payload),
-              now + policy.sweepAfterMs,
-              now,
-              event.id.epochGen,
-              sourceId,
-              event.ownerGen,
-            ),
-        );
+        const row = {
+          id: effectId(event, sink.name, planned.target),
+          sink: sink.name,
+          target: planned.target,
+          payload: JSON.stringify(planned.payload),
+          epoch: event.id.epochGen,
+          ownerGen: event.ownerGen,
+        };
+        // The row as it is bound: UTF-8 JSON, its payload escaped once more.
+        const size = encoder.encode(JSON.stringify(row)).length + 1;
+        if (bytes + size > STATEMENT_BYTES && (chunks.at(-1)?.length ?? 0) > 0) {
+          chunks.push([]);
+          bytes = 0;
+        }
+        chunks.at(-1)?.push(row);
+        bytes += size;
       }
   }
-  return statements;
+  return chunks
+    .filter((rows) => rows.length > 0)
+    .map((rows) =>
+      db
+        .prepare(
+          `INSERT OR IGNORE INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
+           SELECT e.value ->> 'id', e.value ->> 'sink', e.value ->> 'target', e.value ->> 'payload', ?1, ?2
+           FROM json_each(?3) e
+           WHERE (e.value ->> 'epoch') >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?4)
+             AND (e.value ->> 'ownerGen') >=
+                 coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?4), 0)
+           RETURNING effect_id`,
+        )
+        .bind(now + policy.sweepAfterMs, now, JSON.stringify(rows), sourceId),
+    );
 }

@@ -7,6 +7,7 @@ export * from "../ops/comments.js";
 export * from "../ops/contents.js";
 export * from "../ops/file-writes.js";
 export * from "../ops/grants.js";
+export * from "../ops/hooks.js";
 export * from "../ops/imports.js";
 export * from "../ops/meta.js";
 export * from "../ops/orgs.js";

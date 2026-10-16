@@ -63,15 +63,19 @@
         "max_retries": 10,
         "dead_letter_queue": "fyrden-events-dlq"
       },
-      { "queue": "fyrden-webhooks" },
+      // One delivery attempt per message, each acknowledged: the deliveries
+      // table schedules retries (a new message each); the cron resends lost ones.
+      { "queue": "fyrden-webhooks", "max_batch_size": 5, "max_retries": 2 },
       { "queue": "fyrden-ci-dispatch" },
       { "queue": "fyrden-indexing" }
     ]
   },
 
-  // Archives the directory's audit log to R2 and retries stuck effects
-  // (Proposed interval; Free allows a few cron triggers per account).
-  "triggers": { "crons": ["*/5 * * * *"] },
+  // Archives the directory's audit log to R2 and the other maintenance
+  // tasks; the second, offset, retries effects and webhook deliveries in an
+  // invocation of its own (each has 50 D1 queries on Free). Proposed
+  // intervals; Free allows a few cron triggers per account.
+  "triggers": { "crons": ["*/5 * * * *", "2-59/5 * * * *"] },
 
   // Cache only; never an authoritative store.
   "kv_namespaces": [{ "binding": "CACHE" }],
@@ -99,7 +103,7 @@
   // Uploaded with the first deploy by `fyrden deploy` (--secrets-file): the first-run setup's
   // secret, and the platform's commit signing key. Listed, they also reach `wrangler dev` from an
   // env file (only listed secrets do).
-  "secrets": { "required": ["BOOTSTRAP_SECRET", "SIGNING_KEY"] },
+  "secrets": { "required": ["BOOTSTRAP_SECRET", "SIGNING_KEY", "WEBHOOKS_KEY"] },
 
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "fyrden_metrics" }],
 

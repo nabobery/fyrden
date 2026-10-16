@@ -152,7 +152,7 @@ export type UsersTokensListOutput = {
 export type UsersTokensCreateInput = {
   type?: "pat" | "git";
   /** Permissions it is limited to (and what they imply). Empty: your token's. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -217,7 +217,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -334,7 +334,7 @@ export type AgentsTokensCreateInput = {
   agent: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -402,7 +402,7 @@ export type GrantsCreateInput = {
   /** The agent's handle. */
   agent: string;
   /** Permissions the agent may use for you (and what they imply). */
-  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write")[];
+  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
   repositories?: string[];
   expires_in_days?: number;
@@ -1271,6 +1271,302 @@ export type ReposRulesetsDeleteInput = {
 export type ReposRulesetsDeleteOutput = {
   id: number;
   state: "deleted";
+};
+
+/** Input of `repos.hooks.list`: List repository webhooks. */
+export type ReposHooksListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+};
+
+/** Output of `repos.hooks.list`. */
+export type ReposHooksListOutput = ({
+  id: number;
+  name: "web";
+  active: boolean;
+  events: string[];
+  config: {
+    url: string;
+    content_type: "json";
+  };
+  created_at: string;
+  updated_at: string;
+  last_response: {
+    code: number | null;
+    status: string;
+    message: string | null;
+  };
+  /** Fyrden: why the server turned the hook off (its receiver answered 410 Gone). */
+  disabled_reason: string | null;
+  /** Fyrden: secrets that sign its deliveries (two while one is being replaced). */
+  secrets: number;
+})[];
+
+/** Input of `repos.hooks.create`: Create a repository webhook. */
+export type ReposHooksCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  name?: "web";
+  config: {
+    /** Where deliveries are posted: https (http only for a public repository), never this server or a private address. */
+    url: string;
+    content_type?: "json";
+  };
+  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
+  active?: boolean;
+};
+
+/** Output of `repos.hooks.create`. */
+export type ReposHooksCreateOutput = {
+  id: number;
+  name: "web";
+  active: boolean;
+  events: string[];
+  config: {
+    url: string;
+    content_type: "json";
+  };
+  created_at: string;
+  updated_at: string;
+  last_response: {
+    code: number | null;
+    status: string;
+    message: string | null;
+  };
+  /** Fyrden: why the server turned the hook off (its receiver answered 410 Gone). */
+  disabled_reason: string | null;
+  /** Fyrden: secrets that sign its deliveries (two while one is being replaced). */
+  secrets: number;
+  /** The signing secret (`whsec_…`, Standard Webhooks): shown this once; verify deliveries' `webhook-signature` with it. */
+  secret: string;
+};
+
+/** Input of `repos.hooks.get`: Get a repository webhook. */
+export type ReposHooksGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+};
+
+/** Output of `repos.hooks.get`. */
+export type ReposHooksGetOutput = {
+  id: number;
+  name: "web";
+  active: boolean;
+  events: string[];
+  config: {
+    url: string;
+    content_type: "json";
+  };
+  created_at: string;
+  updated_at: string;
+  last_response: {
+    code: number | null;
+    status: string;
+    message: string | null;
+  };
+  /** Fyrden: why the server turned the hook off (its receiver answered 410 Gone). */
+  disabled_reason: string | null;
+  /** Fyrden: secrets that sign its deliveries (two while one is being replaced). */
+  secrets: number;
+};
+
+/** Input of `repos.hooks.update`: Update a repository webhook. */
+export type ReposHooksUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+  config?: {
+    /** Where deliveries are posted: https (http only for a public repository), never this server or a private address. */
+    url?: string;
+    content_type?: "json";
+  };
+  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
+  add_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
+  remove_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
+  active?: boolean;
+};
+
+/** Output of `repos.hooks.update`. */
+export type ReposHooksUpdateOutput = {
+  id: number;
+  name: "web";
+  active: boolean;
+  events: string[];
+  config: {
+    url: string;
+    content_type: "json";
+  };
+  created_at: string;
+  updated_at: string;
+  last_response: {
+    code: number | null;
+    status: string;
+    message: string | null;
+  };
+  /** Fyrden: why the server turned the hook off (its receiver answered 410 Gone). */
+  disabled_reason: string | null;
+  /** Fyrden: secrets that sign its deliveries (two while one is being replaced). */
+  secrets: number;
+};
+
+/** Input of `repos.hooks.delete`: Delete a repository webhook. */
+export type ReposHooksDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+};
+
+/** Output of `repos.hooks.delete`. */
+export type ReposHooksDeleteOutput = {
+  id: number;
+  state: "deleted";
+};
+
+/** Input of `repos.hooks.pings.create`: Ping a repository webhook. */
+export type ReposHooksPingsCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+};
+
+/** Output of `repos.hooks.pings.create`. */
+export type ReposHooksPingsCreateOutput = {
+  id: number;
+  state: "pinged";
+};
+
+/** Input of `repos.hooks.secret.rotate`: Rotate a webhook's secret. */
+export type ReposHooksSecretRotateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+};
+
+/** Output of `repos.hooks.secret.rotate`. */
+export type ReposHooksSecretRotateOutput = {
+  id: number;
+  /** The signing secret (`whsec_…`, Standard Webhooks): shown this once; verify deliveries' `webhook-signature` with it. */
+  secret: string;
+};
+
+/** Input of `repos.hooks.secret.drop`: Drop a webhook's previous secret. */
+export type ReposHooksSecretDropInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+};
+
+/** Output of `repos.hooks.secret.drop`. */
+export type ReposHooksSecretDropOutput = {
+  id: number;
+  secrets: number;
+};
+
+/** Input of `repos.hooks.deliveries.list`: List deliveries for a repository webhook. */
+export type ReposHooksDeliveriesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `repos.hooks.deliveries.list`. */
+export type ReposHooksDeliveriesListOutput = {
+  deliveries: ({
+    /** The delivery's `webhook-id` (the same on every attempt). */
+    id: string;
+    event: string;
+    action: string | null;
+    state: "pending" | "done" | "failed" | "cancelled" | "dropped";
+    /** Why it failed, was cancelled or dropped. */
+    reason: string | null;
+    /** The last attempt's response status. */
+    status_code: number | null;
+    attempts: number;
+    delivered_at: string;
+    next_attempt_at: string | null;
+  })[];
+  next_cursor: string | null;
+};
+
+/** Input of `repos.hooks.deliveries.get`: Get a delivery for a repository webhook. */
+export type ReposHooksDeliveriesGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+  delivery_id: string;
+};
+
+/** Output of `repos.hooks.deliveries.get`. */
+export type ReposHooksDeliveriesGetOutput = {
+  /** The delivery's `webhook-id` (the same on every attempt). */
+  id: string;
+  event: string;
+  action: string | null;
+  state: "pending" | "done" | "failed" | "cancelled" | "dropped";
+  /** Why it failed, was cancelled or dropped. */
+  reason: string | null;
+  /** The last attempt's response status. */
+  status_code: number | null;
+  attempts: number;
+  delivered_at: string;
+  next_attempt_at: string | null;
+  request: {
+    payload: Record<string, unknown> | null;
+  };
+  attempts_made: ({
+    n: number;
+    at: string;
+    url: string | null;
+    status_code: number | null;
+    duration_ms: number | null;
+    response: string | null;
+    error: string | null;
+  })[];
+};
+
+/** Input of `admin.webhooks.reseal`: Seal webhook secrets with the current key. */
+export type AdminWebhooksResealInput = {
+  cursor?: string;
+};
+
+/** Output of `admin.webhooks.reseal`. */
+export type AdminWebhooksResealOutput = {
+  resealed: number;
+  remaining: number;
+  unreadable: number;
+  next_cursor: string | null;
 };
 
 /** Input of `pulls.list`: List pull requests. */
@@ -4062,6 +4358,17 @@ export const OPERATIONS = {
   "repos.rulesets.create": { method: "POST", path: "/repos/{owner}/{repo}/rulesets", pathParams: ["owner","repo"], idempotent: true },
   "repos.rulesets.update": { method: "PUT", path: "/repos/{owner}/{repo}/rulesets/{ruleset_id}", pathParams: ["owner","repo","ruleset_id"], idempotent: true },
   "repos.rulesets.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/rulesets/{ruleset_id}", pathParams: ["owner","repo","ruleset_id"], idempotent: true },
+  "repos.hooks.list": { method: "GET", path: "/repos/{owner}/{repo}/hooks", pathParams: ["owner","repo"], idempotent: false },
+  "repos.hooks.create": { method: "POST", path: "/repos/{owner}/{repo}/hooks", pathParams: ["owner","repo"], idempotent: true },
+  "repos.hooks.get": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}", pathParams: ["owner","repo","hook_id"], idempotent: false },
+  "repos.hooks.update": { method: "PATCH", path: "/repos/{owner}/{repo}/hooks/{hook_id}", pathParams: ["owner","repo","hook_id"], idempotent: true },
+  "repos.hooks.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/hooks/{hook_id}", pathParams: ["owner","repo","hook_id"], idempotent: true },
+  "repos.hooks.pings.create": { method: "POST", path: "/repos/{owner}/{repo}/hooks/{hook_id}/pings", pathParams: ["owner","repo","hook_id"], idempotent: true },
+  "repos.hooks.secret.rotate": { method: "POST", path: "/repos/{owner}/{repo}/hooks/{hook_id}/secret", pathParams: ["owner","repo","hook_id"], idempotent: true },
+  "repos.hooks.secret.drop": { method: "DELETE", path: "/repos/{owner}/{repo}/hooks/{hook_id}/secret/previous", pathParams: ["owner","repo","hook_id"], idempotent: true },
+  "repos.hooks.deliveries.list": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries", pathParams: ["owner","repo","hook_id"], idempotent: false, items: "deliveries" },
+  "repos.hooks.deliveries.get": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: false },
+  "admin.webhooks.reseal": { method: "POST", path: "/admin/webhooks/reseal", pathParams: [], idempotent: true },
   "pulls.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: false, items: "pull_requests" },
   "pulls.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: true },
   "pulls.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: false },
@@ -4217,6 +4524,28 @@ export interface Operations {
   "repos.rulesets.update": { input: ReposRulesetsUpdateInput; output: ReposRulesetsUpdateOutput };
   /** Delete a ruleset. Removes a ruleset. Administrators only. */
   "repos.rulesets.delete": { input: ReposRulesetsDeleteInput; output: ReposRulesetsDeleteOutput };
+  /** List repository webhooks. The repository's webhooks. Administrators only. */
+  "repos.hooks.list": { input: ReposHooksListInput; output: ReposHooksListOutput };
+  /** Create a repository webhook. Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, or `*`. Administrators only. */
+  "repos.hooks.create": { input: ReposHooksCreateInput; output: ReposHooksCreateOutput };
+  /** Get a repository webhook. One webhook. Administrators only. */
+  "repos.hooks.get": { input: ReposHooksGetInput; output: ReposHooksGetOutput };
+  /** Update a repository webhook. Changes a webhook's URL, events or state (turning it on clears why the server turned it off). Deliveries waiting for an attempt go to the new URL. Administrators only. */
+  "repos.hooks.update": { input: ReposHooksUpdateInput; output: ReposHooksUpdateOutput };
+  /** Delete a repository webhook. Removes a webhook; its waiting deliveries are cancelled. Administrators only. */
+  "repos.hooks.delete": { input: ReposHooksDeleteInput; output: ReposHooksDeleteOutput };
+  /** Ping a repository webhook. Sends the webhook a `ping` delivery. Administrators only. */
+  "repos.hooks.pings.create": { input: ReposHooksPingsCreateInput; output: ReposHooksPingsCreateOutput };
+  /** Rotate a webhook's secret. Fyrden: a new signing secret (in this answer only). Deliveries are signed with both the new and the previous secret for a week, or until the previous one is dropped. Administrators only. */
+  "repos.hooks.secret.rotate": { input: ReposHooksSecretRotateInput; output: ReposHooksSecretRotateOutput };
+  /** Drop a webhook's previous secret. Fyrden: stops signing deliveries with the secret a rotation replaced. Administrators only. */
+  "repos.hooks.secret.drop": { input: ReposHooksSecretDropInput; output: ReposHooksSecretDropOutput };
+  /** List deliveries for a repository webhook. The webhook's deliveries of the last 30 days, newest first. Administrators only. */
+  "repos.hooks.deliveries.list": { input: ReposHooksDeliveriesListInput; output: ReposHooksDeliveriesListOutput };
+  /** Get a delivery for a repository webhook. One delivery: its body and each attempt (where it was sent, what came back, the first 4 KiB of the response). Administrators only. */
+  "repos.hooks.deliveries.get": { input: ReposHooksDeliveriesGetInput; output: ReposHooksDeliveriesGetOutput };
+  /** Seal webhook secrets with the current key. Fyrden: seals again, with `WEBHOOKS_KEY`, webhook secrets sealed with a retired key, a batch of repositories at a time (call again with `cursor` until `next_cursor` is null and `remaining` is 0); `unreadable` counts secrets whose key is gone (rotate those hooks' secrets). Instance administrators only. */
+  "admin.webhooks.reseal": { input: AdminWebhooksResealInput; output: AdminWebhooksResealOutput };
   /** List pull requests. The repository's pull requests, newest first. */
   "pulls.list": { input: PullsListInput; output: PullsListOutput };
   /** Create a pull request. Proposes merging one branch of the repository into another. Anyone who can read the repository may open one. Refused when the head has no commits the base lacks, or when a pull request between the two branches is already open. While open, `refs/pull/{number}/head` follows the head branch. The head may be a branch of a fork in the same network (`owner:branch`): its revision is imported first, and later pushes to it reach the pull request shortly after. */

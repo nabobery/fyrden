@@ -8,6 +8,12 @@ import { type EntitySnapshot, REPO_ENTITY, type RepoRow } from "@fyrden/domain";
 import { oidToHex } from "@fyrden/git-core";
 import type { NewEvent, Outbox } from "../base/outbox.js";
 
+/** The webhooks an event goes to: each hook's id and configuration version. */
+export type HookRouter = (
+  type: string,
+  data: Record<string, unknown> | null,
+) => readonly { readonly id: number; readonly v: number }[];
+
 /** A repository's snapshot as a read-model rebuild takes it. */
 export interface RepoExport {
   readonly sourceId: string;
@@ -149,6 +155,9 @@ export class RepoEvents {
   /** An update is moving HEAD: its own snapshot carries the new default branch. */
   #updating = false;
 
+  /** The webhooks an event of `type` goes to (see `routeHooks`). */
+  #hooksFor: HookRouter = () => [];
+
   constructor(
     private readonly git: RepoGitStorage,
     private readonly outbox: Outbox,
@@ -157,6 +166,11 @@ export class RepoEvents {
 
   get #storage() {
     return this.git.context.storage;
+  }
+
+  /** Names the webhooks each event goes to, at their configuration versions. */
+  routeHooks(router: HookRouter): void {
+    this.#hooksFor = router;
   }
 
   #meta(): MetaRow | undefined {
@@ -742,10 +756,23 @@ export class RepoEvents {
       { class: this.git.context.doClass, op: "events.sequence" },
       cursor.rowsWritten,
     );
+    const hooks =
+      meta.owner_id !== null && meta.name !== null ? this.#hooksFor(type, event.data) : [];
     this.outbox.append(
       { sourceId: meta.repo_id, epochGen: meta.epoch_gen, sourceSeq: meta.source_seq },
       {
         ...event,
+        // What a delivery says of the repository is what it was now.
+        ...(hooks.length > 0 && {
+          webhooks: {
+            hooks: [...hooks],
+            repo: {
+              name: meta.name as string,
+              ownerId: meta.owner_id as string,
+              private: meta.visibility !== "public",
+            },
+          },
+        }),
         type,
         at: this.git.context.now(),
         ownerGen: meta.owner_gen,

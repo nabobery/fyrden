@@ -11,7 +11,7 @@ import {
   type RepoRow,
 } from "@fyrden/domain";
 import { dispatchEffects } from "../effects/dispatcher.js";
-import { type EffectSink, effectStatements } from "../effects/journal.js";
+import { type EffectSink, effectStatements, INLINE_EFFECTS } from "../effects/journal.js";
 import { EFFECT_SINKS } from "../effects/sinks.js";
 import { readModelFor } from "../events/read-model.js";
 
@@ -57,13 +57,29 @@ function isWaiting(body: unknown): body is WaitingMessage {
 export const RETRY_DELAY_SECONDS = 10;
 
 /** `unlisted`: the directory does not list the repository (yet). */
-export type ApplyOutcome = "applied" | "dropped" | "unlisted";
+/** `deferred`: the invocation's D1 queries are spent; the message waits for a later one. */
+export type ApplyOutcome = "applied" | "dropped" | "unlisted" | "deferred";
+
+/**
+ * D1 queries one consumer invocation spends on its messages (Free allows
+ * 50; some are left for the rest). Proposed.
+ */
+export const INVOCATION_QUERIES = 45;
+/** D1 queries one inline effect delivery costs at most (its claim, its work, its outcome). */
+const QUERIES_PER_EFFECT = 6;
 
 export interface ConsumerOptions {
   readonly now?: () => number;
   readonly metrics?: Metrics;
   /** The effect sinks (default: the deployment's). */
   readonly sinks?: readonly EffectSink[];
+  /** Effects the invocation may still deliver itself, shared by its messages (default: its own). */
+  readonly inline?: { left: number };
+  /**
+   * D1 queries the invocation may still spend, shared by its messages, and
+   * whether one was applied (a message alone is applied whatever it costs).
+   */
+  readonly queries?: { left: number; applied: boolean };
 }
 
 /**
@@ -79,12 +95,23 @@ export async function consumeEvents(
   options: ConsumerOptions = {},
 ): Promise<void> {
   const log = createLogger({ op: "events.consume" });
+  // One share of inline deliveries and of D1 queries for the whole invocation, however many
+  // messages it has.
+  options = {
+    ...options,
+    inline: options.inline ?? { left: INLINE_EFFECTS },
+    queries: options.queries ?? { left: INVOCATION_QUERIES, applied: false },
+  };
   for (const message of batch.messages) {
     try {
       const waiting = isWaiting(message.body) ? message.body : undefined;
       const envelope = waiting ? waiting.envelope : message.body;
       const outcome = await applyEnvelope(env, envelope, options);
-      if (outcome === "unlisted") {
+      if (outcome === "deferred") {
+        // A new message, not a retry: waiting for budget is no failure.
+        await env.EVENTS.send(message.body, { contentType: "json", delaySeconds: 1 });
+        options.metrics?.count("queue.send", { queue: "events" });
+      } else if (outcome === "unlisted") {
         const now = options.now?.() ?? Date.now();
         const since = Math.min(waiting?.waitingSince ?? now, now);
         const waited = now - since;
@@ -133,6 +160,9 @@ export async function applyEnvelope(
   const now = options.now?.() ?? Date.now();
   // Only repositories produce events so far.
   if (!isId(sourceId, "rep")) return "dropped";
+  const queries = options.queries ?? { left: INVOCATION_QUERIES, applied: false };
+  if (queries.applied && queries.left < 3) return "deferred";
+  queries.left -= 1;
 
   options.metrics?.count("d1.query", { db: "directory", op: "events_route" });
   const listed = await env.DIRECTORY.prepare("SELECT state, org_shard FROM repos WHERE id = ?")
@@ -158,6 +188,10 @@ export async function applyEnvelope(
     ...snapshots.map((event) => repoStatement(db, sourceId, event, now)),
     ...effects,
   ];
+  // Past what is left of the invocation's queries: a later invocation applies it (one alone always).
+  if (queries.applied && statements.length > queries.left) return "deferred";
+  queries.left -= statements.length;
+  queries.applied = true;
   options.metrics?.count("d1.query", { db: "org", op: "events_apply" }, statements.length);
   const results = await db.batch<{ effect_id: string }>(statements);
   // Only the effects this batch inserted: one already journaled keeps its own schedule.
@@ -165,6 +199,14 @@ export async function applyEnvelope(
     .slice(statements.length - effects.length)
     .flatMap((result) => result.results.map((row) => row.effect_id));
   // Journaled with the projection; what cannot be delivered now, the sweeper retries.
+  const inline = options.inline ?? { left: INLINE_EFFECTS };
+  const take = Math.min(
+    inline.left,
+    inserted.length,
+    Math.max(0, Math.floor(queries.left / QUERIES_PER_EFFECT)),
+  );
+  inline.left -= take;
+  queries.left -= take * QUERIES_PER_EFFECT;
   try {
     await dispatchEffects(
       {
@@ -175,7 +217,8 @@ export async function applyEnvelope(
         log: createLogger({ op: "effects.dispatch" }),
         ...(options.metrics && { metrics: options.metrics }),
       },
-      inserted,
+      // The invocation's bounded share now: the effects cron takes the rest (every five minutes).
+      inserted.slice(0, take),
     );
   } catch (error) {
     createLogger({ op: "effects.dispatch" }).warn("dispatching effects failed", { error });

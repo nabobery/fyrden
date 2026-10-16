@@ -74,6 +74,29 @@ const CASES: Record<
     expected: { status: 404, code: "ruleset_not_found" },
   },
   "repos.rulesets.delete": { input: {}, expected: { status: 404, code: "ruleset_not_found" } },
+  // No webhook exists; a new one with a private address is refused after the check.
+  "repos.hooks.list": { input: {}, expected: { status: 200 } },
+  "repos.hooks.get": { input: {}, expected: { status: 404, code: "hook_not_found" } },
+  "repos.hooks.create": {
+    input: { config: { url: "https://10.0.0.1/hook" } },
+    expected: { status: 422, code: "invalid_url" },
+  },
+  "repos.hooks.update": {
+    input: { active: false },
+    expected: { status: 404, code: "hook_not_found" },
+  },
+  "repos.hooks.delete": { input: {}, expected: { status: 404, code: "hook_not_found" } },
+  "repos.hooks.pings.create": { input: {}, expected: { status: 404, code: "hook_not_found" } },
+  "repos.hooks.secret.rotate": { input: {}, expected: { status: 404, code: "hook_not_found" } },
+  "repos.hooks.secret.drop": { input: {}, expected: { status: 404, code: "hook_not_found" } },
+  "repos.hooks.deliveries.list": {
+    input: {},
+    expected: { status: 404, code: "hook_not_found" },
+  },
+  "repos.hooks.deliveries.get": {
+    input: {},
+    expected: { status: 404, code: "hook_not_found" },
+  },
   // No pull request exists, and the repository has no branches to open one between.
   "pulls.list": { input: {}, expected: { status: 200 } },
   "pulls.get": { input: {}, expected: { status: 404, code: "pull_not_found" } },
@@ -241,7 +264,9 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{path+}", "README.md")
     .replace("{tree_sha+}", "main")
     .replace("{format}", "zip")
-    .replace("{ruleset_id}", "1");
+    .replace("{ruleset_id}", "1")
+    .replace("{hook_id}", "1")
+    .replace("{delivery_id}", `msg_${"0".repeat(32)}`);
   const input = CASES[op.id]?.input ?? SECONDARY[op.id]?.input ?? {};
   const get = op.method === "GET";
   return exports.default.fetch(`${ORIGIN}/api${path}`, {

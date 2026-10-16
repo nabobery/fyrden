@@ -664,4 +664,30 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 25,
+    // The repository's webhooks: where events go, which, whether they are
+    // on, the version of that configuration (each change bumps it), and
+    // their signing secrets, sealed (one, or two while one is replaced).
+    name: "webhooks",
+    sql: `
+      CREATE TABLE webhooks (
+        hook_id INTEGER PRIMARY KEY,
+        url TEXT NOT NULL,
+        events TEXT NOT NULL,
+        active INTEGER NOT NULL CHECK (active IN (0, 1)),
+        config_version INTEGER NOT NULL,
+        secrets TEXT NOT NULL,
+        api_host TEXT NOT NULL,
+        disabled_reason TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE webhook_ids (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        last INTEGER NOT NULL
+      ) STRICT;
+    `,
+  },
 ];

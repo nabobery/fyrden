@@ -493,3 +493,19 @@ CREATE TABLE uploads (
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
   ) STRICT;
+CREATE TABLE webhook_ids (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        last INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE webhooks (
+        hook_id INTEGER PRIMARY KEY,
+        url TEXT NOT NULL,
+        events TEXT NOT NULL,
+        active INTEGER NOT NULL CHECK (active IN (0, 1)),
+        config_version INTEGER NOT NULL,
+        secrets TEXT NOT NULL,
+        api_host TEXT NOT NULL,
+        disabled_reason TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;

@@ -38,6 +38,19 @@ import {
 import { getContents, getReadme, getRootContents, getTree } from "../ops/contents.js";
 import { createFileCommit, deleteContents, putContents } from "../ops/file-writes.js";
 import { createGrant, listGrants, revokeGrant } from "../ops/grants.js";
+import {
+  createHook,
+  deleteHook,
+  dropPreviousHookSecret,
+  getHook,
+  getHookDelivery,
+  listHookDeliveries,
+  listHooks,
+  pingHook,
+  resealHookSecrets,
+  rotateHookSecret,
+  updateHook,
+} from "../ops/hooks.js";
 import { createImport, getImport } from "../ops/imports.js";
 import { listSigningKeys, whoami } from "../ops/meta.js";
 import { createOrg, listMembers, removeMembership, setMembership, updateOrg } from "../ops/orgs.js";
@@ -150,6 +163,17 @@ export const registry = defineRegistry([
   createRuleset,
   updateRuleset,
   deleteRuleset,
+  listHooks,
+  createHook,
+  getHook,
+  updateHook,
+  deleteHook,
+  pingHook,
+  rotateHookSecret,
+  dropPreviousHookSecret,
+  listHookDeliveries,
+  getHookDelivery,
+  resealHookSecrets,
   listPulls,
   createPull,
   getPull,

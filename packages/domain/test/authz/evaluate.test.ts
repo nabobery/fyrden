@@ -38,7 +38,9 @@ describe("evaluate: roles", () => {
     expect(allowed("triage").sort()).toEqual(reads);
     expect(allowed("write").sort()).toEqual(writes);
     expect(allowed("maintain").sort()).toEqual(writes);
-    expect(allowed("admin").sort()).toEqual(["administration:write", ...writes].sort());
+    expect(allowed("admin").sort()).toEqual(
+      ["administration:write", "repository_hooks:read", "repository_hooks:write", ...writes].sort(),
+    );
   });
 
   it("names why it denies", () => {
