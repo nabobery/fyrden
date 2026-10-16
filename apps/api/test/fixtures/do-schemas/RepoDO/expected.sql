@@ -21,6 +21,7 @@ CREATE INDEX pull_listings_comparison
 CREATE INDEX pull_listings_created ON pull_listings (created_at);
 CREATE INDEX pull_requests_base ON pull_requests (base_ref, state);
 CREATE INDEX pull_requests_head ON pull_requests (head_ref, state);
+CREATE INDEX pull_requests_head_repo ON pull_requests (head_repo_id, state, number);
 CREATE INDEX pull_requests_state ON pull_requests (state, number);
 CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);

@@ -762,4 +762,13 @@ export const repoSchema: readonly DoMigration[] = [
         WHERE dismissed_at IS NULL;
     `,
   },
+  {
+    version: 29,
+    // The open pull requests whose head is in another repository, a page at
+    // a time in number order (that repository, restored, asks for them).
+    name: "pull_requests_head_repo",
+    sql: `
+      CREATE INDEX pull_requests_head_repo ON pull_requests (head_repo_id, state, number);
+    `,
+  },
 ];

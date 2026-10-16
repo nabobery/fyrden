@@ -127,6 +127,10 @@ export interface PullCaller {
   readonly role: RepoRole | null;
 }
 
+/** A page of the open pull requests whose head is in a repository: its id, the number after, the size. */
+export const OPEN_FROM_HEAD_REPO = `SELECT * FROM pull_requests
+  WHERE head_repo_id = ? AND state = 'open' AND number > ? ORDER BY number LIMIT ?`;
+
 /**
  * The repository's pull requests between its own branches. An open pull
  * request's `refs/pull/<number>/head` follows its head branch in the
@@ -184,13 +188,7 @@ export class RepoPulls {
 
   /** Open pull requests whose head is in `headRepoId`, numbered after `after`, at most `limit`. */
   openFrom(headRepoId: string, after: number, limit: number): PullRecord[] {
-    return this.#rows(
-      `SELECT * FROM pull_requests WHERE state = 'open' AND head_repo_id = ? AND number > ?
-       ORDER BY number LIMIT ?`,
-      headRepoId,
-      after,
-      limit,
-    ).map(record);
+    return this.#rows(OPEN_FROM_HEAD_REPO, headRepoId, after, limit).map(record);
   }
 
   /** The ref store's derived updates: each open pull request's ref follows its head branch. */

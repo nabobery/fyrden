@@ -7,6 +7,7 @@ import {
 } from "@fyrden/adapters-cloudflare/migrations";
 import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
+import { OPEN_FROM_HEAD_REPO } from "../src/do/repo/pulls.js";
 import { repoSchema } from "../src/do/schema/repo.js";
 import repoV0 from "./fixtures/do-schemas/RepoDO/v0.sql?raw";
 import repoV1 from "./fixtures/do-schemas/RepoDO/v1.sql?raw";
@@ -45,6 +46,17 @@ describe("RepoDO schema", () => {
       expect(fromFixture).toBe(fresh);
     });
   }
+
+  it("finds a head repository's open pull requests through an index, in number order", async () => {
+    const stub = env.REPO.getByName(uniqueId("repo"));
+    const plan = await runInDurableObject(stub, (_, state) =>
+      state.storage.sql
+        .exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${OPEN_FROM_HEAD_REPO}`, "r", 0, 20)
+        .toArray()
+        .map((r) => r.detail),
+    );
+    expect(plan).toEqual([expect.stringMatching(/USING INDEX pull_requests_head_repo /)]);
+  });
 
   it("wakes a fresh object at the latest version", async () => {
     const stub = env.REPO.getByName(uniqueId("repo"));
