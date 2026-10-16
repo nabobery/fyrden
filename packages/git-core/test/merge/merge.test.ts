@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { merge3 } from "../../src/merge/diff3.js";
-import { mergeFiles } from "../../src/merge/file-merge.js";
+import { mergeFiles, withConflictMarkers } from "../../src/merge/file-merge.js";
 import { MergeBudget, MergeLimitError, mergeTrees } from "../../src/merge/merge-trees.js";
 import { baseTreeOf } from "../../src/merge/virtual-base.js";
 import { type Oid, oidToHex } from "../../src/object/oid.js";
@@ -50,6 +50,19 @@ describe("mergeFiles", () => {
       ours: [enc.encode("X\n")],
       theirs: [enc.encode("Y\n")],
     });
+  });
+
+  it("writes a conflicted file with git's markers, ending each side with a line feed", () => {
+    const conflict = m("a\nb\nc", "a\nX\nc", "a\nY");
+    if (conflict.kind !== "conflict") return expect.fail(conflict.kind);
+    const text = dec.decode(
+      withConflictMarkers(
+        conflict.regions,
+        { ours: "feature", theirs: "main" },
+        { base: enc.encode("a\nb\nc"), ours: enc.encode("a\nX\nc"), theirs: enc.encode("a\nY") },
+      ),
+    );
+    expect(text).toBe("a\n<<<<<<< feature\nX\nc\n=======\nY\n>>>>>>> main\n");
   });
 
   it("refuses binary sides and sides over the line budget", () => {
@@ -139,6 +152,45 @@ describe("mergeTrees", () => {
       ["l", "symlink"],
       ["m", "modify_delete"],
     ]);
+  });
+
+  it("takes contents given for files whose lines conflict, and no other conflict", async () => {
+    const s = store();
+    const f = (t: string) => ({ oid: s.blob(t) });
+    const base = s.tree({ c: f("1\n"), m: f("m\n") });
+    const ours = s.tree({ a: f("ours\n"), c: f("2\n"), m: f("changed\n") });
+    const theirs = s.tree({ a: f("theirs\n"), c: f("3\n") });
+    const asked: string[][] = [];
+    const given: Record<string, string> = { a: "both\n", c: "", m: "kept\n" };
+    const resolve = (file: {
+      path: Uint8Array;
+      base: Uint8Array;
+      ours: Uint8Array;
+      theirs: Uint8Array;
+    }) => {
+      const path = dec.decode(file.path);
+      asked.push([path, dec.decode(file.base), dec.decode(file.ours), dec.decode(file.theirs)]);
+      const content = given[path];
+      return content === undefined ? undefined : enc.encode(content);
+    };
+    const partly = await mergeTrees(s.source, base, ours, theirs, { resolve });
+    if (partly.kind !== "conflicts") return expect.fail("clean");
+    expect(partly.conflicts.map((c) => [c.path, c.kind])).toEqual([["m", "modify_delete"]]);
+    expect(asked.sort()).toEqual([
+      ["a", "", "ours\n", "theirs\n"],
+      ["c", "1\n", "2\n", "3\n"],
+    ]);
+
+    const without = s.tree({ a: f("ours\n"), c: f("2\n") });
+    const merged = await mergeTrees(s.source, base, without, theirs, { resolve });
+    if (merged.kind !== "clean") return expect.fail(JSON.stringify(merged.conflicts));
+    const blobs = merged.objects.filter((o) => o.type === "blob").map((o) => dec.decode(o.bytes));
+    expect(blobs.sort()).toEqual(["", "both\n"]);
+    // Declined: the conflict stays.
+    const declined = await mergeTrees(s.source, base, without, theirs, {
+      resolve: () => undefined,
+    });
+    expect(declined.kind).toBe("conflicts");
   });
 
   it("stops past its file merge budget", async () => {

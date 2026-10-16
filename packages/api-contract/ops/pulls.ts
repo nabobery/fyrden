@@ -342,3 +342,143 @@ export const mergePull = defineOperation({
     readOnly: false,
   },
 });
+
+const ConflictKind = z.enum([
+  "content",
+  "add_add",
+  "modify_delete",
+  "file_directory",
+  "mode",
+  "symlink",
+  "submodule",
+  "binary",
+  "too_large",
+]);
+
+export const getPullConflicts = defineOperation({
+  id: "pulls.conflicts.get",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/pulls/{pull_number}/conflicts",
+  summary: "Get a pull request's conflicts",
+  description:
+    "Fyrden: the conflicts of merging the base branch's tip into an open pull request's head (none when they merge cleanly). Files whose lines conflict in text (`content`, `add_add`) are `editable`: their merged content is given with git's conflict markers, the head's side first (`<<<<<<< head`, `=======`, `>>>>>>> base`), up to 50 files and 4 MiB in all. Any other conflict (a file deleted on one side, a mode, a symlink, a submodule, a binary or too large file, a file and a directory; renames are not followed) is listed but needs a merge made by hand. Resolve them with `conflict_snapshot`, which names the base tip and head they were read at. Heads in forks come later.",
+  input: z.object({ ...RepoInput, pull_number: PullNumber }),
+  output: z.object({
+    base_sha: z.string(),
+    head_sha: z.string(),
+    conflict_snapshot: z.string().describe("Names this base tip and head, for the resolution."),
+    files: z.array(
+      z.object({
+        path: z.string(),
+        kind: ConflictKind,
+        editable: z.boolean(),
+        content: z
+          .string()
+          .nullable()
+          .describe("An editable file merged, with conflict markers; null otherwise."),
+        conflicts: z.number().int().describe("Conflicts marked in `content`."),
+      }),
+    ),
+  }),
+  permission: "contents:read",
+  principals: ["user", "agent"],
+  rateLimit: "expensive",
+  idempotency: "none",
+  mcp: {
+    tool: "get_conflicts",
+    title: "Get a pull request's conflicts",
+    description:
+      "List the files that conflict when the base branch is merged into a pull request's head, with conflict markers in the ones that can be resolved on the server.",
+    readOnly: true,
+  },
+});
+
+const BaseMergeOutput = z.object({
+  sha: z.string().describe("The merge commit the head branch now points at."),
+  markers: z
+    .array(z.string())
+    .describe("Resolved files that still contain conflict markers (accepted as given)."),
+});
+
+export const resolvePullConflicts = defineOperation({
+  id: "pulls.conflicts.resolve",
+  method: "POST",
+  path: "/repos/{owner}/{repo}/pulls/{pull_number}/conflicts",
+  summary: "Resolve a pull request's conflicts",
+  description:
+    "Fyrden: merges the base branch's tip into the head branch with the given contents for every file whose lines conflict, as one merge commit (parents: the head, then the base tip) made and signed by the server. Write access; the head branch's rulesets apply. Refused when either branch moved since the conflicts were read (409 `head_moved`, `base_moved`), when a conflict cannot be resolved here (422 `not_editable`), when a conflicted file is missing (422 `unresolved`), or when a given file has no conflict (422 `not_conflicted`). Contents that still hold conflict markers are accepted and named in `markers`.",
+  input: z.object({
+    ...RepoInput,
+    pull_number: PullNumber,
+    conflict_snapshot: z
+      .string()
+      .regex(/^[0-9a-f]{80}$/)
+      .describe("From reading the conflicts."),
+    files: z
+      .array(
+        z.object({
+          // Any path a conflict can have (the request body's size bounds it).
+          path: z.string().min(1),
+          content: z
+            .string()
+            .max(1024 * 1024)
+            .describe("The file's resolved content (UTF-8)."),
+        }),
+      )
+      .max(50)
+      .describe("The resolved content of each file whose lines conflict."),
+    commit_message: z
+      .string()
+      .min(1)
+      .max(65_536)
+      .optional()
+      .describe("By default `Merge branch '<base>' into <head>`."),
+  }),
+  output: BaseMergeOutput,
+  permission: "contents:write",
+  principals: ["user", "agent"],
+  rateLimit: "expensive",
+  idempotency: "key",
+  successStatus: 201,
+  mcp: {
+    tool: "resolve_conflicts",
+    title: "Resolve a pull request's conflicts",
+    description:
+      "Merge the base branch into a pull request's head with resolved contents for its conflicting files, as one merge commit on the head branch.",
+    readOnly: false,
+  },
+});
+
+export const updatePullBranch = defineOperation({
+  id: "pulls.branch.update",
+  method: "PUT",
+  path: "/repos/{owner}/{repo}/pulls/{pull_number}/update-branch",
+  summary: "Update a pull request branch",
+  description:
+    "Merges the base branch's tip into an open pull request's head branch (a merge commit made and signed by the server; parents: the head, then the base tip). Write access; the head branch's rulesets apply. Refused (422) when it conflicts (resolve the conflicts instead) or when the head already contains the base tip; refused (409) when `expected_head_sha` is not the head. Done before the answer, which is GitHub's 202. Heads in forks come later.",
+  input: z.object({
+    ...RepoInput,
+    pull_number: PullNumber,
+    expected_head_sha: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/)
+      .optional()
+      .describe("The head the pull request must be at."),
+  }),
+  output: z.object({
+    message: z.string(),
+    url: z.string(),
+    sha: z.string().describe("Fyrden: the merge commit the head branch now points at."),
+  }),
+  permission: "contents:write",
+  principals: ["user", "agent"],
+  rateLimit: "expensive",
+  idempotency: "key",
+  successStatus: 202,
+  mcp: {
+    tool: "update_pull_request_branch",
+    title: "Update a pull request branch",
+    description: "Merge the base branch into a pull request's head branch when it merges cleanly.",
+    readOnly: false,
+  },
+});

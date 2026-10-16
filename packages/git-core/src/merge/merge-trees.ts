@@ -52,7 +52,11 @@ export interface NewObject {
 }
 
 export type TreeMerge =
-  | { readonly kind: "clean"; readonly tree: Oid; readonly objects: readonly NewObject[] }
+  | {
+      readonly kind: "clean";
+      readonly tree: Oid;
+      readonly objects: readonly NewObject[];
+    }
   | { readonly kind: "conflicts"; readonly conflicts: readonly MergeConflict[] };
 
 export interface TreeMergeOptions {
@@ -60,6 +64,21 @@ export interface TreeMergeOptions {
   readonly maxFileBytes?: number;
   /** One budget for a whole operation (a merge and its virtual bases); one is made when absent. */
   readonly budget?: MergeBudget;
+  /**
+   * Contents for a regular file whose lines conflict (a `content` or
+   * `add_add` conflict), given its path and its three versions (empty for
+   * a base it lacks): the file takes them instead of conflicting, unless
+   * this answers undefined. Other conflicts cannot be resolved this way.
+   */
+  readonly resolve?: (file: LinesConflict) => Uint8Array | undefined;
+}
+
+/** A regular file whose lines conflict, as `TreeMergeOptions.resolve` is given it. */
+export interface LinesConflict {
+  readonly path: Uint8Array;
+  readonly base: Uint8Array;
+  readonly ours: Uint8Array;
+  readonly theirs: Uint8Array;
 }
 
 export class MergeLimitError extends Error {
@@ -300,6 +319,11 @@ export async function mergeTrees(
     const merged = mergeFiles(baseBytes, oursBytes, theirsBytes);
     if (merged.kind === "clean")
       return { mode, name: o.name, oid: await write("blob", merged.bytes) };
+    const given =
+      merged.kind === "conflict"
+        ? options.resolve?.({ path, base: baseBytes, ours: oursBytes, theirs: theirsBytes })
+        : undefined;
+    if (given) return { mode, name: o.name, oid: await write("blob", given) };
     conflict(
       merged.kind === "binary"
         ? "binary"

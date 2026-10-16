@@ -2,13 +2,16 @@ import type { RefActor } from "@fyrden/adapters-cloudflare/git";
 import type {
   createPull,
   getPull,
+  getPullConflicts,
   Input,
   listPullCommits,
   listPullFiles,
   listPulls,
   mergePull,
   Output,
+  resolvePullConflicts,
   updatePull,
+  updatePullBranch,
 } from "@fyrden/api-contract";
 import { MAX_REQUESTED_REVIEWERS } from "@fyrden/domain";
 import type { PullView } from "../do/repo/mergeability.js";
@@ -404,5 +407,76 @@ export async function listPullCommitsOperation(
   return {
     commits: await resolveVerification(ctx, result.value.commits),
     next_cursor: encodeListingCursor(result.value.listing, result.value.next),
+  };
+}
+
+/** The `pulls.conflicts.get` operation. */
+export async function getPullConflictsOperation(
+  ctx: OpContext,
+  input: Input<typeof getPullConflicts>,
+): Promise<Output<typeof getPullConflicts>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "contents:read");
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "pullConflicts" });
+  const result = await ctx.env.REPO.getByName(entry.id).pullConflicts(input.pull_number);
+  if (!result.ok) throw new OperationError(result.status, result.code, result.error);
+  const view = result.value;
+  return {
+    base_sha: view.baseSha,
+    head_sha: view.headSha,
+    conflict_snapshot: view.snapshot,
+    files: view.files.map((f) => ({
+      path: f.path,
+      kind: f.kind,
+      editable: f.editable,
+      content: f.content,
+      conflicts: f.conflicts,
+    })),
+  };
+}
+
+/** The `pulls.conflicts.resolve` operation. */
+export async function resolvePullConflictsOperation(
+  ctx: OpContext,
+  input: Input<typeof resolvePullConflicts>,
+): Promise<Output<typeof resolvePullConflicts>> {
+  // git stops reading a message at a NUL (and fsck warns of one).
+  if (input.commit_message?.includes("\0"))
+    throw new OperationError(422, "invalid_input", "A commit message must not contain NUL.");
+  const entry = await repoFor(ctx, input.owner, input.repo, "contents:write");
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "resolvePullConflicts" });
+  const result = await ctx.env.REPO.getByName(entry.id).resolvePullConflicts(
+    {
+      number: input.pull_number,
+      identity: await commitIdentityOf(ctx),
+      snapshot: input.conflict_snapshot,
+      files: input.files,
+      ...(input.commit_message !== undefined && { message: input.commit_message }),
+    },
+    actorOf(ctx),
+  );
+  if (!result.ok) throw new OperationError(result.status, result.code, result.error);
+  return { sha: result.value.sha, markers: [...result.value.markers] };
+}
+
+/** The `pulls.branch.update` operation. */
+export async function updatePullBranchOperation(
+  ctx: OpContext,
+  input: Input<typeof updatePullBranch>,
+): Promise<Output<typeof updatePullBranch>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "contents:write");
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "updatePullBranch" });
+  const result = await ctx.env.REPO.getByName(entry.id).updatePullBranch(
+    {
+      number: input.pull_number,
+      identity: await commitIdentityOf(ctx),
+      ...(input.expected_head_sha !== undefined && { expectedHead: input.expected_head_sha }),
+    },
+    actorOf(ctx),
+  );
+  if (!result.ok) throw new OperationError(result.status, result.code, result.error);
+  return {
+    message: "Updating pull request branch.",
+    url: `${ctx.requestOrigin}/api/repos/${entry.ownerHandle}/${entry.name}/pulls/${input.pull_number}`,
+    sha: result.value.sha,
   };
 }

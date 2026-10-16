@@ -92,11 +92,14 @@ import { listAccountRepos } from "../repos/listing.js";
 import { networkSource, repoOutput, starCounts, visibleParents } from "../repos/output.js";
 import {
   createPullOperation,
+  getPullConflictsOperation,
   getPullOperation,
   listPullCommitsOperation,
   listPullFilesOperation,
   listPullsOperation,
   mergePullOperation,
+  resolvePullConflictsOperation,
+  updatePullBranchOperation,
   updatePullOperation,
 } from "../repos/pulls.js";
 import {
@@ -334,6 +337,9 @@ export const handlers: Handlers = {
   "pulls.get": getPullOperation,
   "pulls.update": updatePullOperation,
   "pulls.merge": mergePullOperation,
+  "pulls.conflicts.get": getPullConflictsOperation,
+  "pulls.conflicts.resolve": resolvePullConflictsOperation,
+  "pulls.branch.update": updatePullBranchOperation,
   "pulls.comments.list": listReviewCommentsOperation,
   "pulls.comments.create": createReviewCommentOperation,
   "pulls.comments.get": getReviewCommentOperation,

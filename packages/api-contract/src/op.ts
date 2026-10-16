@@ -48,8 +48,11 @@ export interface OperationDef<
   rateLimit: "read" | "write" | "expensive";
   /** Non-GET operations take an Idempotency-Key. */
   idempotency: "none" | "key";
-  /** HTTP status of a successful response; 201 when the operation creates a resource. */
-  successStatus?: 200 | 201;
+  /**
+   * HTTP status of a successful response; 201 when the operation creates a
+   * resource, 202 where GitHub answers it.
+   */
+  successStatus?: 200 | 201 | 202;
   /** The response carries a secret, so idempotent replays omit it. */
   secretResponse?: boolean;
   mcp:

@@ -85,9 +85,15 @@ export {
   type Sha1Options,
 } from "./hash/sha1.js";
 export { type MergeChunk, type MergeResult, merge3 } from "./merge/diff3.js";
-export { type ConflictRegion, type FileMerge, mergeFiles } from "./merge/file-merge.js";
+export {
+  type ConflictRegion,
+  type FileMerge,
+  mergeFiles,
+  withConflictMarkers,
+} from "./merge/file-merge.js";
 export {
   type ConflictKind,
+  type LinesConflict,
   MergeBudget,
   type MergeConflict,
   MergeLimitError,

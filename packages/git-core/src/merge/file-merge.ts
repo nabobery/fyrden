@@ -85,3 +85,67 @@ export function mergeFiles(
     ),
   };
 }
+
+const LF = 0x0a;
+const CR = 0x0d;
+
+/** How a line ends: CRLF, LF, or unknown (no line, or no line feed). */
+function endingOf(line: Uint8Array | undefined): "crlf" | "lf" | undefined {
+  if (!line || line[line.length - 1] !== LF) return undefined;
+  return line.length >= 2 && line[line.length - 2] === CR ? "crlf" : "lf";
+}
+
+/** The first line of `bytes`, with its line feed. */
+function firstLine(bytes: Uint8Array): Uint8Array | undefined {
+  if (bytes.length === 0) return undefined;
+  const lf = bytes.indexOf(LF);
+  return lf < 0 ? bytes : bytes.subarray(0, lf + 1);
+}
+
+/**
+ * A conflicted merge as one file with conflict markers, as git writes one
+ * (`merge` style): each conflict is `<<<<<<< ours`, our lines, `=======`,
+ * their lines, `>>>>>>> theirs`; a side whose last line has no line feed
+ * gets one before the next marker. Marker lines end with CRLF, as git's
+ * do (observed against `git merge-file`), only when the base's first line
+ * does and neither side's line before the conflict (its first line, at the
+ * start) ends with a bare LF; else with LF.
+ */
+export function withConflictMarkers(
+  regions: Extract<FileMerge, { kind: "conflict" }>["regions"],
+  labels: { readonly ours: string; readonly theirs: string },
+  files: { readonly base: Uint8Array; readonly ours: Uint8Array; readonly theirs: Uint8Array },
+): Uint8Array {
+  const encoder = new TextEncoder();
+  const parts: Uint8Array[] = [];
+  const baseCrlf = endingOf(firstLine(files.base)) === "crlf";
+  // The last line of each side so far (a clean line is both sides').
+  let ours: Uint8Array | undefined;
+  let theirs: Uint8Array | undefined;
+  for (const region of regions) {
+    if ("clean" in region) {
+      parts.push(...region.clean);
+      const last = region.clean.at(-1);
+      if (last) [ours, theirs] = [last, last];
+      continue;
+    }
+    const crlf =
+      baseCrlf &&
+      endingOf(ours ?? firstLine(files.ours)) !== "lf" &&
+      endingOf(theirs ?? firstLine(files.theirs)) !== "lf";
+    const eol = crlf ? "\r\n" : "\n";
+    const side = (lines: readonly Uint8Array[]) => {
+      parts.push(...lines);
+      const last = lines.at(-1);
+      if (last && last[last.length - 1] !== LF) parts.push(encoder.encode(eol));
+    };
+    parts.push(encoder.encode(`<<<<<<< ${labels.ours}${eol}`));
+    side(region.ours);
+    parts.push(encoder.encode(`=======${eol}`));
+    side(region.theirs);
+    parts.push(encoder.encode(`>>>>>>> ${labels.theirs}${eol}`));
+    ours = region.ours.at(-1) ?? ours;
+    theirs = region.theirs.at(-1) ?? theirs;
+  }
+  return concat(parts);
+}

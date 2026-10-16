@@ -1569,6 +1569,81 @@ export type PullsMergeOutput = {
   message: string;
 };
 
+/** Input of `pulls.conflicts.get`: Get a pull request's conflicts. */
+export type PullsConflictsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+};
+
+/** Output of `pulls.conflicts.get`. */
+export type PullsConflictsGetOutput = {
+  base_sha: string;
+  head_sha: string;
+  /** Names this base tip and head, for the resolution. */
+  conflict_snapshot: string;
+  files: ({
+    path: string;
+    kind: "content" | "add_add" | "modify_delete" | "file_directory" | "mode" | "symlink" | "submodule" | "binary" | "too_large";
+    editable: boolean;
+    /** An editable file merged, with conflict markers; null otherwise. */
+    content: string | null;
+    /** Conflicts marked in `content`. */
+    conflicts: number;
+  })[];
+};
+
+/** Input of `pulls.conflicts.resolve`: Resolve a pull request's conflicts. */
+export type PullsConflictsResolveInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** From reading the conflicts. */
+  conflict_snapshot: string;
+  /** The resolved content of each file whose lines conflict. */
+  files: {
+    path: string;
+    /** The file's resolved content (UTF-8). */
+    content: string;
+  }[];
+  /** By default `Merge branch '<base>' into <head>`. */
+  commit_message?: string;
+};
+
+/** Output of `pulls.conflicts.resolve`. */
+export type PullsConflictsResolveOutput = {
+  /** The merge commit the head branch now points at. */
+  sha: string;
+  /** Resolved files that still contain conflict markers (accepted as given). */
+  markers: string[];
+};
+
+/** Input of `pulls.branch.update`: Update a pull request branch. */
+export type PullsBranchUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The head the pull request must be at. */
+  expected_head_sha?: string;
+};
+
+/** Output of `pulls.branch.update`. */
+export type PullsBranchUpdateOutput = {
+  message: string;
+  url: string;
+  /** Fyrden: the merge commit the head branch now points at. */
+  sha: string;
+};
+
 /** Input of `pulls.files.list`: List pull request files. */
 export type PullsFilesListInput = {
   /** The owner's handle. */
@@ -3992,6 +4067,9 @@ export const OPERATIONS = {
   "pulls.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: false },
   "pulls.update": { method: "PATCH", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.merge": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/merge", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.conflicts.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/conflicts", pathParams: ["owner","repo","pull_number"], idempotent: false },
+  "pulls.conflicts.resolve": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/conflicts", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.branch.update": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/update-branch", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.files.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/files", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "files" },
   "pulls.commits.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/commits", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "commits" },
   "pulls.comments.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/comments", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "comments" },
@@ -4149,6 +4227,12 @@ export interface Operations {
   "pulls.update": { input: PullsUpdateInput; output: PullsUpdateOutput };
   /** Merge a pull request. Merges an open pull request that is not a draft into its base branch: `merge` makes a merge commit of the base branch's tip and the head, `squash` one commit on the base branch with the head's changes (by the pull request's author). The commit is made and signed by the server; the base branch's rulesets apply, with the pull request's reviews and last push. Refused (405) on conflicts, or when the base branch moved while merging; refused (409) when `sha` is not the head. `rebase` replays the pull request's commits (at most 250, none a merge commit) one by one onto the base branch's tip and moves the branch to the last: their authors, author dates and messages are kept, the server is their committer and signs each. Empty commits follow `git rebase`: a commit empty from the start is kept, one whose changes are already in the base is dropped; a commit the base changed further, or a rename in the base of a file the pull request edits, is a conflict. A rebase too long for one request answers 409 `merge_in_progress` and goes on in the background: send the request again (a finished rebase answers its merge) or watch the pull request. */
   "pulls.merge": { input: PullsMergeInput; output: PullsMergeOutput };
+  /** Get a pull request's conflicts. Fyrden: the conflicts of merging the base branch's tip into an open pull request's head (none when they merge cleanly). Files whose lines conflict in text (`content`, `add_add`) are `editable`: their merged content is given with git's conflict markers, the head's side first (`<<<<<<< head`, `=======`, `>>>>>>> base`), up to 50 files and 4 MiB in all. Any other conflict (a file deleted on one side, a mode, a symlink, a submodule, a binary or too large file, a file and a directory; renames are not followed) is listed but needs a merge made by hand. Resolve them with `conflict_snapshot`, which names the base tip and head they were read at. Heads in forks come later. */
+  "pulls.conflicts.get": { input: PullsConflictsGetInput; output: PullsConflictsGetOutput };
+  /** Resolve a pull request's conflicts. Fyrden: merges the base branch's tip into the head branch with the given contents for every file whose lines conflict, as one merge commit (parents: the head, then the base tip) made and signed by the server. Write access; the head branch's rulesets apply. Refused when either branch moved since the conflicts were read (409 `head_moved`, `base_moved`), when a conflict cannot be resolved here (422 `not_editable`), when a conflicted file is missing (422 `unresolved`), or when a given file has no conflict (422 `not_conflicted`). Contents that still hold conflict markers are accepted and named in `markers`. */
+  "pulls.conflicts.resolve": { input: PullsConflictsResolveInput; output: PullsConflictsResolveOutput };
+  /** Update a pull request branch. Merges the base branch's tip into an open pull request's head branch (a merge commit made and signed by the server; parents: the head, then the base tip). Write access; the head branch's rulesets apply. Refused (422) when it conflicts (resolve the conflicts instead) or when the head already contains the base tip; refused (409) when `expected_head_sha` is not the head. Done before the answer, which is GitHub's 202. Heads in forks come later. */
+  "pulls.branch.update": { input: PullsBranchUpdateInput; output: PullsBranchUpdateOutput };
   /** List pull request files. The files a pull request changes, compared from the merge base of its base branch and head to its head (as GitHub's three-dot comparison), in path order, with each file's patch. At most 3,000 files are listed; renames with unchanged content are found. Pages keep the comparison they started with: the cursor carries `merge_base_sha` and `head_sha`. */
   "pulls.files.list": { input: PullsFilesListInput; output: PullsFilesListOutput };
   /** List pull request commits. The commits a pull request's head has that its base branch does not, oldest first; at most 250 (GitHub's limit). */

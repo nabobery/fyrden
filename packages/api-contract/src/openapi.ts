@@ -54,7 +54,8 @@ function operationObject(op: OperationDef): JsonSchema {
     }),
     responses: {
       [String(op.successStatus ?? 200)]: {
-        description: op.successStatus === 201 ? "Created" : "OK",
+        description:
+          op.successStatus === 201 ? "Created" : op.successStatus === 202 ? "Accepted" : "OK",
         content: { "application/json": { schema: stripMeta(toSchema(op.output, "output")) } },
       },
       default: {

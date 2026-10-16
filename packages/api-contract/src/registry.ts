@@ -44,11 +44,14 @@ import { createOrg, listMembers, removeMembership, setMembership, updateOrg } fr
 import {
   createPull,
   getPull,
+  getPullConflicts,
   listPullCommits,
   listPullFiles,
   listPulls,
   mergePull,
+  resolvePullConflicts,
   updatePull,
+  updatePullBranch,
 } from "../ops/pulls.js";
 import { getOrgQuota, getUserQuota, setQuota } from "../ops/quotas.js";
 import {
@@ -152,6 +155,9 @@ export const registry = defineRegistry([
   getPull,
   updatePull,
   mergePull,
+  getPullConflicts,
+  resolvePullConflicts,
+  updatePullBranch,
   listPullFiles,
   listPullCommits,
   listReviewComments,

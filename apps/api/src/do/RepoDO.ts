@@ -149,6 +149,14 @@ import {
 } from "./repo/browse.js";
 import { RepoComments } from "./repo/comments.js";
 import {
+  CONFLICTS_POLICY,
+  type ConflictsView,
+  type MergedIntoHead,
+  mergeIntoHead,
+  parseSnapshot,
+  readConflicts,
+} from "./repo/conflicts.js";
+import {
   type ContentsView,
   contents,
   type DirCursor,
@@ -267,6 +275,29 @@ export interface ApplySuggestionsInput {
   readonly author: GitPerson;
 }
 
+/** A merge of the base branch into a pull request's head branch, as the Worker asks for it. */
+export interface BaseMergeInput {
+  readonly number: number;
+  /** Who it is by (the caller; an agent's with its `Co-authored-by`). */
+  readonly identity: CommitIdentity;
+  /** The commit's message; by default `Merge branch '<base>' into <head>`. */
+  readonly message?: string;
+}
+
+/** Conflicts resolved, as the Worker asks for it. */
+export interface ResolveConflictsInput extends BaseMergeInput {
+  /** The base tip and head the conflicts were read at (`ConflictsView.snapshot`). */
+  readonly snapshot: string;
+  /** The resolved contents of every file whose lines conflict. */
+  readonly files: readonly { readonly path: string; readonly content: string }[];
+}
+
+/** A head branch brought up to date with its base branch, as the Worker asks for it. */
+export interface UpdateBranchInput extends BaseMergeInput {
+  /** The head the caller saw: refused (409) when the pull request is elsewhere. */
+  readonly expectedHead?: string;
+}
+
 /** Heads' repositories told per slice of the `pull_follow` job. Proposed. */
 const FOLLOWS_PER_SLICE = 20;
 /** When to try again after a head's repository could not be told. Proposed. */
@@ -308,6 +339,11 @@ export interface MergePullInput {
   /** Who a squashed commit is by: the pull request's author. */
   readonly pullAuthorIdentity: CommitIdentity;
 }
+
+/** Why a merge into the head was refused at its commit: the base branch moved meanwhile. */
+const BASE_MOVED_WHILE_MERGING = "the base branch moved while the merge was being made";
+/** Why a merge into the head was refused at its commit: the pull request closed or was retargeted. */
+const PULL_CHANGED_WHILE_MERGING = "the pull request changed while the merge was being made";
 
 /** A merge refused while the pull request's rebase merge is under way. */
 const MERGE_IN_PROGRESS = fail(
@@ -1968,6 +2004,216 @@ export class RepoDO extends MigratingDO {
     });
   }
 
+  /**
+   * The conflicts of merging an open pull request's base branch into its
+   * head: each conflicted file, those of lines in text files with their
+   * contents and markers, and the snapshot a resolution names.
+   */
+  pullConflicts(number: number): Promise<Browsed<ConflictsView>> {
+    return this.#measured("pullConflicts", async () => {
+      if (this.#refusesReads()) return fail(404, "repo_not_found", REPO_DELETED);
+      const at = this.#headMergeable(number);
+      if (!at.ok) return at;
+      this.#blocks ??= createClockBlockCache();
+      return readConflicts(
+        { git: this.git, memoryBlocks: this.#blocks },
+        {
+          baseTip: at.value.baseTip,
+          head: at.value.head,
+          baseLabel: at.value.pull.baseRef,
+          headLabel: at.value.pull.headRef,
+        },
+        this.mergePolicy,
+      );
+    });
+  }
+
+  /**
+   * Resolves an open pull request's conflicts with its base branch: the
+   * base tip merged into the head on the head branch, with the given
+   * contents for each file whose lines conflict, made at the snapshot the
+   * conflicts were read at (409 when either side moved since).
+   */
+  resolvePullConflicts(
+    input: ResolveConflictsInput,
+    actor: RefActor,
+  ): Promise<Browsed<MergedIntoHead>> {
+    return this.#measured("resolvePullConflicts", async () => {
+      const at = await this.#headWritable(input.number, actor);
+      if (!at.ok) return at;
+      const snapshot = parseSnapshot(input.snapshot);
+      if (!snapshot)
+        return fail(422, "invalid_input", "The conflict snapshot is not one read here.");
+      if (snapshot.headSha !== oidToHex(at.value.head))
+        return fail(409, "head_moved", "The head branch moved since the conflicts were read.");
+      if (snapshot.baseSha !== oidToHex(at.value.baseTip))
+        return fail(409, "base_moved", "The base branch moved since the conflicts were read.");
+      const resolutions = new Map<string, Uint8Array>();
+      const encoder = new TextEncoder();
+      let bytes = 0;
+      for (const file of input.files) {
+        if (resolutions.has(file.path))
+          return fail(422, "invalid_input", `The file ${file.path} is given more than once.`);
+        const content = encoder.encode(file.content);
+        bytes += content.length;
+        if (
+          content.length > this.mergePolicy.maxFileBytes ||
+          bytes > CONFLICTS_POLICY.maxContentBytes
+        )
+          return fail(
+            422,
+            "too_large",
+            `Resolved files are ${this.mergePolicy.maxFileBytes} bytes each at most, ${CONFLICTS_POLICY.maxContentBytes} in all.`,
+          );
+        resolutions.set(file.path, content);
+      }
+      return this.#mergeIntoHead(input, actor, at.value, resolutions);
+    });
+  }
+
+  /**
+   * Brings an open pull request's head branch up to date: the base tip
+   * merged into it (refused when that conflicts, or when the head already
+   * contains the base tip).
+   */
+  updatePullBranch(input: UpdateBranchInput, actor: RefActor): Promise<Browsed<MergedIntoHead>> {
+    return this.#measured("updatePullBranch", async () => {
+      const at = await this.#headWritable(input.number, actor);
+      if (!at.ok) return at;
+      if (input.expectedHead !== undefined && input.expectedHead !== oidToHex(at.value.head))
+        return fail(409, "head_moved", "The head branch was modified; review it and try again.");
+      try {
+        const walk = { maxCommits: this.mergePolicy.maxCommits };
+        if (
+          await isAncestor(this.git.commitGraph, "verified", at.value.baseTip, at.value.head, walk)
+        )
+          return fail(
+            422,
+            "up_to_date",
+            "The head branch already contains the base branch's latest commit.",
+          );
+      } catch (error) {
+        if (!(error instanceof WalkLimitError)) throw error;
+        return fail(422, "too_expensive", "The base branch and the head are too far apart.");
+      }
+      return this.#mergeIntoHead(input, actor, at.value, undefined);
+    });
+  }
+
+  /** The head and base tip of an open pull request whose head branch is here, to merge. */
+  #headMergeable(
+    number: number,
+  ): Browsed<{ readonly pull: PullRecord; readonly head: Oid; readonly baseTip: Oid }> {
+    const pull = this.pulls.get(number);
+    if (!pull) return fail(404, "pull_not_found", `The repository has no pull request ${number}.`);
+    if (pull.state !== "open")
+      return fail(422, "wrong_state", `Pull request ${number} is not open.`);
+    if (pull.headRepoId)
+      return fail(
+        422,
+        "not_applicable",
+        "The head branch is in another repository; merge the base branch there.",
+      );
+    const head = this.pulls.branchTip(pull.headRef);
+    if (!head || pull.headRefDeleted)
+      return fail(422, "head_not_found", "The head branch does not exist.");
+    if (oidToHex(head) !== pull.headSha)
+      return fail(409, "head_moved", "The head branch is being updated; try again.");
+    const baseTip = this.pulls.branchTip(pull.baseRef);
+    if (!baseTip) return fail(422, "base_not_found", "The base branch does not exist.");
+    return { ok: true, value: { pull, head, baseTip } };
+  }
+
+  /** `#headMergeable` for a caller who may write to the head branch (its rulesets judged now). */
+  async #headWritable(
+    number: number,
+    actor: RefActor,
+  ): Promise<Browsed<{ readonly pull: PullRecord; readonly head: Oid; readonly baseTip: Oid }>> {
+    await this.checkEpoch();
+    const ceilings = await this.#rolesPulled(actor.principal, actor.grantId ?? null);
+    const refusedWrite = this.#writeRefusal();
+    if (refusedWrite) return fail(refusedWrite.status, refusedWrite.code, refusedWrite.error);
+    if (!atLeast(this.#roleNow(actor.principal, ceilings), "write"))
+      return fail(403, "forbidden", "Changing the head branch takes write access.");
+    const at = this.#headMergeable(number);
+    if (!at.ok) return at;
+    const precheck = await this.#precheckUpdates(
+      actor.principal,
+      [{ ref: `refs/heads/${at.value.pull.headRef}`, old: oidToHex(at.value.head), new: ZERO_ID }],
+      actor.grantId ?? null,
+    );
+    if (precheck) return fail(422, "write_refused", precheck);
+    return at;
+  }
+
+  /** The base tip merged into the head on the head branch (see `mergeIntoHead`). */
+  async #mergeIntoHead(
+    input: BaseMergeInput,
+    actor: RefActor,
+    at: { readonly pull: PullRecord; readonly head: Oid; readonly baseTip: Oid },
+    /** The resolved contents of the files whose lines conflict; none to update the branch. */
+    resolutions: ReadonlyMap<string, Uint8Array> | undefined,
+  ): Promise<Browsed<MergedIntoHead>> {
+    const { pull } = at;
+    const given = input.message ?? `Merge branch '${pull.baseRef}' into ${pull.headRef}`;
+    const text = given.endsWith("\n") ? given : `${given}\n`;
+    if (text.includes("\0"))
+      return fail(422, "invalid_input", "A commit message must not contain NUL.");
+    const made = await mergeIntoHead(
+      await this.#writeDeps(),
+      {
+        writer: {
+          principal: actor.principal,
+          tokenId: actor.tokenId ?? "",
+          grantId: actor.grantId ?? null,
+          repoId: this.#repoId(),
+          requestId: actor.requestId ?? null,
+        },
+        headRef: `refs/heads/${pull.headRef}`,
+        baseTip: at.baseTip,
+        head: at.head,
+        resolutions: resolutions ?? new Map(),
+        resolving: resolutions !== undefined,
+        author: input.identity.author,
+        committer: input.identity.committer,
+        message: appendTrailers(text, coAuthorTrailers(text, input.identity.coAuthors)),
+        // The pull request still open between the same branches, the base branch still at the
+        // tip merged (the head moves with compare-and-set).
+        meta: {
+          fence: () => {
+            const now = this.pulls.get(input.number);
+            if (
+              now?.state !== "open" ||
+              now.generation !== pull.generation ||
+              now.baseRef !== pull.baseRef ||
+              now.headRef !== pull.headRef ||
+              now.headRepoId !== pull.headRepoId
+            )
+              return PULL_CHANGED_WHILE_MERGING;
+            return this.pulls.branchTip(pull.baseRef)?.every((b, i) => b === at.baseTip[i]) === true
+              ? undefined
+              : BASE_MOVED_WHILE_MERGING;
+          },
+        },
+        ...(this.headMergeHooks.beforeFinish && {
+          beforeFinish: this.headMergeHooks.beforeFinish,
+        }),
+      },
+      this.mergePolicy,
+    );
+    this.#armOutbox();
+    this.#ensureAuditArchive();
+    if (!made.ok && made.error.includes(BASE_MOVED_WHILE_MERGING))
+      return fail(409, "base_moved", "The base branch moved while the merge was made; try again.");
+    if (!made.ok && made.error.includes(PULL_CHANGED_WHILE_MERGING))
+      return fail(
+        409,
+        "pull_changed",
+        "The pull request was closed or retargeted while the merge was made.",
+      );
+    return made;
+  }
+
   /** Withdraws review requests. */
   removeRequestedReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
     return this.#pullChange("removeRequestedReviewers", actor, (caller) =>
@@ -3076,6 +3322,9 @@ export class RepoDO extends MigratingDO {
 
   /** Hooks into a merge of a pull request. For tests. */
   mergeHooks: { beforeFinish?: () => Promise<void> } = {};
+
+  /** Hooks into a merge of the base branch into a pull request's head. For tests. */
+  headMergeHooks: { beforeFinish?: () => Promise<void> } = {};
 
   /** Hooks into applying suggestions. For tests. */
   suggestionHooks: { beforeWrite?: () => Promise<void> } = {};

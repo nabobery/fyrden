@@ -86,6 +86,12 @@ const CASES: Record<
     expected: { status: 404, code: "pull_not_found" },
   },
   "pulls.merge": { input: {}, expected: { status: 404, code: "pull_not_found" } },
+  "pulls.conflicts.get": { input: {}, expected: { status: 404, code: "pull_not_found" } },
+  "pulls.conflicts.resolve": {
+    input: { conflict_snapshot: "0".repeat(80), files: [] },
+    expected: { status: 404, code: "pull_not_found" },
+  },
+  "pulls.branch.update": { input: {}, expected: { status: 404, code: "pull_not_found" } },
   "pulls.comments.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
   "pulls.comments.create": {
     input: { body: "checked", commit_id: SHA, path: "a.txt", line: 1 },

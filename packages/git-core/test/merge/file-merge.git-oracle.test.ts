@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type FileMerge, mergeFiles } from "../../src/merge/file-merge.js";
+import { type FileMerge, mergeFiles, withConflictMarkers } from "../../src/merge/file-merge.js";
 import { createGitSandbox, type GitSandbox } from "../../testing/git-cli.js";
 
 // Against `git merge-file`. Where every file's lines are unique and each
@@ -108,5 +108,53 @@ describe("mergeFiles against git merge-file", () => {
       }),
       { numRuns: 2_000 },
     );
+  });
+});
+
+describe("conflict markers", () => {
+  const marked = (base: string, ours: string, theirs: string) => {
+    const merged = merge(base, ours, theirs);
+    if (merged.kind !== "conflict") return undefined;
+    return dec.decode(
+      withConflictMarkers(
+        merged.regions,
+        { ours: "ours", theirs: "theirs" },
+        { base: enc.encode(base), ours: enc.encode(ours), theirs: enc.encode(theirs) },
+      ),
+    );
+  };
+
+  for (const [what, base, ours, theirs] of [
+    ["LF lines", "a\nb\nc\n", "a\nX\nc\n", "a\nY\nc\n"],
+    ["CRLF lines", "a\r\nb\r\nc\r\n", "a\r\nX\r\nc\r\n", "a\r\nY\r\nc\r\n"],
+    ["no final line feed", "a\nb", "a\nX", "a\nY"],
+  ] as const)
+    it(`are git's for ${what}`, async () => {
+      expect(marked(base, ours, theirs)).toBe((await gitMerge(base, ours, theirs)).text);
+    });
+
+  it("end their lines as git's do, for every ending of the line before and of each side", async () => {
+    const endings = { n: "\n", r: "\r\n", e: null } as const;
+    for (const before of ["", "p\n", "p\r\n"])
+      for (const b of ["n", "r", "e"] as const)
+        for (const o of ["n", "r", "e"] as const)
+          for (const t of ["n", "r", "e"] as const) {
+            const file = (line: string, end: string | null) =>
+              before + (end === null ? "" : `${line}${end}`);
+            const [base, ours, theirs] = [
+              file("b", endings[b]),
+              file("o", endings[o]),
+              file("t", endings[t]),
+            ];
+            const ourText = marked(base, ours, theirs);
+            if (ourText === undefined) continue;
+            expect([before, b, o, t, ourText]).toEqual([
+              before,
+              b,
+              o,
+              t,
+              (await gitMerge(base, ours, theirs)).text,
+            ]);
+          }
   });
 });

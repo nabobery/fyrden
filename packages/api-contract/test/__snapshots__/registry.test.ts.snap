@@ -11289,6 +11289,285 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
     },
+    "/repos/{owner}/{repo}/pulls/{pull_number}/conflicts": {
+      "get": {
+        "description": "Fyrden: the conflicts of merging the base branch's tip into an open pull request's head (none when they merge cleanly). Files whose lines conflict in text (\`content\`, \`add_add\`) are \`editable\`: their merged content is given with git's conflict markers, the head's side first (\`<<<<<<< head\`, \`=======\`, \`>>>>>>> base\`), up to 50 files and 4 MiB in all. Any other conflict (a file deleted on one side, a mode, a symlink, a submodule, a binary or too large file, a file and a directory; renames are not followed) is listed but needs a merge made by hand. Resolve them with \`conflict_snapshot\`, which names the base tip and head they were read at. Heads in forks come later.",
+        "operationId": "pulls.conflicts.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "base_sha": {
+                      "type": "string",
+                    },
+                    "conflict_snapshot": {
+                      "description": "Names this base tip and head, for the resolution.",
+                      "type": "string",
+                    },
+                    "files": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "conflicts": {
+                            "description": "Conflicts marked in \`content\`.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "content": {
+                            "description": "An editable file merged, with conflict markers; null otherwise.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "editable": {
+                            "type": "boolean",
+                          },
+                          "kind": {
+                            "enum": [
+                              "content",
+                              "add_add",
+                              "modify_delete",
+                              "file_directory",
+                              "mode",
+                              "symlink",
+                              "submodule",
+                              "binary",
+                              "too_large",
+                            ],
+                            "type": "string",
+                          },
+                          "path": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "path",
+                          "kind",
+                          "editable",
+                          "content",
+                          "conflicts",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "head_sha": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "base_sha",
+                    "head_sha",
+                    "conflict_snapshot",
+                    "files",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a pull request's conflicts",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Fyrden: merges the base branch's tip into the head branch with the given contents for every file whose lines conflict, as one merge commit (parents: the head, then the base tip) made and signed by the server. Write access; the head branch's rulesets apply. Refused when either branch moved since the conflicts were read (409 \`head_moved\`, \`base_moved\`), when a conflict cannot be resolved here (422 \`not_editable\`), when a conflicted file is missing (422 \`unresolved\`), or when a given file has no conflict (422 \`not_conflicted\`). Contents that still hold conflict markers are accepted and named in \`markers\`.",
+        "operationId": "pulls.conflicts.resolve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "commit_message": {
+                    "description": "By default \`Merge branch '<base>' into <head>\`.",
+                    "maxLength": 65536,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "conflict_snapshot": {
+                    "description": "From reading the conflicts.",
+                    "pattern": "^[0-9a-f]{80}$",
+                    "type": "string",
+                  },
+                  "files": {
+                    "description": "The resolved content of each file whose lines conflict.",
+                    "items": {
+                      "properties": {
+                        "content": {
+                          "description": "The file's resolved content (UTF-8).",
+                          "maxLength": 1048576,
+                          "type": "string",
+                        },
+                        "path": {
+                          "minLength": 1,
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "path",
+                        "content",
+                      ],
+                      "type": "object",
+                    },
+                    "maxItems": 50,
+                    "type": "array",
+                  },
+                },
+                "required": [
+                  "conflict_snapshot",
+                  "files",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "markers": {
+                      "description": "Resolved files that still contain conflict markers (accepted as given).",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "sha": {
+                      "description": "The merge commit the head branch now points at.",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "sha",
+                    "markers",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Resolve a pull request's conflicts",
+        "x-fyrden-permission": "contents:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}/pulls/{pull_number}/files": {
       "get": {
         "description": "The files a pull request changes, compared from the merge base of its base branch and head to its head (as GitHub's three-dot comparison), in path order, with each file's patch. At most 3,000 files are listed; renames with unchanged content are found. Pages keep the comparison they started with: the cursor carries \`merge_base_sha\` and \`head_sha\`.",
@@ -13911,6 +14190,115 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
         "summary": "Resolve a review thread",
         "x-fyrden-permission": "pull_requests:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/pulls/{pull_number}/update-branch": {
+      "put": {
+        "description": "Merges the base branch's tip into an open pull request's head branch (a merge commit made and signed by the server; parents: the head, then the base tip). Write access; the head branch's rulesets apply. Refused (422) when it conflicts (resolve the conflicts instead) or when the head already contains the base tip; refused (409) when \`expected_head_sha\` is not the head. Done before the answer, which is GitHub's 202. Heads in forks come later.",
+        "operationId": "pulls.branch.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "pattern": "^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "expected_head_sha": {
+                    "description": "The head the pull request must be at.",
+                    "pattern": "^[0-9a-f]{40}$",
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                    },
+                    "sha": {
+                      "description": "Fyrden: the merge commit the head branch now points at.",
+                      "type": "string",
+                    },
+                    "url": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "message",
+                    "url",
+                    "sha",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Accepted",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Update a pull request branch",
+        "x-fyrden-permission": "contents:write",
         "x-fyrden-principals": [
           "user",
           "agent",
