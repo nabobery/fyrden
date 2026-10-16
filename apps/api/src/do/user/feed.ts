@@ -549,10 +549,12 @@ export class Feed {
    * are deleted, the members made up to then leave the activity items that
    * survive (changed since: access given back), and a mark drops entries
    * up to then arriving later. A repository's mark is replaced only by a
-   * newer purge: of the same account, a newer `(epochGen, aclVersion)`;
-   * of another (the repository was transferred), or of none (`""`: a read
-   * found the repository gone), a later `until`. Returns the shown items
-   * deleted.
+   * newer purge: of the same account, a newer `(epochGen, aclVersion)`, or
+   * the same one with a later `until` (a read's check counts from when its
+   * pull started, the revocation itself from when it was made: either may
+   * come first, and access given back takes a newer version); of another
+   * (the repository was transferred), or of none (`""`: a read found the
+   * repository gone), a later `until`. Returns the shown items deleted.
    */
   purge(purge: FeedPurge): number {
     const now = this.now();
@@ -568,7 +570,9 @@ export class Feed {
         !mark ||
         (mark.account_id === purge.accountId && purge.accountId !== ""
           ? purge.epochGen > mark.epoch_gen ||
-            (purge.epochGen === mark.epoch_gen && purge.aclVersion > mark.acl_version)
+            (purge.epochGen === mark.epoch_gen &&
+              (purge.aclVersion > mark.acl_version ||
+                (purge.aclVersion === mark.acl_version && purge.until > mark.until_at)))
           : purge.until > mark.until_at);
       if (!newer) continue;
       for (const row of this.sql.exec<{ feed_seq: number | null }>(

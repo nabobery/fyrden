@@ -113,7 +113,7 @@ describe("purging a feed", () => {
       ["rep_a", ["comment/4"]],
     ]);
     // A late purge of an older access version (or the same one again): nothing changes.
-    for (const late of [purgeOf(["rep_a"], t + 1_000, 4), purgeOf(["rep_a"], t + 1_000, 5)])
+    for (const late of [purgeOf(["rep_a"], t + 1_000, 4), purgeOf(["rep_a"], t - 500, 5)])
       expect(await stub.purge(late)).toEqual({ deleted: 0 });
     expect(await shown(stub)).toHaveLength(2);
     const items = await runInDurableObject(stub, (_: UserDO, state) =>
@@ -193,6 +193,29 @@ describe("purging a feed", () => {
     expect(await marks(stub)).toMatchObject([
       { repo_id: "rep_a", account_id: "", until_at: t + 4_000 },
     ]);
+  });
+
+  it("takes a later cutoff of the same access version, whichever of its purges comes first", async () => {
+    // A read's check pulled ACL version 5 when it started (t - 400), before activity it lets
+    // in still (t - 300) and the revocation itself (t - 200), which version 5 is.
+    const t = Date.now();
+    const read = purgeOf(["rep_a"], t - 400, 5);
+    const revoked = purgeOf(["rep_a"], t - 200, 5);
+    for (const order of [
+      [read, revoked],
+      [revoked, read],
+    ]) {
+      const stub = env.USER.getByName(uniqueId("usr"));
+      await stub.applyFeed([entry("rep_a", 1, t - 300)]);
+      for (const purge of order) await stub.purge(purge);
+      expect(await shown(stub)).toEqual([]);
+      expect(await marks(stub)).toMatchObject([{ repo_id: "rep_a", until_at: t - 200 }]);
+      // A later check by the same version forgets what came since; an earlier one, nothing.
+      await stub.applyFeed([entry("rep_a", 2, t - 100)]);
+      expect(await stub.forgetRepos([purgeOf(["rep_a"], t - 300, 5)])).toEqual({ deleted: 0 });
+      expect(await stub.forgetRepos([purgeOf(["rep_a"], t, 5)])).toEqual({ deleted: 1 });
+      expect(await marks(stub)).toMatchObject([{ repo_id: "rep_a", until_at: t }]);
+    }
   });
 
   it("judges a purge by its account's epoch and version, and another account's by its time", async () => {
