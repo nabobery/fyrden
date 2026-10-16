@@ -296,6 +296,29 @@ export class ForkPulls {
     return outcome.answer;
   }
 
+  /** On the head's side: tells pull request base `baseRepoId` of a revision of its head here. */
+  tell(baseRepoId: string, notice: RevisionNotice): Promise<NoticeAnswer> {
+    // Counted before it is made (a failure too): the job queue stops near the call budget.
+    this.deps.git.context.metrics.count("do.request", {
+      class: "RepoDO",
+      method: "receiveRevision",
+    });
+    return this.deps.env().REPO.getByName(baseRepoId).receiveRevision(notice);
+  }
+
+  /**
+   * On the head's side, restored: asks base `baseRepoId` to follow its pull
+   * requests from here again, a page after `after` (see `followAgain`).
+   */
+  askFollowAgain(baseRepoId: string, after: number): Promise<number | null> {
+    // Counted before it is made: the job queue stops starting slices near the call budget.
+    this.deps.git.context.metrics.count("do.request", {
+      class: "RepoDO",
+      method: "followHeadAgain",
+    });
+    return this.deps.env().REPO.getByName(baseRepoId).followHeadAgain(this.deps.repoId(), after);
+  }
+
   /**
    * Commits a write a pull request's base made of its head branch here
    * (a merge of the base into it, suggestions applied): the pack the base
