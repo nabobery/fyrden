@@ -73,7 +73,20 @@ export interface EffectPolicy {
   readonly retentionMs: number;
   /** Effects one sweep delivers at most. */
   readonly sweepBatch: number;
+  /** Calls to other services one sweep's deliveries make at most (see `effectCalls`). */
+  readonly sweepCalls: number;
 }
+
+/**
+ * Calls the effects cron makes besides its effects' deliveries: the
+ * sweep's claim, marks and prune, and reconciling webhook deliveries
+ * (about 25: its batches of 4 late sends, 2 hooks to turn off, 10 bodies
+ * to delete). Counted from the code, with room.
+ */
+export const CRON_CALLS = 50;
+
+/** Calls one effect of a sink delivering one at a time makes at most (its claim, its work, its outcome). */
+export const SINGLE_EFFECT_CALLS = 8;
 
 export const EFFECT_POLICY: EffectPolicy = {
   sweepAfterMs: 60_000,
@@ -84,6 +97,9 @@ export const EFFECT_POLICY: EffectPolicy = {
   retentionMs: 7 * 24 * 60 * 60 * 1000,
   // Each costs about five D1 queries; Free allows 50 an invocation, the cron's other tasks included.
   sweepBatch: 4,
+  // Free allows 1,000 calls an invocation (measured, docs/operations/limits.md): less the
+  // cron's own, and a margin.
+  sweepCalls: 900 - CRON_CALLS,
 };
 
 /**
@@ -104,6 +120,12 @@ export const INLINE_BATCH_EFFECTS = 8;
 
 const SINK_NAME = /^[a-z][a-z_]*$/;
 const MAX_TARGET = 256;
+
+/** The calls delivering `effect` makes at most, as its sink says (`EffectSink.calls`). */
+export function effectCalls(sink: EffectSink | undefined, effect: PlannedEffect): number {
+  if (!sink?.deliverBatch) return SINGLE_EFFECT_CALLS;
+  return sink.calls?.(effect) ?? 1;
+}
 
 /** The effect's id: the event key, the sink and the target. */
 export function effectId(event: DomainEvent, sink: string, target: string): string {

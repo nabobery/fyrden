@@ -13,10 +13,12 @@ import {
 import { dispatchEffects } from "../effects/dispatcher.js";
 import {
   type EffectSink,
+  effectCalls,
   effectId,
   effectStatements,
   INLINE_BATCH_EFFECTS,
   INLINE_EFFECTS,
+  SINGLE_EFFECT_CALLS,
 } from "../effects/journal.js";
 import { EFFECT_SINKS } from "../effects/sinks.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
@@ -89,8 +91,6 @@ const QUERIES_PER_BATCH = 4;
 export const INVOCATION_CALLS = 900;
 /** Calls applying a message costs besides reading its stored events (its lookup, its batch, a send back). */
 const CALLS_PER_MESSAGE = 3;
-/** Calls one inline effect of a sink delivering one at a time costs at most (its claim, its work, its outcome). */
-const CALLS_PER_EFFECT = 8;
 /** Calls a message's inline effects of batch sinks cost besides their deliveries (as their queries). */
 const CALLS_PER_BATCH = QUERIES_PER_BATCH;
 
@@ -273,11 +273,11 @@ export async function applyEnvelope(
     inline.left,
     single.length,
     Math.max(0, Math.floor(queries.left / QUERIES_PER_EFFECT)),
-    Math.floor(spare() / CALLS_PER_EFFECT),
+    Math.floor(spare() / SINGLE_EFFECT_CALLS),
   );
   inline.left -= take;
   queries.left -= take * QUERIES_PER_EFFECT;
-  calls.left -= take * CALLS_PER_EFFECT;
+  calls.left -= take * SINGLE_EFFECT_CALLS;
   // A batch sink's effects go together: a few queries however many, and the calls each makes.
   const costs = batchCalls(sinks, planned);
   let takeBatched = 0;
@@ -323,7 +323,7 @@ function batchCalls(
     if (!sink.deliverBatch) continue;
     for (const event of events)
       for (const planned of sink.plan(event))
-        costs.set(effectId(event, sink.name, planned.target), sink.calls?.(planned) ?? 1);
+        costs.set(effectId(event, sink.name, planned.target), effectCalls(sink, planned));
   }
   return costs;
 }

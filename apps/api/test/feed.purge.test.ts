@@ -17,7 +17,8 @@ import { describe, expect, it } from "vitest";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { UserDO } from "../src/do/UserDO.js";
 import type { FeedPurge } from "../src/do/user/feed.js";
-import type { Effect, EffectSink } from "../src/effects/journal.js";
+import { sweepEffects } from "../src/effects/dispatcher.js";
+import { EFFECT_POLICY, type Effect, type EffectSink } from "../src/effects/journal.js";
 import { feedSink } from "../src/feed/sink.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { api, user } from "./helpers/api.js";
@@ -199,8 +200,21 @@ function recordingPurges() {
   return { on, purges };
 }
 
+const principals = (n: number) =>
+  Array.from({ length: n }, (_, i) => `usr_${String(i).padStart(4, "0")}`);
+
+/** The account's effects: `[effect id, state, attempts]`. */
+async function effectsOf(accountId: string) {
+  const { results } = await env.ORG_READ.prepare(
+    "SELECT effect_id, state, attempts, lease_token FROM effects WHERE effect_id LIKE ? ORDER BY effect_id",
+  )
+    .bind(`${accountId}:%`)
+    .all<{ effect_id: string; state: string; attempts: number; lease_token: string | null }>();
+  return results;
+}
+
 describe("the feed sink and access revocations", () => {
-  it("plans one purge per revocation, and none for one it cannot read", () => {
+  it("plans a revocation as purges of at most 100 principals, and none for one it cannot read", () => {
     const sourceId = newId("org");
     const event = revokedEvent(sourceId, 1, {
       principals: ["usr_a"],
@@ -209,7 +223,7 @@ describe("the feed sink and access revocations", () => {
     });
     expect(feedSink.plan(event)).toEqual([
       {
-        target: "purge",
+        target: "purge:0",
         payload: {
           purge: {
             accountId: sourceId,
@@ -223,6 +237,12 @@ describe("the feed sink and access revocations", () => {
         },
       },
     ]);
+    const many = feedSink.plan({
+      ...event,
+      data: { principals: principals(1_050), repos: ["rep_x"], acl_version: 3 },
+    });
+    expect(many.map((p) => p.target)).toEqual(Array.from({ length: 11 }, (_, i) => `purge:${i}`));
+    expect(many.map((p) => feedSink.calls?.(p))).toEqual([...Array(10).fill(100), 50]);
     expect(feedSink.plan({ ...event, data: null, stored: true })).toEqual([]);
     expect(feedSink.plan({ ...event, data: { principals: [] } })).toEqual([]);
   });
@@ -330,5 +350,67 @@ describe("the feed sink and access revocations", () => {
     );
     expect(await applyEnvelope(env, { sourceId: owner.principalId, events })).toBe("applied");
     expect(await shown(feed)).toEqual([["rep_elsewhere", ["comment/1"]]]);
+  });
+
+  it("completes a revocation of 1,050 principals across sweeps, each within its calls", async () => {
+    const orgId = newId("org");
+    const { on, purges } = recordingPurges();
+    await applyEnvelope(
+      on,
+      {
+        sourceId: orgId,
+        events: [
+          revokedEvent(orgId, 1, {
+            principals: principals(1_050),
+            repos: ["rep_x"],
+            acl_version: 2,
+          }),
+        ],
+      },
+      // Nothing inline: the sweeper delivers it all.
+      { sinks: [feedSink], inline: { left: 0, batched: 0 } },
+    );
+    expect(await effectsOf(orgId)).toHaveLength(11);
+    const due = Date.now() + EFFECT_POLICY.sweepAfterMs;
+    let sweeps = 0;
+    while ((await effectsOf(orgId)).some((e) => e.state === "pending")) {
+      const before = purges.length;
+      await sweepEffects({ db: env.ORG_READ, env: on, sinks: [feedSink], now: () => due });
+      expect(purges.length - before).toBeLessThanOrEqual(EFFECT_POLICY.sweepCalls);
+      sweeps++;
+      expect(sweeps).toBeLessThanOrEqual(3);
+    }
+    expect(new Set(purges.map((p) => p.principal)).size).toBe(1_050);
+  });
+
+  it("gives back, untried, the effects past a sweep's calls", async () => {
+    const orgId = newId("org");
+    const { on, purges } = recordingPurges();
+    await applyEnvelope(
+      on,
+      {
+        sourceId: orgId,
+        events: [
+          revokedEvent(orgId, 1, { principals: principals(400), repos: ["rep_x"], acl_version: 2 }),
+        ],
+      },
+      { sinks: [feedSink], inline: { left: 0, batched: 0 } },
+    );
+    await sweepEffects({
+      db: env.ORG_READ,
+      env: on,
+      sinks: [feedSink],
+      now: () => Date.now() + EFFECT_POLICY.sweepAfterMs,
+      policy: { ...EFFECT_POLICY, sweepCalls: 150 },
+    });
+    expect(purges).toHaveLength(100);
+    const rows = await effectsOf(orgId);
+    expect(rows.filter((e) => e.state === "done")).toHaveLength(1);
+    expect(rows.filter((e) => e.state === "pending")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ attempts: 0, lease_token: null })]),
+    );
+    expect(rows.filter((e) => e.state === "pending" && (e.attempts > 0 || e.lease_token))).toEqual(
+      [],
+    );
   });
 });

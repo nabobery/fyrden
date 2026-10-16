@@ -1,5 +1,11 @@
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
-import { EFFECT_POLICY, type Effect, type EffectPolicy, type EffectSink } from "./journal.js";
+import {
+  EFFECT_POLICY,
+  type Effect,
+  type EffectPolicy,
+  type EffectSink,
+  effectCalls,
+} from "./journal.js";
 
 /**
  * Delivers journaled effects and records the outcome. A delivery first
@@ -78,7 +84,27 @@ export async function sweepEffects(deps: DispatchDeps): Promise<number> {
     )
     .bind(token, now + policy.leaseMs, now, policy.sweepBatch)
     .all<Row>();
-  const delivered = await deliverAll(deps, results, token);
+  // As many as the sweep's calls allow (one at least, so none waits for ever); the others go back.
+  let calls = 0;
+  const taken = results.filter((row, i) => {
+    calls += effectCalls(
+      deps.sinks.find((s) => s.name === row.sink),
+      { target: row.target, payload: JSON.parse(row.payload) as Record<string, unknown> },
+    );
+    return i === 0 || calls <= policy.sweepCalls;
+  });
+  const left = results.slice(taken.length);
+  if (left.length > 0) {
+    deps.metrics?.count("d1.query", { db: "org", op: "effects_release" });
+    await deps.db
+      .prepare(
+        `UPDATE effects SET lease_token = NULL, lease_until = NULL
+         WHERE effect_id IN (SELECT value FROM json_each(?1)) AND lease_token = ?2`,
+      )
+      .bind(JSON.stringify(left.map((row) => row.effect_id)), token)
+      .run();
+  }
+  const delivered = await deliverAll(deps, taken, token);
   deps.metrics?.count("d1.query", { db: "org", op: "effects_prune" });
   // Failed ones too, after the same time (their payloads go with them).
   await deps.db

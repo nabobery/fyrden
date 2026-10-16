@@ -16,12 +16,16 @@ import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effect
  * takes four effects a run, at most 400 calls).
  *
  * An account's `access.revoked` (principals no longer read some of its
- * repositories) is an effect too: delivering it purges those repositories
+ * repositories) becomes effects too, of at most 100 principals each (a
+ * transfer can name thousands): delivering one purges those repositories
  * from each principal's feed, up to when access was lost, as the account
  * had them at its ACL version. "All but these" is resolved then, from the
  * directory (the account's repositories but the exceptions), and public
  * repositories are left out of every purge: anyone still reads those.
  */
+
+/** Principals one purge effect names at most (an event names up to 100 recipients too). */
+export const PURGE_PRINCIPALS = 100;
 
 /** Feeds called at once while delivering a batch. Proposed. */
 const PARALLEL_FEEDS = 10;
@@ -144,13 +148,18 @@ export const feedSink: EffectSink = {
       const revoked = RevokedSchema.safeParse(event.data);
       if (!revoked.success) return [];
       const data = revoked.data;
-      return [
-        {
-          target: "purge",
+      // A bounded number of feeds an effect: one delivery never makes more calls than that.
+      return Array.from(
+        { length: Math.ceil(data.principals.length / PURGE_PRINCIPALS) },
+        (_, part) => ({
+          target: `purge:${part}`,
           payload: {
             purge: {
               accountId: event.id.sourceId,
-              principals: data.principals,
+              principals: data.principals.slice(
+                part * PURGE_PRINCIPALS,
+                (part + 1) * PURGE_PRINCIPALS,
+              ),
               repos: "repos" in data ? data.repos : null,
               allExcept: "all_except" in data ? data.all_except : null,
               until: event.at,
@@ -158,8 +167,8 @@ export const feedSink: EffectSink = {
               aclVersion: data.acl_version,
             },
           } satisfies PlannedPurge,
-        },
-      ];
+        }),
+      );
     }
     if (!event.feed || event.feed.audience.length === 0) return [];
     return [
