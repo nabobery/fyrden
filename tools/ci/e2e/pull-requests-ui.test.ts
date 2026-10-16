@@ -97,8 +97,12 @@ beforeAll(async () => {
   await writeFile(join(work, HOSTILE_FILE), "<svg onload=window.pwned=3>\n");
   await git(["add", "-A"], work);
   await git(["commit", "-q", "-m", "change"], work);
+  // A branch whose README conflicts with the base's once the base changes it too.
+  await git(["checkout", "-q", "-b", "clash", "main"], work);
+  await writeFile(join(work, "README.md"), "# Clash\n");
+  await git(["commit", "-q", "-am", "clash"], work);
   const remote = `http://x-access-token:${token}@127.0.0.1:${stack.port}/${handle}/${name}.git`;
-  await git(["push", "-q", remote, "main", "topic"], work);
+  await git(["push", "-q", remote, "main", "topic", "clash"], work);
 }, 240_000);
 
 afterAll(async () => {
@@ -197,6 +201,40 @@ describe("pull requests in the web UI", () => {
       `/repos/${handle}/${name}/commits/${pull.head.sha}`,
     );
     expect(commit.commit.message).toContain("Apply suggestions from code review");
+  });
+
+  it("reviews, brings the branch up to date and squashes it into the base", async () => {
+    // The base moves on, touching nothing the pull request changes.
+    await rest("PUT", `/repos/${handle}/${name}/contents/docs/later.md`, {
+      message: "Add docs",
+      content: Buffer.from("later\n").toString("base64"),
+    });
+    await page.goto(`${stack.origin}/${handle}/${name}/pull/1`);
+    const review = page.locator("section", { has: page.getByRole("heading", { name: "Review" }) });
+    // Its author may only comment.
+    await see(review.getByLabel("Approve")).toBeDisabled();
+    await review.getByLabel(/^Review comment/).fill("Reviewed the change.");
+    await review.getByRole("button", { name: "Submit review" }).click();
+    await see(review.getByRole("status")).toHaveText("Review submitted.");
+    await see(page.locator(".timeline").getByText("Reviewed the change.")).toBeVisible();
+    const merge = page.locator("section.merge-box");
+    await merge.getByRole("button", { name: "Update branch" }).click();
+    await see(merge.getByText("The branch is up to date with the base branch.")).toBeVisible();
+    await see(merge.getByText("No conflicts with the base branch.")).toBeVisible({
+      timeout: 60_000,
+    });
+    await accessible(page, "merge box");
+    await merge.getByLabel("Squash and merge").check();
+    await merge.getByLabel("Commit title (optional)").fill("Change things (#1)");
+    await merge.getByRole("button", { name: "Merge pull request" }).click();
+    await see(page.locator(".badge.status-merged")).toBeVisible({ timeout: 30_000 });
+    await see(page.locator(".timeline-event")).toContainText("Merged");
+    const main = await rest<{ commit: { message: string } }>(
+      "GET",
+      `/repos/${handle}/${name}/commits/main`,
+    );
+    expect(main.commit.message).toMatch(/^Change things \(#1\)/);
+    await accessible(page, "merged pull request");
   });
 
   it("never had a script, style or image refused by the policy on any page", () => {

@@ -14,6 +14,7 @@ import { isShown, shownLines } from "../components/diff/patch.js";
 import { LineCommentForm, type LinePick, ThreadView } from "../components/diff/thread.js";
 import { Pager } from "../components/pager.js";
 import { PullHeader } from "../components/pull-header.js";
+import { ReviewForm } from "../components/review-form.js";
 import { apiGet, assertSameOrigin, readForm } from "../lib/api.server.js";
 import { pageLinks } from "../lib/pages.js";
 import {
@@ -25,7 +26,7 @@ import {
   rawField,
   type Thread,
 } from "../lib/pulls.js";
-import { type ActionResult, loadPull, pullApiOf, send } from "../lib/pulls.server.js";
+import { type ActionResult, loadPull, pullApiOf, send, submitReview } from "../lib/pulls.server.js";
 import { loadThreads } from "../lib/review-threads.server.js";
 import type { Route } from "./+types/repo.pull.files";
 import { FILES_PER_PAGE, type PagePatches } from "./repo.pull.patches.js";
@@ -146,6 +147,8 @@ export async function action({
         "The suggestion was not applied.",
       );
     }
+    case "review":
+      return submitReview(context, request, api, form);
     default:
       return { error: "Unknown action." };
   }
@@ -472,6 +475,9 @@ export default function PullFiles({ loaderData }: Route.ComponentProps) {
         </>
       )}
       <Pager links={pages} label="Changed files" />
+      {pull.state === "open" && viewer !== null && (
+        <ReviewForm headSha={pull.head.sha} isAuthor={pull.user.id === viewer} />
+      )}
     </main>
   );
 }

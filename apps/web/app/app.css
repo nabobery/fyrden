@@ -296,3 +296,14 @@ main.wide {
 .threads h4 {
   margin: 1rem 0 0.25rem;
 }
+.ok-text {
+  color: var(--ok);
+}
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 0.5rem 0;
+}
+fieldset p {
+  margin: 0.25rem 0;
+}

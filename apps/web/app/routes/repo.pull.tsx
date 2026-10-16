@@ -1,20 +1,32 @@
 import { Form, useActionData, useNavigation } from "react-router";
 import { Markdown } from "../components/markdown.js";
+import { MergeBox } from "../components/merge-box.js";
 import { Pager } from "../components/pager.js";
 import { PullHeader } from "../components/pull-header.js";
 import { inOrder, Timeline, type TimelineItem } from "../components/pull-timeline.js";
+import { ReviewForm } from "../components/review-form.js";
 import { apiCall, assertSameOrigin, bodyOf, readForm } from "../lib/api.server.js";
 import { renderMarkdown } from "../lib/markdown.js";
+import { type ListedRuleset, mergeRules } from "../lib/merge.server.js";
 import { pageLinks, pageQuery } from "../lib/pages.js";
 import {
   field,
   type IssueComment,
   pullNumber,
+  pullPage,
   type Review,
   rawField,
   repoApiPath,
 } from "../lib/pulls.js";
-import { type ActionResult, loadPull, pullApiOf, send } from "../lib/pulls.server.js";
+import {
+  loadPull,
+  type MergeResult,
+  mergePull,
+  pullApiOf,
+  send,
+  submitReview,
+} from "../lib/pulls.server.js";
+import type { Repo } from "../lib/types.js";
 import type { Route } from "./+types/repo.pull";
 
 export function meta({ params, loaderData }: Route.MetaArgs): Route.MetaDescriptors {
@@ -33,12 +45,14 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const { number, pull, viewer } = await loadPull(context, request, params);
   const api = pullApiOf(params);
-  const [comments, reviews] = await Promise.all([
+  const repoApi = repoApiPath(params.owner, params.repo);
+  const open = pull.state === "open";
+  const [comments, reviews, repo, rulesets] = await Promise.all([
     apiCall<{ comments: IssueComment[]; next_cursor: string | null }>(
       context,
       request,
       "GET",
-      `${repoApiPath(params.owner, params.repo)}/issues/${number}/comments?${pageQuery(url, "comments")}`,
+      `${repoApi}/issues/${number}/comments?${pageQuery(url, "comments")}`,
     ),
     apiCall<{ reviews: Review[]; next_cursor: string | null }>(
       context,
@@ -46,7 +60,16 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       "GET",
       `${api}/reviews?${pageQuery(url, "reviews")}`,
     ),
+    // For the merge box only: what the base branch's rulesets ask of a merge.
+    open ? apiCall<Repo>(context, request, "GET", repoApi) : null,
+    open
+      ? apiCall<{ rulesets: ListedRuleset[] }>(context, request, "GET", `${repoApi}/rulesets`)
+      : null,
   ]);
+  const rules =
+    repo?.status === 200 && rulesets?.status === 200
+      ? mergeRules(rulesets.body.rulesets, pull.base.ref, repo.body.default_branch)
+      : null;
   const commentPage = bodyOf(comments, request);
   const reviewPage = bodyOf(reviews, request);
   const items: TimelineItem[] = [
@@ -93,14 +116,11 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     timeline: inOrder(items),
     commentPages: pageLinks(url, "comments", commentPage.next_cursor),
     reviewPages: pageLinks(url, "reviews", reviewPage.next_cursor),
+    rules,
   };
 }
 
-export async function action({
-  request,
-  context,
-  params,
-}: Route.ActionArgs): Promise<ActionResult> {
+export async function action({ request, context, params }: Route.ActionArgs): Promise<MergeResult> {
   assertSameOrigin(request);
   const form = await readForm(request, PULL_FORM_MAX_BYTES);
   const api = pullApiOf(params);
@@ -143,6 +163,22 @@ export async function action({
         "maintainer",
         "The setting was not saved.",
       );
+    case "review":
+      return submitReview(context, request, api, form);
+    case "merge":
+      return mergePull(context, request, api, form);
+    case "update-branch": {
+      const sha = field(form, "expected_head_sha");
+      return send(
+        context,
+        request,
+        "PUT",
+        `${api}/update-branch`,
+        /^[0-9a-f]{40}$/.test(sha) ? { expected_head_sha: sha } : {},
+        "update-branch",
+        "The branch was not updated.",
+      );
+    }
     default:
       return { error: "Unknown action." };
   }
@@ -162,7 +198,8 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
   const result = useActionData<typeof action>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
-  const { owner, repo, pull, viewer, bodyHtml, timeline, commentPages, reviewPages } = loaderData;
+  const { owner, repo, pull, viewer, bodyHtml, timeline, commentPages, reviewPages, rules } =
+    loaderData;
   const isAuthor = viewer !== null && pull.user.id === viewer;
   const open = pull.state === "open";
   return (
@@ -203,6 +240,15 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
         <Pager links={commentPages} label="Comment" />
         <Pager links={reviewPages} label="Review" />
       </section>
+
+      {open && viewer !== null && <ReviewForm headSha={pull.head.sha} isAuthor={isAuthor} />}
+      {open && (
+        <MergeBox
+          pull={pull}
+          rules={rules}
+          conflicts={`${pullPage(owner, repo, pull.number)}/conflicts`}
+        />
+      )}
 
       <section className="panel" aria-labelledby="pull-state">
         <h2 id="pull-state">State</h2>
