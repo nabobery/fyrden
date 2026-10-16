@@ -816,51 +816,163 @@ describe("the base's view", () => {
     expect(await borrowedLive(stub)).toBe(2);
   });
 
-  it("refuses packs the compaction's run under way would leave no room for", async () => {
-    const stub = env.REPO.getByName(base.id);
-    // Room for one borrowed pack; a run merges at most 100 objects.
-    await inRepo(stub, (r: RepoDO) => {
-      r.packCap = { ...r.packCap, cap: 31 };
-      r.maintenance = { ...r.maintenance, maxRewriteObjects: 100 };
-    });
-    await commitOn(contributor, fork.path, "main", [{ path: "c.txt", content: "c\n" }]);
-    expect((await open(contributor, `${contributor.handle}:main`)).status).toBe(201);
-    // Its two borrowed packs are over the cap: a run of the compaction merged them, and its
-    // output (100 objects: the most a run takes) waits to be swapped in.
-    await inRepo(stub, (r: RepoDO) => {
-      const sql = r.git.context.storage.sql;
-      const sources = sql
-        .exec<{ pack_id: string }>(
-          "SELECT pack_id FROM packs WHERE origin = 'borrowed' AND state = 'live'",
+  /** The base's live borrowed packs with their objects, oldest first. */
+  const borrowedCounts = (stub: DurableObjectStub<RepoDO>) =>
+    inRepo(stub, (r: RepoDO) =>
+      r.git.context.storage.sql
+        .exec<{ pack_id: string; object_count: number }>(
+          `SELECT pack_id, object_count FROM packs WHERE origin = 'borrowed' AND state = 'live'
+           ORDER BY created_at, pack_id`,
         )
-        .toArray()
-        .map((p) => p.pack_id);
-      expect(sources).toHaveLength(2);
-      const now = r.git.context.now();
-      sql.exec(
-        `INSERT INTO packs (pack_id, network_id, r2_key, kind, state, object_count, bytes,
-           created_at, last_touched_at)
-         VALUES ('run-output', ?, 'run-output', 'compact', 'indexing', 100, 1, ?, ?)`,
-        r.git.networkId(),
-        now,
-        now,
-      );
-      const cursor = { phase: "swap", sources, runId: "run", outputId: "run-output" };
-      // Held by a slice that has not finished: the test's admission sees it, no alarm runs it.
-      sql.exec(
-        "UPDATE jobs SET state = 'running', lease_expires_at = ?, cursor = ? WHERE job_id = ?",
-        now + 60 * 60_000,
-        new TextEncoder().encode(JSON.stringify(cursor)),
-        VIEW_COMPACT_JOB,
-      );
+        .toArray(),
+    );
+  /** Runs the base's alarms until its view's compaction is done. */
+  const compactView = async (stub: DurableObjectStub<RepoDO>) => {
+    for (let i = 0; i < 20; i++) {
+      await inRepo(stub, (r: RepoDO) => r.alarm());
+      const state = await inRepo(stub, (r: RepoDO) => r.git.jobs.get(VIEW_COMPACT_JOB)?.state);
+      if (state === "done") return;
+    }
+    throw new Error("the view's compaction did not finish");
+  };
+  /** A branch of the fork at a new commit of its own; answers the branch. */
+  const forkBranch = async (name: string, file: string) => {
+    const sha = await commitOn(contributor, fork.path, "main", [
+      { path: file, content: `${file}\n` },
+    ]);
+    await moveForkBranch(name, ZERO, sha);
+    return name;
+  };
+  /**
+   * Another fork of the base, with a commit of its own: a pull request from
+   * it borrows that one pack (the fork's other packs are the base's). Its
+   * `owner:branch` head.
+   */
+  const otherFork = async () => {
+    const other = await user();
+    await api("PUT", `${base.path}/collaborators/${other.handle}`, owner.token, {
+      permission: "pull",
     });
-    // A third pack: chosen afresh, the three would merge; after the run, it pairs with nothing.
-    const third = await commitOn(contributor, fork.path, "main", [
+    const made = await json<{ name: string }>(
+      api("POST", `${base.path}/forks`, other.token, { name: uniqueId("other") }),
+    );
+    expect(made.status).toBe(201);
+    await commitOn(other, `/repos/${other.handle}/${made.body.name}`, "main", [
       { path: "d.txt", content: "d\n" },
     ]);
-    await moveForkBranch("topic", ZERO, third);
-    const opened = await open(contributor, `${contributor.handle}:topic`);
-    expect(opened).toMatchObject({ status: 422, body: { code: "view_full" } });
+    return { other, head: `${other.handle}:main` };
+  };
+
+  for (const phase of ["swap", "compact"] as const)
+    it(`decides on the written size of the compaction's run under way (${phase})`, async () => {
+      const stub = env.REPO.getByName(base.id);
+      // Room for one borrowed pack; a run merges at most 100 objects.
+      await inRepo(stub, (r: RepoDO) => {
+        r.packCap = { ...r.packCap, cap: 31 };
+        r.maintenance = { ...r.maintenance, maxRewriteObjects: 100 };
+      });
+      await commitOn(contributor, fork.path, "main", [{ path: "c.txt", content: "c\n" }]);
+      expect((await open(contributor, `${contributor.handle}:main`)).status).toBe(201);
+      // Its two borrowed packs are over the cap: a run of the compaction merged them into 100
+      // objects (the most a run takes), waiting to be swapped in; in the compact phase, the
+      // cursor names it only as the run's output (evicted, or deleting its scratch, before the
+      // cursor moved on).
+      await inRepo(stub, (r: RepoDO) => {
+        const sql = r.git.context.storage.sql;
+        const sources = sql
+          .exec<{ pack_id: string }>(
+            "SELECT pack_id FROM packs WHERE origin = 'borrowed' AND state = 'live'",
+          )
+          .toArray()
+          .map((p) => p.pack_id);
+        expect(sources).toHaveLength(2);
+        const now = r.git.context.now();
+        sql.exec(
+          `INSERT INTO packs (pack_id, network_id, r2_key, kind, state, object_count, bytes,
+             created_at, last_touched_at)
+           VALUES ('run-output', ?, 'run-output', 'compact', 'indexing', 100, 1, ?, ?)`,
+          r.git.networkId(),
+          now,
+          now,
+        );
+        const cursor =
+          phase === "swap"
+            ? { phase, sources, runId: "run", outputId: "run-output" }
+            : { phase, sources, runId: "run", rewrite: { packId: "run-output", seq: 1 } };
+        // Held by a slice that has not finished: admission sees it, no alarm runs it.
+        sql.exec(
+          "UPDATE jobs SET state = 'running', lease_expires_at = ?, cursor = ? WHERE job_id = ?",
+          now + 60 * 60_000,
+          new TextEncoder().encode(JSON.stringify(cursor)),
+          VIEW_COMPACT_JOB,
+        );
+      });
+      // A third pack: chosen afresh, the three would merge; after the run, it pairs with nothing.
+      const opened = await open(
+        contributor,
+        `${contributor.handle}:${await forkBranch("topic", "d.txt")}`,
+      );
+      expect(opened).toMatchObject({ status: 422, body: { code: "view_full" } });
+    });
+
+  it("takes packs that fit only were objects shared once the compaction tells they are", async () => {
+    const stub = env.REPO.getByName(base.id);
+    // Another fork, before the base borrows anything (a pull request from it borrows the one pack
+    // of its own).
+    const { other, head: otherHead } = await otherFork();
+    await inRepo(stub, (r: RepoDO) => {
+      r.packCap = { ...r.packCap, cap: 31 };
+    });
+    // Two packs borrowed (over the cap of one, compacted later), then the fork repacks them into
+    // one holding both their objects, which is borrowed too.
+    await commitOn(contributor, fork.path, "main", [{ path: "c.txt", content: "c\n" }]);
+    expect((await open(contributor, `${contributor.handle}:main`)).status).toBe(201);
+    await runJob(env.REPO.getByName(fork.id), "repack");
+    const head = (await pull()).head.sha;
+    await moveForkBranch("whole", ZERO, head);
+    expect((await open(contributor, `${contributor.handle}:whole`)).status).toBe(201);
+    const [b, c, whole] = await borrowedCounts(stub);
+    expect(whole?.object_count).toBe((b?.object_count ?? 0) + (c?.object_count ?? 0));
+    // A run takes the three (twice the objects there are) and no more.
+    const budget = 2 * (whole?.object_count ?? 0);
+    await inRepo(stub, (r: RepoDO) => {
+      r.maintenance = { ...r.maintenance, maxRewriteObjects: budget };
+    });
+    // Were no object shared, the run's output and the new pack would not merge: it waits.
+    const waiting = await open(other, otherHead);
+    expect(waiting).toMatchObject({ status: 409, body: { code: "busy" } });
+    await compactView(stub);
+    // The output holds each object once: room for the new pack.
+    expect((await borrowedCounts(stub)).map((p) => p.object_count)).toEqual([whole?.object_count]);
+    expect(await open(other, otherHead)).toMatchObject({ status: 201 });
+    expect(await borrowedLive(stub)).toBe(2);
+  });
+
+  it("refuses packs that fit only were objects shared once the compaction tells they are not", async () => {
+    const stub = env.REPO.getByName(base.id);
+    const { other, head: otherHead } = await otherFork();
+    await inRepo(stub, (r: RepoDO) => {
+      r.packCap = { ...r.packCap, cap: 31 };
+    });
+    // Three packs borrowed, sharing no object (over the cap of one, compacted later).
+    for (const name of ["c", "e"])
+      await commitOn(contributor, fork.path, "main", [{ path: `${name}.txt`, content: name }]);
+    expect((await open(contributor, `${contributor.handle}:main`)).status).toBe(201);
+    const counts = (await borrowedCounts(stub)).map((p) => p.object_count);
+    expect(counts).toHaveLength(3);
+    // A run takes the three and no more.
+    const budget = counts.reduce((n, c) => n + c, 0);
+    await inRepo(stub, (r: RepoDO) => {
+      r.maintenance = { ...r.maintenance, maxRewriteObjects: budget };
+    });
+    const waiting = await open(other, otherHead);
+    expect(waiting).toMatchObject({ status: 409, body: { code: "busy" } });
+    await compactView(stub);
+    expect((await borrowedCounts(stub)).map((p) => p.object_count)).toEqual([budget]);
+    // Nothing shared: the new pack would never merge with the output.
+    const refused = await open(other, otherHead);
+    expect(refused).toMatchObject({ status: 422, body: { code: "view_full" } });
+    expect(await borrowedLive(stub)).toBe(1);
   });
 
   it("leaves a compaction that cannot bring the view within its cap failing, not done", async () => {

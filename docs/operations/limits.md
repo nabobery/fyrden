@@ -102,16 +102,19 @@ head's. Its view holds at most 32 packs, its own and borrowed, so it may
 borrow at most 32 less `GIT_PACK_CAP` (16 by default). Past that, a
 background job merges its oldest borrowed packs into one, at most 16 packs
 and 500,000 objects (the rewrite budget) a run. Importing a pull request's
-head from a fork, or the base tip into a fork's head branch, is refused
-when it would leave more borrowed packs than such merges can bring within
-the cap, the merge under way included, even were each merged pack as small
-as it can be (its largest source's objects: packs may share objects):
-opening the pull request, or the write to the head branch, answers 422
-`view_full`, and a later revision of an open pull request's head is not
-imported (the pull request keeps its last one). A view over its cap all
-the same (merged packs larger than that, or the budget lowered since)
-leaves the merge job failing, tried again in case a collection drops
-packs.
+head from a fork, or the base tip into a fork's head branch, adds its packs
+only when such merges (the one under way first) bring the view within the
+cap even were no object shared between merged packs (a merged pack's size
+is known once written). When even packs sharing every object they could
+would not fit, it is refused: opening the pull request, or the write to the
+head branch, answers 422 `view_full`, and a later revision of an open pull
+request's head is not imported (the pull request keeps its last one). In
+between (only shared objects would make room), the merge job is asked for
+and the import waits for the real sizes: 409 `busy` (try again), or the
+revision is imported once the merges are done; it is refused when the
+merges leave nothing more to tell. A view over its cap all the same (the
+budget lowered since) leaves the merge job failing, tried again in case a
+collection drops packs.
 
 ### Push policy
 

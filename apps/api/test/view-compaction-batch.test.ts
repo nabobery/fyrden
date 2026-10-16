@@ -2,7 +2,7 @@
 // bring the view within its cap when they fit.
 import { describe, expect, it } from "vitest";
 import type { ViewPack } from "../src/network/types.js";
-import { batchOf, fitsAfterCompaction } from "../src/network/view-cap.js";
+import { admission, batchOf, fitsAfterCompaction } from "../src/network/view-cap.js";
 
 const pack = (id: number, objects: number, unit: string | null = null): ViewPack => ({
   packId: `p${id}`,
@@ -72,47 +72,100 @@ describe("batchOf", () => {
 
 describe("fitsAfterCompaction", () => {
   it("holds a view within its cap", () => {
-    expect(fitsAfterCompaction([pack(1, 600)], { limit: 1, maxPacks: 16, maxObjects: 500 })).toBe(
-      true,
-    );
+    const limits = { limit: 1, maxPacks: 16, maxObjects: 500 };
+    expect(fitsAfterCompaction([pack(1, 600)], limits, "upper")).toBe(true);
   });
 
   it("holds a view the compaction's runs bring within its cap, one after another", () => {
     // Three packs a run: two runs, then their outputs merged.
     const packs = [1, 2, 3, 4, 5, 6].map((i) => pack(i, 1));
-    expect(fitsAfterCompaction(packs, { limit: 1, maxPacks: 3, maxObjects: 100 })).toBe(true);
+    expect(fitsAfterCompaction(packs, { limit: 1, maxPacks: 3, maxObjects: 100 }, "upper")).toBe(
+      true,
+    );
   });
 
-  it("refuses a view whose smallest pair is over the rewrite budget", () => {
+  it("refuses a view whose smallest pair is over the rewrite budget, however outputs are sized", () => {
     const packs = [pack(1, 300), pack(2, 300), pack(3, 300)];
-    expect(fitsAfterCompaction(packs, { limit: 2, maxPacks: 16, maxObjects: 500 })).toBe(false);
+    const limits = { limit: 2, maxPacks: 16, maxObjects: 500 };
+    expect(fitsAfterCompaction(packs, limits, "upper")).toBe(false);
+    expect(fitsAfterCompaction(packs, limits, "lower")).toBe(false);
   });
 
-  it("holds a view whose runs' outputs may share their sources' objects", () => {
-    // Two runs of 400 objects each; packs holding the same objects pairwise give outputs of 200,
-    // which merge: an output is only known to hold its largest source's objects.
+  it("sizes outputs as every source object (upper) or the largest source's (lower)", () => {
+    // Two runs of 400 objects each: their outputs merge only if they hold 200 each.
     const packs = [1, 2, 3, 4].map((i) => pack(i, 200));
-    expect(fitsAfterCompaction(packs, { limit: 1, maxPacks: 16, maxObjects: 500 })).toBe(true);
+    const limits = { limit: 1, maxPacks: 16, maxObjects: 500 };
+    expect(fitsAfterCompaction(packs, limits, "upper")).toBe(false);
+    expect(fitsAfterCompaction(packs, limits, "lower")).toBe(true);
   });
 
-  it("refuses a view whose run under way left an output too large to merge", () => {
-    // The run of the first two finished with every object of both (9); the pack added after it
-    // pairs with nothing. Chosen afresh, the three would fit.
+  it("takes the run under way first, at its written size", () => {
+    // The run of the first two wrote 9 objects; the pack added after it pairs with nothing.
+    // Chosen afresh, the three would fit.
     const packs = [pack(1, 3), pack(2, 6), pack(3, 3)];
     const limits = { limit: 1, maxPacks: 16, maxObjects: 10 };
-    expect(fitsAfterCompaction(packs, limits)).toBe(true);
-    expect(fitsAfterCompaction(packs, limits, { sources: ["p1", "p2"], objects: 9 })).toBe(false);
+    expect(fitsAfterCompaction(packs, limits, "lower")).toBe(true);
+    const run = { sources: ["p1", "p2"], objects: 9 };
+    expect(fitsAfterCompaction(packs, limits, "lower", run)).toBe(false);
   });
 
-  it("takes a run under way whose output is not written yet as holding its largest source", () => {
+  it("sizes a run under way not written yet by the bound", () => {
     const packs = [pack(1, 3), pack(2, 6), pack(3, 3)];
     const limits = { limit: 1, maxPacks: 16, maxObjects: 10 };
-    expect(fitsAfterCompaction(packs, limits, { sources: ["p1", "p2"] })).toBe(true);
+    const run = { sources: ["p1", "p2"] };
+    expect(fitsAfterCompaction(packs, limits, "lower", run)).toBe(true);
+    expect(fitsAfterCompaction(packs, limits, "upper", run)).toBe(false);
   });
 
   it("chooses afresh when a run's sources left the view (the run is discarded)", () => {
     const packs = [pack(2, 6), pack(3, 3)];
     const limits = { limit: 1, maxPacks: 16, maxObjects: 10 };
-    expect(fitsAfterCompaction(packs, limits, { sources: ["p1", "p2"], objects: 9 })).toBe(true);
+    const run = { sources: ["p1", "p2"], objects: 9 };
+    expect(fitsAfterCompaction(packs, limits, "upper", run)).toBe(true);
+  });
+});
+
+describe("admission", () => {
+  const limits = { limit: 16, maxPacks: 16, maxObjects: 500_000 };
+  const disjoint = (n: number) => Array.from({ length: n }, (_, i) => pack(i + 1, 200_000));
+
+  it("never admits disjoint packs past the cap: compacted first, then refused", () => {
+    // 33 packs of 200,000 objects: two fit a run, three do not. Were every pair's objects
+    // shared, they would merge down; were none, 17 outputs of 400,000 would never merge.
+    const view = disjoint(33);
+    const current = view.slice(0, 32);
+    expect(admission(view, current, limits)).toBe("learn");
+    // Compacted with nothing shared: 16 outputs of 400,000; the 33rd pack fits no run.
+    const compacted = Array.from({ length: 16 }, (_, i) => pack(100 + i, 400_000));
+    expect(admission([...compacted, pack(33, 200_000)], compacted, limits)).toBe("full");
+  });
+
+  it("admits what fits were nothing shared", () => {
+    const view = disjoint(17);
+    expect(admission(view, view.slice(0, 16), limits)).toBe("admit");
+  });
+
+  it("refuses what cannot fit even were everything shared", () => {
+    const big = { limit: 1, maxPacks: 16, maxObjects: 500 };
+    const view = [pack(1, 300), pack(2, 300)];
+    expect(admission(view, view.slice(0, 1), big)).toBe("full");
+  });
+
+  it("waits for a run under way to tell its size", () => {
+    const small = { limit: 1, maxPacks: 16, maxObjects: 10 };
+    const view = [pack(1, 3), pack(2, 6), pack(3, 3)];
+    const current = view.slice(0, 2);
+    expect(admission(view, current, small, { sources: ["p1", "p2"] })).toBe("learn");
+    // Written: 9 (nothing shared) leaves no room; 6 (all shared) does.
+    expect(admission(view, current, small, { sources: ["p1", "p2"], objects: 9 })).toBe("full");
+    expect(admission(view, current, small, { sources: ["p1", "p2"], objects: 6 })).toBe("admit");
+  });
+
+  it("refuses when only shared objects could make room and nothing is left to compact", () => {
+    // Merged two by two, 4 + 4 + 4 fits one run only were objects shared; the current view (one
+    // pack) is within its cap, so compacting it tells nothing.
+    const small = { limit: 1, maxPacks: 16, maxObjects: 10 };
+    const view = [pack(1, 4), pack(2, 4), pack(3, 4)];
+    expect(admission(view, view.slice(0, 1), small)).toBe("full");
   });
 });

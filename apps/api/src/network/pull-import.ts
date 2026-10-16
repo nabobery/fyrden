@@ -5,8 +5,8 @@ import { GC_JOB_ID, inProgress, scheduleGc } from "../git/maintenance/schedule.j
 import { liveViewPacks } from "./member.js";
 import type { CommitRowData, ViewPack } from "./types.js";
 import {
+  admission,
   compactionLimits,
-  fitsAfterCompaction,
   isDetaching,
   runUnderWay,
   scheduleViewCompaction,
@@ -183,8 +183,9 @@ export async function runImportStep(
         return { ...work, step: "snapshot", leaseId: null, state: {} };
       const packs = work.state.packs ?? [];
       const adopted = borrowedWith(git, packs);
+      const current = borrowedLive(git);
       // Packs it reads already add nothing: a view over its cap all the same takes them.
-      if (adopted.length > borrowedLive(git).length) admit(deps, adopted);
+      if (adopted.length > current.length) admit(deps, adopted, current);
       adoptPacks(git, packs);
       // Over the cap: compacted on the view's own job; the import goes on meanwhile.
       if (adopted.length > compactionLimits(deps.ownCap(), deps.rewriteObjects()).limit)
@@ -261,7 +262,10 @@ export async function importInForeground<T>(
               ? error.code
               : "busy",
       };
-    if (error instanceof ImportBusy) return { ok: false, code: "busy" };
+    if (error instanceof ImportBusy) {
+      waitOn(deps.git, error);
+      return { ok: false, code: "busy" };
+    }
     throw error;
   } finally {
     await discardImport(deps, work);
@@ -317,19 +321,36 @@ function borrowedWith(git: RepoGitStorage, packs: readonly ViewPack[]): ViewPack
 }
 
 /**
- * Refuses a borrowed view (`view`, oldest first) the base could not hold:
- * over its cap with no compaction able to bring it within, the run under
- * way included, even were its outputs as small as they can be. Admitted, a
- * view over its cap is compacted later (and one its outputs leave over it
- * all the same fails the compaction's job).
+ * Takes the base's borrowed view to `view` (oldest first) from `current`
+ * only when the compaction is sure to bring it within its cap (see
+ * `admission`): refused for good when it cannot, else the import waits
+ * (`ViewCompacting`) until the compaction has told the merged packs' real
+ * sizes.
  */
-function admit(deps: ViewDeps, view: readonly ViewPack[]): void {
+function admit(deps: ViewDeps, view: readonly ViewPack[], current: readonly ViewPack[]): void {
   const limits = compactionLimits(deps.ownCap(), deps.rewriteObjects());
-  if (!fitsAfterCompaction(view, limits, runUnderWay(deps.git)))
+  const decision = admission(view, current, limits, runUnderWay(deps.git));
+  if (decision === "admit") return;
+  if (decision === "full")
     throw new ImportFailed(
       "view_full",
       "the base's view cannot hold more borrowed packs: they are too large to compact",
     );
+  throw new ViewCompacting("the base's view is being compacted; the import goes on after");
+}
+
+/**
+ * An import waiting for the base's view compaction (see `admit`). Whoever
+ * catches it asks for the compaction outside any transaction it was thrown
+ * in (`waitOn`), so the request is not undone with it.
+ */
+export class ViewCompacting extends ImportBusy {
+  override name = "ViewCompacting";
+}
+
+/** After an import step or publication failed: the compaction it waits for is asked for. */
+export function waitOn(git: RepoGitStorage, error: unknown): void {
+  if (error instanceof ViewCompacting) scheduleViewCompaction(git);
 }
 
 /** Registry states of a pack not finished yet: waited out. */
@@ -434,6 +455,7 @@ export function readyToPublish(deps: ViewDeps, work: ImportWork): boolean {
   // Left (or leaving) the network: the head's packs are not the base's to read any more.
   if (leftNetwork(git, work)) throw new ImportFailed("not_member", "the base left its network");
   const sql = git.context.storage.sql;
+  const current = borrowedLive(git);
   let tookBack: "none" | "own" | "borrowed" = "none";
   for (const pack of work.state.packs ?? []) {
     const row = sql
@@ -449,7 +471,7 @@ export function readyToPublish(deps: ViewDeps, work: ImportWork): boolean {
   }
   // Packs taken back may put the view over its cap again (a compaction replaced them meanwhile):
   // borrowed ones are admitted as when they were adopted.
-  if (tookBack === "borrowed") admit(deps, borrowedLive(git));
+  if (tookBack === "borrowed") admit(deps, borrowedLive(git), current);
   if (tookBack !== "none") scheduleViewCompaction(git);
   // Every staged commit's parents are staged or in the graph, and the revision is one of them.
   const staged = sql
@@ -725,6 +747,7 @@ export class PullImports {
     } catch (error) {
       if (!this.#unchanged(row)) return void (await discardImport(this.deps, work));
       const busy = error instanceof ImportBusy;
+      waitOn(git, error);
       const attempts = row.attempts + (busy ? 0 : 1);
       if (error instanceof ImportFailed || attempts >= this.deps.policy().maxAttempts) {
         this.deps.log().warn("a pull request's head could not be imported", {
@@ -793,8 +816,9 @@ export class PullImports {
         await discardImport(this.deps, next);
         return;
       }
-      // Frozen meanwhile: it waits, unspent.
-      if (!this.deps.writable()) {
+      // Frozen meanwhile, or waiting for the view's compaction: it waits, unspent.
+      if (!this.deps.writable() || error instanceof ImportBusy) {
+        waitOn(git, error);
         this.#save(row, next, { requestedAt: git.context.now() + this.deps.policy().retryMs });
         return;
       }
