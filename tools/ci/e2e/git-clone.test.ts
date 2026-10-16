@@ -5,14 +5,14 @@
 // clone and fetch is checked with `git fsck --full` and compared with the
 // same operation against the source over file:// (git's own upload-pack,
 // protocol v2). Storage is a fresh temporary directory per mode.
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { mentionsToken } from "@fyrden/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startWranglerDev } from "./wrangler-dev.js";
+import { startWranglerDev, type WranglerDev } from "./wrangler-dev.js";
 
 const root = resolve(import.meta.dirname, "../../..");
 const apiConfig = join(root, "apps/api/wrangler.jsonc");
@@ -58,8 +58,7 @@ describe.each(["free", "paid"] as const)("stock git clones and fetches (plan %s)
   let origin = "";
   const bootstrapSecret = `e2e-${crypto.randomUUID()}`;
   let scratch = "";
-  let dev: ChildProcess | undefined;
-  let closed: Promise<void> = Promise.resolve();
+  let server: WranglerDev | undefined;
   let output = "";
   let token = "";
   let handle = "";
@@ -195,7 +194,7 @@ describe.each(["free", "paid"] as const)("stock git clones and fetches (plan %s)
     );
     expect(migrate.code, migrate.stdout + migrate.stderr).toBe(0);
 
-    const server = await startWranglerDev({
+    server = await startWranglerDev({
       args: [
         "-c",
         apiConfig,
@@ -211,8 +210,6 @@ describe.each(["free", "paid"] as const)("stock git clones and fetches (plan %s)
         output += text;
       },
     });
-    dev = server.child;
-    closed = server.closed;
     port = server.port;
     origin = `http://127.0.0.1:${port}`;
 
@@ -235,11 +232,13 @@ describe.each(["free", "paid"] as const)("stock git clones and fetches (plan %s)
   }, 120_000);
 
   afterAll(async () => {
-    if (dev && dev.exitCode === null && dev.signalCode === null) dev.kill("SIGTERM");
-    await Promise.race([closed, new Promise((give) => setTimeout(give, 10_000))]);
-    // Neither the Workers nor wrangler's access log may print a token.
-    expect(output.split("\n").filter(mentionsToken)).toEqual([]);
-    if (scratch) await rm(scratch, { recursive: true, force: true });
+    try {
+      await server?.stop();
+      // Neither the Workers nor wrangler's access log may print a token.
+      expect(output.split("\n").filter(mentionsToken)).toEqual([]);
+    } finally {
+      if (scratch) await rm(scratch, { recursive: true, force: true });
+    }
   });
 
   it("refuses protocol v0 for clone with a message naming protocol v2", async () => {

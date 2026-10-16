@@ -74,7 +74,10 @@ a machine short of memory add `--concurrency=1` to heavy runs (`test`,
   clock carries a `biome-ignore` saying so.
 - End-to-end tests start `wrangler dev` only through `startWranglerDev`
   (`tools/ci/e2e/wrangler-dev.ts`): ports the OS reports free, taken right
-  before the start, and a fresh pair if one was taken meanwhile.
+  before the start, and a fresh pair if one was taken meanwhile. Its `stop()`
+  is the only teardown: SIGTERM, SIGKILL if the process outlives a grace
+  period, and it resolves only once the process has closed, so a suite
+  removes the state directory after it, never before.
 - Run `pnpm turbo run test:shuffle` before review on any change to alarms, the
   outbox, jobs or a test's setup: it runs the workerd suites in random orders.
 

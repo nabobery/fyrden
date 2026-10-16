@@ -3,7 +3,7 @@
 // accounts made through the admin API, a typed REST client, an MCP client,
 // stock git with no user or system config, and bounded polling for what the
 // server does in the background (alarms, queues).
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -20,7 +20,7 @@ import {
   type OutputOf,
 } from "@fyrden/sdk";
 import { expect } from "vitest";
-import { startWranglerDev } from "./wrangler-dev.js";
+import { startWranglerDev, type WranglerDev } from "./wrangler-dev.js";
 
 const root = resolve(import.meta.dirname, "../../..");
 const apiDir = join(root, "apps/api");
@@ -122,19 +122,10 @@ export async function startForge(name: string): Promise<Forge> {
     expect(migrate.code, migrate.stdout + migrate.stderr).toBe(0);
   }
   let output = "";
-  let dev: ChildProcess | undefined;
-  let closed: Promise<void> = Promise.resolve();
+  let server: WranglerDev | undefined;
   const stop = async () => {
     try {
-      if (dev && dev.exitCode === null && dev.signalCode === null) dev.kill("SIGTERM");
-      const ended = await Promise.race([
-        closed.then(() => true),
-        new Promise<boolean>((give) => setTimeout(() => give(false), 10_000)),
-      ]);
-      if (!ended) {
-        dev?.kill("SIGKILL");
-        await closed;
-      }
+      await server?.stop();
       // Neither the Worker nor wrangler's access log may print a token.
       expect(output.split("\n").filter(mentionsToken)).toEqual([]);
     } finally {
@@ -143,7 +134,7 @@ export async function startForge(name: string): Promise<Forge> {
     }
   };
   try {
-    const server = await startWranglerDev({
+    server = await startWranglerDev({
       args: [
         "-c",
         apiConfig,
@@ -159,8 +150,6 @@ export async function startForge(name: string): Promise<Forge> {
         output += text;
       },
     });
-    dev = server.child;
-    closed = server.closed;
     const origin = `http://127.0.0.1:${server.port}`;
     const client = (token: string, dpop?: DpopKey) =>
       new FyrdenClient({

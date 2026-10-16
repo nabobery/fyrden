@@ -16,13 +16,47 @@ const wranglerBin = join(
 /** Starts tried at most, a port taken meanwhile each time. */
 const ATTEMPTS = 3;
 const PORT_TAKEN = /Address already in use|EADDRINUSE/;
+/** How long a stop waits for the process to exit on SIGTERM before killing it. */
+const STOP_GRACE_MS = 10_000;
 
 export interface WranglerDev {
-  readonly child: ChildProcess;
   /** The HTTP port, on 127.0.0.1. */
   readonly port: number;
-  /** Resolves when the process has exited and its output pipes have closed. */
-  readonly closed: Promise<void>;
+  /**
+   * Ends the process: SIGTERM, then SIGKILL if it is still running after a
+   * grace period. Resolves once it has exited and its output pipes have
+   * closed, so its state can be removed. Calling it again is safe.
+   */
+  stop(): Promise<void>;
+}
+
+/**
+ * The `stop` of `child` (see `WranglerDev.stop`), every call answered by the
+ * same promise. Made right after the spawn: it listens for the `close`.
+ */
+export function stopper(child: ChildProcess, graceMs = STOP_GRACE_MS): () => Promise<void> {
+  // On `close`, not `exit`: output can still arrive between the two.
+  const closed = new Promise<void>((done) => child.once("close", () => done()));
+  let stopping: Promise<void> | undefined;
+  const stop = async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
+      let grace: NodeJS.Timeout | undefined;
+      const ended = await Promise.race([
+        closed.then(() => true),
+        new Promise<boolean>((give) => {
+          grace = setTimeout(() => give(false), graceMs);
+        }),
+      ]);
+      clearTimeout(grace);
+      if (!ended) child.kill("SIGKILL");
+    }
+    await closed;
+  };
+  return () => {
+    stopping ??= stop();
+    return stopping;
+  };
 }
 
 /**
@@ -57,7 +91,7 @@ export async function startWranglerDev(options: {
         env: { ...process.env, NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" },
       },
     );
-    const closed = new Promise<void>((done) => child.once("close", () => done()));
+    const stop = stopper(child);
     let output = "";
     const started = await new Promise<"ready" | "port_taken" | Error>((settle) => {
       const timer = setTimeout(
@@ -85,13 +119,9 @@ export async function startWranglerDev(options: {
         );
       });
     });
-    if (started === "ready") return { child, port, closed };
-    if (started instanceof Error) {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-      await closed;
-      throw started;
-    }
-    await closed;
+    if (started === "ready") return { port, stop };
+    await stop();
+    if (started instanceof Error) throw started;
   }
 }
 

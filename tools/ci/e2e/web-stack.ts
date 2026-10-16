@@ -2,7 +2,7 @@
 // user made through bootstrap, and a Chromium page signed in as that user:
 // what a browser test of the web UI starts from. Needs `pnpm --filter
 // @fyrden/web build` first (turbo does it).
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -10,7 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import { type Browser, chromium, type Page, expect as see } from "@playwright/test";
 import { expect } from "vitest";
-import { startWranglerDev } from "./wrangler-dev.js";
+import { startWranglerDev, type WranglerDev } from "./wrangler-dev.js";
 
 const root = resolve(import.meta.dirname, "../../..");
 const apiConfig = join(root, "apps/api/wrangler.jsonc");
@@ -74,15 +74,15 @@ export async function startWebStack(
 ): Promise<WebStack> {
   const scratch = await mkdtemp(join(tmpdir(), "fyrden-web-stack-"));
   let output = "";
-  let server: Awaited<ReturnType<typeof startWranglerDev>> | undefined;
+  let server: WranglerDev | undefined;
   let browser: Browser | undefined;
   const stop = async () => {
-    await browser?.close().catch(() => undefined);
-    const dev: ChildProcess | undefined = server?.child;
-    if (dev && dev.exitCode === null && dev.signalCode === null) dev.kill("SIGTERM");
-    if (server)
-      await Promise.race([server.closed, new Promise((give) => setTimeout(give, 10_000))]);
-    await rm(scratch, { recursive: true, force: true });
+    try {
+      await browser?.close().catch(() => undefined);
+      await server?.stop();
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
   };
   try {
     const persist = join(scratch, "state");

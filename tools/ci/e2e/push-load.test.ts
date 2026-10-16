@@ -102,10 +102,11 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  const child = server?.child;
-  if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
-  if (server) await Promise.race([server.closed, new Promise((give) => setTimeout(give, 10_000))]);
-  if (scratch) await rm(scratch, { recursive: true, force: true });
+  try {
+    await server?.stop();
+  } finally {
+    if (scratch) await rm(scratch, { recursive: true, force: true });
+  }
 });
 
 describe("agents pushing at once", () => {

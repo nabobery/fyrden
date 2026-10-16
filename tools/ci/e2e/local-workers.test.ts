@@ -2,23 +2,20 @@
 // Worker's API service binding is real) and smoke-tests the web Worker:
 // its page and its /healthz both go through the binding into fyrden-api.
 // Needs `pnpm --filter @fyrden/web build` first (turbo does it).
-import type { ChildProcess } from "node:child_process";
 import { join, resolve } from "node:path";
 import { generateToken, mentionsToken, secureRandomBytes } from "@fyrden/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runSmoke, webChecks } from "../src/smoke.ts";
-import { startWranglerDev } from "./wrangler-dev.js";
+import { startWranglerDev, type WranglerDev } from "./wrangler-dev.js";
 
 const root = resolve(import.meta.dirname, "../../..");
 let port = 0;
-let dev: ChildProcess | undefined;
-// Resolves when wrangler dev has exited and its output pipes have closed.
-let closed: Promise<void> = Promise.resolve();
+let server: WranglerDev | undefined;
 // Everything both Workers write, for the whole run.
 let output = "";
 
 beforeAll(async () => {
-  const server = await startWranglerDev({
+  server = await startWranglerDev({
     args: [
       "-c",
       join(root, "apps/web/build/server/wrangler.json"),
@@ -30,8 +27,6 @@ beforeAll(async () => {
       output += text;
     },
   });
-  dev = server.child;
-  closed = server.closed;
   port = server.port;
 }, 90_000);
 
@@ -55,9 +50,7 @@ async function waitForLine(from: number, match: RegExp, timeoutMs = 15_000): Pro
 }
 
 afterAll(async () => {
-  if (dev && dev.exitCode === null && dev.signalCode === null) dev.kill("SIGTERM");
-  // `close`, not `exit`: output can still arrive between the two.
-  await Promise.race([closed, new Promise((give) => setTimeout(give, 10_000))]);
+  await server?.stop();
   // Lines printed late, after the test that caused them, are checked too.
   expect(workerLines().filter(mentionsToken)).toEqual([]);
 });
