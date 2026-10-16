@@ -517,6 +517,42 @@ describe("pull requests in the web UI", () => {
     await see(remark.getByLabel("Reply")).toHaveValue("");
   });
 
+  it("asks for the lines again when the head moves under an unfinished line comment", async () => {
+    await pushBranch("relined", { "relined.txt": `${lines(8).join("\n")}\n` });
+    const number = await openPull("relined", "Relined");
+    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}/files`);
+    const file = page.locator("section.file", { hasText: "relined.txt" });
+    const drawn = file.locator("diffs-container");
+    await see(drawn.getByText("const line8 = 8;")).toBeVisible({ timeout: 30_000 });
+    await drawn.locator('[data-column-number="3"]').first().click();
+    await see(file.getByLabel("Line", { exact: true })).toHaveValue("3");
+    await file.getByLabel(/^Comment \(Markdown/).fill("About the third line.");
+    // The head moves, and the page reads the pull request again (after a review is sent).
+    await pushFile("relined", "later.txt");
+    const moved = await headOf(number);
+    const review = page.locator("section", { has: page.getByRole("heading", { name: "Review" }) });
+    await review.getByLabel(/^Review comment/).fill("A review meanwhile.");
+    await review.getByRole("button", { name: "Submit review" }).click();
+    await see(review.getByRole("status")).toHaveText("Review submitted.");
+    // The comment is now of the new head: its text kept, its lines asked for again.
+    await see(file.getByRole("alert")).toContainText(
+      `The pull request moved to ${moved.slice(0, 7)}`,
+    );
+    await see(file.getByLabel("Line", { exact: true })).toHaveValue("");
+    await see(file.getByLabel(/^Comment \(Markdown/)).toHaveValue("About the third line.");
+    await accessible(page, "line comment on a moved head");
+    await drawn.locator('[data-column-number="4"]').first().click();
+    await see(file.getByLabel("Line", { exact: true })).toHaveValue("4");
+    await see(file.getByRole("alert")).toHaveCount(0);
+    await file.getByRole("button", { name: "Add comment" }).click();
+    await see(file.getByRole("status").filter({ hasText: "Comment added." })).toBeVisible();
+    const { comments } = await rest<{ comments: { commit_id: string; line: number }[] }>(
+      "GET",
+      `/repos/${handle}/${name}/pulls/${number}/comments`,
+    );
+    expect(comments.map((c) => [c.commit_id, c.line])).toEqual([[moved, 4]]);
+  });
+
   it("draws every diagram on the page, a later one leaving the earlier ones", async () => {
     await pushBranch("diagrams", { "diagrams.txt": "x\n" });
     const number = await openPull("diagrams", "Diagrams", {

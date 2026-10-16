@@ -190,9 +190,28 @@ export interface LinePick {
   end: number;
 }
 
+/** A new comment's lines, as its fields hold them. */
+interface LineFields {
+  side: DiffSide;
+  start: string;
+  line: string;
+}
+
+/** The fields for lines picked in the diff (empty for none). */
+function fieldsOf(pick: LinePick | null): LineFields {
+  return {
+    side: pick?.side ?? "RIGHT",
+    start: pick && pick.start !== pick.end ? String(pick.start) : "",
+    line: pick ? String(pick.end) : "",
+  };
+}
+
 /**
  * A new comment on lines of a file: the lines picked in the diff fill it in,
- * and it can be filled in by hand (from the keyboard) as well.
+ * and it can be filled in by hand (from the keyboard) as well. It is always
+ * sent for the head whose changes are shown: when the head moves while a
+ * comment is being written, its text is kept and its lines asked for again
+ * (those picked were lines of the older head).
  */
 export function LineCommentForm({
   path,
@@ -212,16 +231,36 @@ export function LineCommentForm({
 }) {
   const fetcher = useFetcher<Answer>();
   const id = useId();
-  const body = useRef<HTMLTextAreaElement>(null);
-  const form = useRef<HTMLFormElement>(null);
+  const bodyField = useRef<HTMLTextAreaElement>(null);
+  const [lines, setLines] = useState(() => fieldsOf(pick));
+  const [body, setBody] = useState("");
+  const [shown, setShown] = useState({ pick, head: headSha });
+  /** The head moved under a comment being written (to the one shown now). */
+  const [moved, setMoved] = useState(false);
+  if (shown.head !== headSha) {
+    setShown({ pick, head: headSha });
+    setLines(fieldsOf(null));
+    setMoved(body.trim() !== "");
+  } else if (shown.pick !== pick) {
+    // Lines picked again fill the fields in afresh; the comment written so far stays.
+    setShown({ pick, head: headSha });
+    setLines(fieldsOf(pick));
+    setMoved(false);
+  }
+  const edit = (change: Partial<LineFields>) => {
+    setLines({ ...lines, ...change });
+    setMoved(false);
+  };
   // Lines picked in the diff: the form opens on them, ready to type.
   useEffect(() => {
-    if (pick && open) body.current?.focus();
+    if (pick && open) bodyField.current?.focus();
   }, [pick, open]);
   useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data?.ok) form.current?.reset();
+    if (fetcher.state === "idle" && fetcher.data?.ok) {
+      setBody("");
+      setMoved(false);
+    }
   }, [fetcher.state, fetcher.data]);
-  const range = pick && pick.start !== pick.end;
   return (
     <details
       className="line-comment"
@@ -229,18 +268,28 @@ export function LineCommentForm({
       onToggle={(e) => onToggle((e.currentTarget as HTMLDetailsElement).open)}
     >
       <summary>Comment on lines</summary>
-      <fetcher.Form method="post" ref={form}>
+      {moved && (
+        <p className="error" role="alert">
+          The pull request moved to <code>{headSha.slice(0, 7)}</code> since you started this
+          comment: pick its lines again in these changes.
+        </p>
+      )}
+      <fetcher.Form method="post">
         <input type="hidden" name="intent" value="comment" />
         <input type="hidden" name="path" value={path} />
         {previousPath !== undefined && (
           <input type="hidden" name="previous_path" value={previousPath} />
         )}
-        <input type="hidden" name="commit_id" value={headSha} />
-        {/* Lines picked again fill these in afresh; the comment written so far stays. */}
-        <div className="row" key={pick ? `${pick.side}${pick.start}-${pick.end}` : "none"}>
+        <input type="hidden" name="commit_id" value={shown.head} />
+        <div className="row">
           <span>
             <label htmlFor={`${id}-side`}>Side</label>
-            <select id={`${id}-side`} name="side" defaultValue={pick?.side ?? "RIGHT"}>
+            <select
+              id={`${id}-side`}
+              name="side"
+              value={lines.side}
+              onChange={(e) => edit({ side: e.currentTarget.value === "LEFT" ? "LEFT" : "RIGHT" })}
+            >
               <option value="RIGHT">New file (head)</option>
               <option value="LEFT">Old file (base)</option>
             </select>
@@ -253,7 +302,8 @@ export function LineCommentForm({
               type="number"
               min={1}
               inputMode="numeric"
-              defaultValue={range ? pick.start : ""}
+              value={lines.start}
+              onChange={(e) => edit({ start: e.currentTarget.value })}
             />
           </span>
           <span>
@@ -265,14 +315,23 @@ export function LineCommentForm({
               min={1}
               required
               inputMode="numeric"
-              defaultValue={pick?.end ?? ""}
+              value={lines.line}
+              onChange={(e) => edit({ line: e.currentTarget.value })}
             />
           </span>
         </div>
         <label htmlFor={`${id}-body`}>
           Comment (Markdown; a ```suggestion block suggests a change)
         </label>
-        <textarea id={`${id}-body`} name="body" className="short" required ref={body} />
+        <textarea
+          id={`${id}-body`}
+          name="body"
+          className="short"
+          required
+          ref={bodyField}
+          value={body}
+          onChange={(e) => setBody(e.currentTarget.value)}
+        />
         <p>
           <button type="submit" className="primary" disabled={fetcher.state !== "idle"}>
             Add comment
