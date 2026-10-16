@@ -32,11 +32,12 @@ const IGNORE_SIGTERM = 'process.on("SIGTERM", () => {})';
 
 /**
  * As wrangler's launcher: runs a child sharing its output pipes, which
- * prints `ready <pid>` and runs `childScript`; forwards SIGTERM to it and
- * exits when it does, or at once after the start when `leave` is set.
+ * runs `childScript` and then prints `ready <pid>` (so a signal handler it
+ * sets is in place once ready); forwards SIGTERM to it and exits when it
+ * does, or at once after the start when `leave` is set.
  */
 function launcher(childScript: string, leave = false): string {
-  const child = `console.log("ready " + process.pid); ${childScript}`;
+  const child = `${childScript}; console.log("ready " + process.pid)`;
   return [
     'const { spawn } = require("node:child_process");',
     `const kid = spawn(process.execPath, ["-e", ${JSON.stringify(child)}], { stdio: "inherit" });`,
