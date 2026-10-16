@@ -208,11 +208,14 @@ export async function findReposById(
   return results.map(entryOf);
 }
 
+/** The repositories of one owner in a fork network a pull request's head is looked for among. Proposed. */
+export const MAX_HEAD_CANDIDATES = 10;
+
 /**
  * The active repositories of fork network `networkId` that the principal
  * with `handle` owns (a pull request's head is a branch of one), named
- * `name` when given; at most two (enough to tell one from several). From
- * the D1 primary, so a fork made a moment ago is found.
+ * `name` when given; the first `MAX_HEAD_CANDIDATES` by name. From the D1
+ * primary, so a fork made a moment ago is found.
  */
 export async function networkReposOf(
   env: Env,
@@ -229,9 +232,9 @@ export async function networkReposOf(
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.network_id = ? AND p.handle = ? COLLATE NOCASE AND r.state = 'active'
          AND p.disabled_at IS NULL AND (?3 IS NULL OR r.name = ?3 COLLATE NOCASE)
-       ORDER BY r.name LIMIT 2`,
+       ORDER BY r.name LIMIT ?4`,
     )
-    .bind(networkId, handle, name ?? null)
+    .bind(networkId, handle, name ?? null, MAX_HEAD_CANDIDATES)
     .all<RepoRow>();
   return results.map(entryOf);
 }

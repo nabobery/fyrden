@@ -245,8 +245,10 @@ export async function createPullOperation(
 /**
  * The repository and branch `head` names: a branch of the base itself, or
  * GitHub's `owner:branch`, a branch of that owner's repository in the
- * base's fork network (`headRepo` names it when the owner has several),
- * which the caller must be able to read.
+ * base's fork network (`headRepo` names it when the owner has several the
+ * caller reads), which the caller must be able to read. A repository the
+ * caller cannot read is not there for it: it neither makes the name
+ * ambiguous nor is told of.
  */
 async function headRepoOf(
   ctx: OpContext,
@@ -266,18 +268,23 @@ async function headRepoOf(
     "head_not_found",
     `${owner} has no repository in this repository's fork network to open a pull request from.`,
   );
-  if (candidates.length === 0) throw notFound;
-  if (candidates.length > 1)
-    throw new OperationError(
-      422,
-      "head_repo_required",
-      `${owner} has several repositories in this fork network; name one with head_repo.`,
-    );
-  const found = candidates[0] as RepoEntry;
-  if (found.id === base.id) return { repo: null, branch };
-  // The caller must read the head's repository (a private sibling it cannot read is not found).
-  if (!(await authorize(ctx.env, ctx.auth, found, "contents:read", ctx.metrics))) throw notFound;
-  return { repo: found, branch };
+  let found: RepoEntry | undefined;
+  // One at a time, stopping at a second the caller reads: the calls are bounded by the candidates.
+  for (const candidate of candidates) {
+    const readable =
+      candidate.id === base.id ||
+      (await authorize(ctx.env, ctx.auth, candidate, "contents:read", ctx.metrics));
+    if (!readable) continue;
+    if (found)
+      throw new OperationError(
+        422,
+        "head_repo_required",
+        `${owner} has several repositories in this fork network; name one with head_repo.`,
+      );
+    found = candidate;
+  }
+  if (!found) throw notFound;
+  return { repo: found.id === base.id ? null : found, branch };
 }
 
 /** The `pulls.update` operation. */

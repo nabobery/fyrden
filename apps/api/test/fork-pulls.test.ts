@@ -328,6 +328,51 @@ describe("pull requests from forks", () => {
   });
 });
 
+describe("an owner with several repositories in the network", () => {
+  let stranger: Who;
+  let second: { id: string; name: string; path: string };
+  const letRead = (repo: { path: string }) =>
+    api("PUT", `${repo.path}/collaborators/${stranger.handle}`, contributor.token, {
+      permission: "pull",
+    });
+
+  beforeEach(async () => {
+    stranger = await user();
+    await api("PUT", `${base.path}/collaborators/${stranger.handle}`, owner.token, {
+      permission: "pull",
+    });
+    // Named to sort after the first fork: a lookup that took the first by name finds that one.
+    const forked = await json<{ id: string; name: string }>(
+      api("POST", `${base.path}/forks`, contributor.token, { name: uniqueId("second") }),
+    );
+    expect(forked.status).toBe(201);
+    second = { ...forked.body, path: `/repos/${contributor.handle}/${forked.body.name}` };
+    expect(second.name > fork.name).toBe(true);
+    await commitOn(contributor, second.path, "main", [{ path: "s.txt", content: "second\n" }]);
+  });
+
+  it("tells a caller who reads none of them nothing of them", async () => {
+    expect((await open(stranger, `${contributor.handle}:main`)).body.code).toBe("head_not_found");
+  });
+
+  it("takes the one the caller reads, whatever the others", async () => {
+    expect((await letRead(second)).status).toBe(200);
+    const opened = await open(stranger, `${contributor.handle}:main`);
+    expect(opened.status).toBe(201);
+    expect(opened.body.head_repo_id).toBe(second.id);
+  });
+
+  it("needs head_repo only among those the caller reads", async () => {
+    expect((await letRead(fork)).status).toBe(200);
+    expect((await letRead(second)).status).toBe(200);
+    expect((await open(stranger, `${contributor.handle}:main`)).body.code).toBe(
+      "head_repo_required",
+    );
+    const named = await open(stranger, `${contributor.handle}:main`, { head_repo: second.name });
+    expect(named.body.head_repo_id).toBe(second.id);
+  });
+});
+
 describe("revisions told out of order or more than once", () => {
   it("take a push back to the same commit as a push, by its pusher", async () => {
     await open(contributor, `${contributor.handle}:main`);
