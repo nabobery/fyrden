@@ -22,6 +22,7 @@ import { EFFECT_POLICY, type Effect, type EffectSink } from "../src/effects/jour
 import { feedSink } from "../src/feed/sink.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { api, user } from "./helpers/api.js";
+import { settleOthersDue } from "./helpers/effects.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 
@@ -375,6 +376,8 @@ describe("the feed sink and access revocations", () => {
   it("completes a revocation of 1,050 principals across sweeps, each within its calls", async () => {
     const orgId = newId("org");
     const { on, purges } = recordingPurges();
+    // Its sweeps' bounds hold for its own effects: others' are settled first.
+    await settleOthersDue(Date.now() + EFFECT_POLICY.sweepAfterMs + 60_000);
     await applyEnvelope(
       on,
       {
@@ -406,6 +409,8 @@ describe("the feed sink and access revocations", () => {
   it("gives back, untried, the effects past a sweep's calls", async () => {
     const orgId = newId("org");
     const { on, purges } = recordingPurges();
+    // Its sweeps' bounds hold for its own effects: others' are settled first.
+    await settleOthersDue(Date.now() + EFFECT_POLICY.sweepAfterMs + 60_000);
     await applyEnvelope(
       on,
       {

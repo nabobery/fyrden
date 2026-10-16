@@ -14,7 +14,7 @@ import { env, exports } from "cloudflare:workers";
 import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import fc from "fast-check";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
@@ -714,7 +714,8 @@ describe("the feed operations", () => {
   let repo: Awaited<ReturnType<typeof repoOf>>;
   let other: Awaited<ReturnType<typeof repoOf>>;
 
-  beforeAll(async () => {
+  // Each test its own user, repositories and feed: some add to the feed, and tests run in any order.
+  beforeEach(async () => {
     owner = await user();
     repo = await repoOf(owner);
     other = await repoOf(owner);

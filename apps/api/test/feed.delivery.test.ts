@@ -36,6 +36,7 @@ import {
   EVENTS_QUEUE,
   INVOCATION_CALLS,
 } from "../src/queues/events-consumer.js";
+import { settleOthersDue } from "./helpers/effects.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H8";
@@ -320,6 +321,8 @@ describe("the feed sink", () => {
   });
 
   it("keeps a consumer invocation and a sweep within Free's 50 D1 queries", async () => {
+    // Its counts hold for its own effects: others due by its sweep are settled first.
+    await settleOthersDue(T0 + EFFECT_POLICY.sweepAfterMs);
     const repos = await Promise.all(Array.from({ length: 5 }, () => listedRepo()));
     const { on, calls } = recordingFeeds();
     const count = { queries: 0 };
