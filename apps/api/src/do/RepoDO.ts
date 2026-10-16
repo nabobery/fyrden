@@ -89,12 +89,6 @@ import {
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
 import type { AclSnapshot } from "./OrgDO.js";
-import {
-  CONFIRMED_KEEP_MS,
-  STORAGE_CHARGE_TTL_MS,
-  STORAGE_QUOTA_EXCEEDED,
-  STORAGE_QUOTA_UNAVAILABLE,
-} from "./org/quotas.js";
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
 import { RepoAuthority } from "./repo/authority.js";
@@ -173,6 +167,7 @@ import {
   type RulesetInput,
   type RulesetRecord,
 } from "./repo/rulesets.js";
+import { StorageCharges } from "./repo/storage-charges.js";
 import {
   type TemplateTree,
   type TemplateWriteInput,
@@ -218,14 +213,6 @@ export interface RepoDetails {
  * of CPU an alarm gets (measured on Workers Free, 2026-10-10).
  */
 const ALARM_BUDGET_MS = 5_000;
-/** The job that tells the account of committed uploads it was not told of at once. */
-const STORAGE_CONFIRM_JOB = "storage-confirm";
-/** How long before an owed confirmation is tried (again). Proposed. */
-const STORAGE_CONFIRM_RETRY_MS = 60_000;
-/** Owed confirmations one slice tells. Proposed. */
-const STORAGE_CONFIRM_BATCH = 50;
-/** How long a confirmation stays owed: within the account's memory of the ones it took. */
-const STORAGE_OWED_MAX_AGE_MS = CONFIRMED_KEEP_MS - 24 * 60 * 60 * 1000;
 /** How long an archive request builds before it answers "building". Proposed. */
 const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
 
@@ -265,6 +252,9 @@ export class RepoDO extends MigratingDO {
 
   /** Effective roles and the rulesets' judgement of writes. */
   readonly #authority: RepoAuthority;
+
+  /** The account's storage quota, as pushes charge it. */
+  readonly #storageCharges: StorageCharges;
 
   /** Review requests, diff threads and the standing a merge is judged by. */
   readonly #discussion: PullDiscussion;
@@ -469,6 +459,13 @@ export class RepoDO extends MigratingDO {
       metrics: this.git.context.metrics,
       account: () => this.events.account(),
       pull: (accountId) => this.pullAcl(accountId),
+    });
+    this.#storageCharges = new StorageCharges({
+      git: this.git,
+      env: () => this.env,
+      account: () => this.events.account(),
+      repoId: () => this.#repoId(),
+      log: () => this.#log(),
     });
     this.#authority = new RepoAuthority({
       git: this.git,
@@ -1723,54 +1720,7 @@ export class RepoDO extends MigratingDO {
     };
     this.#pushes.frozen = () => this.events.frozen() ?? this.#generationAbandoned();
     this.#pushes.rules = this.#authority.pushRules();
-    const account = () => {
-      // A repository from before identities were recorded has no account to charge.
-      const owner = this.events.account();
-      return owner && this.env.ORG.getByName(owner.accountId);
-    };
-    this.#pushes.storage = {
-      charge: async (uploadId, bytes) => {
-        const stub = account();
-        if (!stub) return undefined;
-        try {
-          const fits = await stub.chargeStorage({
-            uploadId,
-            repoId: this.#repoId(),
-            bytes,
-            ttlMs: STORAGE_CHARGE_TTL_MS,
-          });
-          return fits ? undefined : STORAGE_QUOTA_EXCEEDED;
-        } catch (error) {
-          // Fail closed: an account that cannot be asked takes no bytes.
-          this.#log().warn("storage charge failed", { uploadId, error });
-          return STORAGE_QUOTA_UNAVAILABLE;
-        }
-      },
-      owe: (uploadId, bytes) => {
-        if (!account()) return;
-        this.ctx.storage.sql.exec(
-          "INSERT OR IGNORE INTO storage_owed (upload_id, bytes, owed_at) VALUES (?, ?, ?)",
-          uploadId,
-          bytes,
-          this.git.context.now(),
-        );
-        // Told right after the commit; this job tells the account should that fail.
-        this.git.jobs.ensure("storage_confirm", STORAGE_CONFIRM_JOB, {
-          runAt: this.git.context.now() + STORAGE_CONFIRM_RETRY_MS,
-        });
-      },
-      confirm: async (uploadId, bytes) => {
-        await this.#confirmStorage(uploadId, bytes);
-      },
-      release: async (uploadId) => {
-        // Not released, what the upload held lapses on its own.
-        await account()
-          ?.releaseStorage(uploadId)
-          .catch((error: unknown) =>
-            this.#log().warn("storage release failed", { uploadId, error }),
-          );
-      },
-    };
+    this.#pushes.storage = this.#storageCharges.quota();
     return this.#pushes;
   }
 
@@ -1970,6 +1920,11 @@ export class RepoDO extends MigratingDO {
     return this.#imports().record();
   }
 
+  /** Committed uploads the account has not been told of yet. */
+  owedStorage(): { uploadId: string; bytes: number }[] {
+    return this.#storageCharges.owed();
+  }
+
   /** Runs due background jobs; the job queue re-arms the alarm for the next one. */
   override async alarm(): Promise<void> {
     await this.#measured("alarm", async () => {
@@ -2048,84 +2003,9 @@ export class RepoDO extends MigratingDO {
     );
   }
 
-  /**
-   * Tells the account a committed upload's bytes are the repository's (it
-   * counts each upload once), then owes it nothing; false when it could
-   * not be told (still owed: the `storage_confirm` job tries again).
-   */
-  async #confirmStorage(uploadId: string, bytes: number): Promise<boolean> {
-    const owner = this.events.account();
-    if (!owner) return true;
-    try {
-      // Not taken while the repository moves between accounts: owed to the next one.
-      const taken = await this.env.ORG.getByName(owner.accountId).confirmStorage({
-        uploadId,
-        repoId: this.#repoId(),
-        bytes,
-      });
-      if (!taken) return false;
-    } catch (error) {
-      this.#log().warn("storage confirm failed", { uploadId, error });
-      return false;
-    }
-    this.ctx.storage.sql.exec("DELETE FROM storage_owed WHERE upload_id = ?", uploadId);
-    return true;
-  }
-
-  /** Committed uploads the account has not been told of yet. */
-  owedStorage(): { uploadId: string; bytes: number }[] {
-    return this.ctx.storage.sql
-      .exec<{ upload_id: string; bytes: number }>(
-        "SELECT upload_id, bytes FROM storage_owed ORDER BY upload_id",
-      )
-      .toArray()
-      .map((r) => ({ uploadId: r.upload_id, bytes: r.bytes }));
-  }
-
-  /** The `storage_confirm` job: tells the account of every upload still owed. */
-  #storageConfirmHandler(): JobHandler {
-    return {
-      runSlice: async () => {
-        const sql = this.ctx.storage.sql;
-        // Owed past the account's memory of confirmations, one told again could count twice:
-        // given up, uncounted.
-        const stale = sql
-          .exec<{ upload_id: string; bytes: number }>(
-            "SELECT upload_id, bytes FROM storage_owed WHERE owed_at < ?",
-            this.git.context.now() - STORAGE_OWED_MAX_AGE_MS,
-          )
-          .toArray();
-        for (const row of stale) {
-          this.#log().error("storage confirmation given up", {
-            uploadId: row.upload_id,
-            bytes: row.bytes,
-          });
-          sql.exec("DELETE FROM storage_owed WHERE upload_id = ?", row.upload_id);
-        }
-        const owed = sql
-          .exec<{ upload_id: string; bytes: number }>(
-            "SELECT upload_id, bytes FROM storage_owed ORDER BY owed_at LIMIT ?",
-            STORAGE_CONFIRM_BATCH,
-          )
-          .toArray();
-        for (const row of owed) {
-          // The account cannot be told now: later, without spending an attempt.
-          if (!(await this.#confirmStorage(row.upload_id, row.bytes)))
-            return { done: false, cursor: null, runAfterMs: STORAGE_CONFIRM_RETRY_MS };
-        }
-        // Done only with nothing owed, judged with no wait before the answer: a push that
-        // owed more meanwhile found this job running and left it to this one.
-        const left = sql.exec<{ n: number }>("SELECT count(*) AS n FROM storage_owed").one().n;
-        return left === 0
-          ? { done: true }
-          : { done: false, cursor: null, runAfterMs: STORAGE_CONFIRM_RETRY_MS };
-      },
-    };
-  }
-
   #jobHandlers() {
     return {
-      storage_confirm: this.#storageConfirmHandler(),
+      storage_confirm: this.#storageCharges.confirmHandler(),
       mergeability: this.mergeability.handler(),
       merge_saga: this.rebases.handler("alarm"),
       pull_notices: this.pullSource.noticesHandler(),
