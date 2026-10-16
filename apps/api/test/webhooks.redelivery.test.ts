@@ -5,7 +5,7 @@
 // a test's back, in this test or a later one.
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ATTEMPT_POLICY, attemptDelivery } from "../src/webhooks/deliver.js";
+import { ATTEMPT_POLICY, attemptDelivery, reconcileWebhooks } from "../src/webhooks/deliver.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { webhookTest } from "./helpers/webhooks.js";
 
@@ -156,5 +156,43 @@ describe("redelivery", () => {
     expect(refused.status).toBe(422);
     expect(refused.body.code).toBe("too_many_attempts");
     expect(queued).toEqual([id]);
+  });
+
+  it("holds the most attempts a delivery makes in the consumer and the cron too", async () => {
+    const { id } = await delivered(400);
+    const cap = ATTEMPT_POLICY.maxTotalAttempts;
+    const row = () =>
+      env.ORG_READ.prepare(
+        "SELECT state, reason, attempts FROM webhook_deliveries WHERE delivery_id = ?",
+      )
+        .bind(id)
+        .first();
+    // Pending past the most, whatever its own limit says (not by this API): never claimed.
+    await env.ORG_READ.prepare(
+      `UPDATE webhook_deliveries SET state = 'pending', reason = NULL, attempts = ?,
+         attempt_limit = ?, next_attempt_at = 0 WHERE delivery_id = ?`,
+    )
+      .bind(cap, cap + 5, id)
+      .run();
+    await attemptDelivery(t.deps(), id);
+    expect(t.received).toHaveLength(1);
+    expect(await row()).toEqual({ state: "pending", reason: null, attempts: cap });
+    // The cron finishes it instead of sending its message again (it is the first one due).
+    t.sent.length = 0;
+    await reconcileWebhooks(t.deps());
+    expect(t.sent.map((s) => s.delivery)).not.toContain(id);
+    expect(await row()).toEqual({ state: "failed", reason: "attempts_spent", attempts: cap });
+
+    // One short of the most: its last attempt, failed, is not retried.
+    await env.ORG_READ.prepare(
+      `UPDATE webhook_deliveries SET state = 'pending', reason = NULL, attempts = ?,
+         next_attempt_at = 0 WHERE delivery_id = ?`,
+    )
+      .bind(cap - 1, id)
+      .run();
+    t.answer = () => new Response("busy", { status: 503 });
+    await attemptDelivery(t.deps(), id);
+    expect(t.received).toHaveLength(2);
+    expect(await row()).toEqual({ state: "failed", reason: "attempts_spent", attempts: cap });
   });
 });

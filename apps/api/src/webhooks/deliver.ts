@@ -66,6 +66,18 @@ export type AttemptPolicy = { readonly [K in keyof typeof ATTEMPT_POLICY]: numbe
 
 export const WEBHOOKS_QUEUE = "fyrden-webhooks";
 
+/**
+ * The attempts a delivery may make, in SQL over its row: its own limit (a
+ * redelivery's) or the policy's, never past the most any delivery makes.
+ * `maxAttempts` and `maxTotal` name the statement's parameters.
+ */
+const attemptCap = (maxAttempts: string, maxTotal: string) =>
+  `min(coalesce(attempt_limit, ${maxAttempts}), ${maxTotal})`;
+
+/** `attemptCap` for a row already read. */
+const capOf = (attemptLimit: number | null, policy: AttemptPolicy) =>
+  Math.min(attemptLimit ?? policy.maxAttempts, policy.maxTotalAttempts);
+
 type Claimed = {
   delivery_id: string;
   repo_id: string;
@@ -138,11 +150,11 @@ export async function attemptDelivery(deps: DeliveryDeps, deliveryId: string): P
       `UPDATE webhook_deliveries SET lease_token = ?1, lease_until = ?2, updated_at = ?3,
          attempts = attempts + 1
        WHERE delivery_id = ?4 AND state = 'pending' AND next_attempt_at <= ?3
-         AND (lease_until IS NULL OR lease_until <= ?3) AND attempts < coalesce(attempt_limit, ?5)
+         AND (lease_until IS NULL OR lease_until <= ?3) AND attempts < ${attemptCap("?5", "?6")}
        RETURNING delivery_id, repo_id, hook_id, event, private, payload_key, attempts,
          attempt_limit, created_at`,
     )
-    .bind(token, now + policy.leaseMs, now, deliveryId, policy.maxAttempts)
+    .bind(token, now + policy.leaseMs, now, deliveryId, policy.maxAttempts, policy.maxTotalAttempts)
     .first<Claimed>();
   if (!claimed) return;
   const outcome = await attempt(deps, claimed, policy);
@@ -312,7 +324,7 @@ async function record(
       next = now + outcome.afterMs;
       break;
     case "retry": {
-      if (attempts >= (delivery.attempt_limit ?? policy.maxAttempts)) {
+      if (attempts >= capOf(delivery.attempt_limit, policy)) {
         state = "failed";
         reason = "attempts_spent";
         break;
@@ -395,7 +407,7 @@ async function record(
 export interface Reconciled {
   /** Late deliveries whose message was sent again. */
   readonly sent: number;
-  /** Deliveries whose last attempt's run died with its claim, now failed. */
+  /** Deliveries with their attempts spent (a last attempt's run died with its claim), now failed. */
   readonly finished: number;
   /** Requests to turn a hook off after a 410 that were tried again. */
   readonly disabled: number;
@@ -419,21 +431,24 @@ export async function reconcileWebhooks(deps: DeliveryDeps): Promise<Reconciled>
     log.error("a reconciliation step failed", { step, ...(delivery && { delivery }), error });
     failures.push(error);
   };
-  const step = async (name: string, run: () => Promise<number>): Promise<number> => {
+  const step = async <T>(name: string, run: () => Promise<T>, none: T): Promise<T> => {
     try {
       return await run();
     } catch (error) {
       fail(name, error);
-      return 0;
+      return none;
     }
   };
+  const late = await step(
+    "resend",
+    () => resendLate(deps, policy, (delivery, error) => fail("resend", error, delivery)),
+    { sent: 0, finished: 0 },
+  );
   const reconciled: Reconciled = {
-    sent: await step("resend", () =>
-      resendLate(deps, policy, (delivery, error) => fail("resend", error, delivery)),
-    ),
-    finished: await step("finish", () => finishDeadClaims(deps, policy)),
-    disabled: await step("disable", () => disableGone(deps, policy)),
-    pruned: await step("prune", () => pruneExpired(deps, policy)),
+    sent: late.sent,
+    finished: late.finished + (await step("finish", () => finishDeadClaims(deps, policy), 0)),
+    disabled: await step("disable", () => disableGone(deps, policy), 0),
+    pruned: await step("prune", () => pruneExpired(deps, policy), 0),
   };
   if (failures.length > 0)
     throw new AggregateError(failures, `webhook reconciliation: ${failures.length} failure(s)`);
@@ -444,13 +459,14 @@ export async function reconcileWebhooks(deps: DeliveryDeps): Promise<Reconciled>
  * Sends a message again for due deliveries whose message is late (lost, or
  * never sent for a wait over a queue's longest delay), claiming each by its
  * schedule so two runs send one. A send that fails leaves its delivery due
- * from now: a later run finds it late again and sends it then.
+ * from now: a later run finds it late again and sends it then. One whose
+ * attempts are spent (no message could make another) is failed instead.
  */
 async function resendLate(
   deps: DeliveryDeps,
   policy: AttemptPolicy,
   failed: (delivery: string, error: unknown) => void,
-): Promise<number> {
+): Promise<{ sent: number; finished: number }> {
   const { db, env } = deps;
   const now = deps.now();
   const late = await db
@@ -463,15 +479,26 @@ async function resendLate(
     .bind(now - policy.lateMs, now, policy.reconcileBatch)
     .all<{ delivery_id: string; next_attempt_at: number }>();
   let sent = 0;
+  let finished = 0;
+  const spent = `attempts >= ${attemptCap("?4", "?5")}`;
   for (const row of late.results) {
     const moved = await db
       .prepare(
-        `UPDATE webhook_deliveries SET next_attempt_at = ?1, enqueued_at = ?1, updated_at = ?1
-         WHERE delivery_id = ?2 AND state = 'pending' AND next_attempt_at = ?3`,
+        `UPDATE webhook_deliveries SET next_attempt_at = ?1, enqueued_at = ?1, updated_at = ?1,
+           state = CASE WHEN ${spent} THEN 'failed' ELSE state END,
+           reason = CASE WHEN ${spent} THEN 'attempts_spent' ELSE reason END,
+           lease_token = CASE WHEN ${spent} THEN NULL ELSE lease_token END,
+           lease_until = CASE WHEN ${spent} THEN NULL ELSE lease_until END
+         WHERE delivery_id = ?2 AND state = 'pending' AND next_attempt_at = ?3
+         RETURNING state`,
       )
-      .bind(now, row.delivery_id, row.next_attempt_at)
-      .run();
-    if (moved.meta.changes === 0) continue;
+      .bind(now, row.delivery_id, row.next_attempt_at, policy.maxAttempts, policy.maxTotalAttempts)
+      .first<{ state: string }>();
+    if (!moved) continue;
+    if (moved.state === "failed") {
+      finished++;
+      continue;
+    }
     try {
       await env.WEBHOOKS.send({ delivery: row.delivery_id } satisfies DeliveryMessage);
       sent++;
@@ -480,7 +507,7 @@ async function resendLate(
       failed(row.delivery_id, error);
     }
   }
-  return sent;
+  return { sent, finished };
 }
 
 /** A last attempt whose run died with its claim: nothing more to try (claims are few: indexed). */
@@ -494,10 +521,10 @@ async function finishDeadClaims(deps: DeliveryDeps, policy: AttemptPolicy): Prom
        WHERE delivery_id IN (
          SELECT delivery_id FROM webhook_deliveries
          WHERE state = 'pending' AND lease_until IS NOT NULL AND lease_until <= ?1
-           AND attempts >= coalesce(attempt_limit, ?2)
+           AND attempts >= ${attemptCap("?2", "?4")}
          LIMIT ?3)`,
     )
-    .bind(now, policy.maxAttempts, policy.reconcileBatch)
+    .bind(now, policy.maxAttempts, policy.reconcileBatch, policy.maxTotalAttempts)
     .run();
   return finished.meta.changes;
 }
