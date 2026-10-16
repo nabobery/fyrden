@@ -13,6 +13,7 @@ import type { RepoDO } from "../src/do/RepoDO.js";
 import { allocateEpoch } from "../src/events/epochs.js";
 import { PULL_NOTICES_JOB, PULL_REFOLLOW_JOB } from "../src/network/pull-source.js";
 import {
+  runUnderWay,
   scheduleViewCompaction,
   VIEW_COMPACT_JOB,
   viewCompactionHandler,
@@ -965,6 +966,12 @@ describe("the base's view", () => {
           new TextEncoder().encode(JSON.stringify(cursor)),
           VIEW_COMPACT_JOB,
         );
+        // Its output sorts where its upload began, before packs borrowed after.
+        expect(runUnderWay(r.git)).toEqual({
+          sources,
+          output: { packId: "run-output", createdAt: now },
+          objects: 100,
+        });
       });
       // A third pack: chosen afresh, the three would merge; after the run, it pairs with nothing.
       const opened = await open(

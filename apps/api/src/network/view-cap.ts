@@ -56,9 +56,7 @@ export function chooseBaseCompaction(packs: readonly ViewPack[], limit: number):
     throw new RangeError("the view limit must be at least 1");
   if (packs.length <= limit) return [];
   const units = new Map<string, ViewPack[]>();
-  for (const pack of [...packs].sort(
-    (a, b) => a.createdAt - b.createdAt || cmp(a.packId, b.packId),
-  )) {
+  for (const pack of [...packs].sort(oldestFirst)) {
     const key = pack.unitId ?? pack.packId;
     units.set(key, [...(units.get(key) ?? []), pack]);
   }
@@ -71,6 +69,12 @@ export function chooseBaseCompaction(packs: readonly ViewPack[], limit: number):
 }
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** Where a pack sorts in the view: as the registry lists packs, by when each began, then by id. */
+type PackKey = Pick<ViewPack, "packId" | "createdAt">;
+
+const oldestFirst = (a: PackKey, b: PackKey) =>
+  a.createdAt - b.createdAt || cmp(a.packId, b.packId);
 
 export interface CompactSliceInput {
   readonly sources: readonly string[];
@@ -205,9 +209,14 @@ export function batchOf(packs: readonly ViewPack[], limits: CompactionLimits): V
   return [];
 }
 
-/** A run of the view's compaction under way: its sources, and its output's objects once written. */
+/**
+ * A run of the view's compaction under way: its sources, its output once
+ * its upload began (where it sorts: packs added since sort after it), and
+ * the output's objects once written.
+ */
 export interface RunUnderWay {
   readonly sources: readonly string[];
+  readonly output?: PackKey;
   readonly objects?: number;
 }
 
@@ -221,12 +230,12 @@ export type OutputBound = "upper" | "lower";
 /**
  * Whether the view compaction brings a view of `packs` (borrowed, live,
  * oldest first) within `limits.limit` were each output it writes of the
- * size `bound` takes: the run under way first (`underWay`, at its written
- * size once known; unless its sources left the view, which discards it),
- * then its runs one after another as the job chooses them, by the packs'
- * known sizes. False when a run would find no batch while the view is
- * still over (no two units fit one run). Each run takes at least two packs
- * and gives back one, so this ends.
+ * size `bound` takes: the run under way first (`underWay`, its output where
+ * it sorts and at its written size once known; unless its sources left the
+ * view, which discards it), then its runs one after another as the job
+ * chooses them, by the packs' known sizes. False when a run would find no
+ * batch while the view is still over (no two units fit one run). Each run
+ * takes at least two packs and gives back one, so this ends.
  */
 export function fitsAfterCompaction(
   packs: readonly ViewPack[],
@@ -235,7 +244,7 @@ export function fitsAfterCompaction(
   underWay?: RunUnderWay,
 ): boolean {
   let view = [...packs];
-  const merge = (batch: readonly ViewPack[], run: number, objects?: number) => {
+  const merge = (batch: readonly ViewPack[], run: number, objects?: number, begun?: PackKey) => {
     const [first] = batch;
     if (!first) return;
     const counts = batch.map((p) => p.objectCount ?? 0);
@@ -243,15 +252,19 @@ export function fitsAfterCompaction(
     const output: ViewPack = {
       ...first,
       packId: `compacted:${run}`,
+      ...begun,
       unitId: null,
       objectCount:
         objects ?? (bound === "upper" ? counts.reduce((n, c) => n + c, 0) : Math.max(...counts)),
     };
-    // An output is newer than every pack of the view.
     view = [...view.filter((p) => !merged.has(p.packId)), output];
+    // An output sorts where its upload began; one not begun yet is newer than every pack of the
+    // view (as each later run's is).
+    if (begun) view.sort(oldestFirst);
   };
   const running = view.filter((p) => underWay?.sources.includes(p.packId));
-  if (underWay && running.length === underWay.sources.length) merge(running, -1, underWay.objects);
+  if (underWay && running.length === underWay.sources.length)
+    merge(running, -1, underWay.objects, underWay.output);
   for (let run = 0; view.length > limits.limit; run++) {
     const batch = batchOf(view, limits);
     if (batch.length < 2) return false;
@@ -288,10 +301,11 @@ export function admission(
 
 /**
  * The run of the view's compaction under way, if one is (its sources
- * chosen), with its output's objects once written: an output is written
- * when the registry has it indexing with its count, whether the cursor has
- * moved on to the swap yet or not (an eviction, or the run's scratch still
- * being deleted).
+ * chosen), with its output once the registry has it (from when its upload
+ * began) and the output's objects once written: an output is written when
+ * the registry has it indexing with its count, whether the cursor has moved
+ * on to the swap yet or not (an eviction, or the run's scratch still being
+ * deleted).
  */
 export function runUnderWay(git: RepoGitStorage): RunUnderWay | undefined {
   const job = git.jobs.get(VIEW_COMPACT_JOB);
@@ -300,14 +314,18 @@ export function runUnderWay(git: RepoGitStorage): RunUnderWay | undefined {
   if (!cursor?.sources || (cursor.phase !== "swap" && !cursor.runId)) return undefined;
   const outputId = cursor.outputId ?? cursor.rewrite?.packId;
   const output = git.context.storage.sql
-    .exec<{ state: string; object_count: number | null; bytes: number | null }>(
-      "SELECT state, object_count, bytes FROM packs WHERE pack_id = ?",
+    .exec<{ state: string; object_count: number | null; bytes: number | null; created_at: number }>(
+      "SELECT state, object_count, bytes, created_at FROM packs WHERE pack_id = ?",
       outputId ?? "",
     )
     .toArray()[0];
   const written =
     output?.state === "indexing" && output.object_count !== null && output.bytes !== null;
-  return { sources: cursor.sources, ...(written && { objects: output.object_count ?? 0 }) };
+  return {
+    sources: cursor.sources,
+    ...(outputId && output && { output: { packId: outputId, createdAt: output.created_at } }),
+    ...(written && { objects: output.object_count ?? 0 }),
+  };
 }
 
 /** A view over its cap that no compaction run fits (no two of its units within a run's limits). */

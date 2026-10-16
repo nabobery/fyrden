@@ -161,6 +161,19 @@ describe("admission", () => {
     expect(admission(view, current, small, { sources: ["p1", "p2"], objects: 6 })).toBe("admit");
   });
 
+  it("does not admit packs the run under way's output sorts before", () => {
+    // Fourteen large packs, then 32,000, 128,000 and 64,000 objects; the run merges the first two
+    // of those into an output begun before the import's three packs. In storage order the next
+    // run merges 64,000 + 160,000 + 64,000, leaving 17 packs no pair of which fits (taken as
+    // the newest, the output would pair with a 288,000 one: 16).
+    const large = Array.from({ length: 14 }, (_, i) => pack(i + 1, 500_000));
+    const current = [...large, pack(15, 32_000), pack(16, 128_000), pack(17, 64_000)];
+    const view = [...current, pack(19, 64_000), pack(20, 288_000), pack(21, 288_000)];
+    const run = { sources: ["p15", "p16"], output: { packId: "p18", createdAt: 18 } };
+    expect(admission(view, current, limits, { ...run, objects: 160_000 })).toBe("learn");
+    expect(admission(view, current, limits, run)).toBe("learn");
+  });
+
   it("refuses when only shared objects could make room and nothing is left to compact", () => {
     // Merged two by two, 4 + 4 + 4 fits one run only were objects shared; the current view (one
     // pack) is within its cap, so compacting it tells nothing.
