@@ -23,15 +23,11 @@ import {
 } from "@fyrden/adapters-cloudflare/obs";
 import {
   atLeast,
-  type CommentSide,
   type CommitIdentity,
-  checkAnchor,
   coAuthorTrailers,
   decidePullAction,
   type Envelope,
   type GitPerson,
-  lineCount,
-  type MergeContext,
   protectsBranch,
   type RepoRole,
   type ReviewEvent,
@@ -126,7 +122,6 @@ import { RepoAuthority } from "./repo/authority.js";
 import {
   BROWSE_POLICY,
   type Browsed,
-  type BrowseFailure,
   type CommitView,
   type CompareView,
   fail,
@@ -184,6 +179,11 @@ import {
   PULL_CHANGED,
 } from "./repo/merge.js";
 import { MERGEABILITY_POLICY, type PullView, RepoMergeability } from "./repo/mergeability.js";
+import {
+  type NewReviewComment,
+  type PullChangeRefusal,
+  PullDiscussion,
+} from "./repo/pull-discussion.js";
 import { mergeBaseOf, type PullFilesPage, pullCommits, pullFiles } from "./repo/pull-files.js";
 import {
   type OpenPull,
@@ -196,7 +196,6 @@ import {
 import { hasPrecheckRules } from "./repo/push-rules.js";
 import {
   type MergeStamps,
-  type MergeStanding,
   REBASE_POLICY,
   type RebasePolicy,
   RebaseSagas,
@@ -204,15 +203,8 @@ import {
   rebaseJobId,
   type SagaView,
 } from "./repo/rebase-saga.js";
-import {
-  type Comparison,
-  needsMergeBase,
-  RepoReviewComments,
-  type ReviewCommentFailure,
-  type ReviewCommentRecord,
-  type ThreadAnchor,
-} from "./repo/review-comments.js";
-import { RepoReviews, type ReviewFailure } from "./repo/reviews.js";
+import { RepoReviewComments, type ReviewCommentRecord } from "./repo/review-comments.js";
+import { RepoReviews } from "./repo/reviews.js";
 import {
   RepoRulesets,
   type RuleSuite,
@@ -235,9 +227,6 @@ const INVALID_LISTING = fail(
   "invalid_cursor",
   "The cursor is not one this API returned, or its listing has expired: start again.",
 );
-
-/** Why a change of pull requests or reviews was not attempted. */
-type PullChangeRefusal = "repo_not_found" | "repo_transferring" | "access_lost";
 
 /** `text` without the line breaks it ends with (a loop: a regex would backtrack on many). */
 function withoutTrailingNewlines(text: string): string {
@@ -314,27 +303,6 @@ const OPEN_IMPORT_STEPS = 40;
 /** Why an import into a repository whose view of borrowed packs is full is refused. */
 const VIEW_FULL_DETAIL =
   "The repository borrows as many packs from its fork network as it can hold, and they are too large to merge.";
-
-/** The largest file a diff comment's anchor is checked against. */
-const ANCHOR_MAX_BYTES = 1024 * 1024;
-
-/** What a pull request's diff compares, with the base it was worked out from. */
-interface Compared {
-  readonly comparison: Comparison;
-  readonly baseRef: string;
-  /** The base tip it was worked out from, as `RepoPulls.comparedBase` gave it. */
-  readonly baseTip: string;
-}
-
-/** The first comment of a new thread on a pull request's diff, as the Worker asks for it. */
-export interface NewReviewComment {
-  readonly body: string;
-  readonly commitId: string;
-  readonly path: string;
-  readonly side: CommentSide;
-  readonly line: number;
-  readonly startLine?: number;
-}
 
 /** A merge of a pull request, as the Worker asks for it. */
 export interface MergePullInput {
@@ -490,6 +458,9 @@ export class RepoDO extends MigratingDO {
   /** Effective roles and the rulesets' judgement of writes. */
   readonly #authority: RepoAuthority;
 
+  /** Review requests, diff threads and the standing a merge is judged by. */
+  readonly #discussion: PullDiscussion;
+
   /** Pulls the account's ACL snapshot for this repository. Tests may replace it. */
   pullAcl: (accountId: string) => Promise<AclSnapshot>;
 
@@ -637,7 +608,7 @@ export class RepoDO extends MigratingDO {
         pulls: this.pulls,
         repoId: () => this.#repoId(),
         standing: (number, pull, method, upToDate) =>
-          this.#mergeStanding(number, pull, method, upToDate),
+          this.#discussion.standing(number, pull, method, upToDate),
         internalCalls: () => currentInvocation()?.tally.internal ?? 0,
         committed: () => {
           this.#armOutbox();
@@ -685,6 +656,17 @@ export class RepoDO extends MigratingDO {
       acl: this.acl,
       rulesets: () => this.rulesetStore,
       memoryBlocks: () => this.#memoryBlocks(),
+    });
+    this.#discussion = new PullDiscussion({
+      git: this.git,
+      pulls: this.pulls,
+      reviews: this.reviews,
+      reviewComments: this.reviewComments,
+      authority: this.#authority,
+      memoryBlocks: () => this.#memoryBlocks(),
+      viewed: (pull) => this.#viewed(pull),
+      pullChange: (method, actor, change, prepare, texts) =>
+        this.#pullChange(method, actor, change, prepare, texts),
     });
     // The commit point: the initiating principal may still write, under a
     // snapshot within the write window (a commit without one is the
@@ -1151,13 +1133,6 @@ export class RepoDO extends MigratingDO {
     );
   }
 
-  /** A change's pull request with whether it merges. */
-  #withView(
-    result: { ok: true; pull: PullRecord } | { ok: false; code: ReviewFailure },
-  ): { ok: true; pull: PullView } | { ok: false; code: ReviewFailure } {
-    return result.ok ? { ok: true, pull: this.#viewed(result.pull) } : result;
-  }
-
   /** A pull request with whether it merges, as far as that is known now. */
   #viewed(pull: PullRecord): PullView {
     return { ...pull, ...this.mergeability.view(pull) };
@@ -1609,7 +1584,12 @@ export class RepoDO extends MigratingDO {
         );
       }
 
-      const { merge, asRead, stamps } = await this.#mergeStanding(number, pull, method, upToDate);
+      const { merge, asRead, stamps } = await this.#discussion.standing(
+        number,
+        pull,
+        method,
+        upToDate,
+      );
       const baseRef = `refs/heads/${pull.baseRef}`;
       const precheck = await this.#authority.precheckUpdates(
         actor.principal,
@@ -1683,68 +1663,6 @@ export class RepoDO extends MigratingDO {
       this.#ensureAuditArchive();
       return made;
     });
-  }
-
-  /**
-   * What the rulesets judge a merge by, from the repository's own records:
-   * the pull request's reviews, whose of them count (write access now),
-   * its last push and threads; `then` stamps them as read (before any
-   * wait), `stamps` as they are when called (in the commit's transaction).
-   */
-  async #mergeStanding(
-    number: number,
-    pull: PullRecord,
-    method: MergePullInput["method"],
-    upToDate: boolean,
-  ): Promise<MergeStanding & { readonly asRead: MergeStamps }> {
-    const standing = this.reviews.standing(number);
-    const threadsThen = this.reviewComments.stamp(number);
-    // Whose reviews count: write access now, checked again in the commit's transaction.
-    const reviewerOwners = await this.#authority.ownersPulled([
-      ...new Set(standing.reviews.map((r) => r.reviewerRoot)),
-    ]);
-    const eligible = () =>
-      [...reviewerOwners]
-        .filter(([root, owners]) => atLeast(this.#authority.roleNow(root, owners), "write"))
-        .map(([root]) => root);
-    const eligibleRoots = new Set(eligible());
-    const lastPush =
-      pull.lastPusher === null || pull.lastPushAt === null
-        ? null
-        : {
-            pusherRoot: rootIdentity({
-              principalId: pull.lastPusher,
-              grantId: pull.lastPusherGrant,
-              ceilingIds: await this.#authority.ceilingsOf(pull.lastPusher, pull.lastPusherGrant),
-            }),
-            at: pull.lastPushAt,
-          };
-    const merge: MergeContext = {
-      number,
-      method,
-      approvals: {
-        reviews: standing.reviews,
-        headSha: pull.headSha,
-        authorRoot: pull.authorRoot,
-        lastPush,
-        eligibleRoots,
-      },
-      unresolvedThreads: this.reviewComments.unresolved(number),
-      upToDate,
-    };
-    return {
-      merge,
-      asRead: {
-        reviews: standing.stamp,
-        threads: threadsThen,
-        eligible: [...eligibleRoots].join(" "),
-      },
-      stamps: () => ({
-        reviews: this.reviews.stamp(number),
-        threads: this.reviewComments.stamp(number),
-        eligible: eligible().join(" "),
-      }),
-    };
   }
 
   /**
@@ -2009,36 +1927,6 @@ export class RepoDO extends MigratingDO {
     });
   }
 
-  /**
-   * Requests reviews of principals (users and agents, found by the
-   * Worker); each one's access is checked here, an agent's capped by its
-   * owner's, before the change.
-   */
-  requestReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
-    return this.#pullChange(
-      "requestReviewers",
-      actor,
-      (caller, ceilings) =>
-        this.#withView(
-          this.reviews.request(
-            number,
-            [...ceilings].map(([id, owners]) => ({
-              id,
-              root: rootIdentity({ principalId: id, grantId: null, ceilingIds: owners }),
-              role: this.#authority.roleNow(id, owners),
-            })),
-            caller,
-          ),
-        ),
-      async () => {
-        const ceilings = new Map<string, string[]>();
-        for (const id of new Set(reviewerIds))
-          ceilings.set(id, await this.#authority.rolesPulled(id, null));
-        return ceilings;
-      },
-    );
-  }
-
   /** A pull request's comments, oldest first; null when the repository is gone, undefined without the pull request. */
   listComments(number: number, after: number, limit: number) {
     return this.#measured("listComments", () => {
@@ -2079,224 +1967,63 @@ export class RepoDO extends MigratingDO {
     return this.#pullChange("deleteComment", actor, (caller) => this.comments.delete(id, caller));
   }
 
+  /** Requests reviews of principals, each one's access checked here (see `PullDiscussion`). */
+  requestReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
+    return this.#discussion.requestReviewers(number, reviewerIds, actor);
+  }
+
+  /** Withdraws review requests. */
+  removeRequestedReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
+    return this.#discussion.removeRequestedReviewers(number, reviewerIds, actor);
+  }
+
   /**
    * A pull request's diff comments, oldest first, with what its diff
    * compares now (whether each is outdated); null when the repository is
    * gone, undefined without the pull request.
    */
   listReviewComments(number: number, after: number, limit: number) {
-    return this.#measured("listReviewComments", async () => {
-      if (this.#refusesReads()) return null;
-      const pull = this.pulls.get(number);
-      if (!pull) return undefined;
-      const comments = this.reviewComments.list(number, after, limit);
-      const { comparison } = await this.#compared(
-        pull,
-        comments.map((c) => c.anchor),
-      );
-      return { comparison, comments };
-    });
+    return this.#measured("listReviewComments", async () =>
+      this.#refusesReads() ? null : this.#discussion.reviewComments(number, after, limit),
+    );
   }
 
   /** One diff comment, with what its pull request's diff compares now; null when the repository is gone. */
   getReviewComment(id: number) {
-    return this.#measured("getReviewComment", async () => {
-      if (this.#refusesReads()) return null;
-      const comment = this.reviewComments.get(id);
-      if (!comment) return undefined;
-      const pull = this.pulls.get(comment.number);
-      const comparison = pull ? (await this.#compared(pull, [comment.anchor])).comparison : null;
-      return { comparison, comment };
-    });
+    return this.#measured("getReviewComment", async () =>
+      this.#refusesReads() ? null : this.#discussion.reviewComment(id),
+    );
   }
 
   /** A pull request's threads, oldest first, as `listReviewComments`. */
   listReviewThreads(number: number, after: number, limit: number) {
-    return this.#measured("listReviewThreads", async () => {
-      if (this.#refusesReads()) return null;
-      const pull = this.pulls.get(number);
-      if (!pull) return undefined;
-      const threads = this.reviewComments.threads(number, after, limit);
-      const { comparison } = await this.#compared(pull, threads);
-      return { comparison, threads };
-    });
-  }
-
-  /**
-   * What `pull`'s diff compares now: its head, and the merge base of its
-   * base and head when one of `anchors` needs it (a base-side thread on
-   * the head); one that cannot be worked out leaves those outdated. With
-   * the base tip it was worked out from.
-   */
-  async #compared(pull: PullRecord, anchors: readonly ThreadAnchor[]): Promise<Compared> {
-    const base = this.pulls.comparedBase(pull);
-    let mergeBaseSha: string | null = null;
-    if (anchors.some((anchor) => needsMergeBase(anchor, pull.headSha))) {
-      const found = await mergeBaseOf(this.git.commitGraph, base, oidFromHex(pull.headSha));
-      if (found.ok) mergeBaseSha = oidToHex(found.value);
-    }
-    return {
-      comparison: { headSha: pull.headSha, mergeBaseSha },
-      baseRef: pull.baseRef,
-      baseTip: oidToHex(base),
-    };
-  }
-
-  /**
-   * In a change, with no await since `compared` was worked out: its
-   * comparison when the pull request still compares the same base tip and
-   * head, else the head now with the merge base unknown (a base-side
-   * thread is then answered outdated, the cautious way).
-   */
-  #comparisonNow(number: number, compared: Compared | null): Comparison | null {
-    const pull = this.pulls.get(number);
-    if (!pull) return null;
-    return compared !== null &&
-      pull.headSha === compared.comparison.headSha &&
-      pull.baseRef === compared.baseRef &&
-      oidToHex(this.pulls.comparedBase(pull)) === compared.baseTip
-      ? compared.comparison
-      : { headSha: pull.headSha, mergeBaseSha: null };
-  }
-
-  /** What `#compared` works out for a change of the thread at `anchor`, before the change. */
-  async #comparedFor(number: number, anchor: ThreadAnchor | undefined): Promise<Compared | null> {
-    const pull = this.pulls.get(number);
-    return pull ? this.#compared(pull, anchor ? [anchor] : []) : null;
-  }
-
-  /**
-   * Starts a thread on a pull request's diff, at an anchor checked against
-   * the file it names: at the commit (a head the pull request has had) for
-   * the head side, at the merge base of the base branch and that commit
-   * for the base side.
-   */
-  createReviewComment(number: number, input: NewReviewComment, actor: RefActor) {
-    return this.#pullChange(
-      "createReviewComment",
-      actor,
-      (caller, checked) =>
-        checked.ok
-          ? this.#withComparison(
-              this.reviewComments.start(number, checked.value.anchor, input.body, caller),
-              checked.value.compared,
-            )
-          : checked,
-      () => this.#checkedAnchor(number, input),
-      [input.body],
+    return this.#measured("listReviewThreads", async () =>
+      this.#refusesReads() ? null : this.#discussion.threads(number, after, limit),
     );
+  }
+
+  /** Starts a thread on a pull request's diff, at an anchor checked against the file it names. */
+  createReviewComment(number: number, input: NewReviewComment, actor: RefActor) {
+    return this.#discussion.createReviewComment(number, input, actor);
   }
 
   /** Replies in the thread of comment `to`. */
   replyReviewComment(number: number, to: number, body: string, actor: RefActor) {
-    return this.#pullChange(
-      "replyReviewComment",
-      actor,
-      (caller, compared) =>
-        this.#withComparison(this.reviewComments.reply(number, to, body, caller), compared),
-      () => this.#comparedFor(number, this.reviewComments.get(to)?.anchor),
-      [body],
-    );
-  }
-
-  /**
-   * `input`'s anchor, if the file it names has the lines it names (a
-   * base-side one records the merge base it was checked at), and what the
-   * diff compares now.
-   */
-  async #checkedAnchor(
-    number: number,
-    input: NewReviewComment,
-  ): Promise<
-    | { ok: true; value: { anchor: ThreadAnchor; compared: Compared } }
-    | BrowseFailure
-    | { ok: false; code: string }
-  > {
-    const pull = this.pulls.get(number);
-    if (!pull) return { ok: false, code: "not_found" };
-    if (!this.pulls.hadHead(number, input.commitId))
-      return { ok: false, code: "commit_not_in_pull" };
-    // An earlier head force-pushed away is kept only while the reflog keeps it.
-    if (!this.git.commitGraph.readSync([oidFromHex(input.commitId)], "verified")[0])
-      return { ok: false, code: "commit_unavailable" };
-    // The left side the files listing shows (a merged one's from the base it was merged onto).
-    const base = this.pulls.comparedBase(pull);
-    let at = input.commitId;
-    let mergeBaseSha: string | null = null;
-    if (input.side === "LEFT") {
-      const found = await mergeBaseOf(this.git.commitGraph, base, oidFromHex(input.commitId));
-      if (!found.ok) return found;
-      at = mergeBaseSha = oidToHex(found.value);
-    }
-    this.#blocks ??= createClockBlockCache();
-    const browse = new RepoBrowse({ git: this.git, memoryBlocks: this.#blocks });
-    let file: Awaited<ReturnType<typeof rawFile>>;
-    try {
-      file = await rawFile(browse, at, input.path, ANCHOR_MAX_BYTES);
-    } finally {
-      browse.close();
-    }
-    // A missing file is a refused anchor (422); any other failure keeps its own status.
-    if (!file.ok)
-      return file.code === "path_not_found" ? { ok: false, code: "path_not_found" } : file;
-    const lines = { side: input.side, line: input.line, startLine: input.startLine ?? null };
-    const refused = checkAnchor(lines, lineCount(file.value.bytes));
-    if (refused) return { ok: false, code: refused };
-    const anchor = { commitSha: input.commitId, mergeBaseSha, path: input.path, ...lines };
-    // The merge base worked out for the head is the comparison's own: no second walk.
-    const compared: Compared = {
-      comparison: {
-        headSha: pull.headSha,
-        mergeBaseSha: needsMergeBase(anchor, pull.headSha) ? mergeBaseSha : null,
-      },
-      baseRef: pull.baseRef,
-      baseTip: oidToHex(base),
-    };
-    return { ok: true, value: { anchor, compared } };
+    return this.#discussion.replyReviewComment(number, to, body, actor);
   }
 
   editReviewComment(id: number, body: string, actor: RefActor) {
-    return this.#pullChange(
-      "editReviewComment",
-      actor,
-      (caller, compared) =>
-        this.#withComparison(this.reviewComments.edit(id, body, caller), compared),
-      () => {
-        const comment = this.reviewComments.get(id);
-        return comment ? this.#comparedFor(comment.number, comment.anchor) : Promise.resolve(null);
-      },
-      [body],
-    );
+    return this.#discussion.editReviewComment(id, body, actor);
   }
 
-  /** A diff comment's change, with what its pull request's diff compares now (whether it is outdated). */
-  #withComparison(
-    result: { ok: true; comment: ReviewCommentRecord } | { ok: false; code: ReviewCommentFailure },
-    compared: Compared | null,
-  ) {
-    return result.ok
-      ? { ...result, comparison: this.#comparisonNow(result.comment.number, compared) }
-      : result;
+  /** Resolves a thread, or makes it unresolved again. */
+  resolveReviewThread(number: number, threadId: number, resolved: boolean, actor: RefActor) {
+    return this.#discussion.resolveReviewThread(number, threadId, resolved, actor);
   }
 
   deleteReviewComment(id: number, actor: RefActor) {
     return this.#pullChange("deleteReviewComment", actor, (caller) =>
       this.reviewComments.delete(id, caller),
-    );
-  }
-
-  /** Resolves a thread, or makes it unresolved again. */
-  resolveReviewThread(number: number, threadId: number, resolved: boolean, actor: RefActor) {
-    return this.#pullChange(
-      "resolveReviewThread",
-      actor,
-      (caller, compared) => {
-        const result = this.reviewComments.resolve(number, threadId, resolved, caller);
-        return result.ok
-          ? { ...result, comparison: this.#comparisonNow(number, compared) }
-          : result;
-      },
-      () => this.#comparedFor(number, this.reviewComments.thread(number, threadId)),
     );
   }
 
@@ -2703,13 +2430,6 @@ export class RepoDO extends MigratingDO {
         "The pull request was closed or retargeted while the merge was made.",
       );
     return made;
-  }
-
-  /** Withdraws review requests. */
-  removeRequestedReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
-    return this.#pullChange("removeRequestedReviewers", actor, (caller) =>
-      this.#withView(this.reviews.unrequest(number, reviewerIds, caller)),
-    );
   }
 
   /**
