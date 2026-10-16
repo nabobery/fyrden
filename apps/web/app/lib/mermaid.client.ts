@@ -13,6 +13,13 @@ const SECURE_KEYS = [
   "maxEdges",
 ];
 
+/**
+ * Diagrams drawn on this document so far: each takes an id of its own, as
+ * Mermaid first removes any element with the id it renders under (another
+ * comment's diagram, drawn earlier by another Markdown component).
+ */
+let drawn = 0;
+
 export async function drawDiagrams(blocks: Element[], isCancelled: () => boolean): Promise<void> {
   const { default: mermaid } = await import("mermaid");
   const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -27,10 +34,12 @@ export async function drawDiagrams(blocks: Element[], isCancelled: () => boolean
     secure: [...SECURE_KEYS, "htmlLabels", "flowchart"],
     theme: dark ? "dark" : "default",
   });
-  for (const [i, code] of blocks.entries()) {
+  for (const code of blocks) {
     if (isCancelled()) return;
     try {
-      const { svg } = await mermaid.render(`mermaid-${i}`, code.textContent ?? "");
+      const { svg } = await mermaid.render(`mermaid-${drawn++}`, code.textContent ?? "");
+      // The component may have gone (or rendered again) while this one was drawn.
+      if (isCancelled()) return;
       const figure = document.createElement("figure");
       figure.className = "mermaid";
       figure.setAttribute("role", "img");

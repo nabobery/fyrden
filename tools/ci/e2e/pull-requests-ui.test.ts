@@ -517,6 +517,25 @@ describe("pull requests in the web UI", () => {
     await see(remark.getByLabel("Reply")).toHaveValue("");
   });
 
+  it("draws every diagram on the page, a later one leaving the earlier ones", async () => {
+    await pushBranch("diagrams", { "diagrams.txt": "x\n" });
+    const number = await openPull("diagrams", "Diagrams", {
+      body: "```mermaid\ngraph TD\n  Start --> Stop\n```\n",
+    });
+    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}`);
+    const description = page.locator("section", { has: page.locator("#pull-description") });
+    await see(description.locator("figure.mermaid svg")).toHaveCount(1, { timeout: 30_000 });
+    await page
+      .getByLabel("Comment (Markdown)")
+      .fill("```mermaid\ngraph LR\n  Here --> There\n```\n");
+    await page.getByRole("button", { name: "Comment", exact: true }).click();
+    const timeline = page.locator(".timeline");
+    await see(timeline.locator("figure.mermaid svg")).toHaveCount(1, { timeout: 30_000 });
+    await see(description.locator("figure.mermaid svg")).toHaveCount(1);
+    await see(description.locator("figure.mermaid")).toContainText("Start");
+    await see(timeline.locator("figure.mermaid")).toContainText("There");
+  });
+
   it("never had a script, style or image refused by the policy on any page", () => {
     expect(stack.refused).toEqual([]);
   });
