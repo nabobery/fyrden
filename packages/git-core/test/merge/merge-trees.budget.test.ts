@@ -120,6 +120,62 @@ describe("mergeTrees, budget", () => {
     expect(await reads(256)).toEqual({ limit: "path", trees: 3 * 16 });
   });
 
+  describe("a path some side changed, whether or not the merge joins it", () => {
+    // Fifteen 255-byte directories and a 254-byte one, with their slashes:
+    // 4,095 bytes. A one-byte name under them is 4,096 bytes, a two-byte one 4,097.
+    const dirs = [
+      ...Array.from({ length: 15 }, (_, i) => String(i % 10).repeat(255)),
+      "x".repeat(254),
+    ];
+    /** A side: `files` (name to content) in the deepest directory. */
+    const side = (s: ReturnType<typeof store>, files: Record<string, string>) =>
+      dirs.reduceRight(
+        (inner, dir) => s.tree({ [dir]: { mode: 0o40000, oid: inner } }),
+        s.tree(Object.fromEntries(Object.entries(files).map(([n, t]) => [n, { oid: s.blob(t) }]))),
+      );
+    /** Both sides change `a` and `b` apart, so the merge walks into the deepest directory. */
+    const merge = (
+      s: ReturnType<typeof store>,
+      base: Record<string, string>,
+      ours: Record<string, string>,
+      theirs: Record<string, string>,
+    ) =>
+      mergeTrees(
+        s.source,
+        side(s, { a: "a\n", b: "b\n", ...base }),
+        side(s, { a: "A\n", b: "b\n", ...ours }),
+        side(s, { a: "a\n", b: "B\n", ...theirs }),
+      );
+    type Files = Record<string, string>;
+    const lines = { base: "a\nb\nc\n", ours: "A\nb\nc\n", theirs: "a\nb\nC\n" };
+
+    /** A file `n`'s base, ours and theirs, each as the files it adds to a side. */
+    type Sides = (n: string) => readonly [Files, Files, Files];
+    const cases: readonly (readonly [string, Sides])[] = [
+      [
+        "merged line by line",
+        (n) => [{ [n]: lines.base }, { [n]: lines.ours }, { [n]: lines.theirs }],
+      ],
+      ["changed on one side", (n) => [{ [n]: "1\n" }, { [n]: "2\n" }, { [n]: "1\n" }]],
+      ["added on one side", (n) => [{}, { [n]: "new\n" }, {}]],
+      ["deleted on one side", (n) => [{ [n]: "1\n" }, { [n]: "1\n" }, {}]],
+    ];
+    for (const [what, files] of cases)
+      it(`fits at 4,096 bytes and stops the merge at 4,097 for a file ${what}`, async () => {
+        const s = store();
+        const [b, o, t] = files("f");
+        expect((await merge(s, b, o, t)).kind).toBe("clean");
+        const [lb, lo, lt] = files("ff");
+        expect(await stopped(merge(s, lb, lo, lt))).toMatchObject({ limit: "path" });
+      });
+
+    it("leaves alone a path past the limit that no side changed, as a tree diff lists no unchanged path", async () => {
+      const s = store();
+      const untouched = { ff: "same\n" };
+      expect((await merge(s, untouched, untouched, untouched)).kind).toBe("clean");
+    });
+  });
+
   /** Sides that change each of `names` differently, as a symlink: conflicts without file merges. */
   const links = (s: ReturnType<typeof store>, names: readonly string[]) => {
     const side = (target: string) =>
