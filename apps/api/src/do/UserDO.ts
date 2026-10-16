@@ -13,6 +13,7 @@ import {
   type FeedPurge,
   feedEpochSource,
   type SyncPosition,
+  type ThreadVersion,
 } from "./user/feed.js";
 
 /**
@@ -58,9 +59,9 @@ export class UserDO extends MigratingDO {
     return this.#feed().sync(after, limit, repoIds);
   }
 
-  ackFeed(id: FeedItemId, version: number): FeedAck {
+  ackFeed(id: FeedItemId, at: ThreadVersion): FeedAck {
     const feed = this.#feed();
-    return this.ctx.storage.transactionSync(() => feed.ack(id, version));
+    return this.ctx.storage.transactionSync(() => feed.ack(id, at));
   }
 
   override async alarm(): Promise<void> {

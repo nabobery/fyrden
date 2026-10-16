@@ -3,7 +3,8 @@ import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
 /*
  * A principal's activity feed: one item per repository, thread and kind,
  * updated in place by the entries events bring. An entry applies only when
- * it is newer than the item (the thread's feed version), so duplicates and
+ * it is newer than the item (the thread's feed version, within the
+ * repository's restore generation), so duplicates and
  * any delivery order leave the same item; an activity item also gathers the
  * ids of what it aggregates (comments, reviews) as a set. Items hold ids,
  * not text: what a member says is read from the repository when the item
@@ -50,6 +51,8 @@ export interface FeedItem {
   readonly kind: FeedKind;
   readonly number: number;
   readonly title: string;
+  /** The repository's restore generation `version` counts in. */
+  readonly epoch: number;
   readonly version: number;
   readonly state: "open" | "resolved";
   readonly priority: FeedPriority;
@@ -65,6 +68,7 @@ export interface FeedItem {
   readonly truncated: boolean;
   readonly eventKey: string;
   readonly eventAt: number;
+  readonly ackedEpoch: number;
   readonly ackedVersion: number;
   readonly seq: number;
 }
@@ -104,6 +108,24 @@ export interface SyncPosition {
   readonly seq: number;
 }
 
+/**
+ * A thread's version, in the repository's restore generation: a newer
+ * generation's are newer, whatever their numbers (a restore starts them
+ * again).
+ */
+export interface ThreadVersion {
+  readonly epoch: number;
+  readonly version: number;
+}
+
+const newerThan = (a: ThreadVersion, b: ThreadVersion) =>
+  a.epoch > b.epoch || (a.epoch === b.epoch && a.version > b.version);
+
+const versionOf = (entry: FeedEntry): ThreadVersion => ({
+  epoch: entry.epochGen,
+  version: entry.feed.subject.version,
+});
+
 /** `ahead`: the item has no such version yet. */
 export type FeedAck =
   | { readonly status: "missing" }
@@ -137,6 +159,7 @@ type Row = {
   kind: FeedKind;
   number: number;
   title: string;
+  thread_epoch: number;
   version: number;
   state: "open" | "resolved";
   priority: FeedPriority;
@@ -150,6 +173,7 @@ type Row = {
   truncated: number;
   last_event_key: string;
   last_event_at: number;
+  acked_epoch: number;
   acked_version: number;
   /** Null for a tombstone. */
   feed_seq: number | null;
@@ -193,6 +217,7 @@ function itemOf(row: Row): FeedItem {
     kind: row.kind,
     number: row.number,
     title: row.title,
+    epoch: row.thread_epoch,
     version: row.version,
     state: row.state,
     priority: row.priority,
@@ -206,6 +231,7 @@ function itemOf(row: Row): FeedItem {
     truncated: row.truncated === 1,
     eventKey: row.last_event_key,
     eventAt: row.last_event_at,
+    ackedEpoch: row.acked_epoch,
     ackedVersion: row.acked_version,
     seq: row.feed_seq as number,
   };
@@ -214,13 +240,17 @@ function itemOf(row: Row): FeedItem {
 const WHERE_ITEM = "repo_id = ? AND thread_key = ? AND kind = ?";
 
 /** An item's fields that entries change: its row less its key, sequence and acknowledgement. */
-type State = Omit<Row, "repo_id" | "thread_key" | "kind" | "acked_version" | "feed_seq" | "seq_at">;
+type State = Omit<
+  Row,
+  "repo_id" | "thread_key" | "kind" | "acked_epoch" | "acked_version" | "feed_seq" | "seq_at"
+>;
 
 function stateOf(row: Row): State {
   const {
     repo_id: _,
     thread_key: __,
     kind: ___,
+    acked_epoch: _____,
     acked_version: ____,
     feed_seq,
     seq_at,
@@ -235,6 +265,7 @@ const sameState = (a: State, b: State) => JSON.stringify(a) === JSON.stringify(b
 function blank(entry: FeedEntry): State {
   return {
     ...thread(entry),
+    thread_epoch: 0,
     version: 0,
     state: "resolved",
     display_member: null,
@@ -251,6 +282,7 @@ function thread(entry: FeedEntry) {
   return {
     number: feed.subject.number,
     title: feed.subject.title,
+    thread_epoch: entry.epochGen,
     version: feed.subject.version,
     state: recipient.state,
     priority: recipient.priority,
@@ -304,7 +336,9 @@ export class Feed {
     const now = this.now();
     let changed = 0;
     let notified = 0;
-    const ordered = [...entries].sort((a, b) => a.feed.subject.version - b.feed.subject.version);
+    const ordered = [...entries].sort(
+      (a, b) => a.epochGen - b.epochGen || a.feed.subject.version - b.feed.subject.version,
+    );
     const purged = new Map<string, number | null>();
     const purgedUntil = (repoId: string) => {
       if (!purged.has(repoId)) purged.set(repoId, this.#purgedUntil(repoId));
@@ -335,7 +369,10 @@ export class Feed {
     const id = { repoId: entry.repoId, threadKey: feed.threadKey, kind: recipient.kind };
     const item = this.#row(id);
     const before = item ? stateOf(item) : blank(entry);
-    const newer = feed.subject.version > before.version;
+    const newer = newerThan(versionOf(entry), {
+      epoch: before.thread_epoch,
+      version: before.version,
+    });
     let after: State = newer ? { ...before, ...thread(entry) } : before;
     if (recipient.kind === "activity") after = withMember(after, entry);
     else if (newer)
@@ -445,16 +482,20 @@ export class Feed {
    * older one than already acknowledged changes nothing. A change is
    * sequenced, so every reader of the feed sees it.
    */
-  ack(id: FeedItemId, version: number): FeedAck {
+  ack(id: FeedItemId, at: ThreadVersion): FeedAck {
     const item = this.#row(id);
     if (!item || item.feed_seq === null) return { status: "missing" };
-    if (version > item.version) return { status: "ahead" };
-    if (version <= item.acked_version) return { status: "acked", item: itemOf(item) };
+    if (newerThan(at, { epoch: item.thread_epoch, version: item.version }))
+      return { status: "ahead" };
+    if (!newerThan(at, { epoch: item.acked_epoch, version: item.acked_version }))
+      return { status: "acked", item: itemOf(item) };
     const row = this.sql
       .exec<Row>(
-        `UPDATE feed_items SET acked_version = ?, feed_seq = ?, seq_at = ? WHERE ${WHERE_ITEM}
+        `UPDATE feed_items SET acked_epoch = ?, acked_version = ?, feed_seq = ?, seq_at = ?
+         WHERE ${WHERE_ITEM}
          RETURNING *`,
-        version,
+        at.epoch,
+        at.version,
         this.#next(false),
         this.now(),
         id.repoId,

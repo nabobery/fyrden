@@ -172,6 +172,7 @@ describe("the feed sink", () => {
           eventKey: "rep_0:1:3",
           occurredAt: event.at,
           actor: OWNER,
+          epochGen: 1,
           feed: event.feed,
         },
       },
@@ -213,6 +214,7 @@ describe("the feed sink", () => {
       repoId,
       actor: OWNER,
       feed: { threadKey: "pull/1", member: "comment/2", subject: { version: 2 } },
+      epochGen: 1,
       recipient: { principal: b, kind: "activity" },
     });
     expect(calls[1]?.entries[1]?.feed).not.toHaveProperty("audience");

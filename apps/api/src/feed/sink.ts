@@ -36,6 +36,7 @@ interface PlannedFeed {
   readonly eventKey: string;
   readonly occurredAt: number;
   readonly actor: string | null;
+  readonly epochGen: number;
   readonly feed: FeedBlock;
 }
 
@@ -179,6 +180,7 @@ export const feedSink: EffectSink = {
           eventKey: eventKey(event.id),
           occurredAt: event.at,
           actor: event.actor,
+          epochGen: event.id.epochGen,
           feed: event.feed,
         } satisfies PlannedFeed,
       },

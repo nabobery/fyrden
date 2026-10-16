@@ -3012,7 +3012,9 @@ export type FeedListOutput = {
       number: number;
       title: string;
     };
-    /** The thread's feed version the item is at; acknowledge with it. */
+    /** The repository's restore generation `version` counts in: a newer generation's versions are newer, whatever their numbers. */
+    epoch: number;
+    /** The thread's feed version the item is at; acknowledge with it and `epoch`. */
     version: number;
     /** `resolved`: nothing to act on any more. */
     state: "open" | "resolved";
@@ -3035,6 +3037,8 @@ export type FeedListOutput = {
     members_truncated: boolean;
     /** When the last change happened, Unix time in milliseconds. */
     event_at: number;
+    /** The epoch of the version last acknowledged; 0 for none. */
+    acked_epoch: number;
     /** The version last acknowledged; 0 for none. */
     acked_version: number;
   })[];
@@ -3067,7 +3071,9 @@ export type FeedSyncOutput = {
       number: number;
       title: string;
     };
-    /** The thread's feed version the item is at; acknowledge with it. */
+    /** The repository's restore generation `version` counts in: a newer generation's versions are newer, whatever their numbers. */
+    epoch: number;
+    /** The thread's feed version the item is at; acknowledge with it and `epoch`. */
     version: number;
     /** `resolved`: nothing to act on any more. */
     state: "open" | "resolved";
@@ -3090,6 +3096,8 @@ export type FeedSyncOutput = {
     members_truncated: boolean;
     /** When the last change happened, Unix time in milliseconds. */
     event_at: number;
+    /** The epoch of the version last acknowledged; 0 for none. */
+    acked_epoch: number;
     /** The version last acknowledged; 0 for none. */
     acked_version: number;
   })[];
@@ -3103,14 +3111,18 @@ export type FeedSyncOutput = {
 /** Input of `feed.ack`: Acknowledge a feed item. */
 export type FeedAckInput = {
   item_key: string;
+  epoch: number;
   version: number;
 };
 
 /** Output of `feed.ack`. */
 export type FeedAckOutput = {
   item_key: string;
+  /** The item's current epoch. */
+  epoch: number;
   /** The item's current version. */
   version: number;
+  acked_epoch: number;
   acked_version: number;
 };
 
@@ -4799,7 +4811,7 @@ export interface Operations {
   "feed.list": { input: FeedListInput; output: FeedListOutput };
   /** Sync the activity feed. The feed's current state, to start from or start over: open P0 items, then P1 items of the last 7 days, newest first (500 at most), and the cursor to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. `complete` is false when more were left out, or when not every repository could be checked (at most 100 an answer): `head_cursor` is then the feed's start. */
   "feed.sync": { input: FeedSyncInput; output: FeedSyncOutput };
-  /** Acknowledge a feed item. Records that the feed's owner has seen an item at a version (every reader of the feed shares it, and the item comes again in `GET /feed`). A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing. */
+  /** Acknowledge a feed item. Records that the feed's owner has seen an item at a version, its `epoch` and `version` (every reader of the feed shares it, and the item comes again in `GET /feed`). Versions order by epoch, then version. A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing. */
   "feed.ack": { input: FeedAckInput; output: FeedAckOutput };
   /** Get your quota. The authenticated user's quota: how many repositories it may have and how many bytes their pushes may store, and how much of each is used. A deleted repository's bytes are free again once its deletion finishes. */
   "quotas.user.get": { input: QuotasUserGetInput; output: QuotasUserGetOutput };

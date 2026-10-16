@@ -32,6 +32,7 @@ function entry(repoId: string, version: number, occurredAt: number): FeedEntry {
     repoId,
     occurredAt,
     actor: "usr_actor",
+    epochGen: 1,
     feed: {
       threadKey: "pull/1",
       subject: { kind: "pull", number: 1, title: "A pull request", version },

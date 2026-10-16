@@ -14,10 +14,16 @@ export const FeedItem = z.object({
     number: z.number().int(),
     title: z.string(),
   }),
+  epoch: z
+    .number()
+    .int()
+    .describe(
+      "The repository's restore generation `version` counts in: a newer generation's versions are newer, whatever their numbers.",
+    ),
   version: z
     .number()
     .int()
-    .describe("The thread's feed version the item is at; acknowledge with it."),
+    .describe("The thread's feed version the item is at; acknowledge with it and `epoch`."),
   state: z.enum(["open", "resolved"]).describe("`resolved`: nothing to act on any more."),
   priority: z.enum(FEED_PRIORITIES).describe("P0: act on this; P1: a thread you take part in."),
   reasons: z.array(z.string()).describe("Why it is in the feed: author, reviewer, mentioned, ..."),
@@ -40,6 +46,7 @@ export const FeedItem = z.object({
     .describe("For `activity`: the ids it gathers (comments, reviews), the greatest 100."),
   members_truncated: z.boolean().describe("Some members were left out."),
   event_at: z.number().int().describe("When the last change happened, Unix time in milliseconds."),
+  acked_epoch: z.number().int().describe("The epoch of the version last acknowledged; 0 for none."),
   acked_version: z.number().int().describe("The version last acknowledged; 0 for none."),
 });
 
@@ -120,14 +127,17 @@ export const ackFeedItem = defineOperation({
   path: "/feed/ack",
   summary: "Acknowledge a feed item",
   description:
-    "Records that the feed's owner has seen an item at a version (every reader of the feed shares it, and the item comes again in `GET /feed`). A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing.",
+    "Records that the feed's owner has seen an item at a version, its `epoch` and `version` (every reader of the feed shares it, and the item comes again in `GET /feed`). Versions order by epoch, then version. A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing.",
   input: z.object({
     item_key: z.string().max(300),
+    epoch: z.number().int().positive(),
     version: z.number().int().positive(),
   }),
   output: z.object({
     item_key: z.string(),
+    epoch: z.number().int().describe("The item's current epoch."),
     version: z.number().int().describe("The item's current version."),
+    acked_epoch: z.number().int(),
     acked_version: z.number().int(),
   }),
   permission: AUTHENTICATED,
@@ -137,7 +147,7 @@ export const ackFeedItem = defineOperation({
   mcp: {
     tool: "ack_feed_item",
     title: "Acknowledge a feed item",
-    description: "Mark a feed item seen at a version (from the item's `version`).",
+    description: "Mark a feed item seen at a version (the item's `epoch` and `version`).",
     readOnly: false,
   },
 });

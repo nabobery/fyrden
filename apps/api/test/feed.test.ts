@@ -43,6 +43,7 @@ interface EntryInit {
   principal?: string;
   action?: string;
   actor?: string;
+  epochGen?: number;
 }
 
 /** One recipient's entry, built by hand as the repository would send it. */
@@ -50,10 +51,11 @@ function entry(init: EntryInit): FeedEntry {
   const thread = init.thread ?? 1;
   const kind = init.kind ?? "activity";
   return {
-    eventKey: `rep_test:1:${init.version}`,
+    eventKey: `rep_test:${init.epochGen ?? 1}:${init.version}`,
     repoId: init.repoId ?? "rep_test",
     occurredAt: init.occurredAt ?? Date.now(),
     actor: init.actor ?? "usr_actor",
+    epochGen: init.epochGen ?? 1,
     feed: {
       threadKey: `pull/${thread}`,
       subject: { kind: "pull", number: thread, title: `Pull ${thread}`, version: init.version },
@@ -133,14 +135,25 @@ describe("applying entries", () => {
       silent: fc.boolean(),
     });
     // One event per version of a thread, as the repository numbers them.
-    const history = fc.array(step, { minLength: 1, maxLength: 30 }).map((steps) => {
-      const versions = new Map<number, number>();
-      return steps.map(({ kind, state, ...s }) => {
-        const version = (versions.get(s.thread) ?? 0) + 1;
-        versions.set(s.thread, version);
-        return entry({ ...s, kind, version, state: kind === "activity" ? "open" : state });
+    // A restore of the repository from some event on: its versions start again, in epoch 2.
+    const history = fc
+      .tuple(fc.array(step, { minLength: 1, maxLength: 30 }), fc.nat(40))
+      .map(([steps, restore]) => {
+        const versions = new Map<string, number>();
+        return steps.map(({ kind, state, ...s }, index) => {
+          const epochGen = index >= restore ? 2 : 1;
+          const key = `${s.thread}:${epochGen}`;
+          const version = (versions.get(key) ?? 0) + 1;
+          versions.set(key, version);
+          return entry({
+            ...s,
+            kind,
+            epochGen,
+            version,
+            state: kind === "activity" ? "open" : state,
+          });
+        });
       });
-    });
     const delivery = history.chain((entries) =>
       fc.tuple(
         fc.constant(entries),
@@ -228,8 +241,39 @@ describe("applying entries", () => {
           .items.map((i) => i.kind),
       ).toEqual(["merge_conflict"]);
       expect(
-        feedIn(storage).feed.ack({ repoId: "rep_test", threadKey: "pull/1", kind: "approved" }, 5),
+        feedIn(storage).feed.ack(
+          { repoId: "rep_test", threadKey: "pull/1", kind: "approved" },
+          { epoch: 1, version: 5 },
+        ),
       ).toEqual({ status: "missing" });
+    });
+  });
+
+  it("takes a restored repository's versions as newer, and keeps a delayed one from before out", async () => {
+    await inFeed((storage) => {
+      const { feed, apply, items, reset } = feedIn(storage);
+      const kind = "review_requested";
+      const before = entry({ kind, version: 20, priority: "P0" });
+      // Restored: the thread's versions start again, in epoch 2.
+      const restored = entry({ kind, epochGen: 2, version: 1, state: "resolved", priority: "P0" });
+      // Delivered late, from before the restore (the restored repository never had it).
+      const delayed = entry({ kind, version: 21, priority: "P0" });
+      apply([before]);
+      expect(apply([restored])).toEqual({ changed: 1, notified: 1 });
+      expect(apply([delayed])).toEqual({ changed: 0, notified: 0 });
+      expect(items()).toMatchObject([{ thread_epoch: 2, version: 1, state: "resolved" }]);
+      // In one call, in any order, the same.
+      reset();
+      apply([delayed, restored, before]);
+      expect(items()).toMatchObject([{ thread_epoch: 2, version: 1, state: "resolved" }]);
+      // Acknowledgements order by epoch, then version.
+      const id = { repoId: "rep_test", threadKey: "pull/1", kind } as const;
+      const ack = (epoch: number, version: number) =>
+        storage.transactionSync(() => feed.ack(id, { epoch, version }));
+      expect(ack(2, 2)).toEqual({ status: "ahead" });
+      expect(ack(1, 20)).toMatchObject({ item: { ackedEpoch: 1, ackedVersion: 20 } });
+      expect(ack(2, 1)).toMatchObject({ item: { ackedEpoch: 2, ackedVersion: 1 } });
+      expect(ack(1, 30)).toMatchObject({ item: { ackedEpoch: 2, ackedVersion: 1 } });
     });
   });
 
@@ -378,13 +422,19 @@ describe("reading the feed", () => {
     const kind = "review_requested";
     await stub.applyFeed([entry({ kind, version: 2, priority: "P0" })]);
     const id = { repoId: "rep_test", threadKey: "pull/1", kind } as const;
-    expect(await stub.ackFeed(id, 3)).toEqual({ status: "ahead" });
-    expect(await stub.ackFeed({ ...id, threadKey: "pull/9" }, 1)).toEqual({ status: "missing" });
-    const acked = await stub.ackFeed(id, 2);
+    expect(await stub.ackFeed(id, { epoch: 1, version: 3 })).toEqual({ status: "ahead" });
+    expect(await stub.ackFeed({ ...id, threadKey: "pull/9" }, { epoch: 1, version: 1 })).toEqual({
+      status: "missing",
+    });
+    const acked = await stub.ackFeed(id, { epoch: 1, version: 2 });
     expect(acked).toMatchObject({ status: "acked", item: { ackedVersion: 2, seq: 2 } });
     // An older or the same version again: unchanged, not sequenced again.
-    expect(await stub.ackFeed(id, 1)).toMatchObject({ item: { ackedVersion: 2, seq: 2 } });
-    expect(await stub.ackFeed(id, 2)).toMatchObject({ item: { ackedVersion: 2, seq: 2 } });
+    expect(await stub.ackFeed(id, { epoch: 1, version: 1 })).toMatchObject({
+      item: { ackedVersion: 2, seq: 2 },
+    });
+    expect(await stub.ackFeed(id, { epoch: 1, version: 2 })).toMatchObject({
+      item: { ackedVersion: 2, seq: 2 },
+    });
     // A newer version of the item keeps the acknowledgement of the older one.
     await stub.applyFeed([entry({ kind, version: 3, priority: "P0" })]);
     const page = await stub.listFeed(null, 50, {});
@@ -707,7 +757,8 @@ describe("the feed operations", () => {
       repo.fullName,
     ]);
     expect(
-      (await feedApi("POST", "/feed/ack", reader.token, { item_key: key, version: 1 })).status,
+      (await feedApi("POST", "/feed/ack", reader.token, { item_key: key, epoch: 1, version: 1 }))
+        .status,
     ).toBe(200);
     expect((await api("DELETE", path, owner.token)).status).toBe(200);
     const list = await json<FeedOut>(feedApi("GET", "/feed", reader.token));
@@ -716,7 +767,9 @@ describe("the feed operations", () => {
       [],
     );
     expect(
-      await json(feedApi("POST", "/feed/ack", reader.token, { item_key: key, version: 2 })),
+      await json(
+        feedApi("POST", "/feed/ack", reader.token, { item_key: key, epoch: 1, version: 2 }),
+      ),
     ).toMatchObject({ status: 404, body: { code: "feed_item_not_found" } });
   });
 
@@ -724,7 +777,7 @@ describe("the feed operations", () => {
     const key = `${repo.id}:pull/1:activity`;
     const ack = (version: number, item_key = key) =>
       json<{ acked_version: number; code?: string }>(
-        feedApi("POST", "/feed/ack", owner.token, { item_key, version }),
+        feedApi("POST", "/feed/ack", owner.token, { item_key, epoch: 1, version }),
       );
     expect(await ack(2)).toMatchObject({ status: 409, body: { code: "version_ahead" } });
     expect(await ack(1)).toMatchObject({
@@ -827,6 +880,7 @@ describe("the feed operations", () => {
     const ack = (repoId: string) =>
       feedApi("POST", "/feed/ack", limited, {
         item_key: `${repoId}:pull/1:review_requested`,
+        epoch: 1,
         version: 1,
       });
     expect((await ack(shown.id)).status).toBe(200);

@@ -1492,6 +1492,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "items": {
                         "additionalProperties": false,
                         "properties": {
+                          "acked_epoch": {
+                            "description": "The epoch of the version last acknowledged; 0 for none.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                           "acked_version": {
                             "description": "The version last acknowledged; 0 for none.",
                             "maximum": 9007199254740991,
@@ -1516,6 +1522,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "none",
                             ],
                             "type": "string",
+                          },
+                          "epoch": {
+                            "description": "The repository's restore generation \`version\` counts in: a newer generation's versions are newer, whatever their numbers.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
                           },
                           "event_at": {
                             "description": "When the last change happened, Unix time in milliseconds.",
@@ -1628,7 +1640,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "string",
                           },
                           "version": {
-                            "description": "The thread's feed version the item is at; acknowledge with it.",
+                            "description": "The thread's feed version the item is at; acknowledge with it and \`epoch\`.",
                             "maximum": 9007199254740991,
                             "minimum": -9007199254740991,
                             "type": "integer",
@@ -1640,6 +1652,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "thread_key",
                           "kind",
                           "subject",
+                          "epoch",
                           "version",
                           "state",
                           "priority",
@@ -1652,6 +1665,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "members",
                           "members_truncated",
                           "event_at",
+                          "acked_epoch",
                           "acked_version",
                         ],
                         "type": "object",
@@ -1718,13 +1732,18 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/feed/ack": {
       "post": {
-        "description": "Records that the feed's owner has seen an item at a version (every reader of the feed shares it, and the item comes again in \`GET /feed\`). A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing.",
+        "description": "Records that the feed's owner has seen an item at a version, its \`epoch\` and \`version\` (every reader of the feed shares it, and the item comes again in \`GET /feed\`). Versions order by epoch, then version. A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing.",
         "operationId": "feed.ack",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "properties": {
+                  "epoch": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer",
+                  },
                   "item_key": {
                     "maxLength": 300,
                     "type": "string",
@@ -1737,6 +1756,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                 },
                 "required": [
                   "item_key",
+                  "epoch",
                   "version",
                 ],
                 "type": "object",
@@ -1752,7 +1772,18 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                 "schema": {
                   "additionalProperties": false,
                   "properties": {
+                    "acked_epoch": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                     "acked_version": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "epoch": {
+                      "description": "The item's current epoch.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",
@@ -1769,7 +1800,9 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                   },
                   "required": [
                     "item_key",
+                    "epoch",
                     "version",
+                    "acked_epoch",
                     "acked_version",
                   ],
                   "type": "object",
@@ -1826,6 +1859,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "items": {
                         "additionalProperties": false,
                         "properties": {
+                          "acked_epoch": {
+                            "description": "The epoch of the version last acknowledged; 0 for none.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                           "acked_version": {
                             "description": "The version last acknowledged; 0 for none.",
                             "maximum": 9007199254740991,
@@ -1850,6 +1889,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "none",
                             ],
                             "type": "string",
+                          },
+                          "epoch": {
+                            "description": "The repository's restore generation \`version\` counts in: a newer generation's versions are newer, whatever their numbers.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
                           },
                           "event_at": {
                             "description": "When the last change happened, Unix time in milliseconds.",
@@ -1962,7 +2007,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "string",
                           },
                           "version": {
-                            "description": "The thread's feed version the item is at; acknowledge with it.",
+                            "description": "The thread's feed version the item is at; acknowledge with it and \`epoch\`.",
                             "maximum": 9007199254740991,
                             "minimum": -9007199254740991,
                             "type": "integer",
@@ -1974,6 +2019,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "thread_key",
                           "kind",
                           "subject",
+                          "epoch",
                           "version",
                           "state",
                           "priority",
@@ -1986,6 +2032,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "members",
                           "members_truncated",
                           "event_at",
+                          "acked_epoch",
                           "acked_version",
                         ],
                         "type": "object",

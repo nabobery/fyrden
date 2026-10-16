@@ -15,12 +15,15 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   feed in sequence order is the order changes arrived in. A row without
  *   one is a tombstone: never shown, it keeps what resolved something the
  *   feed has not shown, against older entries arriving later
- *   (`feed_tombstones` finds the oldest for retention). `members`: the ids
- *   an activity item aggregates (JSON, at most 100, each with when and by
- *   whom it was made), `truncated` once any was dropped; `display_member`: the member the item displays (an
- *   activity item's greatest, whose author `actor` is), its text read from
- *   the repository when the item is read; `acked_version`:
- *   the version the feed's owner last acknowledged (0 for none).
+ *   (`feed_tombstones` finds the oldest for retention). `thread_epoch` and
+ *   `version`: the thread's version, in the repository's restore
+ *   generation (a newer one's versions are newer). `members`: the ids an
+ *   activity item aggregates (JSON, at most 100, each with when and by whom
+ *   it was made), `truncated` once any was dropped; `display_member`: the
+ *   member the item displays (an activity item's greatest, whose author
+ *   `actor` is), its text read from the repository when the item is read;
+ *   `acked_epoch` and `acked_version`: the version the feed's owner last
+ *   acknowledged (0 for none).
  * - `purge_marks`: repositories the owner lost read access to, with when
  *   (`until_at`: entries of events up to then are dropped on arrival), and
  *   the account that said so at its `(epoch_gen, acl_version)` (an older
@@ -48,6 +51,7 @@ export const userSchema: readonly DoMigration[] = [
         kind TEXT NOT NULL,
         number INTEGER NOT NULL,
         title TEXT NOT NULL,
+        thread_epoch INTEGER NOT NULL,
         version INTEGER NOT NULL,
         state TEXT NOT NULL CHECK (state IN ('open', 'resolved')),
         priority TEXT NOT NULL CHECK (priority IN ('P0', 'P1')),
@@ -61,6 +65,7 @@ export const userSchema: readonly DoMigration[] = [
         truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
         last_event_key TEXT NOT NULL,
         last_event_at INTEGER NOT NULL,
+        acked_epoch INTEGER NOT NULL DEFAULT 0,
         acked_version INTEGER NOT NULL DEFAULT 0,
         feed_seq INTEGER UNIQUE,
         seq_at INTEGER NOT NULL,

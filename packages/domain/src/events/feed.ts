@@ -88,6 +88,11 @@ export interface FeedEntry {
   readonly occurredAt: number;
   /** The actor, as the event names it. */
   readonly actor: string | null;
+  /**
+   * The repository's restore generation (the event's): the thread's
+   * versions count within it, and a newer one's are newer.
+   */
+  readonly epochGen: number;
   readonly feed: Omit<FeedBlock, "audience">;
   readonly recipient: FeedRecipient;
 }

@@ -229,6 +229,7 @@ function itemOutput(item: FeedItem, repo: RepoEntry, excerpt: string | null): Fe
     thread_key: item.threadKey,
     kind: item.kind,
     subject: { kind: "pull", number: item.number, title: item.title },
+    epoch: item.epoch,
     version: item.version,
     state: item.state,
     priority: item.priority,
@@ -241,6 +242,7 @@ function itemOutput(item: FeedItem, repo: RepoEntry, excerpt: string | null): Fe
     members: [...item.members],
     members_truncated: item.truncated,
     event_at: item.eventAt,
+    acked_epoch: item.ackedEpoch,
     acked_version: item.ackedVersion,
   };
 }
@@ -359,7 +361,7 @@ export async function ackFeedItemOperation(
   if (repo === undefined) throw new Error("the repository's access could not be checked");
   if (repo === "hidden") throw notFound;
   counted(ctx, "ackFeed");
-  const acked = await feedOf(ctx).ackFeed(id, input.version);
+  const acked = await feedOf(ctx).ackFeed(id, { epoch: input.epoch, version: input.version });
   if (acked.status === "missing") throw notFound;
   if (acked.status === "ahead")
     throw new OperationError(
@@ -369,7 +371,9 @@ export async function ackFeedItemOperation(
     );
   return {
     item_key: input.item_key,
+    epoch: acked.item.epoch,
     version: acked.item.version,
+    acked_epoch: acked.item.ackedEpoch,
     acked_version: acked.item.ackedVersion,
   };
 }
