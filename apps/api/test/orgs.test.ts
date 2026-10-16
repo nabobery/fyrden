@@ -170,7 +170,7 @@ describe("memberships", () => {
       ),
     ).toMatchObject({ ok: false, code: "forbidden" });
     expect(
-      await stub.removeMember({ principalId: bob.principalId }, owner.principalId),
+      await stub.removeMember({ principalId: bob.principalId }, owner.principalId, []),
     ).toMatchObject({
       ok: false,
       code: "forbidden",

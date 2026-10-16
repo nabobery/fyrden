@@ -6,6 +6,7 @@ import { env } from "cloudflare:workers";
 import type { DomainEvent } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, it } from "vitest";
+import { HELD_REPOS } from "../src/repos/directory.js";
 import { api, user, type Who } from "./helpers/api.js";
 
 let admin: Who;
@@ -21,6 +22,32 @@ const events = (accountId: string) =>
       .toArray()
       .map((row) => JSON.parse(row.event) as DomainEvent),
   );
+
+/** An organization of `owner` with `dev` a member. */
+async function orgWithMember() {
+  const owner = await user();
+  const dev = await user();
+  const login = uniqueId("org").slice(0, 39);
+  const created = await api("POST", "/admin/organizations", admin.token, {
+    login,
+    admin: owner.handle,
+  });
+  const { id } = await created.json<{ id: string }>();
+  await api("PUT", `/orgs/${login}/memberships/${dev.handle}`, owner.token, {});
+  return { id, login, owner, dev };
+}
+
+/** A private repository of `ownerId` in the directory only. */
+async function directoryRepo(ownerId: string): Promise<string> {
+  const id = uniqueId("rep_");
+  await env.DIRECTORY.prepare(
+    `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'default', 'private', 0, 0)`,
+  )
+    .bind(id, ownerId, id.toLowerCase(), uniqueId("net"))
+    .run();
+  return id;
+}
 
 describe("access revocations", () => {
   it("are told when a collaborator is removed, not when a role only changes", async () => {
@@ -43,19 +70,21 @@ describe("access revocations", () => {
     expect(revoked?.data?.acl_version).toBeGreaterThan(0);
   });
 
-  it("are told for every repository but those still shared when a member leaves", async () => {
-    const owner = await user();
-    const dev = await user();
-    const login = uniqueId("org").slice(0, 39);
-    const created = await api("POST", "/admin/organizations", admin.token, {
-      login,
-      admin: owner.handle,
-    });
-    const { id } = await created.json<{ id: string }>();
-    await api("PUT", `/orgs/${login}/memberships/${dev.handle}`, owner.token, {});
-    const shared = await (
-      await api("POST", `/orgs/${login}/repos`, owner.token, { name: "shared" })
-    ).json<{ id: string }>();
+  it("name, when a member leaves, every repository the organization holds then but those still shared", async () => {
+    const { id, login, owner, dev } = await orgWithMember();
+    const made = async (name: string) =>
+      (await api("POST", `/orgs/${login}/repos`, owner.token, { name })).json<{ id: string }>();
+    await made("shared");
+    const other = await made("other");
+    // One moving away to another account, not released yet: still the organization's to purge.
+    const moving = await directoryRepo(owner.principalId);
+    await env.DIRECTORY.prepare(
+      `INSERT INTO repo_transfers (repo_id, transfer_id, from_owner, from_name, to_owner, to_name,
+         step, created_at, updated_at)
+       VALUES (?, ?, ?, 'old', ?, 'new', 'grants', 0, 0)`,
+    )
+      .bind(moving, uniqueId("trf"), id, owner.principalId)
+      .run();
     await api("PUT", `/repos/${login}/shared/collaborators/${dev.handle}`, owner.token, {
       permission: "pull",
     });
@@ -64,10 +93,31 @@ describe("access revocations", () => {
     ).toBe(200);
     const revoked = (await events(id)).filter((e) => e.type === "access.revoked");
     expect(revoked).toHaveLength(1);
-    expect(revoked[0]?.data).toMatchObject({
-      principals: [dev.principalId],
-      all_except: [shared.id],
-    });
+    expect(revoked[0]?.data).toMatchObject({ principals: [dev.principalId] });
+    const named = (revoked[0]?.data ?? {}) as { repos?: string[] };
+    expect([...(named.repos ?? [])].sort()).toEqual([other.id, moving].sort());
+  });
+
+  it("name them in events of at most 100 repositories each", async () => {
+    const { id, login, owner, dev } = await orgWithMember();
+    const held = await Promise.all(Array.from({ length: 250 }, () => directoryRepo(id)));
+    expect(
+      (await api("DELETE", `/orgs/${login}/memberships/${dev.handle}`, owner.token)).status,
+    ).toBe(200);
+    const revoked = (await events(id)).filter((e) => e.type === "access.revoked");
+    const named = revoked.map((e) => (e.data as { repos: string[] }).repos);
+    expect(named.map((repos) => repos.length)).toEqual([100, 100, 50]);
+    expect(named.flat().sort()).toEqual([...held].sort());
+    expect(new Set(revoked.map((e) => e.data?.acl_version)).size).toBe(1);
+  });
+
+  it("find the organization's repositories and those moving away by index, not by a scan", async () => {
+    const { results } = await env.DIRECTORY.prepare(`EXPLAIN QUERY PLAN ${HELD_REPOS}`)
+      .bind(uniqueId("org"))
+      .all<{ detail: string }>();
+    const plan = results.map((row) => row.detail);
+    expect(plan.filter((detail) => detail.startsWith("SCAN"))).toEqual([]);
+    expect(plan.join("\n")).toContain("repo_transfers_leaving");
   });
 });
 

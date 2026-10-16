@@ -16,12 +16,12 @@ import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effect
  * takes four effects a run, at most 400 calls).
  *
  * An account's `access.revoked` (principals no longer read some of its
- * repositories) becomes effects too, of at most 100 principals each (a
- * transfer can name thousands): delivering one purges those repositories
- * from each principal's feed, up to when access was lost, as the account
- * had them at its ACL version. "All but these" is resolved then, from the
- * directory (the account's repositories but the exceptions), and public
- * repositories are left out of every purge: anyone still reads those.
+ * repositories, at most 100 an event) becomes effects too, of at most 100
+ * principals each (a transfer can name thousands): delivering one purges
+ * those repositories from each principal's feed, up to when access was
+ * lost, as the account had them at its ACL version. The event names every
+ * repository (a member's removal names those the account held then), and
+ * public repositories are left out of every purge: anyone still reads those.
  */
 
 /** Principals one purge effect names at most (an event names up to 100 recipients too). */
@@ -40,26 +40,18 @@ interface PlannedFeed {
   readonly feed: FeedBlock;
 }
 
-const RevokedSchema = z.union([
-  z.object({
-    principals: z.array(z.string().min(1)).min(1),
-    repos: z.array(z.string().min(1)),
-    acl_version: z.number().int().nonnegative(),
-  }),
-  z.object({
-    principals: z.array(z.string().min(1)).min(1),
-    all_except: z.array(z.string().min(1)),
-    acl_version: z.number().int().nonnegative(),
-  }),
-]);
+const RevokedSchema = z.object({
+  principals: z.array(z.string().min(1)).min(1),
+  repos: z.array(z.string().min(1)),
+  acl_version: z.number().int().nonnegative(),
+});
 
-/** A purge, as its effect carries it: of `repos`, or of all the account's but `allExcept`. */
+/** A purge of `repos`, as its effect carries it. */
 interface PlannedPurge {
   readonly purge: {
     readonly accountId: string;
     readonly principals: readonly string[];
-    readonly repos: readonly string[] | null;
-    readonly allExcept: readonly string[] | null;
+    readonly repos: readonly string[];
     readonly until: number;
     readonly epochGen: number;
     readonly aclVersion: number;
@@ -94,37 +86,24 @@ function entryCalls(effects: readonly Effect[], env: Env): FeedCall[] {
 }
 
 /**
- * Each purge's call to each principal's feed. One directory query resolves
- * "all but" and finds the public repositories, which every purge leaves out.
+ * Each purge's call to each principal's feed. One directory query finds
+ * the public repositories, which every purge leaves out.
  */
 async function purgeCalls(effects: readonly Effect[], env: Env): Promise<FeedCall[]> {
   const purges = effects.map((effect) => ({
     id: effect.id,
     ...(effect.payload as unknown as PlannedPurge).purge,
   }));
-  const accounts = [...new Set(purges.filter((p) => p.repos === null).map((p) => p.accountId))];
-  const listed = [...new Set(purges.flatMap((p) => p.repos ?? []))];
-  const owned = new Map<string, string[]>();
-  const open = new Set<string>();
-  if (purges.length > 0) {
-    const { results } = await env.DIRECTORY.withSession("first-primary")
-      .prepare(
-        `SELECT id, owner_id, visibility FROM repos
-         WHERE owner_id IN (SELECT value FROM json_each(?1))
-           OR id IN (SELECT value FROM json_each(?2))`,
-      )
-      .bind(JSON.stringify(accounts), JSON.stringify(listed))
-      .all<{ id: string; owner_id: string; visibility: string }>();
-    for (const row of results) {
-      if (row.visibility === "public") open.add(row.id);
-      else owned.set(row.owner_id, [...(owned.get(row.owner_id) ?? []), row.id]);
-    }
-  }
+  if (purges.length === 0) return [];
+  const { results } = await env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT id FROM repos WHERE id IN (SELECT value FROM json_each(?)) AND visibility = 'public'`,
+    )
+    .bind(JSON.stringify([...new Set(purges.flatMap((p) => p.repos))]))
+    .all<{ id: string }>();
+  const open = new Set(results.map((row) => row.id));
   return purges.flatMap((purge) => {
-    const repoIds = (
-      purge.repos ??
-      (owned.get(purge.accountId) ?? []).filter((id) => !purge.allExcept?.includes(id))
-    ).filter((id) => !open.has(id));
+    const repoIds = purge.repos.filter((id) => !open.has(id));
     if (repoIds.length === 0) return [];
     return purge.principals.map((principal) => ({
       effects: new Set([purge.id]),
@@ -161,8 +140,7 @@ export const feedSink: EffectSink = {
                 part * PURGE_PRINCIPALS,
                 (part + 1) * PURGE_PRINCIPALS,
               ),
-              repos: "repos" in data ? data.repos : null,
-              allExcept: "all_except" in data ? data.all_except : null,
+              repos: data.repos,
               until: event.at,
               epochGen: event.id.epochGen,
               aclVersion: data.acl_version,

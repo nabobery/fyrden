@@ -112,6 +112,9 @@ type Meta = {
   epoch_gen: number;
 };
 
+/** Repositories one `access.revoked` event names at most (a removal can name thousands). */
+const REVOKED_REPOS = 100;
+
 /** Audit rows one delivery sends at most. */
 const AUDIT_BATCH = 50;
 /** Wait before the alarm retries a delivery that failed. Proposed. */
@@ -146,39 +149,41 @@ export class OrgDO extends MigratingDO {
   }
 
   /**
-   * In a change's transaction: `principals` no longer read `scope` (some of
-   * the account's repositories, or all of them but `except`), as of ACL
-   * `version`. An event says so, for their activity feeds.
+   * In a change's transaction: `principals` no longer read `repos` of the
+   * account, as of ACL `version`. Events say so, for their activity feeds,
+   * each naming at most `REVOKED_REPOS` repositories.
    */
   #revoked(
     actor: ChangeActor | null,
     principals: readonly string[],
-    scope: { readonly repos: readonly string[] } | { readonly except: readonly string[] },
+    repos: readonly string[],
     version: number,
   ): void {
-    if (principals.length === 0 || ("repos" in scope && scope.repos.length === 0)) return;
-    const meta = this.ctx.storage.sql
-      .exec<{ account_id: string; epoch_gen: number; source_seq: number }>(
-        `UPDATE org_meta SET source_seq = source_seq + 1 WHERE id = 1
-         RETURNING account_id, epoch_gen, source_seq`,
-      )
-      .one();
-    this.#outbox.append(
-      { sourceId: meta.account_id, epochGen: meta.epoch_gen, sourceSeq: meta.source_seq },
-      {
-        type: "access.revoked",
-        at: this.#now(),
-        actor: actor?.principalId ?? null,
-        actChain: [],
-        ownerGen: 1,
-        entity: null,
-        data: {
-          principals: [...principals],
-          ...("repos" in scope ? { repos: [...scope.repos] } : { all_except: [...scope.except] }),
-          acl_version: version,
+    if (principals.length === 0) return;
+    for (let at = 0; at < repos.length; at += REVOKED_REPOS) {
+      const meta = this.ctx.storage.sql
+        .exec<{ account_id: string; epoch_gen: number; source_seq: number }>(
+          `UPDATE org_meta SET source_seq = source_seq + 1 WHERE id = 1
+           RETURNING account_id, epoch_gen, source_seq`,
+        )
+        .one();
+      this.#outbox.append(
+        { sourceId: meta.account_id, epochGen: meta.epoch_gen, sourceSeq: meta.source_seq },
+        {
+          type: "access.revoked",
+          at: this.#now(),
+          actor: actor?.principalId ?? null,
+          actChain: [],
+          ownerGen: 1,
+          entity: null,
+          data: {
+            principals: [...principals],
+            repos: repos.slice(at, at + REVOKED_REPOS),
+            acl_version: version,
+          },
         },
-      },
-    );
+      );
+    }
   }
 
   /**
@@ -434,8 +439,23 @@ export class OrgDO extends MigratingDO {
     });
   }
 
-  /** Removes a member, if `actor` is an owner now; the last owner cannot leave. Gone already, it bumps nothing. */
-  async removeMember(actor: ChangeActor, memberId: string): Promise<AclChange> {
+  /**
+   * Removes a member, if `actor` is an owner now; the last owner cannot
+   * leave. Gone already, it bumps nothing. `held`: the repositories the
+   * account holds, as the caller read them from the directory just before
+   * (see `heldRepos`); the member's feed forgets them all but those it is a
+   * collaborator of. Read then, they are the ones that matter: one
+   * transferred away since is named all the same (the member lost it
+   * anyway); one transferred in since was never the member's through the
+   * account; one created since is forgotten when the member's feed is next
+   * read (it finds the member cannot read it); one whose transfer ended
+   * before was forgotten with that transfer's own revocation.
+   */
+  async removeMember(
+    actor: ChangeActor,
+    memberId: string,
+    held: readonly string[],
+  ): Promise<AclChange> {
     return this.#change(actor, { owner: true }, (meta) => {
       const current = this.accountRole(memberId);
       if (current === null) return this.#unchanged(meta);
@@ -444,11 +464,11 @@ export class OrgDO extends MigratingDO {
       // Teams are the organization's: leaving it leaves them.
       this.ctx.storage.sql.exec("DELETE FROM team_members WHERE principal_id = ?", memberId);
       const changed = this.#changed(actor, "org.member.remove", { user: memberId });
-      // Every repository but those it is a collaborator of.
+      const kept = new Set(this.collaboratorRepos(memberId, "read"));
       this.#revoked(
         actor,
         [memberId],
-        { except: this.collaboratorRepos(memberId, "read") },
+        held.filter((id) => !kept.has(id)),
         (changed as { version: number }).version,
       );
       return changed;
@@ -507,12 +527,7 @@ export class OrgDO extends MigratingDO {
         [repoId],
       );
       if (this.#roleOn(repoId, userId, meta) === null)
-        this.#revoked(
-          actor,
-          [userId],
-          { repos: [repoId] },
-          (changed as { version: number }).version,
-        );
+        this.#revoked(actor, [userId], [repoId], (changed as { version: number }).version);
       return changed;
     });
   }
@@ -739,7 +754,7 @@ export class OrgDO extends MigratingDO {
         this.#now(),
       );
       const bumped = meta && { epochGen: meta.epoch_gen, version: this.#bump() };
-      if (bumped) this.#revoked(null, readers, { repos: [repoId] }, bumped.version);
+      if (bumped) this.#revoked(null, readers, [repoId], bumped.version);
       return { ...handedOver, acl: bumped };
     });
     // An access.revoked it wrote goes out with the alarm.
@@ -1017,7 +1032,7 @@ export class OrgDO extends MigratingDO {
         repos,
       );
       const lost = repos.filter((repoId) => this.#roleOn(repoId, userId, meta) === null);
-      this.#revoked(actor, [userId], { repos: lost }, (changed as { version: number }).version);
+      this.#revoked(actor, [userId], lost, (changed as { version: number }).version);
       return changed;
     });
   }
@@ -1077,7 +1092,7 @@ export class OrgDO extends MigratingDO {
         .toArray()
         .map((m) => m.principal_id)
         .filter((principal) => this.#roleOn(repoId, principal, meta) === null);
-      this.#revoked(actor, lost, { repos: [repoId] }, (changed as { version: number }).version);
+      this.#revoked(actor, lost, [repoId], (changed as { version: number }).version);
       return changed;
     });
   }

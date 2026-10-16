@@ -189,6 +189,24 @@ export async function listOwnedForks(
 }
 
 /** The active repositories among `ids` (of enabled owners), in one query, from the D1 primary. */
+/**
+ * The repositories an account holds now, in one read: those it owns (but
+ * deleted ones) and those a transfer has moved away from it in the
+ * directory that it has not let go of yet (the `grants` step).
+ */
+export const HELD_REPOS = `SELECT id FROM repos WHERE owner_id = ?1 AND state <> 'deleted'
+  UNION SELECT repo_id FROM repo_transfers WHERE from_owner = ?1 AND step = 'grants'`;
+
+/** `HELD_REPOS` of `ownerId`, from the D1 primary. */
+export async function heldRepos(env: Env, ownerId: string, metrics?: Metrics): Promise<string[]> {
+  metrics?.count("d1.query", { db: "directory", op: "held_repos" });
+  const { results } = await env.DIRECTORY.withSession("first-primary")
+    .prepare(HELD_REPOS)
+    .bind(ownerId)
+    .all<{ id: string }>();
+  return results.map((row) => row.id);
+}
+
 export async function findReposById(
   env: Env,
   ids: readonly string[],

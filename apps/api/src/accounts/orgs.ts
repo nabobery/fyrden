@@ -12,6 +12,7 @@ import { isValidHandle, type OrgRole } from "@fyrden/domain";
 import { allocateEpoch } from "../events/epochs.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { heldRepos } from "../repos/directory.js";
 import { clock, newId } from "../services.js";
 import { applied, findAccount, invalidateChange, orgFor, userFor } from "./account.js";
 
@@ -98,10 +99,13 @@ export async function removeMembershipOperation(
   const org = await orgFor(ctx, input.org, "members:write");
   // A disabled user can still be removed from where it is.
   const user = await userFor(ctx, input.username, true);
+  // What the organization holds, read before the change: its object keeps no list of its
+  // repositories, and the member's feed forgets them (see `OrgDO.removeMember`).
+  const held = await heldRepos(env, org.id, metrics);
   const stub = env.ORG.getByName(org.id);
   metrics.count("do.request", { class: "OrgDO", method: "removeMember" });
   const change = applied(
-    await stub.removeMember({ principalId: auth.principalId, requestId }, user.id),
+    await stub.removeMember({ principalId: auth.principalId, requestId }, user.id, held),
   );
   ctx.waitUntil(stub.deliverAudit());
   await invalidateChange(env, org.id, change, metrics);

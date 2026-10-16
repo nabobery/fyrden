@@ -21,7 +21,7 @@ import { sweepEffects } from "../src/effects/dispatcher.js";
 import { EFFECT_POLICY, type Effect, type EffectSink } from "../src/effects/journal.js";
 import { feedSink } from "../src/feed/sink.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
-import { api, user } from "./helpers/api.js";
+import { api, json, user } from "./helpers/api.js";
 import { settleOthersDue } from "./helpers/effects.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
@@ -217,6 +217,38 @@ describe("purging a feed", () => {
   });
 });
 
+/** What the account's outbox would send. */
+const outboxOf = (accountId: string) =>
+  runInDurableObject(env.ORG.getByName(accountId), (_: OrgDO, state) =>
+    state.storage.sql
+      .exec<{ event: string }>("SELECT event FROM outbox ORDER BY source_seq")
+      .toArray()
+      .map((row) => JSON.parse(row.event) as DomainEvent),
+  );
+
+/** Two accounts in the directory, and how a test puts private repositories there. */
+async function accounts() {
+  const [orgId, elsewhere] = [newId("org"), newId("org")];
+  await env.DIRECTORY.batch(
+    [orgId, elsewhere].map((id) =>
+      env.DIRECTORY.prepare(
+        "INSERT INTO principals (id, type, handle, created_at) VALUES (?, 'org', ?, 0)",
+      ).bind(id, uniqueId("org").slice(0, 39)),
+    ),
+  );
+  const repo = async (ownerId: string) => {
+    const id = newId("rep");
+    await env.DIRECTORY.prepare(
+      `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'default', 'private', 0, 0)`,
+    )
+      .bind(id, ownerId, id.toLowerCase(), newId("net"))
+      .run();
+    return id;
+  };
+  return { orgId, elsewhere, repo };
+}
+
 const marks = (stub: DurableObjectStub<UserDO>) =>
   runInDurableObject(stub, (_: UserDO, state) =>
     state.storage.sql
@@ -273,7 +305,6 @@ describe("the feed sink and access revocations", () => {
             accountId: sourceId,
             principals: ["usr_a"],
             repos: ["rep_x"],
-            allExcept: null,
             until: event.at,
             epochGen: 1,
             aclVersion: 3,
@@ -291,7 +322,7 @@ describe("the feed sink and access revocations", () => {
     expect(feedSink.plan({ ...event, data: { principals: [] } })).toEqual([]);
   });
 
-  it("takes an account's events for the feed sink only, and resolves all but the exceptions from the directory", async () => {
+  it("takes an account's events for the feed sink only, and leaves public repositories out of its purges", async () => {
     const orgId = newId("org");
     await env.DIRECTORY.prepare(
       "INSERT INTO principals (id, type, handle, created_at) VALUES (?, 'org', ?, 0)",
@@ -308,11 +339,10 @@ describe("the feed sink and access revocations", () => {
         .run();
       return id;
     };
-    const [kept, internal, open, shared] = [
+    const [kept, internal, open] = [
       await repo("private"),
       await repo("internal"),
       await repo("public"),
-      await repo("private"),
     ];
     const other: string[] = [];
     const oneByOne: EffectSink = {
@@ -332,7 +362,7 @@ describe("the feed sink and access revocations", () => {
           revokedEvent(
             orgId,
             1,
-            { principals: ["usr_dev"], all_except: [shared], acl_version: 9 },
+            { principals: ["usr_dev"], repos: [kept, internal, open], acl_version: 9 },
             at,
           ),
         ],
@@ -350,19 +380,6 @@ describe("the feed sink and access revocations", () => {
       epochGen: 1,
       aclVersion: 9,
     });
-    // A public repository named outright is left out too: anyone still reads it.
-    purges.length = 0;
-    await applyEnvelope(
-      on,
-      {
-        sourceId: orgId,
-        events: [
-          revokedEvent(orgId, 2, { principals: ["usr_dev"], repos: [kept, open], acl_version: 10 }),
-        ],
-      },
-      { sinks: [feedSink] },
-    );
-    expect(purges.map((p) => p.purge.repoIds)).toEqual([[kept]]);
     const epoch = await env.ORG_READ.prepare(
       "SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?",
     )
@@ -394,6 +411,66 @@ describe("the feed sink and access revocations", () => {
     );
     expect(await applyEnvelope(env, { sourceId: owner.principalId, events })).toBe("applied");
     expect(await shown(feed)).toEqual([["rep_elsewhere", ["comment/1"]]]);
+  });
+
+  it("purges a removed member's feed of a repository the organization transferred before the purge arrived", async () => {
+    const admin = await user(true);
+    const owner = await user();
+    const dev = await user();
+    const org = async () => {
+      const login = uniqueId("org").slice(0, 39);
+      const made = await json<{ id: string }>(
+        api("POST", "/admin/organizations", admin.token, { login, admin: owner.handle }),
+      );
+      expect(made.status).toBe(201);
+      return { login, id: made.body.id };
+    };
+    const [from, to] = [await org(), await org()];
+    await api("PUT", `/orgs/${from.login}/memberships/${dev.handle}`, owner.token, {});
+    const repo = (
+      await json<{ id: string; name: string }>(
+        api("POST", `/orgs/${from.login}/repos`, owner.token, { name: uniqueId("r") }),
+      )
+    ).body;
+    const feed = env.USER.getByName(dev.principalId);
+    const t = Date.now();
+    await feed.applyFeed([entry(repo.id, 1, t - 1_000)]);
+    // The member leaves; the account's event waits in its outbox while the repository moves.
+    expect(
+      (await api("DELETE", `/orgs/${from.login}/memberships/${dev.handle}`, owner.token)).status,
+    ).toBe(200);
+    const moved = await json<{ state: string }>(
+      api("POST", `/repos/${from.login}/${repo.name}/transfer`, owner.token, {
+        new_owner: to.login,
+      }),
+    );
+    expect(moved.body.state).toBe("transferred");
+    expect(await applyEnvelope(env, { sourceId: from.id, events: await outboxOf(from.id) })).toBe(
+      "applied",
+    );
+    expect(await shown(feed)).toEqual([]);
+    // Access given back where the repository is now: its old activity stays gone, late or not.
+    await api("PUT", `/orgs/${to.login}/memberships/${dev.handle}`, owner.token, {});
+    await feed.applyFeed([entry(repo.id, 1, t - 1_000), entry(repo.id, 2, Date.now())]);
+    expect(await shown(feed)).toEqual([[repo.id, ["comment/2"]]]);
+  });
+
+  it("purges the repositories a removal named, wherever they went since", async () => {
+    const { orgId, elsewhere, repo } = await accounts();
+    const [leaving, staying] = [await repo(orgId), await repo(orgId)];
+    const event = revokedEvent(orgId, 1, {
+      principals: ["usr_dev"],
+      repos: [leaving, staying],
+      acl_version: 3,
+    });
+    // Before the delivery, one repository leaves, comes back and leaves again.
+    for (const owner of [elsewhere, orgId, elsewhere])
+      await env.DIRECTORY.prepare("UPDATE repos SET owner_id = ? WHERE id = ?")
+        .bind(owner, leaving)
+        .run();
+    const { on, purges } = recordingPurges();
+    await applyEnvelope(on, { sourceId: orgId, events: [event] }, { sinks: [feedSink] });
+    expect(purges.map((p) => p.purge.repoIds)).toEqual([[leaving, staying]]);
   });
 
   it("completes a revocation of 1,050 principals across sweeps, each within its calls", async () => {
