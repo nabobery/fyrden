@@ -1,5 +1,6 @@
 import type { ackFeedItem, getFeed, Input, Output, syncFeed } from "@fyrden/api-contract";
 import { FEED_KINDS, type FeedKind, feedItemKey } from "@fyrden/domain";
+import type { FeedViewDenial } from "../do/RepoDO.js";
 import {
   FEED_POLICY,
   type FeedFilter,
@@ -29,10 +30,12 @@ import { allowedWithRole, findReposById, type RepoEntry } from "../repos/directo
  * could not be made, or one past the answer's budget, ends the answer
  * there (the cursor never passes an item not checked).
  *
- * A check that finds the feed's owner itself cannot read a repository now
- * (it is gone, or the owner's own access says so, not a token's limits)
- * makes the feed forget that repository's items, as losing access does
- * (see `Feed.forget`): so however many such items come first, the next
+ * A check that finds the feed's owner itself cannot read a repository (it
+ * is gone, or the owner's own access says so by an ACL snapshot the
+ * repository decided with; not a token's limits, nor a check that could
+ * not be sure) makes the feed forget that repository's items, as losing
+ * access does, up to when that snapshot was pulled and never past a newer
+ * one (see `Feed.purge`): so however many such items come first, the next
  * answer gets past them, and no cursor ever names one. An answer that
  * stopped short on them looks like one that found nothing new: only a
  * full page asks to read on at once (`poll_after_ms` 0).
@@ -136,8 +139,8 @@ type Displayed = Pick<FeedItem, "repoId" | "member">;
 class Visibility {
   readonly #decided = new Map<string, RepoEntry | "denied" | "unknown">();
   readonly #excerpts = new Map<string, string | null>();
-  /** Repositories the feed's owner itself cannot read now: gone, or its access says so. */
-  readonly #lost = new Set<string>();
+  /** Repositories the feed's owner itself cannot read: gone, or its access says so, as of when. */
+  readonly #lost = new Map<string, Extract<FeedViewDenial, { kind: "lost" }>["loss"]>();
   #checks = 0;
 
   constructor(private readonly ctx: OpContext) {}
@@ -159,13 +162,14 @@ class Visibility {
     const entries = new Map(
       (await findReposById(env, [...members.keys()], metrics)).map((e) => [e.id, e]),
     );
+    const read = Date.now();
     const checking: RepoEntry[] = [];
     for (const id of members.keys()) {
       const entry = entries.get(id);
       // Gone, or outside the token's own limits: no call needed.
       if (!entry || !allowedWithRole(auth, entry, READ, "admin")) {
         this.#decided.set(id, "denied");
-        if (!entry) this.#lost.add(id);
+        if (!entry) this.#lost.set(id, { accountId: "", epochGen: 0, aclVersion: 0, until: read });
       } else if (this.#checks < SCAN.repoChecks) {
         this.#checks++;
         checking.push(entry);
@@ -178,16 +182,18 @@ class Visibility {
         );
         this.#decided.set(
           entry.id,
-          view === undefined
+          // No answer, or a denial the repository could not be sure of: not checked.
+          view === undefined || view.denial?.kind === "unknown"
             ? "unknown"
             : // A public repository is read without a role there (the token's limits still apply).
               view.readable && allowedWithRole(auth, entry, READ, view.role ?? "read")
               ? entry
               : "denied",
         );
-        // Unreadable for the owner itself; under a grant, its acting agents' owners' rights
-        // capped the answer too, so it says nothing of the owner's own.
-        if (view !== undefined && !view.readable && auth.grantId === null) this.#lost.add(entry.id);
+        // Lost to the owner itself; under a grant, its acting agents' owners' rights capped the
+        // answer too, so it says nothing of the owner's own.
+        if (view?.denial?.kind === "lost" && auth.grantId === null)
+          this.#lost.set(entry.id, view.denial.loss);
       }),
     );
   }
@@ -196,7 +202,9 @@ class Visibility {
   async forgetLost(): Promise<void> {
     if (this.#lost.size === 0) return;
     this.ctx.metrics.count("do.request", { class: "UserDO", method: "forgetRepos" });
-    await this.ctx.env.USER.getByName(this.ctx.auth.principalId).forgetRepos([...this.#lost]);
+    await this.ctx.env.USER.getByName(this.ctx.auth.principalId).forgetRepos(
+      [...this.#lost].map(([repoId, loss]) => ({ ...loss, repoIds: [repoId] })),
+    );
   }
 
   /** Reads what the members of `items` not read with their repository's check say. */

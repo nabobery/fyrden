@@ -244,6 +244,7 @@ import {
   writeTemplate,
 } from "./repo/template.js";
 import { repoSchema } from "./schema/repo.js";
+import type { FeedPurge } from "./user/feed.js";
 
 /** A listing's cursor that names none this repository keeps for that pull request. */
 const INVALID_LISTING = fail(
@@ -273,6 +274,19 @@ const SUGGESTIONS_CHANGED =
   "the pull request or its comments changed while the suggestions were applied";
 
 /** Suggestions to apply to a pull request's head, as the Worker asks for it. */
+/**
+ * Why a feed's reader may not read the repository (`feedView`): `lost`,
+ * certainly, as `loss` says (the repository gone: no account, and the time
+ * it was found so; or the account's ACL at `(epochGen, aclVersion)`, as
+ * pulled at `until`), so the reader's feed may forget it up to then;
+ * `denied`, but on nothing a feed may forget it by (an object without an
+ * account); `unknown`, not known (no usable ACL snapshot: a pull failed).
+ */
+export type FeedViewDenial =
+  | { readonly kind: "lost"; readonly loss: Omit<FeedPurge, "repoIds"> }
+  | { readonly kind: "denied" }
+  | { readonly kind: "unknown" };
+
 export interface ApplySuggestionsInput {
   readonly number: number;
   readonly commentIds: readonly number[];
@@ -3947,7 +3961,8 @@ export class RepoDO extends MigratingDO {
    * it, the excerpts of `members` (at most 100): what feed items name of
    * the repository (`comment/<id>`, `review_comment/<id>`, `review/<id>`,
    * `pull/<n>` for a pull request's description), read now so an edit or
-   * deletion shows at once (null for one gone or empty).
+   * deletion shows at once (null for one gone or empty). When it does not
+   * read it, `denial` says how sure that is (see `FeedViewDenial`).
    */
   feedView(
     principal: string,
@@ -3957,15 +3972,43 @@ export class RepoDO extends MigratingDO {
     readonly readable: boolean;
     readonly role: RepoRole | null;
     readonly excerpts: Record<string, string | null>;
+    readonly denial: FeedViewDenial | null;
   }> {
     return this.#measured("feedView", async () => {
-      if (this.#refusesReads()) return { readable: false, role: null, excerpts: {} };
+      const gone = () => ({
+        readable: false,
+        role: null,
+        excerpts: {},
+        denial: {
+          kind: "lost" as const,
+          loss: { accountId: "", epochGen: 0, aclVersion: 0, until: Date.now() },
+        },
+      });
+      if (this.#refusesReads()) return gone();
       const ceilings = await this.#rolesPulled(principal, grantId);
       // Deleted meanwhile (its rows not erased yet): nothing of it is read.
-      if (this.#refusesReads()) return { readable: false, role: null, excerpts: {} };
+      if (this.#refusesReads()) return gone();
       const role = this.#roleNow(principal, ceilings);
       const readable = role !== null || this.events.visibility() === "public";
-      if (!readable) return { readable, role, excerpts: {} };
+      if (!readable) {
+        // The snapshot the decision used: a denial without one (a pull failed) is no answer.
+        const basis = this.acl.basis();
+        const denial: FeedViewDenial =
+          basis === "unknown"
+            ? { kind: "unknown" }
+            : basis === "none"
+              ? { kind: "denied" }
+              : {
+                  kind: "lost",
+                  loss: {
+                    accountId: basis.accountId,
+                    epochGen: basis.epochGen,
+                    aclVersion: basis.version,
+                    until: basis.pulledAt,
+                  },
+                };
+        return { readable, role, excerpts: {}, denial };
+      }
       const excerpts: Record<string, string | null> = {};
       for (const member of members.slice(0, 100)) {
         const [kind, id] = member.split("/") as [string, string | undefined];
@@ -3988,7 +4031,7 @@ export class RepoDO extends MigratingDO {
                   : undefined;
         excerpts[member] = excerpt(body);
       }
-      return { readable, role, excerpts };
+      return { readable, role, excerpts, denial: null };
     });
   }
 

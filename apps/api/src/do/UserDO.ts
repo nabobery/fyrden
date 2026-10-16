@@ -45,10 +45,16 @@ export class UserDO extends MigratingDO {
     return { deleted };
   }
 
-  /** Forgets repositories a read found the principal cannot read now (see `Feed.forget`). */
-  async forgetRepos(repoIds: readonly string[]): Promise<{ deleted: number }> {
+  /**
+   * Forgets repositories a read found the principal cannot read, each as
+   * the purge of what that was decided by (see `Feed.purge`), in one
+   * transaction.
+   */
+  async forgetRepos(losses: readonly FeedPurge[]): Promise<{ deleted: number }> {
     const feed = this.#feed();
-    const deleted = this.ctx.storage.transactionSync(() => feed.forget(repoIds));
+    const deleted = this.ctx.storage.transactionSync(() =>
+      losses.reduce((sum, loss) => sum + feed.purge(loss), 0),
+    );
     await this.#scheduleRetention(feed);
     return { deleted };
   }

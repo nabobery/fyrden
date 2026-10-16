@@ -240,8 +240,16 @@ describe("feed blocks", () => {
     await api("DELETE", `${path}/issues/comments/${made.body.id}`, writer.token);
     expect(await blocks(from)).toEqual([]);
     expect((await view(owner)).excerpts[member]).toBeNull();
-    // One who cannot read the repository gets nothing.
-    expect(await view(await user())).toEqual({ readable: false, role: null, excerpts: {} });
+    // One who cannot read the repository gets nothing, and is told so by the ACL decided with.
+    expect(await view(await user())).toMatchObject({
+      readable: false,
+      role: null,
+      excerpts: {},
+      denial: {
+        kind: "lost",
+        loss: { accountId: owner.principalId, aclVersion: expect.any(Number) },
+      },
+    });
   });
 
   it("keep out of a thread those mentioned who cannot read the repository", async () => {

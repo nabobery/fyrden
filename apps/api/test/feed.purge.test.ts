@@ -13,7 +13,7 @@ import {
   secureRandomBytes,
 } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { UserDO } from "../src/do/UserDO.js";
 import type { FeedPurge } from "../src/do/user/feed.js";
@@ -170,27 +170,29 @@ describe("purging a feed", () => {
     }
   });
 
-  it("forgets a repository a read found unreadable as a purge up to then, judged against others by time", async () => {
+  it("forgets what a read found lost as that purge would: up to its check, never past newer access", async () => {
     const stub = env.USER.getByName(uniqueId("usr"));
     const t = Date.now();
-    await stub.applyFeed([entry("rep_a", 1, t - 2_000), entry("rep_b", 1, t - 2_000)]);
-    expect(await stub.forgetRepos(["rep_a"])).toEqual({ deleted: 1 });
-    expect(await shown(stub)).toEqual([["rep_b", ["comment/1"]]]);
-    // Older entries arriving later are dropped; access given back brings new ones only.
-    await stub.applyFeed([entry("rep_a", 2, t - 1_000), entry("rep_a", 3, t + 10_000)]);
-    expect(await shown(stub)).toEqual([
-      ["rep_b", ["comment/1"]],
-      ["rep_a", ["comment/3"]],
+    await stub.applyFeed([entry("rep_a", 1, t - 2_000), entry("rep_a", 2, t + 1_000)]);
+    // Checked at t, by ACL version 5: what came after (access given back) stays.
+    expect(await stub.forgetRepos([purgeOf(["rep_a"], t, 5)])).toEqual({ deleted: 0 });
+    expect(await shown(stub)).toEqual([["rep_a", ["comment/2"]]]);
+    // A check by an older version than a purge already applied changes nothing.
+    expect(await stub.purge(purgeOf(["rep_a"], t + 2_000, 7))).toEqual({ deleted: 1 });
+    await stub.applyFeed([entry("rep_a", 3, t + 3_000)]);
+    expect(await stub.forgetRepos([purgeOf(["rep_a"], t + 4_000, 6)])).toEqual({ deleted: 0 });
+    expect(await shown(stub)).toEqual([["rep_a", ["comment/3"]]]);
+    // A repository found gone (no account) is judged by time, against any mark.
+    const gone = { accountId: "", epochGen: 0 };
+    expect(await stub.forgetRepos([purgeOf(["rep_a"], t + 4_000, 0, gone)])).toEqual({
+      deleted: 1,
+    });
+    expect(await stub.forgetRepos([purgeOf(["rep_a"], t + 3_500, 0, gone)])).toEqual({
+      deleted: 0,
+    });
+    expect(await marks(stub)).toMatchObject([
+      { repo_id: "rep_a", account_id: "", until_at: t + 4_000 },
     ]);
-    // An account's purge from before it changes nothing; a later one replaces its mark.
-    expect(await stub.purge(purgeOf(["rep_a"], t - 500, 5))).toEqual({ deleted: 0 });
-    expect(await marks(stub)).toMatchObject([{ repo_id: "rep_a", account_id: "" }]);
-    expect(await stub.purge(purgeOf(["rep_a"], t + 20_000, 5))).toEqual({ deleted: 1 });
-    // And a read that finds it unreadable again, later still, forgets again.
-    await stub.applyFeed([entry("rep_a", 4, t + 25_000)]);
-    vi.setSystemTime(t + 30_000);
-    expect(await stub.forgetRepos(["rep_a"])).toEqual({ deleted: 1 });
-    expect(await marks(stub)).toMatchObject([{ repo_id: "rep_a", account_id: "" }]);
   });
 
   it("judges a purge by its account's epoch and version, and another account's by its time", async () => {

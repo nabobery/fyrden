@@ -20,8 +20,8 @@ import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
  * (so many at most), so an entry up to it arriving later is dropped
  * rather than bringing the item back. When the owner loses read access to repositories, their
  * items up to then are purged, and a mark drops entries up to then that
- * arrive later; so are they when a read finds the owner cannot read them
- * now, whichever comes first.
+ * arrive later; so are they when a read finds the owner cannot read them,
+ * up to when that was decided, whichever comes first.
  */
 
 /** Proposed values. */
@@ -550,34 +550,11 @@ export class Feed {
    * survive (changed since: access given back), and a mark drops entries
    * up to then arriving later. A repository's mark is replaced only by a
    * newer purge: of the same account, a newer `(epochGen, aclVersion)`;
-   * of another (the repository was transferred), a later `until`.
-   * Returns the shown items deleted.
+   * of another (the repository was transferred), or of none (`""`: a read
+   * found the repository gone), a later `until`. Returns the shown items
+   * deleted.
    */
   purge(purge: FeedPurge): number {
-    return this.#purge(purge, (mark) =>
-      mark.account_id === purge.accountId
-        ? purge.epochGen > mark.epoch_gen ||
-          (purge.epochGen === mark.epoch_gen && purge.aclVersion > mark.acl_version)
-        : purge.until > mark.until_at,
-    );
-  }
-
-  /**
-   * Forgets repositories a read found the owner cannot read now (call
-   * within a transaction): as a purge up to now does, its mark of no
-   * account (`""`), so a later mark of any replaces it by its time, and it
-   * replaces any earlier one. Returns the shown items deleted.
-   */
-  forget(repoIds: readonly string[]): number {
-    const until = this.now();
-    return this.#purge(
-      { repoIds, until, accountId: "", epochGen: 0, aclVersion: 0 },
-      (mark) => until > mark.until_at,
-    );
-  }
-
-  /** `purge`, for each repository whose mark `newer` finds it newer than (or that has none). */
-  #purge(purge: FeedPurge, newer: (mark: Mark) => boolean): number {
     const now = this.now();
     let deleted = 0;
     for (const repoId of new Set(purge.repoIds)) {
@@ -587,7 +564,13 @@ export class Feed {
           repoId,
         )
         .toArray()[0];
-      if (mark && !newer(mark)) continue;
+      const newer =
+        !mark ||
+        (mark.account_id === purge.accountId && purge.accountId !== ""
+          ? purge.epochGen > mark.epoch_gen ||
+            (purge.epochGen === mark.epoch_gen && purge.aclVersion > mark.acl_version)
+          : purge.until > mark.until_at);
+      if (!newer) continue;
       for (const row of this.sql.exec<{ feed_seq: number | null }>(
         "DELETE FROM feed_items WHERE repo_id = ? AND last_event_at <= ? RETURNING feed_seq",
         repoId,

@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import { ACL_POLICY } from "../src/do/repo/acl.js";
 import { FEED_POLICY } from "../src/do/user/feed.js";
 import { decodeFeedCursor, encodeFeedCursor, FEED_POLL } from "../src/feed/operations.js";
 import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
@@ -48,8 +49,17 @@ function withFeedView(base: Env): Env {
       viewCalls.set(repoId, [...(viewCalls.get(repoId) ?? []), [...members]]);
       if (directoryOnly.has(repoId))
         return unreadable.has(repoId)
-          ? { readable: false, role: null, excerpts: {} }
-          : { readable: true, role: "admin" as const, excerpts: {} };
+          ? {
+              readable: false,
+              role: null,
+              excerpts: {},
+              // As a fresh snapshot of an account's ACL would say it.
+              denial: {
+                kind: "lost" as const,
+                loss: { accountId: "acct_double", epochGen: 1, aclVersion: 1, until: Date.now() },
+              },
+            }
+          : { readable: true, role: "admin" as const, excerpts: {}, denial: null };
       const real = await stub.feedView(principal, grantId, members);
       if (!real.readable) return real;
       const excerpts = { ...real.excerpts };
@@ -80,12 +90,45 @@ function withFeedView(base: Env): Env {
 }
 
 /** A request to the API, its repositories' objects with the `feedView` double. */
-function feedFetch(path: string, headers: Record<string, string>, init: RequestInit = {}) {
+function feedFetch(
+  path: string,
+  headers: Record<string, string>,
+  init: RequestInit = {},
+  on: Env = withFeedView(env),
+) {
   return createApp().fetch(
     new Request(`${ORIGIN}/api${path}`, { ...init, headers }),
-    withFeedView(env),
+    on,
     createExecutionContext(),
   );
+}
+
+/** `env` whose feeds run `meanwhile` right before they forget what a read found lost. */
+function forgettingAfter(base: Env, meanwhile: () => Promise<void>): Env {
+  const users = new Proxy(base.USER, {
+    get(target, prop) {
+      if (prop === "getByName")
+        return (name: string) => {
+          const stub = target.getByName(name);
+          return new Proxy(stub, {
+            get(inner, key) {
+              if (key === "forgetRepos")
+                return async (losses: Parameters<typeof stub.forgetRepos>[0]) => {
+                  await meanwhile();
+                  return stub.forgetRepos(losses);
+                };
+              const value = Reflect.get(inner, key);
+              return typeof value === "function"
+                ? (...args: unknown[]) => Reflect.apply(value, inner, args)
+                : value;
+            },
+          });
+        };
+      const value = Reflect.get(target, prop);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { ...base, USER: users } as Env;
 }
 
 /** `api`, through `feedFetch`. */
@@ -566,6 +609,55 @@ describe("the feed operations", () => {
     const after = await feedApi("GET", `/feed?since=${cursor}`, busy.token);
     expect(after.headers.get("ETag")).toBe(before.headers.get("ETag"));
     expect(await after.json()).toEqual(await before.json());
+  });
+
+  it("forget nothing when a repository cannot tell its access now, and show it again once it can", async () => {
+    const reader = await user();
+    await api("PUT", `/repos/${repo.fullName}/collaborators/${reader.handle}`, owner.token, {
+      permission: "pull",
+    });
+    await deliverTo(reader.principalId, { repoId: repo.id, version: 2 });
+    const key = `${repo.id}:pull/1:activity`;
+    const keys = async () =>
+      (await json<FeedOut>(feedApi("GET", "/feed", reader.token))).body.items.map(
+        (i) => i.item_key,
+      );
+    expect(await keys()).toEqual([key]);
+    // The account's object fails every pull, and the repository's snapshot is too old to decide by.
+    const org = env.ORG.getByName(owner.principalId);
+    await runInDurableObject(org, (instance: OrgDO) => {
+      instance.snapshotFor = async () => {
+        throw new Error("unavailable");
+      };
+    });
+    vi.setSystemTime(Date.now() + ACL_POLICY.writeWindowMs + 1_000);
+    expect(await keys()).toEqual([]);
+    expect(await stored(reader.principalId)).toEqual([key]);
+    await runInDurableObject(org, (instance: OrgDO) => {
+      Reflect.deleteProperty(instance, "snapshotFor");
+    });
+    expect(await keys()).toEqual([key]);
+  });
+
+  it("forget only what was lost when access was checked, not activity of access given back since", async () => {
+    const reader = await user();
+    const path = `/repos/${repo.fullName}/collaborators/${reader.handle}`;
+    await api("PUT", path, owner.token, { permission: "pull" });
+    await deliverTo(reader.principalId, { repoId: repo.id, version: 2 });
+    expect((await api("DELETE", path, owner.token)).status).toBe(200);
+    // Between the check that found access lost and the forgetting: access given back, and news.
+    const on = forgettingAfter(withFeedView(env), async () => {
+      await api("PUT", path, owner.token, { permission: "pull" });
+      await deliverTo(reader.principalId, { repoId: repo.id, thread: 2, version: 3 });
+    });
+    const res = await feedFetch("/feed", { Authorization: `Bearer ${reader.token}` }, {}, on);
+    expect((await res.json<FeedOut>()).items).toEqual([]);
+    expect(await stored(reader.principalId)).toEqual([`${repo.id}:pull/2:activity`]);
+    expect(
+      (await json<FeedOut>(feedApi("GET", "/feed", reader.token))).body.items.map(
+        (i) => i.item_key,
+      ),
+    ).toEqual([`${repo.id}:pull/2:activity`]);
   });
 
   it("forget nothing for a token whose own limits hide a repository", async () => {
