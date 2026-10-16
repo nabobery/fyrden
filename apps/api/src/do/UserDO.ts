@@ -45,6 +45,14 @@ export class UserDO extends MigratingDO {
     return { deleted };
   }
 
+  /** Forgets repositories a read found the principal cannot read now (see `Feed.forget`). */
+  async forgetRepos(repoIds: readonly string[]): Promise<{ deleted: number }> {
+    const feed = this.#feed();
+    const deleted = this.ctx.storage.transactionSync(() => feed.forget(repoIds));
+    await this.#scheduleRetention(feed);
+    return { deleted };
+  }
+
   async listFeed(since: FeedPosition | null, limit: number, filter: FeedFilter): Promise<FeedPage> {
     await this.#checkEpoch();
     return this.#feed().list(since, limit, filter);

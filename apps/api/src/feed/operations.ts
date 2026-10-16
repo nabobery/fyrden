@@ -28,6 +28,14 @@ import { allowedWithRole, findReposById, type RepoEntry } from "../repos/directo
  * shows at once and a deletion leaves no excerpt. A check that
  * could not be made, or one past the answer's budget, ends the answer
  * there (the cursor never passes an item not checked).
+ *
+ * A check that finds the feed's owner itself cannot read a repository now
+ * (it is gone, or the owner's own access says so, not a token's limits)
+ * makes the feed forget that repository's items, as losing access does
+ * (see `Feed.forget`): so however many such items come first, the next
+ * answer gets past them, and no cursor ever names one. An answer that
+ * stopped short on them looks like one that found nothing new: only a
+ * full page asks to read on at once (`poll_after_ms` 0).
  */
 
 /** How long a caller that reached the head waits before polling again. Proposed. */
@@ -99,6 +107,8 @@ type Displayed = Pick<FeedItem, "repoId" | "member">;
 class Visibility {
   readonly #decided = new Map<string, RepoEntry | "denied" | "unknown">();
   readonly #excerpts = new Map<string, string | null>();
+  /** Repositories the feed's owner itself cannot read now: gone, or its access says so. */
+  readonly #lost = new Set<string>();
   #checks = 0;
 
   constructor(private readonly ctx: OpContext) {}
@@ -124,8 +134,10 @@ class Visibility {
     for (const id of members.keys()) {
       const entry = entries.get(id);
       // Gone, or outside the token's own limits: no call needed.
-      if (!entry || !allowedWithRole(auth, entry, READ, "admin")) this.#decided.set(id, "denied");
-      else if (this.#checks < SCAN.repoChecks) {
+      if (!entry || !allowedWithRole(auth, entry, READ, "admin")) {
+        this.#decided.set(id, "denied");
+        if (!entry) this.#lost.add(id);
+      } else if (this.#checks < SCAN.repoChecks) {
         this.#checks++;
         checking.push(entry);
       }
@@ -144,8 +156,18 @@ class Visibility {
               ? entry
               : "denied",
         );
+        // Unreadable for the owner itself; under a grant, its acting agents' owners' rights
+        // capped the answer too, so it says nothing of the owner's own.
+        if (view !== undefined && !view.readable && auth.grantId === null) this.#lost.add(entry.id);
       }),
     );
+  }
+
+  /** Makes the feed forget the repositories decided its owner cannot read now (one call). */
+  async forgetLost(): Promise<void> {
+    if (this.#lost.size === 0) return;
+    this.ctx.metrics.count("do.request", { class: "UserDO", method: "forgetRepos" });
+    await this.ctx.env.USER.getByName(this.ctx.auth.principalId).forgetRepos([...this.#lost]);
   }
 
   /** Reads what the members of `items` not read with their repository's check say. */
@@ -270,7 +292,7 @@ export async function getFeedOperation(
   let epoch = since?.epoch;
   let lowWatermark = 0;
   const visibility = new Visibility(ctx);
-  const { shown, more } = await scan(
+  const { shown } = await scan(
     visibility,
     input.limit,
     async (after: FeedPosition | null) => {
@@ -292,12 +314,14 @@ export async function getFeedOperation(
       seq: Math.max(lowWatermark, item?.seq ?? since?.seq ?? 0),
     });
   const page = shown.slice(0, input.limit);
-  await visibility.read(page.map(({ item }) => item));
+  await Promise.all([visibility.read(page.map(({ item }) => item)), visibility.forgetLost()]);
   return {
     items: page.map(({ item, repo }) => itemOutput(item, repo, visibility.excerpt(item))),
     next_cursor: at(page.at(-1)?.item),
     head_cursor: at(shown.at(-1)?.item),
-    poll_after_ms: more ? 0 : FEED_POLL_AFTER_MS,
+    // Read on at once only after a full page: what the caller sees says so, never what it
+    // does not (see the top).
+    poll_after_ms: page.length === input.limit ? 0 : FEED_POLL_AFTER_MS,
   };
 }
 
@@ -320,7 +344,7 @@ export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof s
     (item) => ({ open: item.priority === "P0" && item.state === "open", seq: item.seq }),
   );
   const items = shown.slice(0, FEED_POLICY.syncItems);
-  await visibility.read(items.map(({ item }) => item));
+  await Promise.all([visibility.read(items.map(({ item }) => item)), visibility.forgetLost()]);
   // Following from the greatest item shown misses no change the caller may see; an incomplete
   // sync follows from the start. Never below the low watermark: what retention deleted is gone
   // for every reader, so such a cursor would only be refused.

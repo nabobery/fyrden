@@ -18,7 +18,8 @@ import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
  * deleted; the low watermark records how far, and a cursor below it has
  * missed changes. When the owner loses read access to repositories, their
  * items up to then are purged, and a mark drops entries up to then that
- * arrive later.
+ * arrive later; so are they when a read finds the owner cannot read them
+ * now, whichever comes first.
  */
 
 /** Proposed values. */
@@ -153,6 +154,9 @@ export interface FeedItemId {
 }
 
 type Meta = { epoch: string; head_seq: number; low_watermark: number; items: number };
+
+/** A repository's purge mark, as a later purge compares itself with it. */
+type Mark = { account_id: string; epoch_gen: number; acl_version: number; until_at: number };
 
 type Row = {
   repo_id: string;
@@ -524,22 +528,40 @@ export class Feed {
    * Returns the shown items deleted.
    */
   purge(purge: FeedPurge): number {
+    return this.#purge(purge, (mark) =>
+      mark.account_id === purge.accountId
+        ? purge.epochGen > mark.epoch_gen ||
+          (purge.epochGen === mark.epoch_gen && purge.aclVersion > mark.acl_version)
+        : purge.until > mark.until_at,
+    );
+  }
+
+  /**
+   * Forgets repositories a read found the owner cannot read now (call
+   * within a transaction): as a purge up to now does, its mark of no
+   * account (`""`), so a later mark of any replaces it by its time, and it
+   * replaces any earlier one. Returns the shown items deleted.
+   */
+  forget(repoIds: readonly string[]): number {
+    const until = this.now();
+    return this.#purge(
+      { repoIds, until, accountId: "", epochGen: 0, aclVersion: 0 },
+      (mark) => until > mark.until_at,
+    );
+  }
+
+  /** `purge`, for each repository whose mark `newer` finds it newer than (or that has none). */
+  #purge(purge: FeedPurge, newer: (mark: Mark) => boolean): number {
     const now = this.now();
     let deleted = 0;
     for (const repoId of new Set(purge.repoIds)) {
       const mark = this.sql
-        .exec<{ account_id: string; epoch_gen: number; acl_version: number; until_at: number }>(
+        .exec<Mark>(
           "SELECT account_id, epoch_gen, acl_version, until_at FROM purge_marks WHERE repo_id = ?",
           repoId,
         )
         .toArray()[0];
-      const newer =
-        !mark ||
-        (mark.account_id === purge.accountId
-          ? purge.epochGen > mark.epoch_gen ||
-            (purge.epochGen === mark.epoch_gen && purge.aclVersion > mark.acl_version)
-          : purge.until > mark.until_at);
-      if (!newer) continue;
+      if (mark && !newer(mark)) continue;
       for (const row of this.sql.exec<{ feed_seq: number | null }>(
         "DELETE FROM feed_items WHERE repo_id = ? AND last_event_at <= ? RETURNING feed_seq",
         repoId,

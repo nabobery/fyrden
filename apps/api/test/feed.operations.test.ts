@@ -15,7 +15,7 @@ import { createApp } from "../src/app.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { FEED_POLICY } from "../src/do/user/feed.js";
-import { encodeFeedCursor, FEED_POLL_AFTER_MS } from "../src/feed/operations.js";
+import { decodeFeedCursor, encodeFeedCursor, FEED_POLL_AFTER_MS } from "../src/feed/operations.js";
 import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { SESSION_COOKIE, startSession } from "../src/oauth/session.js";
 import { agentFor } from "./helpers/agents.js";
@@ -34,6 +34,8 @@ const said = new Map<string, string | null>();
 const viewCalls = new Map<string, string[][]>();
 /** Repositories that exist only in the directory (no object behind them): readable as their owner's. */
 const directoryOnly = new Set<string>();
+/** Of those, the ones whose check says the caller may not read them. */
+const unreadable = new Set<string>();
 
 /**
  * `env` whose repository objects count their `feedView` calls and lay
@@ -45,7 +47,9 @@ function withFeedView(base: Env): Env {
     async (principal: string, grantId: string | null, members: readonly string[]) => {
       viewCalls.set(repoId, [...(viewCalls.get(repoId) ?? []), [...members]]);
       if (directoryOnly.has(repoId))
-        return { readable: true, role: "admin" as const, excerpts: {} };
+        return unreadable.has(repoId)
+          ? { readable: false, role: null, excerpts: {} }
+          : { readable: true, role: "admin" as const, excerpts: {} };
       const real = await stub.feedView(principal, grantId, members);
       if (!real.readable) return real;
       const excerpts = { ...real.excerpts };
@@ -110,6 +114,28 @@ async function repoOf(owner: Who): Promise<{ id: string; name: string; fullName:
   );
   expect(made.status).toBe(201);
   return { ...made.body, fullName: `${owner.handle}/${made.body.name}` };
+}
+
+/** `n` private repositories of `owner` in the directory only (see `directoryOnly`), in order. */
+async function directoryRepos(owner: Who, n: number): Promise<string[]> {
+  const repoIds = Array.from({ length: n }, () => uniqueId("rep_"));
+  for (const id of repoIds) directoryOnly.add(id);
+  await env.DIRECTORY.batch(
+    repoIds.map((id) =>
+      env.DIRECTORY.prepare(
+        `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'default', 'private', 0, 0)`,
+      ).bind(id, owner.principalId, id.toLowerCase(), uniqueId("net")),
+    ),
+  );
+  return repoIds;
+}
+
+/** What the principal's feed holds, by item key, whoever may read it. */
+async function stored(principal: string): Promise<string[]> {
+  const page = await env.USER.getByName(principal).listFeed(null, 5_000, {});
+  if (page.expired) throw new Error("expired");
+  return page.items.map((i) => `${i.repoId}:${i.threadKey}:${i.kind}`);
 }
 
 type FeedOut = {
@@ -376,16 +402,7 @@ describe("the feed operations", () => {
 
   it("continue past their budget of repository checks with a cursor", async () => {
     const someone = await user();
-    const repoIds = Array.from({ length: 105 }, () => uniqueId("rep_"));
-    for (const id of repoIds) directoryOnly.add(id);
-    await env.DIRECTORY.batch(
-      repoIds.map((id) =>
-        env.DIRECTORY.prepare(
-          `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'default', 'private', 0, 0)`,
-        ).bind(id, someone.principalId, id.toLowerCase(), uniqueId("net")),
-      ),
-    );
+    const repoIds = await directoryRepos(someone, 105);
     await env.USER.getByName(someone.principalId).applyFeed(
       repoIds.map((repoId) => entry({ repoId, version: 1, principal: someone.principalId })),
     );
@@ -400,6 +417,128 @@ describe("the feed operations", () => {
       repoIds.slice(100).map((id) => id.toLowerCase()),
     );
     expect(second.body.poll_after_ms).toBe(FEED_POLL_AFTER_MS);
+  });
+
+  it("get past items of repositories the owner may not read, however many come first, forgetting them", async () => {
+    const someone = await user();
+    const hidden = await directoryRepos(someone, 150);
+    for (const id of hidden) unreadable.add(id);
+    const shown = await directoryRepos(someone, 3);
+    const keys = shown.map((id) => `${id}:pull/1:activity`);
+    await env.USER.getByName(someone.principalId).applyFeed(
+      [...hidden, ...shown].map((repoId) =>
+        entry({ repoId, version: 1, principal: someone.principalId }),
+      ),
+    );
+    const read = (cursor?: string) =>
+      json<FeedOut>(
+        feedApi("GET", cursor === undefined ? "/feed" : `/feed?since=${cursor}`, someone.token),
+      );
+    // A check budget of repositories it may not read: as quiet as an answer with nothing new,
+    // and those repositories' items are gone from the feed (the owner lost them).
+    const first = await read();
+    expect(first.body).toMatchObject({ items: [], poll_after_ms: FEED_POLL_AFTER_MS });
+    expect(await stored(someone.principalId)).toHaveLength(53);
+    // The next answer gets past the rest of them.
+    const second = await read(first.body.next_cursor);
+    expect(second.body.items.map((i) => i.item_key)).toEqual(keys);
+    expect(await stored(someone.principalId)).toEqual(keys);
+    // The same request again: the same items, none skipped.
+    expect((await read(first.body.next_cursor)).body).toEqual(second.body);
+  });
+
+  it("get past hidden items that take the whole budget of items read", async () => {
+    const someone = await user();
+    const shown = await directoryRepos(someone, 1);
+    const feed = env.USER.getByName(someone.principalId);
+    // A repository gone from the directory: its items are left out without a check.
+    const gone = uniqueId("rep_");
+    await feed.applyFeed(
+      Array.from({ length: 1_000 }, (_, i) =>
+        entry({ repoId: gone, thread: i + 1, version: 1, principal: someone.principalId }),
+      ),
+    );
+    await feed.applyFeed(
+      shown.map((repoId) => entry({ repoId, version: 1, principal: someone.principalId })),
+    );
+    const first = await json<FeedOut>(feedApi("GET", "/feed", someone.token));
+    expect(first.body).toMatchObject({ items: [], poll_after_ms: FEED_POLL_AFTER_MS });
+    const second = await json<FeedOut>(
+      feedApi("GET", `/feed?since=${first.body.next_cursor}`, someone.token),
+    );
+    expect(second.body.items.map((i) => i.item_key)).toEqual(
+      shown.map((id) => `${id}:pull/1:activity`),
+    );
+  });
+
+  it("answer alike however much activity the caller may not see comes, past its budgets too", async () => {
+    // Two feeds with the same item the caller sees; one also gets activity it may not see.
+    const [quiet, busy] = [await user(), await user()];
+    const [seen] = await directoryRepos(quiet, 1);
+    const at = Date.now();
+    for (const who of [quiet, busy])
+      await env.USER.getByName(who.principalId).applyFeed([
+        entry({ repoId: seen ?? "", version: 1, principal: who.principalId, occurredAt: at }),
+      ]);
+    const bursts = [
+      async () => {
+        const hidden = await directoryRepos(busy, 120);
+        for (const id of hidden) unreadable.add(id);
+        await env.USER.getByName(busy.principalId).applyFeed(
+          hidden.map((repoId) => entry({ repoId, version: 1, principal: busy.principalId })),
+        );
+      },
+      async () => {
+        const gone = uniqueId("rep_");
+        await env.USER.getByName(busy.principalId).applyFeed(
+          Array.from({ length: 1_100 }, (_, i) =>
+            entry({ repoId: gone, thread: i + 1, version: 1, principal: busy.principalId }),
+          ),
+        );
+      },
+      async () => {},
+      async () => {},
+    ];
+    // Each feed's answers along its cursors, the feed's own epoch aside.
+    const answers = async (who: Who, between?: (step: number) => Promise<void>) => {
+      const out: unknown[] = [];
+      let cursor: string | undefined;
+      for (let step = 0; step < 5; step++) {
+        if (step > 0) await between?.(step - 1);
+        const res = await json<FeedOut>(
+          feedApi("GET", cursor === undefined ? "/feed" : `/feed?since=${cursor}`, who.token),
+        );
+        const { epoch: _, ...next } = decodeFeedCursor(res.body.next_cursor) ?? {};
+        const { epoch: __, ...head } = decodeFeedCursor(res.body.head_cursor) ?? {};
+        out.push({ ...res.body, next_cursor: next, head_cursor: head });
+        cursor = res.body.next_cursor;
+      }
+      return out;
+    };
+    const expected = await answers(quiet);
+    expect(await answers(busy, (step) => bursts[step]?.() ?? Promise.resolve())).toEqual(expected);
+    // The same request before and after more of it: the same answer, ETag included.
+    const cursor = (await json<FeedOut>(feedApi("GET", "/feed", busy.token))).body.next_cursor;
+    const before = await feedApi("GET", `/feed?since=${cursor}`, busy.token);
+    await bursts[0]?.();
+    const after = await feedApi("GET", `/feed?since=${cursor}`, busy.token);
+    expect(after.headers.get("ETag")).toBe(before.headers.get("ETag"));
+    expect(await after.json()).toEqual(await before.json());
+  });
+
+  it("forget nothing for a token whose own limits hide a repository", async () => {
+    const someone = await user();
+    const [kept, other] = await directoryRepos(someone, 2);
+    const feed = env.USER.getByName(someone.principalId);
+    await feed.applyFeed(
+      [kept, other].map((repoId) =>
+        entry({ repoId: repoId ?? "", version: 1, principal: someone.principalId }),
+      ),
+    );
+    // Without pull request reads, it is shown nothing, and the owner's feed keeps both.
+    const narrow = await scopedToken(someone.principalId, ["metadata:read"]);
+    expect((await json<FeedOut>(feedApi("GET", "/feed", narrow))).body.items).toEqual([]);
+    expect(await stored(someone.principalId)).toHaveLength(2);
   });
 
   it("expire cursors made before the feed's object was restored", async () => {
