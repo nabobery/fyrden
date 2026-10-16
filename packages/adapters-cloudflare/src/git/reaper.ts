@@ -65,7 +65,8 @@ export function scheduleOrphanReaper(jobs: JobQueue, at: number): void {
   jobs.ensure("reap_orphans", ORPHAN_REAPER_JOB_ID, { runAt: at });
 }
 
-export interface PackPrefixSweep {
+/** Where one page of the sweep of a network's pack prefix is listed. */
+export interface PackPrefixListing {
   readonly bucket: R2Bucket;
   readonly networkId: string;
   /** The R2 list cursor from the previous page. */
@@ -73,50 +74,69 @@ export interface PackPrefixSweep {
   readonly limit: number;
   /** Objects uploaded at or before this time (ms) are old enough to delete. */
   readonly cutoff: number;
+  /** Called once per R2 list call (a class A operation), for cost counters. */
+  onList?(): void;
+}
+
+export interface PackPrefixSweep extends PackPrefixListing {
   /**
    * The pack ids among `packIds` that a registry still names. A repository
    * alone in its network answers from its own registry; the network object
    * answers for every member.
    */
   registered(packIds: readonly string[]): Set<string> | Promise<Set<string>>;
-  /** Called once per R2 list call (a class A operation), for cost counters. */
-  onList?(): void;
+}
+
+/** One listed page of `net/<nid>/p/`. */
+export interface PackPrefixPage {
+  /** The listed objects old enough to delete, with the pack each names (none: not a pack's file). */
+  readonly old: readonly { readonly key: string; readonly packId?: string }[];
+  /** The cursor of the next page, absent when the prefix is done. */
+  readonly next?: string;
 }
 
 const PACK_FILE = /^([0-9A-Z]{26})\.(pack|idx)$/;
 
 /**
+ * Lists one page of `net/<nid>/p/`: its objects older than the cutoff, and
+ * where the next page starts. A registry row is created before any byte of
+ * a pack is stored, so an old object without one can never gain one.
+ */
+export async function listPackPrefix(listing: PackPrefixListing): Promise<PackPrefixPage> {
+  const prefix = packPrefix(listing.networkId);
+  listing.onList?.();
+  const page = await listing.bucket.list({
+    prefix,
+    limit: listing.limit,
+    ...(listing.cursor ? { cursor: listing.cursor } : {}),
+  });
+  const old = page.objects
+    .filter((o) => o.uploaded.getTime() <= listing.cutoff)
+    .map((o) => {
+      const packId = PACK_FILE.exec(o.key.slice(prefix.length))?.[1];
+      return packId === undefined ? { key: o.key } : { key: o.key, packId };
+    });
+  return { old, ...(page.truncated ? { next: page.cursor } : {}) };
+}
+
+/**
  * One page of the sweep of `net/<nid>/p/`: deletes the listed objects that
- * no registry row names and that are older than the cutoff. A registry row
- * is created before any byte of a pack is stored, so an old object without
- * one can never gain one. Returns the deleted keys and the cursor of the
- * next page (absent when the prefix is done).
+ * no registry row names and that are older than the cutoff. Returns the
+ * deleted keys and the cursor of the next page (absent when the prefix is
+ * done).
  */
 export async function sweepPackPrefix(
   sweep: PackPrefixSweep,
 ): Promise<{ deleted: string[]; cursor?: string }> {
-  const prefix = packPrefix(sweep.networkId);
-  sweep.onList?.();
-  const page = await sweep.bucket.list({
-    prefix,
-    limit: sweep.limit,
-    ...(sweep.cursor ? { cursor: sweep.cursor } : {}),
-  });
-  const packIdOf = (key: string) => PACK_FILE.exec(key.slice(prefix.length))?.[1];
-  const ids = [
-    ...new Set(page.objects.map((o) => packIdOf(o.key)).filter((id) => id !== undefined)),
-  ];
+  const page = await listPackPrefix(sweep);
+  const ids = [...new Set(page.old.flatMap((o) => (o.packId === undefined ? [] : [o.packId])))];
   const registered = ids.length > 0 ? await sweep.registered(ids) : new Set<string>();
-  const deleted = page.objects
-    .filter((o) => o.uploaded.getTime() <= sweep.cutoff)
-    .filter((o) => {
-      const id = packIdOf(o.key);
-      // A key that names no pack can have no row: nothing but packs is stored here.
-      return id === undefined || !registered.has(id);
-    })
+  // A key that names no pack can have no row: nothing but packs is stored here.
+  const deleted = page.old
+    .filter((o) => o.packId === undefined || !registered.has(o.packId))
     .map((o) => o.key);
   if (deleted.length > 0) await sweep.bucket.delete(deleted);
-  return { deleted, ...(page.truncated ? { cursor: page.cursor } : {}) };
+  return { deleted, ...(page.next ? { cursor: page.next } : {}) };
 }
 
 /** Pack states an orphaned upload's packs can be in; any other means the pack is in use. */

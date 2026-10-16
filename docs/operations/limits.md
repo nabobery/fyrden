@@ -328,6 +328,18 @@ alarm. These periods are defaults and are not configurable in this version:
 A repack that replaces packs a clone is reading waits up to 1 hour for that
 clone before it switches; the old packs stay readable either way.
 
+A fork network (a repository and its forks) is also collected as a whole,
+daily while it has more than one member, in the network's own Durable Object
+alarm. Each member reports which of the network's shared packs it still
+reads; a shared pack none reads is deleted once every member has
+acknowledged it and the 30-day retention has passed. Files under the
+network's pack prefix older than 1 day that no member's registry names are
+deleted: the members are asked a page of 100 files at a time, and no more
+once every file of the page is accounted for. Each slice of this work makes
+at most 100 calls to members, R2 and D1 (Proposed) and saves its place, and
+an alarm starts no slice past 800 calls, so a network with many members is
+collected over as many alarms as it needs.
+
 ## Repository deletion
 
 `DELETE /repos/{owner}/{repo}` and the bulk `POST /user/repos/delete` start a

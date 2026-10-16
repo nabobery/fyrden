@@ -4,7 +4,7 @@ import {
   isNetworkId,
   JobQueue,
 } from "@fyrden/adapters-cloudflare/git";
-import { createLogger, createMetrics } from "@fyrden/adapters-cloudflare/obs";
+import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
 import { deletionHandler } from "../network/deletion.js";
 import { networkGcHandler } from "../network/gc.js";
@@ -397,12 +397,21 @@ export class NetworkDO extends MigratingDO {
     };
   }
 
+  /**
+   * Runs the network's due jobs as a measured invocation: the job queue
+   * starts no slice once its calls near the invocation's budget.
+   */
   override async alarm(): Promise<void> {
     const runtime = this.runtime;
-    await this.jobs.runDue(
-      { network_gc: networkGcHandler(runtime), network_delete: deletionHandler(runtime) },
-      this.#memory,
-      this.context.now() + ALARM_BUDGET_MS,
+    await measureInvocation(
+      this.context.metrics,
+      { where: "do", op: "alarm", doClass: "NetworkDO" },
+      () =>
+        this.jobs.runDue(
+          { network_gc: networkGcHandler(runtime), network_delete: deletionHandler(runtime) },
+          this.#memory,
+          this.context.now() + ALARM_BUDGET_MS,
+        ),
     );
   }
 }

@@ -1,9 +1,12 @@
 import {
   type JobHandler,
+  listPackPrefix,
+  type PackPrefixPage,
   type SliceResult,
-  sweepPackPrefix,
 } from "@fyrden/adapters-cloudflare/git";
-import { type NetworkRuntime, scheduleDeletions } from "./runtime.js";
+import type { RepoDO } from "../do/RepoDO.js";
+import type { Member, NetworkRegistry } from "./registry.js";
+import { type NetworkRuntime, SliceCalls, scheduleDeletions } from "./runtime.js";
 import type { MemberPack } from "./types.js";
 
 /*
@@ -19,7 +22,14 @@ import type { MemberPack } from "./types.js";
  *    are condemned (two-phase deletion, deletion.ts). The fence lifts.
  * 2. Sweep: objects under `net/<nid>/p/` that no member's registry and not
  *    the network names, older than the sweep TTL, are deleted (the orphan
- *    sweep a lone repository runs for itself).
+ *    sweep a lone repository runs for itself). Page by page: the members
+ *    are asked in turn which of a page's packs their registries name, until
+ *    every pack is named or every member has answered; only then is the
+ *    rest deleted.
+ *
+ * A slice makes at most the policy's `sliceCalls` calls and saves its place
+ * (the member it reached, the page and what is known of it), so a network
+ * with many members is collected over several slices and alarms.
  *
  * Which objects of a shared pack each member reaches is each member's own
  * collection's question: it marks borrowed packs too, never rewrites them,
@@ -38,11 +48,25 @@ interface GcCursor {
   readonly next: number;
   /** Per member snapshotted so far, the network's packs its view holds. */
   readonly holds: Readonly<Record<string, readonly string[]>>;
+  /** The R2 list cursor of the sweep's next page. */
   readonly list?: string;
+  /** The sweep's page whose members are being asked. */
+  readonly page?: SweepPage;
+}
+
+/** A listed page of the sweep, while the members are asked about it. */
+interface SweepPage extends PackPrefixPage {
+  /** Its packs the network does not hold and no member asked so far names. */
+  readonly unnamed: readonly string[];
+  /** The last member asked, as `[joinedAt, repoId]`: members are asked in the order they joined. */
+  readonly asked?: readonly [number, string];
 }
 
 /** Registry states of a member's row that count as holding the pack. */
 const HOLDING = new Set(["indexing", "indexed", "live", "garbage", "superseded", "condemned"]);
+
+/** Calls one question to a member may take: the call, and the directory check if it fails. */
+const MEMBER_CALLS = 2;
 
 const encode = (cursor: GcCursor) => new TextEncoder().encode(JSON.stringify(cursor));
 function decode(bytes: Uint8Array | null): GcCursor | undefined {
@@ -60,30 +84,30 @@ export function networkGcHandler(runtime: NetworkRuntime): JobHandler {
 }
 
 async function gcSlice(runtime: NetworkRuntime, saved: GcCursor | undefined): Promise<SliceResult> {
-  const { registry, context, policy } = runtime;
+  const { env, registry, context, policy } = runtime;
   const networkId = registry.networkId();
   if (!networkId) return { done: true };
   const deadline = context.now() + policy.sliceMs;
-  let cursor = saved ?? start(runtime);
-  if (!cursor) return { done: false, cursor: null, runAfterMs: 1_000 };
+  const calls = new SliceCalls(policy.sliceCalls, context.metrics);
+  const opened = saved ?? start(runtime);
+  if (!opened) return { done: false, cursor: null, runAfterMs: 1_000 };
+  let cursor: GcCursor = opened;
   if (cursor.epoch !== registry.gcState().epoch) {
     // The saved run is not the current epoch's (a state lost with a reset): start again.
     registry.setGcState({ phase: "idle", fence: false });
     return { done: false, cursor: null, runAfterMs: 0 };
   }
+  const paused = (): SliceResult => ({ done: false, cursor: encode(cursor), runAfterMs: 0 });
   if (cursor.phase === "mark") {
     while (cursor.next < cursor.members.length) {
-      if (context.now() >= deadline) return { done: false, cursor: encode(cursor), runAfterMs: 0 };
+      if (context.now() >= deadline || !calls.fits(MEMBER_CALLS)) return paused();
       const repoId = cursor.members[cursor.next] as string;
       await runtime.hooks.onMarkMember?.(cursor.epoch, repoId);
       // A member deleted since the snapshot holds nothing (its storage may be gone).
-      const view = registry.member(repoId)
-        ? await runtime.env.REPO.getByName(repoId)
-            .networkSnapshot(networkId)
-            .catch(async (error: unknown) => {
-              if (await forgetIfDeleted(runtime, repoId)) return [];
-              throw error;
-            })
+      const view: MemberPack[] = registry.member(repoId)
+        ? await askMember<MemberPack[]>(runtime, calls, repoId, "networkSnapshot", [], (member) =>
+            member.networkSnapshot(networkId),
+          )
         : [];
       cursor = {
         ...cursor,
@@ -95,10 +119,55 @@ async function gcSlice(runtime: NetworkRuntime, saved: GcCursor | undefined): Pr
     cursor = { ...cursor, phase: "sweep" };
   }
   for (;;) {
-    if (context.now() >= deadline) return { done: false, cursor: encode(cursor), runAfterMs: 0 };
-    const page = await sweep(runtime, networkId, cursor.list);
-    if (!page) break;
-    cursor = { ...cursor, list: page };
+    if (context.now() >= deadline) return paused();
+    const { page } = cursor;
+    if (!page) {
+      if (!calls.fits(1)) return paused();
+      const listed = await listPackPrefix({
+        bucket: env.GIT,
+        networkId,
+        ...(cursor.list ? { cursor: cursor.list } : {}),
+        limit: policy.sweepListLimit,
+        cutoff: context.now() - policy.sweepTtlMs,
+        onList: () => calls.count("r2.class_a", { bucket: "fyrden-git", op: "list" }),
+      });
+      cursor = { ...cursor, page: { ...listed, unnamed: notHeld(registry, listed) } };
+      continue;
+    }
+    // Members are asked only while a pack of the page is still unnamed.
+    const member = page.unnamed.length > 0 ? memberAfter(registry, page.asked) : undefined;
+    if (member) {
+      if (!calls.fits(MEMBER_CALLS)) return paused();
+      const named = new Set<string>(
+        await askMember<string[]>(runtime, calls, member.repoId, "registeredPacks", [], (stub) =>
+          stub.registeredPacks(page.unnamed),
+        ),
+      );
+      cursor = {
+        ...cursor,
+        page: {
+          ...page,
+          unnamed: page.unnamed.filter((id) => !named.has(id)),
+          asked: [member.joinedAt, member.repoId],
+        },
+      };
+      continue;
+    }
+    // Every member has answered: what none names, and the network still does not hold, goes.
+    const stillNotHeld = new Set(notHeld(registry, page));
+    const doomed = page.unnamed.filter((id) => stillNotHeld.has(id));
+    const keys = page.old
+      .filter((o) => o.packId === undefined || doomed.includes(o.packId))
+      .map((o) => o.key);
+    if (keys.length > 0) {
+      if (!calls.fits(1)) return paused();
+      calls.count("r2.class_a", { bucket: "fyrden-git", op: "delete" });
+      await env.GIT.delete(keys);
+      context.metrics.count("git.maintenance", { job: "network-gc", what: "swept" }, keys.length);
+    }
+    if (page.next === undefined) break;
+    const { page: _swept, ...rest } = cursor;
+    cursor = { ...rest, list: page.next };
   }
   registry.setGcState({ phase: "idle", fence: false });
   context.metrics.count("git.maintenance", { job: "network-gc", what: "epochs" }, 1);
@@ -133,6 +202,53 @@ function start(runtime: NetworkRuntime): GcCursor | undefined {
       holds: {},
     };
   });
+}
+
+/**
+ * Of a page's packs, those the network does not hold (unknown to it, or
+ * their bytes deleted): only a member's registry can keep them.
+ */
+function notHeld(registry: NetworkRegistry, page: PackPrefixPage): string[] {
+  const ids = [...new Set(page.old.flatMap((o) => (o.packId === undefined ? [] : [o.packId])))];
+  const known = registry.known(ids);
+  return ids.filter((id) => !known.has(id) || registry.packState(id) === "deleted");
+}
+
+/**
+ * The member to ask after `asked`, in the order members joined. One that
+ * joins meanwhile comes last, so it is asked too; one deleted meanwhile
+ * registers nothing any more.
+ */
+function memberAfter(
+  registry: NetworkRegistry,
+  asked: readonly [number, string] | undefined,
+): Member | undefined {
+  return registry
+    .members()
+    .find(
+      (m) => !asked || m.joinedAt > asked[0] || (m.joinedAt === asked[0] && m.repoId > asked[1]),
+    );
+}
+
+/**
+ * Asks member `repoId` (its `method`), counting the call first. A member
+ * deleted meanwhile answers `gone`; any other failure is thrown.
+ */
+async function askMember<R>(
+  runtime: NetworkRuntime,
+  calls: SliceCalls,
+  repoId: string,
+  method: "networkSnapshot" | "registeredPacks",
+  gone: R,
+  ask: (member: DurableObjectStub<RepoDO>) => Promise<R>,
+): Promise<R> {
+  calls.count("do.request", { class: "RepoDO", method });
+  try {
+    return await ask(runtime.env.REPO.getByName(repoId));
+  } catch (error) {
+    if (await forgetIfDeleted(runtime, calls, repoId)) return gone;
+    throw error;
+  }
 }
 
 /** The network's packs a member's view holds; a borrowed pack the network did not know is recorded as shared. */
@@ -198,53 +314,20 @@ function decide(runtime: NetworkRuntime, cursor: GcCursor): void {
   });
 }
 
-/** One page of the sweep of the network's pack prefix; the next page's cursor, or undefined at the end. */
-async function sweep(
-  runtime: NetworkRuntime,
-  networkId: string,
-  list: string | undefined,
-): Promise<string | undefined> {
-  const { env, registry, context, policy } = runtime;
-  const members = registry.members(["joining", "active", "detaching", "detached"]);
-  const { deleted, cursor } = await sweepPackPrefix({
-    bucket: env.GIT,
-    networkId,
-    ...(list ? { cursor: list } : {}),
-    limit: policy.sweepListLimit,
-    cutoff: context.now() - policy.sweepTtlMs,
-    registered: async (ids) => {
-      const out = new Set<string>();
-      for (const id of registry.known(ids)) if (registry.packState(id) !== "deleted") out.add(id);
-      for (const member of members) {
-        let registered: string[];
-        try {
-          registered = await env.REPO.getByName(member.repoId).registeredPacks([...ids]);
-        } catch (error) {
-          // Deleted meanwhile: it registers nothing any more.
-          if (await forgetIfDeleted(runtime, member.repoId)) continue;
-          throw error;
-        }
-        for (const id of registered) out.add(id);
-      }
-      return out;
-    },
-    onList: () => context.metrics.count("r2.class_a", { bucket: "fyrden-git", op: "list" }),
-  });
-  if (deleted.length > 0)
-    context.metrics.count("git.maintenance", { job: "network-gc", what: "swept" }, deleted.length);
-  return cursor;
-}
-
 /**
  * After a call to member `repoId` failed: true when it is no longer a member
  * (deleted meanwhile), or the directory says it is deleted. Such a member is
  * removed here with its claims: its deletion left it behind (a network it
  * was in before it recorded its networks), and its storage is gone.
  */
-async function forgetIfDeleted(runtime: NetworkRuntime, repoId: string): Promise<boolean> {
+async function forgetIfDeleted(
+  runtime: NetworkRuntime,
+  calls: SliceCalls,
+  repoId: string,
+): Promise<boolean> {
   const { registry, env, context, policy } = runtime;
   if (!registry.member(repoId)) return true;
-  context.metrics.count("d1.query", { db: "directory", op: "member_state" });
+  calls.count("d1.query", { db: "directory", op: "member_state" });
   const row = await env.DIRECTORY.prepare("SELECT state FROM repos WHERE id = ?")
     .bind(repoId)
     .first<{ state: string }>();

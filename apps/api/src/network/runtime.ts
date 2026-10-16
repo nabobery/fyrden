@@ -1,5 +1,5 @@
 import type { GitStorageContext, JobQueue } from "@fyrden/adapters-cloudflare/git";
-import type { Logger } from "@fyrden/adapters-cloudflare/obs";
+import type { Logger, MetricDimensions, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { NetworkRegistry } from "./registry.js";
 
 const SECOND = 1000;
@@ -24,6 +24,13 @@ export interface NetworkPolicy {
   readonly sweepListLimit: number;
   /** Wall time one slice may run (an alarm gets 30 s of CPU, measured on Workers Free, 2026-10-10). */
   readonly sliceMs: number;
+  /**
+   * Calls to members, R2 and D1 one slice makes at most (a call to a member
+   * counts with the directory check that may follow it). The job queue
+   * starts no slice past 800 calls in an invocation, so a slice must fit in
+   * the rest of the 1,000 Free allows (measured on Workers Free, 2026-10-10).
+   */
+  readonly sliceCalls: number;
 }
 
 export const NETWORK_DEFAULTS: NetworkPolicy = Object.freeze({
@@ -35,7 +42,35 @@ export const NETWORK_DEFAULTS: NetworkPolicy = Object.freeze({
   sweepTtlMs: DAY,
   sweepListLimit: 100,
   sliceMs: 20 * SECOND,
+  sliceCalls: 100,
 });
+
+type CallMetric = "r2.class_a" | "d1.query" | "do.request";
+
+/**
+ * The calls one slice of a network job has made, within the policy's
+ * `sliceCalls`. Each is counted before it is made, in the slice and as its
+ * cost counter (which the invocation counts against its budget).
+ */
+export class SliceCalls {
+  #made = 0;
+
+  constructor(
+    private readonly limit: number,
+    private readonly metrics: Metrics,
+  ) {}
+
+  /** Whether `n` more calls fit in the slice. */
+  fits(n: number): boolean {
+    return this.#made + n <= this.limit;
+  }
+
+  /** Counts a call about to be made. */
+  count<N extends CallMetric>(name: N, dimensions: MetricDimensions<N>): void {
+    this.#made++;
+    this.metrics.count(name, dimensions);
+  }
+}
 
 /** Pause points for tests (the network's ordering under concurrency). */
 export interface NetworkHooks {
