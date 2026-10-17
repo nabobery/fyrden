@@ -305,8 +305,9 @@ repository:
   3 minutes + B / 16 KiB/s, and never past `GIT_IMPORT_MAX_MS`. A source
   stopped this way fails the import at once, without a retry, with the error
   `the source took too long: ...` naming the limit; whatever was stored is
-  removed. The transfer stays in the Durable Object because a Free Worker
-  (a queue consumer too) gets about 10 ms of CPU per invocation: the pack
+  removed. Once the fetch is over, stopped or not, any response the source
+  left open is cancelled. The transfer stays in the Durable Object because a
+  Free Worker (a queue consumer too) gets about 10 ms of CPU per invocation: the pack
   arrives in side-band frames that Worker code must take apart, and framing
   in Worker code was measured at 2.4 to 3.7 ms of CPU per MiB (see Free and
   Paid serving; taking frames apart is assumed to cost about as much,

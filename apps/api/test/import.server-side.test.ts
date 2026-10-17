@@ -636,4 +636,22 @@ describe("a slow or stalled source", () => {
     );
     expect(await failedAtOnce(target)).toBe("the source took too long");
   });
+
+  it("releases the source's responses once the fetch is over, though they stay open after git's flush", async () => {
+    const target = await pushTarget();
+    const signals = new Set<AbortSignal>();
+    // Every answer as recorded (each ends with a flush), then no end.
+    await start(target, cx.source.exchanges, (_n, body, signal) => {
+      signals.add(signal);
+      return (async function* () {
+        yield body;
+        await stalled(signal);
+      })();
+    });
+    expect(await runDurableObjectAlarm(target.repo.stub)).toBe(true);
+    expect((await target.repo.stub.importRecord())?.state).toBe("indexing");
+    // Their signal, which cancels a `fetch` and its body, is aborted.
+    expect([...signals].map((s) => s.aborted)).toEqual([true]);
+    expect((await untilImported(target)).state).toBe("committed");
+  });
 });

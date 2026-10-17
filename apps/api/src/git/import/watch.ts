@@ -17,7 +17,9 @@ import type { HttpTransport } from "@fyrden/git-core";
  * The watch checks every `TICK_MS`. A source too slow has its requests
  * aborted through their signal (as the overall limit always was: `fetch`
  * rejects, and its body stops, once its signal aborts), and its pack stops
- * at the next chunk.
+ * at the next chunk. Once the fetch is over the signal is aborted too, so no
+ * response the client stopped reading (it stops at git's flush, not at the
+ * body's end) stays open.
  */
 
 export interface ImportPace {
@@ -75,7 +77,10 @@ export class TransferWatch {
     this.#stop = clock.every(TICK_MS, () => this.#tick());
   }
 
-  /** Aborted once the source is too slow; its reason is a `SourceTooSlowError`. */
+  /**
+   * Aborted once the source is too slow, its reason a `SourceTooSlowError`,
+   * and once the fetch is over (`stop`).
+   */
   get signal(): AbortSignal {
     return this.#controller.signal;
   }
@@ -117,9 +122,13 @@ export class TransferWatch {
     }
   }
 
-  /** Stops checking; call once the fetch is over. */
+  /**
+   * Stops checking and aborts the signal, which cancels any response still
+   * open; call once the fetch is over.
+   */
   stop(): void {
     this.#stop();
+    this.#controller.abort(new DOMException("the import's fetch is over", "AbortError"));
   }
 
   #tick(): void {
