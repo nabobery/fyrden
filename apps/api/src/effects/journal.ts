@@ -125,8 +125,9 @@ export const EFFECT_POLICY: EffectPolicy = {
   // CPU time, not calls, bounds a run: Free allows about 10 ms an invocation (verified,
   // docs/operations/limits.md), and delivering a webhook effect took 0.26 ms of CPU with a
   // small body and 0.5 ms with a 180 KB one (measured locally, 2026-10-17: the dispatcher and
-  // the webhook sink with their I/O stubbed). 20 small effects take about 5 ms; the bytes let
-  // at most 5 of the largest bodies (192 KiB) through, about 2.5 ms. To be confirmed on Free.
+  // the webhook sink with their I/O stubbed), but a run of 20 took 42 to 86 ms on Free
+  // (measured, 2026-10-17): the limit keeps a run's work fixed, not within 10 ms. The bytes
+  // let at most 5 of the largest bodies (192 KiB) through.
   sweepLimit: 20,
   sweepBytes: 1024 * 1024,
 };
@@ -142,7 +143,9 @@ export const INLINE_EFFECTS = 1;
 /**
  * The same for an invocation of one message: within a few ms of CPU time,
  * as the sweep's `sweepLimit`, and its payloads within `sweepBytes` (5 of
- * the largest webhook bodies, 192 KiB). Proposed, to be confirmed on Free.
+ * the largest webhook bodies, 192 KiB). Proposed: on Free a consumer
+ * invocation took 8 ms of CPU at the median and 44 ms at most (measured,
+ * 2026-10-17; docs/operations/limits.md).
  */
 export const INLINE_EFFECTS_ALONE = 5;
 
