@@ -8,7 +8,8 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * - `network_meta`: the network's id and its membership version (bumped
  *   whenever a member joins, starts detaching or leaves).
  * - `members`: the repositories of the network and the parent each was
- *   forked from. A fork is `joining` until it is published.
+ *   forked from. A fork is `joining` until it is published. Members are
+ *   walked in the order they joined (`members_joined`, v3).
  * - `network_packs`: packs the network shares, for which this object is the
  *   lifetime authority; `pack_claims`: which members' views hold them.
  * - `gc_state`: the network collection's epoch, phase and fence (the
@@ -98,6 +99,13 @@ export const networkSchema: readonly DoMigration[] = [
     name: "deletion_fence",
     sql: `
       ALTER TABLE deletions ADD COLUMN deleting_since INTEGER;
+    `,
+  },
+  {
+    version: 3,
+    name: "members_joined",
+    sql: `
+      CREATE INDEX members_joined ON members (joined_at, repo_id);
     `,
   },
 ];

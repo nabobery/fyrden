@@ -10,6 +10,7 @@ import { env } from "cloudflare:workers";
 import {
   createDoMemoryBudget,
   DEFAULT_JOB_POLICY,
+  type GitSqlStorage,
   JobQueue,
   newPackId,
 } from "@fyrden/adapters-cloudflare/git";
@@ -228,7 +229,73 @@ describe("network collection within a call budget", () => {
     expect(gc).toMatchObject({ epoch: 1, phase: "idle", fence: false });
     for (const key of orphans) expect(await exists(key)).toBe(false);
   });
+
+  it("the sweep finds the next member to ask with a bounded read, however many members there are", async () => {
+    const { networkId } = await network();
+    const orphans = await putOrphans(networkId, 2);
+    await setNetworkPolicy(networkId, { sliceCalls: 4 });
+    await inNetwork(networkId, (n) => n.startGc());
+    for (let i = 0; i < 10; i++) if ((await slice(networkId, "gc")).phase !== "mark") break;
+    expect((await inNetwork(networkId, (n) => n.registry.gcState())).phase).toBe("sweep");
+    // Members joined since the mark, each asked in turn (none names the orphans).
+    await inNetwork(networkId, (n) => {
+      for (let i = 0; i < 40; i++) n.registry.addMember(uniqueId("rep"), null, "active");
+    });
+
+    const reads = await inNetwork(networkId, async (n) => {
+      const counted = countMemberReads(n);
+      try {
+        for (let i = 0; i < 100; i++) {
+          await n.jobs.runJob(
+            NETWORK_GC_JOB_ID,
+            networkGcHandler(n.runtime),
+            createDoMemoryBudget(16 * 1024 * 1024),
+            0,
+          );
+          if (dueAt(n, NETWORK_GC_JOB_ID) > n.context.now()) break;
+        }
+        return counted.reads;
+      } finally {
+        counted.restore();
+      }
+    });
+    for (const key of orphans) expect(await exists(key)).toBe(false);
+    // One read at least per member asked, each of a row or two, not of every member.
+    expect(reads.length).toBeGreaterThanOrEqual(43);
+    expect(Math.max(...reads)).toBeLessThanOrEqual(2);
+  });
 });
+
+/**
+ * Counts the rows each query of the network object's `members` table reads,
+ * until `restore`.
+ */
+function countMemberReads(n: NetworkDO) {
+  const context = n.context as { storage: GitSqlStorage };
+  const storage = context.storage;
+  const cursors: SqlStorageCursor<Record<string, SqlStorageValue>>[] = [];
+  const sql = new Proxy(storage.sql, {
+    get(target, key) {
+      if (key === "exec")
+        return (query: string, ...bindings: unknown[]) => {
+          const cursor = target.exec(query, ...bindings);
+          if (/\bFROM members\b/.test(query)) cursors.push(cursor);
+          return cursor;
+        };
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  context.storage = { sql, transactionSync: (fn) => storage.transactionSync(fn) };
+  return {
+    get reads() {
+      return cursors.map((c) => c.rowsRead);
+    },
+    restore: () => {
+      context.storage = storage;
+    },
+  };
+}
 
 describe("network collection while a fork is joining", () => {
   /** Runs the network's alarm when its collection is next due (or now), until an epoch ends; those times. */

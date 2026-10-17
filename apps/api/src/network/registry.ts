@@ -63,6 +63,20 @@ const all = <T extends Record<string, SqlStorageValue>>(
   ...bindings: unknown[]
 ): T[] => sql.sql.exec<T>(query, ...bindings).toArray();
 
+type MemberRow = {
+  repo_id: string;
+  parent_repo_id: string | null;
+  state: string;
+  joined_at: number;
+};
+const MEMBER_COLUMNS = "repo_id, parent_repo_id, state, joined_at";
+const toMember = (r: MemberRow): Member => ({
+  repoId: r.repo_id,
+  parentRepoId: r.parent_repo_id,
+  state: r.state as MemberState,
+  joinedAt: r.joined_at,
+});
+
 export class NetworkRegistry {
   constructor(private readonly context: Pick<GitStorageContext, "storage" | "now">) {}
 
@@ -108,28 +122,43 @@ export class NetworkRegistry {
     );
   }
 
-  members(states?: readonly MemberState[]): Member[] {
-    const rows = all<{
-      repo_id: string;
-      parent_repo_id: string | null;
-      state: string;
-      joined_at: number;
-    }>(
+  /** The members (of `states`, when given) in the order they joined; the first `limit` of them, when given. */
+  members(states?: readonly MemberState[], limit?: number): Member[] {
+    return all<MemberRow>(
       this.#sql,
-      `SELECT repo_id, parent_repo_id, state, joined_at FROM members
-       ${states ? `WHERE state IN (${placeholders(states.length)})` : ""} ORDER BY joined_at, repo_id`,
+      `SELECT ${MEMBER_COLUMNS} FROM members
+       ${states ? `WHERE state IN (${placeholders(states.length)})` : ""} ORDER BY joined_at, repo_id
+       ${limit === undefined ? "" : "LIMIT ?"}`,
       ...(states ?? []),
-    );
-    return rows.map((r) => ({
-      repoId: r.repo_id,
-      parentRepoId: r.parent_repo_id,
-      state: r.state as MemberState,
-      joinedAt: r.joined_at,
-    }));
+      ...(limit === undefined ? [] : [limit]),
+    ).map(toMember);
   }
 
   member(repoId: string): Member | undefined {
-    return this.members().find((m) => m.repoId === repoId);
+    return all<MemberRow>(
+      this.#sql,
+      `SELECT ${MEMBER_COLUMNS} FROM members WHERE repo_id = ?`,
+      repoId,
+    ).map(toMember)[0];
+  }
+
+  /**
+   * The first member (of `states`, when given) after `after`, a member's
+   * `[joinedAt, repoId]` (or from the first), in the order members joined:
+   * one seek, however many members there are.
+   */
+  memberAfter(
+    after: readonly [number, string] | undefined,
+    states?: readonly MemberState[],
+  ): Member | undefined {
+    return all<MemberRow>(
+      this.#sql,
+      `SELECT ${MEMBER_COLUMNS} FROM members WHERE (joined_at, repo_id) > (?, ?)
+       ${states ? `AND state IN (${placeholders(states.length)})` : ""}
+       ORDER BY joined_at, repo_id LIMIT 1`,
+      ...(after ?? [Number.MIN_SAFE_INTEGER, ""]),
+      ...(states ?? []),
+    ).map(toMember)[0];
   }
 
   /** Adds a member (the first one, the network's root, joins `active`). */

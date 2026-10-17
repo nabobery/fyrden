@@ -1,4 +1,5 @@
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
+CREATE INDEX members_joined ON members (joined_at, repo_id);
 CREATE INDEX network_packs_state ON network_packs (state);
 CREATE INDEX pack_claims_repo ON pack_claims (repo_id);
 CREATE TABLE deletions (

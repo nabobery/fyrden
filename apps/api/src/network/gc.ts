@@ -5,7 +5,7 @@ import {
   type SliceResult,
 } from "@fyrden/adapters-cloudflare/git";
 import type { RepoDO } from "../do/RepoDO.js";
-import type { Member, NetworkRegistry } from "./registry.js";
+import type { NetworkRegistry } from "./registry.js";
 import {
   NETWORK_GC_JOB_ID,
   type NetworkRuntime,
@@ -173,7 +173,9 @@ async function gcSlice(
       continue;
     }
     // Members are asked only while a pack of the page is still unnamed.
-    const member = page.unnamed.length > 0 ? memberAfter(registry, page.asked) : undefined;
+    // In the order they joined: one that joins meanwhile comes last, so it is
+    // asked too; one deleted meanwhile registers nothing any more.
+    const member = page.unnamed.length > 0 ? registry.memberAfter(page.asked) : undefined;
     if (member) {
       if (!calls.fits(MEMBER_CALLS)) return paused();
       const named = new Set<string>(
@@ -210,7 +212,7 @@ async function gcSlice(
   registry.setGcState({ phase: "idle", fence: false });
   context.metrics.count("git.maintenance", { job: "network-gc", what: "epochs" }, 1);
   // Collect again later while the network is shared.
-  if (registry.members(["joining", "active", "detaching", "detached"]).length > 1)
+  if (registry.members(undefined, 2).length > 1)
     return { done: false, cursor: null, runAfterMs: policy.gcIntervalMs };
   return { done: true };
 }
@@ -253,22 +255,6 @@ function notHeld(registry: NetworkRegistry, page: PackPrefixPage): string[] {
   const ids = [...new Set(page.old.flatMap((o) => (o.packId === undefined ? [] : [o.packId])))];
   const known = registry.known(ids);
   return ids.filter((id) => !known.has(id) || registry.packState(id) === "deleted");
-}
-
-/**
- * The member to ask after `asked`, in the order members joined. One that
- * joins meanwhile comes last, so it is asked too; one deleted meanwhile
- * registers nothing any more.
- */
-function memberAfter(
-  registry: NetworkRegistry,
-  asked: readonly [number, string] | undefined,
-): Member | undefined {
-  return registry
-    .members()
-    .find(
-      (m) => !asked || m.joinedAt > asked[0] || (m.joinedAt === asked[0] && m.repoId > asked[1]),
-    );
 }
 
 /**
