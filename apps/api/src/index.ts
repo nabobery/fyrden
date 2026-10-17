@@ -1,17 +1,15 @@
 import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { app } from "./app-instance.js";
 import { archiveDirectoryAudit } from "./cron/directory-audit-archiver.js";
+import { runEffectsCron } from "./cron/effects.js";
 import { reapExpiredRepos } from "./cron/expiry-reaper.js";
-import { sweepEffects } from "./effects/dispatcher.js";
-import { EFFECT_SINKS } from "./effects/sinks.js";
-import { DEFAULT_ORG_SHARD, readModelFor } from "./events/read-model.js";
 import { reapOAuth } from "./oauth/reaper.js";
 import { consumeEvents, EVENTS_QUEUE } from "./queues/events-consumer.js";
 import { advanceDeletions } from "./repos/deletion.js";
 import { settleStaleGenerations } from "./repos/generate.js";
 import { advanceTransfers } from "./repos/transfer.js";
 import { reapIdempotencyKeys } from "./rest/idempotency.js";
-import { consumeWebhooks, reconcileWebhooks, WEBHOOKS_QUEUE } from "./webhooks/deliver.js";
+import { consumeWebhooks, WEBHOOKS_QUEUE } from "./webhooks/deliver.js";
 import type { DeliveryMessage } from "./webhooks/sink.js";
 
 export { NetworkDO } from "./do/NetworkDO.js";
@@ -47,18 +45,9 @@ export default {
     const metrics = createMetrics(env.METRICS);
     // Effects and webhook deliveries: an invocation of their own, its D1 queries their budget.
     if (controller.cron === EFFECTS_CRON)
-      return measureInvocation(metrics, { where: "worker", op: "cron effects" }, async () => {
-        const db = readModelFor(env, DEFAULT_ORG_SHARD);
-        await sweepEffects({
-          db,
-          env,
-          sinks: EFFECT_SINKS,
-          now: () => Date.now(),
-          log: createLogger({ op: "cron.effects" }),
-          metrics,
-        });
-        await reconcileWebhooks({ env, db, now: () => Date.now(), metrics });
-      });
+      return measureInvocation(metrics, { where: "worker", op: "cron effects" }, () =>
+        runEffectsCron(env, { metrics }),
+      );
     await measureInvocation(metrics, { where: "worker", op: "cron" }, async () => {
       // Each task on its own: one failing does not stop the other.
       const results = await Promise.allSettled([

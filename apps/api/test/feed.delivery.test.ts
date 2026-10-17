@@ -303,8 +303,12 @@ describe("the feed sink", () => {
         repoId,
         [1, 2, 3].map((seq) => commentEvent(repoId, seq, block(seq, [`usr_r${repoId}`]))),
       ),
-      // Not T0: the effect left pending must not fall due in the global sweep below.
-      { sinks: [oneByOne, feedSink] },
+      // Not T0: the effect left pending must not fall due in the global sweep below. The share
+      // of a full batch's invocation, so one effect is left.
+      {
+        sinks: [oneByOne, feedSink],
+        inline: { left: INLINE_EFFECTS, batched: INLINE_BATCH_EFFECTS },
+      },
     );
     expect(single).toHaveLength(INLINE_EFFECTS);
     expect(calls.map((call) => call.entries.length)).toEqual([3]);
@@ -320,7 +324,7 @@ describe("the feed sink", () => {
     ]);
   });
 
-  it("keeps a consumer invocation and a sweep within Free's 50 D1 queries", async () => {
+  it("keeps a consumer invocation and a sweep to a few D1 queries", async () => {
     // Its counts hold for its own effects: others due by its sweep are settled first.
     await settleOthersDue(T0 + EFFECT_POLICY.sweepAfterMs);
     const repos = await Promise.all(Array.from({ length: 5 }, () => listedRepo()));
@@ -359,7 +363,8 @@ describe("the feed sink", () => {
       ...Array(100).fill(2),
     ]);
 
-    // The sweeper takes the rest, a batch at a time: a claim, a mark and the prune.
+    // The sweeper takes the other seven in one run, as its calls allow (100 each): a claim, a
+    // mark and the prune, and one call per recipient.
     count.queries = 0;
     calls.length = 0;
     await sweepEffects({
@@ -369,8 +374,8 @@ describe("the feed sink", () => {
       now: () => T0 + EFFECT_POLICY.sweepAfterMs,
     });
     expect(count.queries).toBe(3);
-    expect(calls.length).toBeLessThanOrEqual(100);
-    expect(calls.every((call) => call.entries.length === EFFECT_POLICY.sweepBatch)).toBe(true);
+    expect(calls).toHaveLength(100);
+    expect(calls.every((call) => call.entries.length === 7)).toBe(true);
   });
 
   it("keeps an invocation's calls within its allowance when events are stored, leaving the rest to the sweeper", async () => {

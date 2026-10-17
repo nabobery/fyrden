@@ -67,6 +67,12 @@ export const METRICS = {
   // group is written each time (zeros too), so the latest point is the value.
   "git.repo.packs": ["repo", "group"],
   "git.repo.bytes": ["repo", "group"],
+  // The effects pipeline, one point per run by outcome = ok | error: the
+  // effects cron's sweep and its webhook reconciliation, and a consumer
+  // message's inline delivery of the effects it journaled.
+  "effects.sweep": ["outcome"],
+  "webhooks.reconcile": ["outcome"],
+  "effects.dispatch": ["outcome"],
   // Calls one invocation made against one subrequest budget, written once
   // when it ends: where = worker | do; budget = internal (R2, D1, Durable
   // Object calls) | external (outbound fetch and Cache API); op = the route

@@ -7,11 +7,19 @@ export interface SmokeResult {
   name: string;
   ok: boolean;
   detail: string;
+  /** Something to look at that does not fail the deployment. */
+  warning?: string;
+}
+
+/** What a passing check found: its detail, and a warning if any. */
+export interface Passed {
+  detail: string;
+  warning?: string;
 }
 
 export interface Check {
   name: string;
-  run: () => Promise<string>;
+  run: () => Promise<string | Passed>;
 }
 
 const REQUIRED_CHECKS = ["d1", "durableObject", "r2"] as const;
@@ -28,9 +36,16 @@ async function expectOk(res: Response): Promise<Response> {
   return res;
 }
 
-/** A health report passes only if every storage tier was checked and passed. */
-function assertHealthy(body: unknown): string {
-  const report = body as { ok?: unknown; checks?: Record<string, { ok?: unknown; ms?: unknown }> };
+/**
+ * A health report passes only if every storage tier was checked and passed.
+ * Late effects (webhook deliveries, feed entries) only warn: the API serves
+ * without them, and a deployment that was down a while catches up.
+ */
+function assertHealthy(body: unknown): Passed {
+  const report = body as {
+    ok?: unknown;
+    checks?: Record<string, { ok?: unknown; ms?: unknown; overdueS?: unknown; error?: unknown }>;
+  };
   const checks = report.checks ?? {};
   const problems = REQUIRED_CHECKS.filter((name) => {
     const check = checks[name];
@@ -38,7 +53,14 @@ function assertHealthy(body: unknown): string {
   });
   if (report.ok !== true || problems.length > 0)
     throw new Error(`failed or missing checks: ${problems.join(", ") || "ok=false"}`);
-  return REQUIRED_CHECKS.map((name) => `${name} ${checks[name]?.ms} ms`).join(", ");
+  const detail = REQUIRED_CHECKS.map((name) => `${name} ${checks[name]?.ms} ms`).join(", ");
+  const effects = checks.effects;
+  if (effects === undefined || effects.ok === true) return { detail };
+  const warning =
+    typeof effects.overdueS === "number"
+      ? `effects overdue by ${effects.overdueS} s`
+      : `effects check failed: ${String(effects.error ?? "unknown")}`;
+  return { detail, warning };
 }
 
 export function apiChecks(apiUrl: string, fetcher: typeof fetch = fetch): Check[] {
@@ -89,7 +111,12 @@ export async function runSmoke(checks: Check[]): Promise<SmokeResult[]> {
   const results: SmokeResult[] = [];
   for (const check of checks) {
     try {
-      results.push({ name: check.name, ok: true, detail: await check.run() });
+      const passed = await check.run();
+      results.push({
+        name: check.name,
+        ok: true,
+        ...(typeof passed === "string" ? { detail: passed } : passed),
+      });
     } catch (error) {
       results.push({
         name: check.name,
@@ -108,6 +135,9 @@ if (import.meta.main) {
     process.exit(2);
   }
   const results = await runSmoke([...apiChecks(apiUrl), ...webChecks(webUrl)]);
-  for (const r of results) console.log(`${r.ok ? "PASS" : "FAIL"} ${r.name}: ${r.detail}`);
+  for (const r of results) {
+    console.log(`${r.ok ? "PASS" : "FAIL"} ${r.name}: ${r.detail}`);
+    if (r.warning) console.log(`WARN ${r.name}: ${r.warning}`);
+  }
   process.exit(results.every((r) => r.ok) ? 0 : 1);
 }

@@ -5,6 +5,8 @@ import {
   type EffectPolicy,
   type EffectSink,
   effectCalls,
+  SINGLE_EFFECT_CALLS,
+  SWEEP_ROUND_CALLS,
 } from "./journal.js";
 
 /**
@@ -64,13 +66,59 @@ export async function dispatchEffects(deps: DispatchDeps, ids: readonly string[]
 
 /**
  * Retries due effects (the consumer could not deliver them, or their claim
- * expired), and deletes delivered ones past retention. Returns the effects
- * delivered.
+ * expired), oldest first, a page at a time while the sweep's calls last,
+ * and deletes delivered ones past retention. Returns the effects delivered.
  */
 export async function sweepEffects(deps: DispatchDeps): Promise<number> {
   const policy = deps.policy ?? EFFECT_POLICY;
   const now = deps.now();
-  const token = crypto.randomUUID();
+  let left = policy.sweepCalls;
+  let delivered = 0;
+  for (let first = true; ; first = false) {
+    left -= SWEEP_ROUND_CALLS;
+    const page = Math.min(policy.sweepPage, Math.floor(left / SINGLE_EFFECT_CALLS));
+    // The run's first effect goes whatever it costs, so none waits for ever.
+    if (page < 1 && !first) break;
+    const token = crypto.randomUUID();
+    const rows = await claimDue(deps, policy, token, now, Math.max(page, 1));
+    // As many as the calls left allow; the others go back.
+    let taken = 0;
+    for (const row of rows) {
+      const cost = effectCalls(
+        deps.sinks.find((s) => s.name === row.sink),
+        { target: row.target, payload: JSON.parse(row.payload) as Record<string, unknown> },
+      );
+      if (cost > left && !(first && taken === 0)) break;
+      left -= cost;
+      taken++;
+    }
+    const back = rows.slice(taken);
+    if (back.length > 0) await release(deps, back, token);
+    delivered += await deliverAll(deps, rows.slice(0, taken), token);
+    // Nothing more is due, or the calls are spent. An effect that failed now backs off past
+    // `now` and a delivered one is done, so a later page never meets either again.
+    if (rows.length < page || back.length > 0) break;
+  }
+  deps.metrics?.count("d1.query", { db: "org", op: "effects_prune" });
+  // Failed ones too, after the same time (their payloads go with them).
+  await deps.db
+    .prepare(
+      `DELETE FROM effects WHERE (state = 'done' AND done_at <= ?1)
+         OR (state = 'failed' AND next_attempt_at <= ?1)`,
+    )
+    .bind(now - policy.retentionMs)
+    .run();
+  return delivered;
+}
+
+/** Claims up to `limit` due effects, oldest first. */
+async function claimDue(
+  deps: DispatchDeps,
+  policy: EffectPolicy,
+  token: string,
+  now: number,
+  limit: number,
+): Promise<Row[]> {
   deps.metrics?.count("d1.query", { db: "org", op: "effects_claim" });
   const { results } = await deps.db
     .prepare(
@@ -82,39 +130,21 @@ export async function sweepEffects(deps: DispatchDeps): Promise<number> {
          ORDER BY next_attempt_at LIMIT ?4)
        ${RETURNING}`,
     )
-    .bind(token, now + policy.leaseMs, now, policy.sweepBatch)
+    .bind(token, now + policy.leaseMs, now, limit)
     .all<Row>();
-  // As many as the sweep's calls allow (one at least, so none waits for ever); the others go back.
-  let calls = 0;
-  const taken = results.filter((row, i) => {
-    calls += effectCalls(
-      deps.sinks.find((s) => s.name === row.sink),
-      { target: row.target, payload: JSON.parse(row.payload) as Record<string, unknown> },
-    );
-    return i === 0 || calls <= policy.sweepCalls;
-  });
-  const left = results.slice(taken.length);
-  if (left.length > 0) {
-    deps.metrics?.count("d1.query", { db: "org", op: "effects_release" });
-    await deps.db
-      .prepare(
-        `UPDATE effects SET lease_token = NULL, lease_until = NULL
-         WHERE effect_id IN (SELECT value FROM json_each(?1)) AND lease_token = ?2`,
-      )
-      .bind(JSON.stringify(left.map((row) => row.effect_id)), token)
-      .run();
-  }
-  const delivered = await deliverAll(deps, taken, token);
-  deps.metrics?.count("d1.query", { db: "org", op: "effects_prune" });
-  // Failed ones too, after the same time (their payloads go with them).
+  return results;
+}
+
+/** Gives claimed effects back untried, their schedule as it was. */
+async function release(deps: DispatchDeps, rows: readonly Row[], token: string): Promise<void> {
+  deps.metrics?.count("d1.query", { db: "org", op: "effects_release" });
   await deps.db
     .prepare(
-      `DELETE FROM effects WHERE (state = 'done' AND done_at <= ?1)
-         OR (state = 'failed' AND next_attempt_at <= ?1)`,
+      `UPDATE effects SET lease_token = NULL, lease_until = NULL
+       WHERE effect_id IN (SELECT value FROM json_each(?1)) AND lease_token = ?2`,
     )
-    .bind(now - policy.retentionMs)
+    .bind(JSON.stringify(rows.map((row) => row.effect_id)), token)
     .run();
-  return delivered;
 }
 
 /** A sink that delivers its effects together. */

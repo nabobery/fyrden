@@ -98,6 +98,19 @@ The latest point of a group is its current value.
 | `git.maintenance` | `job` (`repack`, `gc`, `reachability`, `retire`), `what` | Amounts per maintenance step (`bytes_in`, `bytes_out`, `objects`, `packs_in`, `packs_out`, `garbage_objects`, `garbage_bytes`, `condemned`, `deleted`, `deleted_bytes`, `expired_fetch`, `stale_output`, `all_reachable`, `slices`, `restarts`) |
 | `git.reaped` | `what` (`upload`, `pack`, `scratch`, `object`, `abort_failed`) | Items the cleanup of abandoned uploads removed |
 
+### Effects
+
+| Metric | Dimensions | Value |
+|---|---|---|
+| `effects.sweep` | `outcome` (`ok`, `error`) | 1 per run of the effects cron's sweep (retrying due webhook and feed effects) |
+| `webhooks.reconcile` | `outcome` (`ok`, `error`) | 1 per run of the effects cron's webhook reconciliation (late sends, dead claims, hooks to turn off, expired deliveries) |
+| `effects.dispatch` | `outcome` (`ok`, `error`) | 1 per events consumer message that delivered effects it journaled itself |
+
+Any `error` means effects are not being claimed or delivered: the failure is
+logged at error level (`op` `cron.effects` or `effects.dispatch`), and the
+effects stay pending for a later run. `GET /healthz` reports how late the
+oldest pending effect is (`checks.effects.overdueS`).
+
 ### Cost counters
 
 | Metric | Dimensions | Value |

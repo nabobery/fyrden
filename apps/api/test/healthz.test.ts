@@ -2,7 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
-import { deepHealth } from "../src/health.js";
+import { deepHealth, EFFECTS_OVERDUE_MS, OLDEST_PENDING_EFFECT } from "../src/health.js";
 
 describe("GET /healthz", () => {
   it("round-trips D1, a RepoDO and R2 and returns the request id", async () => {
@@ -18,7 +18,7 @@ describe("GET /healthz", () => {
     }>();
     expect(body.ok).toBe(true);
     expect(body.requestId).toBe("req-healthz-1");
-    expect(Object.keys(body.checks).sort()).toEqual(["d1", "durableObject", "r2"]);
+    expect(Object.keys(body.checks).sort()).toEqual(["d1", "durableObject", "effects", "r2"]);
     for (const check of Object.values(body.checks)) {
       expect(check.ok).toBe(true);
       expect(check.ms).toBeGreaterThanOrEqual(0);
@@ -34,6 +34,7 @@ describe("GET /healthz", () => {
     expect(result.rateLimited).toBe(false);
     expect(counted.sort()).toEqual([
       "d1.query directory,healthz",
+      "d1.query org,healthz_effects",
       "do.request RepoDO,healthProbe",
       "r2.class_a fyrden-assets,put",
       "r2.class_b fyrden-assets,get",
@@ -59,6 +60,54 @@ describe("GET /healthz", () => {
     expect(result.rateLimited === false && result.report.checks.r2.ok).toBe(false);
     expect(counted).toContain("r2.class_a");
     expect(counted).not.toContain("r2.class_b");
+  });
+
+  it("reports effects overdue past the threshold as degraded, without failing the check", async () => {
+    const id = uniqueId("effect");
+    await env.ORG_READ.prepare(
+      `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
+       VALUES (?, 'webhooks', 'hooks', '{}', ?, 0)`,
+    )
+      .bind(id, Date.now() - EFFECTS_OVERDUE_MS - 60_000)
+      .run();
+    try {
+      const res = await exports.default.fetch("https://fyrden.test/healthz");
+      expect(res.status).toBe(200);
+      const body = await res.json<{ ok: boolean; checks: { effects: Record<string, unknown> } }>();
+      expect(body.ok).toBe(true);
+      // Only how late: no counts or ids on a public endpoint.
+      expect(Object.keys(body.checks.effects).sort()).toEqual(["ms", "ok", "overdueS"]);
+      expect(body.checks.effects.ok).toBe(false);
+      expect(body.checks.effects.overdueS).toBeGreaterThanOrEqual(EFFECTS_OVERDUE_MS / 1000 + 60);
+    } finally {
+      await env.ORG_READ.prepare("DELETE FROM effects WHERE effect_id = ?").bind(id).run();
+    }
+  });
+
+  it("reports effects as ok when the oldest pending one is not due yet", async () => {
+    const id = uniqueId("effect");
+    await env.ORG_READ.prepare(
+      `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
+       VALUES (?, 'webhooks', 'hooks', '{}', ?, 0)`,
+    )
+      .bind(id, Date.now() + 60 * 60_000)
+      .run();
+    try {
+      const result = await deepHealth(env, {}, { count: () => {} });
+      expect(result.rateLimited === false && result.report.checks.effects).toMatchObject({
+        ok: true,
+        overdueS: 0,
+      });
+    } finally {
+      await env.ORG_READ.prepare("DELETE FROM effects WHERE effect_id = ?").bind(id).run();
+    }
+  });
+
+  it("finds the oldest pending effect through the due index", async () => {
+    const { results } = await env.ORG_READ.prepare(
+      `EXPLAIN QUERY PLAN ${OLDEST_PENDING_EFFECT}`,
+    ).all<{ detail: string }>();
+    expect(results.map((r) => r.detail).join("\n")).toMatch(/USING (COVERING )?INDEX effects_due/);
   });
 
   it("leaves no probe object behind in R2", async () => {

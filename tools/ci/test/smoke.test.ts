@@ -52,6 +52,30 @@ describe("smoke", () => {
     expect(results.filter((r) => r.name.includes("healthz")).every((r) => !r.ok)).toBe(true);
   });
 
+  it("warns about overdue effects without failing", async () => {
+    const degraded = {
+      ...healthy,
+      checks: { ...healthy.checks, effects: { ok: false, ms: 2, overdueS: 1800 } },
+    };
+    const results = await runSmoke(all(fakeFetch(routes(degraded))));
+    expect(results.filter((r) => !r.ok)).toEqual([]);
+    expect(results.filter((r) => r.warning).map((r) => [r.name, r.warning])).toEqual([
+      ["api healthz", "effects overdue by 1800 s"],
+      ["web healthz through the binding", "effects overdue by 1800 s"],
+    ]);
+  });
+
+  it("does not warn when effects are on time, or not reported", async () => {
+    const onTime = {
+      ...healthy,
+      checks: { ...healthy.checks, effects: { ok: true, ms: 2, overdueS: 0 } },
+    };
+    for (const health of [onTime, healthy]) {
+      const results = await runSmoke(all(fakeFetch(routes(health))));
+      expect(results.filter((r) => !r.ok || r.warning)).toEqual([]);
+    }
+  });
+
   it("expects the same RPC version the API contract declares", () => {
     expect(EXPECTED_RPC_VERSION).toBe(API_RPC_VERSION);
   });

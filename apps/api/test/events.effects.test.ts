@@ -1,4 +1,9 @@
-import { runInDurableObject } from "cloudflare:test";
+import {
+  createExecutionContext,
+  createMessageBatch,
+  getQueueResult,
+  runInDurableObject,
+} from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
   createIdFactory,
@@ -9,8 +14,17 @@ import {
 import { describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { dispatchEffects, sweepEffects } from "../src/effects/dispatcher.js";
-import { EFFECT_POLICY, type Effect, type EffectSink } from "../src/effects/journal.js";
-import { applyEnvelope } from "../src/queues/events-consumer.js";
+import {
+  EFFECT_POLICY,
+  type Effect,
+  type EffectSink,
+  INLINE_EFFECTS,
+  INLINE_EFFECTS_ALONE,
+  SINGLE_EFFECT_CALLS,
+  SWEEP_ROUND_CALLS,
+} from "../src/effects/journal.js";
+import { applyEnvelope, consumeEvents, EVENTS_QUEUE } from "../src/queues/events-consumer.js";
+import { settleOthersDue } from "./helpers/effects.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H7";
@@ -394,5 +408,100 @@ describe("effects journal", () => {
     expect(await effectRows(repoId)).toHaveLength(1);
     await sweep([sink], T0 + EFFECT_POLICY.retentionMs);
     expect(await effectRows(repoId)).toEqual([]);
+  });
+});
+
+/** Journals `n` effects of `repoId` for the recording sink, due at `at`. */
+async function dueEffects(repoId: string, n: number, at: number): Promise<void> {
+  await env.ORG_READ.prepare(
+    `WITH RECURSIVE e(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM e WHERE i < ?2)
+     INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
+     SELECT ?1 || ':1:' || i || ':test_hook:hook_1', 'test_hook', 'hook_1', '{}', ?3, ?3 FROM e`,
+  )
+    .bind(repoId, n, at)
+    .run();
+}
+
+describe("effects throughput", () => {
+  it("drains a burst in one sweep when its calls allow", async () => {
+    const at = T0 + 1;
+    await settleOthersDue(at);
+    const repoId = await listedRepo();
+    const { sink, received } = recordingSink(repoId);
+    // A push moving 60 pull requests' heads leaves about this many webhook effects.
+    await dueEffects(repoId, 60, T0);
+    expect(await sweep([sink], at)).toBe(60);
+    expect(received.size).toBe(60);
+    expect((await effectRows(repoId)).every((row) => row.state === "done")).toBe(true);
+  });
+
+  it("delivers what the sweep's calls allow, a page at a time, and leaves the rest untouched", async () => {
+    const at = T0 + 2;
+    await settleOthersDue(at);
+    const repoId = await listedRepo();
+    const { sink, received } = recordingSink(repoId);
+    await dueEffects(repoId, 30, T0);
+    const policy = { ...EFFECT_POLICY, sweepPage: 4, sweepCalls: 100 };
+    const delivered = await sweepEffects({
+      db: env.ORG_READ,
+      env,
+      sinks: [sink],
+      now: () => at,
+      policy,
+    });
+    // Pages of 4 while their calls fit (each page's own calls first): 4, 4, then 3.
+    expect(SWEEP_ROUND_CALLS + 4 * SINGLE_EFFECT_CALLS).toBe(36);
+    expect(delivered).toBe(11);
+    expect(received.size).toBe(11);
+    const rows = await env.ORG_READ.prepare(
+      `SELECT state, attempts, lease_token FROM effects WHERE effect_id LIKE ? AND state != 'done'`,
+    )
+      .bind(`${repoId}:%`)
+      .all();
+    expect(rows.results).toHaveLength(19);
+    expect(rows.results.every((r) => r.attempts === 0 && r.lease_token === null)).toBe(true);
+    // The next run goes on from there.
+    await sweepEffects({ db: env.ORG_READ, env, sinks: [sink], now: () => at, policy });
+    expect(received.size).toBe(22);
+  });
+
+  it("delivers more effects inline when the consumer's batch is small", async () => {
+    const one = await listedRepo();
+    const single = recordingSink(one);
+    const events = Array.from({ length: 12 }, (_, i) => pushEvent(one, i + 1));
+    const alone = createMessageBatch(EVENTS_QUEUE, [
+      { id: "alone", timestamp: new Date(), attempts: 1, body: envelope(one, events) },
+    ]);
+    await consumeEvents(alone, env, { sinks: [single.sink], now: () => T0 });
+    expect(await getQueueResult(alone, createExecutionContext())).toMatchObject({
+      explicitAcks: ["alone"],
+    });
+    expect(single.received.size).toBe(INLINE_EFFECTS_ALONE);
+    expect(INLINE_EFFECTS_ALONE).toBe(10);
+
+    // A full batch of five messages shares the least.
+    const repos = await Promise.all(Array.from({ length: 5 }, () => listedRepo()));
+    const delivered: string[] = [];
+    const sink: EffectSink = {
+      name: "test_hook",
+      plan: single.sink.plan,
+      deliver: async (effect) => {
+        if (repos.some((repoId) => effect.id.startsWith(`${repoId}:`))) delivered.push(effect.id);
+      },
+    };
+    const full = createMessageBatch(
+      EVENTS_QUEUE,
+      repos.map((repoId, i) => ({
+        id: `m${i}`,
+        timestamp: new Date(),
+        attempts: 1,
+        body: envelope(
+          repoId,
+          [1, 2, 3].map((seq) => pushEvent(repoId, seq)),
+        ),
+      })),
+    );
+    await consumeEvents(full, env, { sinks: [sink], now: () => T0 });
+    expect(delivered).toHaveLength(INLINE_EFFECTS);
   });
 });
