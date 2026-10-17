@@ -14,6 +14,7 @@ import repoV1 from "./fixtures/do-schemas/RepoDO/v1.sql?raw";
 import repoV2 from "./fixtures/do-schemas/RepoDO/v2.sql?raw";
 import repoV15 from "./fixtures/do-schemas/RepoDO/v15.sql?raw";
 import repoV29 from "./fixtures/do-schemas/RepoDO/v29.sql?raw";
+import repoV30 from "./fixtures/do-schemas/RepoDO/v30.sql?raw";
 
 // One fixture per released schema version: an object last migrated by any
 // released build must reach the same schema as a fresh one.
@@ -23,7 +24,7 @@ const fixtures: Record<
 > = {
   RepoDO: {
     schema: repoSchema,
-    versions: { 0: repoV0, 1: repoV1, 2: repoV2, 15: repoV15, 29: repoV29 },
+    versions: { 0: repoV0, 1: repoV1, 2: repoV2, 15: repoV15, 29: repoV29, 30: repoV30 },
   },
 };
 

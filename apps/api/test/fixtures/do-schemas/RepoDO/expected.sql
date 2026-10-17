@@ -260,7 +260,7 @@ CREATE TABLE mergeability (
         head_sha TEXT NOT NULL,
         state TEXT NOT NULL CHECK (state IN ('clean', 'conflicts', 'manual', 'unknown', 'error')),
         computed_at INTEGER NOT NULL
-      ) STRICT;
+      , attempts INTEGER NOT NULL DEFAULT 0, policy_version INTEGER NOT NULL DEFAULT 0) STRICT;
 CREATE TABLE mergeability_jobs (
         pr_number INTEGER PRIMARY KEY,
         seq INTEGER NOT NULL,

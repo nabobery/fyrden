@@ -11533,8 +11533,24 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "mergeable_reason": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "pending",
+                                  "too_expensive",
+                                  "unreadable",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Fyrden: why \`mergeable\` is null while open. \`pending\`: not worked out yet; \`too_expensive\`: past the budgets for working it out in the background (merging may still succeed); \`unreadable\`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed.",
+                          },
                           "mergeable_state": {
-                            "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not worked out yet, or too large to work out here.",
+                            "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not known, for the reason \`mergeable_reason\` gives.",
                             "enum": [
                               "clean",
                               "dirty",
@@ -11628,6 +11644,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "head_repo_id",
                           "mergeable",
                           "mergeable_state",
+                          "mergeable_reason",
                           "draft",
                           "maintainer_can_modify",
                           "title",
@@ -11864,8 +11881,24 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "mergeable_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "pending",
+                            "too_expensive",
+                            "unreadable",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: why \`mergeable\` is null while open. \`pending\`: not worked out yet; \`too_expensive\`: past the budgets for working it out in the background (merging may still succeed); \`unreadable\`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed.",
+                    },
                     "mergeable_state": {
-                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not worked out yet, or too large to work out here.",
+                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not known, for the reason \`mergeable_reason\` gives.",
                       "enum": [
                         "clean",
                         "dirty",
@@ -11959,6 +11992,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "head_repo_id",
                     "mergeable",
                     "mergeable_state",
+                    "mergeable_reason",
                     "draft",
                     "maintainer_can_modify",
                     "title",
@@ -12720,8 +12754,24 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "mergeable_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "pending",
+                            "too_expensive",
+                            "unreadable",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: why \`mergeable\` is null while open. \`pending\`: not worked out yet; \`too_expensive\`: past the budgets for working it out in the background (merging may still succeed); \`unreadable\`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed.",
+                    },
                     "mergeable_state": {
-                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not worked out yet, or too large to work out here.",
+                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not known, for the reason \`mergeable_reason\` gives.",
                       "enum": [
                         "clean",
                         "dirty",
@@ -12815,6 +12865,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "head_repo_id",
                     "mergeable",
                     "mergeable_state",
+                    "mergeable_reason",
                     "draft",
                     "maintainer_can_modify",
                     "title",
@@ -13051,8 +13102,24 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "mergeable_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "pending",
+                            "too_expensive",
+                            "unreadable",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: why \`mergeable\` is null while open. \`pending\`: not worked out yet; \`too_expensive\`: past the budgets for working it out in the background (merging may still succeed); \`unreadable\`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed.",
+                    },
                     "mergeable_state": {
-                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not worked out yet, or too large to work out here.",
+                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not known, for the reason \`mergeable_reason\` gives.",
                       "enum": [
                         "clean",
                         "dirty",
@@ -13146,6 +13213,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "head_repo_id",
                     "mergeable",
                     "mergeable_state",
+                    "mergeable_reason",
                     "draft",
                     "maintainer_can_modify",
                     "title",
@@ -14805,8 +14873,24 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "mergeable_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "pending",
+                            "too_expensive",
+                            "unreadable",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: why \`mergeable\` is null while open. \`pending\`: not worked out yet; \`too_expensive\`: past the budgets for working it out in the background (merging may still succeed); \`unreadable\`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed.",
+                    },
                     "mergeable_state": {
-                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not worked out yet, or too large to work out here.",
+                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not known, for the reason \`mergeable_reason\` gives.",
                       "enum": [
                         "clean",
                         "dirty",
@@ -14900,6 +14984,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "head_repo_id",
                     "mergeable",
                     "mergeable_state",
+                    "mergeable_reason",
                     "draft",
                     "maintainer_can_modify",
                     "title",
@@ -15225,8 +15310,24 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "mergeable_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "pending",
+                            "too_expensive",
+                            "unreadable",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: why \`mergeable\` is null while open. \`pending\`: not worked out yet; \`too_expensive\`: past the budgets for working it out in the background (merging may still succeed); \`unreadable\`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed.",
+                    },
                     "mergeable_state": {
-                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not worked out yet, or too large to work out here.",
+                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not known, for the reason \`mergeable_reason\` gives.",
                       "enum": [
                         "clean",
                         "dirty",
@@ -15320,6 +15421,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "head_repo_id",
                     "mergeable",
                     "mergeable_state",
+                    "mergeable_reason",
                     "draft",
                     "maintainer_can_modify",
                     "title",

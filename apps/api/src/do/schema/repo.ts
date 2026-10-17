@@ -819,4 +819,16 @@ export const repoSchema: readonly DoMigration[] = [
       ALTER TABLE networks ADD COLUMN released INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    version: 31,
+    // A mergeability result past the budgets (`unknown`) or unreadable
+    // (`error`) is worked out again later: how many times in a row its pair
+    // came to that (each delay doubles), and the version of the budgets it
+    // was worked out under (0 before this: worked out again when asked for).
+    name: "mergeability_retries",
+    sql: `
+      ALTER TABLE mergeability ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE mergeability ADD COLUMN policy_version INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
