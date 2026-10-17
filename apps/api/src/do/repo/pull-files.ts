@@ -22,6 +22,7 @@ import {
   guarded,
   type RepoBrowse,
 } from "./browse.js";
+import type { ChangeList, ChangeLists, ListedChange } from "./change-lists.js";
 import { ReadsTooLargeError, UnreadableObjectError, withHeldReads } from "./held-reads.js";
 import type { RepoPulls } from "./pulls.js";
 
@@ -127,11 +128,15 @@ function utf8Length(text: string): number {
   return bytes;
 }
 
+/** Files whose patches a page reads at once. Proposed. */
+const PAGE_FILES_AT_ONCE = 6;
+
 /**
  * One page of the files a pull request changes, compared from `mergeBase`
  * (the merge base of its base and head) to `head`, as GitHub's three-dot
  * comparison. The whole listing is worked out from the trees (renames pair
- * across it); only the page's files are read for their patches.
+ * across it), or taken from `lists` when it was worked out before; only the
+ * page's files are read for their patches.
  */
 export function pullFiles(
   browse: RepoBrowse,
@@ -143,104 +148,174 @@ export function pullFiles(
     readonly limit: number;
   },
   policy: PullFilesPolicy = PULL_FILES_POLICY,
+  lists?: ChangeLists,
 ): Promise<Browsed<PullFilesPage>> {
   return guarded(async () => {
     const [baseRow, headRow] = graph.readSync([input.mergeBase, input.head], "verified");
     if (!baseRow || !headRow) return UNREADABLE;
-    return browse.reading(async (reader) => {
-      let entries: DiffEntry[];
-      let truncated: boolean;
-      try {
-        // Tree bodies, and what parsing makes of them, are held from the
-        // object's memory budget until the listing is worked out.
-        ({ entries, truncated } = await withHeldReads(
-          reader,
-          { tryReserve: (bytes) => browse.hold(bytes) },
-          { maxTreeBytes: policy.maxTreeBytes, maxReadBytes: policy.maxTreeBytesTotal },
-          async (reads) => {
-            const listed = await diffTrees(reads.readTree, baseRow.tree, headRow.tree, {
-              maxTrees: policy.maxTrees,
-              maxChanges: policy.maxRawChanges,
-            });
-            // Past the raw cap a rename's other half may be cut off: none are
-            // paired then, so none shows half paired (git's view without renames).
-            const all = listed.truncated ? listed.changes : findExactRenames(listed.changes);
-            return {
-              entries: all.slice(0, policy.maxFiles),
-              truncated: listed.truncated || all.length > policy.maxFiles,
-            };
-          },
-        ));
-      } catch (error) {
-        if (error instanceof TreeDiffLimitError || error instanceof ReadsTooLargeError)
-          return TOO_EXPENSIVE;
-        if (error instanceof UnreadableObjectError) return UNREADABLE;
-        throw error;
-      }
-      try {
-        return {
-          ok: true,
-          value: await page(browse, entries, input, policy, {
-            mergeBase: oidToHex(input.mergeBase),
-            head: oidToHex(input.head),
-            truncated,
-          }),
-        };
-      } catch (error) {
-        if (error instanceof UnreadableObjectError) return UNREADABLE;
-        throw error;
-      }
-    });
+    const comparison = { mergeBase: oidToHex(input.mergeBase), head: oidToHex(input.head) };
+    // The limits that shape a listing: one worked out with others is not this one.
+    const limits = `${policy.maxFiles} ${policy.maxRawChanges}`;
+    let list = lists?.get(comparison.mergeBase, comparison.head, limits);
+    if (!list) {
+      const listed = await changeList(browse, baseRow.tree, headRow.tree, policy);
+      if (!listed.ok) return listed;
+      list = listed.value;
+      lists?.keep(comparison.mergeBase, comparison.head, limits, list);
+    }
+    try {
+      return {
+        ok: true,
+        value: await page(browse, list.changes, input, policy, {
+          ...comparison,
+          truncated: list.truncated,
+        }),
+      };
+    } catch (error) {
+      if (error instanceof UnreadableObjectError) return UNREADABLE;
+      throw error;
+    }
   });
 }
 
-/** The page of `entries` from `input.start`, with patches, within the page's budgets. */
+/** The changes from tree `base` to tree `head`, renames paired, within the policy's bounds. */
+async function changeList(
+  browse: RepoBrowse,
+  base: Oid,
+  head: Oid,
+  policy: PullFilesPolicy,
+): Promise<Browsed<ChangeList>> {
+  const reader = await browse.reader();
+  try {
+    // Tree bodies, and what parsing makes of them, are held from the
+    // object's memory budget until the listing is worked out.
+    const list = await withHeldReads(
+      reader,
+      { tryReserve: (bytes) => browse.hold(bytes) },
+      { maxTreeBytes: policy.maxTreeBytes, maxReadBytes: policy.maxTreeBytesTotal },
+      async (reads) => {
+        const listed = await diffTrees(reads.readTree, base, head, {
+          maxTrees: policy.maxTrees,
+          maxChanges: policy.maxRawChanges,
+        });
+        // Past the raw cap a rename's other half may be cut off: none are
+        // paired then, so none shows half paired (git's view without renames).
+        const all = listed.truncated ? listed.changes : findExactRenames(listed.changes);
+        return {
+          changes: all.slice(0, policy.maxFiles).map(listedChange),
+          truncated: listed.truncated || all.length > policy.maxFiles,
+        };
+      },
+    );
+    return { ok: true, value: list };
+  } catch (error) {
+    if (error instanceof TreeDiffLimitError || error instanceof ReadsTooLargeError)
+      return TOO_EXPENSIVE;
+    if (error instanceof UnreadableObjectError) return UNREADABLE;
+    throw error;
+  }
+}
+
+/** What a page needs of a change. */
+function listedChange(entry: DiffEntry): ListedChange {
+  return {
+    status: entry.status,
+    path: entry.path,
+    previousPath: entry.status === "renamed" ? entry.previousPath : null,
+    oldMode: entry.oldMode,
+    newMode: entry.newMode,
+    oldOid: entry.oldOid,
+    newOid: entry.newOid,
+  };
+}
+
+/** Whether a change keeps its content (a rename, a change of mode). */
+const sameContent = (change: ListedChange) =>
+  change.oldOid !== null &&
+  change.newOid !== null &&
+  oidToHex(change.oldOid) === oidToHex(change.newOid);
+
+/** Whether a change's patch is worked out from its files: not a submodule's, and lines changed. */
+const patched = (change: ListedChange) =>
+  !isGitlink(change.oldMode) && !isGitlink(change.newMode) && !sameContent(change);
+
+/**
+ * The page of `changes` from `input.start`, with patches, within the
+ * page's budgets. A few files are read at once, their objects located
+ * together first; each is taken in order, so the page ends where reading
+ * them one by one would end it.
+ */
 async function page(
   browse: RepoBrowse,
-  entries: readonly DiffEntry[],
+  changes: readonly ListedChange[],
   input: { readonly start: number; readonly limit: number },
   policy: PullFilesPolicy,
   comparison: Omit<PullFilesPage, "files" | "next">,
 ): Promise<PullFilesPage> {
+  const listed = changes.slice(input.start, input.start + input.limit);
+  const blobs = listed
+    .filter(patched)
+    .flatMap((change) => [change.oldOid, change.newOid])
+    .filter((oid) => oid !== null);
+  if (blobs.length > 0) {
+    try {
+      await (await browse.reader()).prefetch(blobs);
+    } catch (error) {
+      // Out of reads: each file says so as it is read.
+      if (!(error instanceof ReadBudgetError)) throw error;
+    }
+  }
+  const views: Promise<{ view: PullFileView } | { error: unknown }>[] = [];
+  const read = (i: number) => {
+    const change = listed[i];
+    if (change)
+      views[i] = fileView(browse, change, policy).then(
+        (view) => ({ view }),
+        (error: unknown) => ({ error }),
+      );
+  };
+  for (let i = 0; i < PAGE_FILES_AT_ONCE; i++) read(i);
   const files: PullFileView[] = [];
   let patchBytes = 0;
-  for (const entry of entries.slice(input.start, input.start + input.limit)) {
-    let view: PullFileView;
-    try {
-      view = await fileView(browse, entry, policy);
-    } catch (error) {
-      // Out of reads: the page ends with the files it has, or the file says so.
-      if (!(error instanceof ReadBudgetError)) throw error;
-      if (files.length > 0) break;
-      view = { ...bare(entry), patchOmitted: "budget" };
+  try {
+    for (const [i, change] of listed.entries()) {
+      const outcome = await views[i];
+      let view: PullFileView;
+      if (outcome && "view" in outcome) view = outcome.view;
+      else {
+        // Out of reads: the page ends with the files it has, or the file says so.
+        if (!(outcome?.error instanceof ReadBudgetError)) throw outcome?.error;
+        if (files.length > 0) break;
+        view = { ...bare(change), patchOmitted: "budget" };
+      }
+      const bytes = view.patch === null ? 0 : utf8Length(view.patch);
+      if (files.length > 0 && patchBytes + bytes > policy.maxPagePatchBytes) break;
+      patchBytes += bytes;
+      browse.take(2 * view.filename.length + bytes + 256);
+      files.push(view);
+      read(i + PAGE_FILES_AT_ONCE);
     }
-    const bytes = view.patch === null ? 0 : utf8Length(view.patch);
-    if (files.length > 0 && patchBytes + bytes > policy.maxPagePatchBytes) break;
-    patchBytes += bytes;
-    browse.take(2 * view.filename.length + bytes + 256);
-    files.push(view);
+  } finally {
+    // Files read past where the page ends finish before the request does.
+    await Promise.all(views);
   }
   const end = input.start + files.length;
-  return { ...comparison, files, next: end < entries.length ? end : null };
+  return { ...comparison, files, next: end < changes.length ? end : null };
 }
 
 /** A file's listing without its patch. */
-function bare(entry: DiffEntry): PullFileView {
-  const sameContent =
-    entry.oldOid !== null &&
-    entry.newOid !== null &&
-    oidToHex(entry.oldOid) === oidToHex(entry.newOid);
+function bare(change: ListedChange): PullFileView {
   const status =
-    entry.status === "renamed"
+    change.status === "renamed"
       ? "renamed"
-      : entry.status === "type_changed" || (entry.status === "modified" && sameContent)
+      : change.status === "type_changed" || (change.status === "modified" && sameContent(change))
         ? "changed"
-        : entry.status;
+        : change.status;
   return {
-    filename: entry.path,
-    previousFilename: entry.status === "renamed" ? entry.previousPath : null,
+    filename: change.path,
+    previousFilename: change.previousPath,
     status,
-    sha: oidToHex((entry.newOid ?? entry.oldOid) as Oid),
+    sha: oidToHex((change.newOid ?? change.oldOid) as Oid),
     additions: 0,
     deletions: 0,
     patch: null,
@@ -252,15 +327,14 @@ function bare(entry: DiffEntry): PullFileView {
 /** A file's listing with its patch, reading both sides within the policy's bounds. */
 async function fileView(
   browse: RepoBrowse,
-  entry: DiffEntry,
+  change: ListedChange,
   policy: PullFilesPolicy,
 ): Promise<PullFileView> {
-  const view = bare(entry);
-  if (isGitlink(entry.oldMode) || isGitlink(entry.newMode))
+  const view = bare(change);
+  if (isGitlink(change.oldMode) || isGitlink(change.newMode))
     return { ...view, patchOmitted: "submodule" };
   // The same content (a rename, a mode change) has no lines to compare.
-  if (entry.oldOid && entry.newOid && oidToHex(entry.oldOid) === oidToHex(entry.newOid))
-    return view;
+  if (sameContent(change)) return view;
   const reader = await browse.reader();
   const sizeOf = async (oid: Oid | null) => {
     if (!oid) return 0;
@@ -268,10 +342,10 @@ async function fileView(
     if (header?.type !== "blob") throw new UnreadableObjectError();
     return header.size;
   };
-  const sizes = [await sizeOf(entry.oldOid), await sizeOf(entry.newOid)];
-  if (sizes.some((size) => size > policy.maxSideBytes))
+  const [oldSize, newSize] = await Promise.all([sizeOf(change.oldOid), sizeOf(change.newOid)]);
+  if (oldSize > policy.maxSideBytes || newSize > policy.maxSideBytes)
     return { ...view, patchOmitted: "too_large" };
-  const hold = browse.hold((sizes[0] ?? 0) + (sizes[1] ?? 0));
+  const hold = browse.hold(oldSize + newSize);
   if (!hold) return { ...view, patchOmitted: "budget" };
   try {
     const read = async (oid: Oid | null) => {
@@ -280,7 +354,8 @@ async function fileView(
       if (object?.type !== "blob") throw new UnreadableObjectError();
       return object.bytes;
     };
-    const diff = diffFile(await read(entry.oldOid), await read(entry.newOid));
+    const [before, after] = await Promise.all([read(change.oldOid), read(change.newOid)]);
+    const diff = diffFile(before, after);
     if (diff.kind === "binary") return { ...view, patchOmitted: "binary" };
     if (diff.kind === "too_large") return { ...view, patchOmitted: "too_large" };
     const counts = {
@@ -362,12 +437,15 @@ const INVALID_LISTING = fail(
  * branch's tip while open, see `comparedBase`) and the recorded head is
  * worked out now, and kept for the later
  * pages when there are any; `from` names such a listing (a cursor this
- * repository gave) and where its next page starts.
+ * repository gave) and where its next page starts. The files changed
+ * between the two commits are kept in `lists` for every page and listing
+ * of the same comparison.
  */
 export async function pullFilesListing(
   browse: RepoBrowse,
   pulls: RepoPulls,
   graph: SqliteCommitGraph,
+  lists: ChangeLists,
   input: { readonly number: number; readonly from: ListingCursor | null; readonly limit: number },
 ): Promise<Browsed<PullFilesPage & { listing: string | null }>> {
   const { number, from, limit } = input;
@@ -387,12 +465,13 @@ export async function pullFilesListing(
     if (!found.ok) return found;
     mergeBase = found.value;
   }
-  const page = await pullFiles(browse, graph, {
-    mergeBase,
-    head,
-    start: from?.start ?? 0,
-    limit,
-  });
+  const page = await pullFiles(
+    browse,
+    graph,
+    { mergeBase, head, start: from?.start ?? 0, limit },
+    PULL_FILES_POLICY,
+    lists,
+  );
   if (!page.ok) return page;
   if (!listing && page.value.next !== null)
     listing = pulls.startListing(number, "files", page.value.mergeBase, page.value.head);

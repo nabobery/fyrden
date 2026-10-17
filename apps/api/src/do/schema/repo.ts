@@ -831,4 +831,24 @@ export const repoSchema: readonly DoMigration[] = [
       ALTER TABLE mergeability ADD COLUMN policy_version INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    version: 32,
+    // The changes between two commits that a pull request's file listing
+    // worked out from their trees (see `ChangeLists`), found by the two
+    // commits and the listing limits used. A bounded number and size are
+    // kept; the oldest (lowest `seq`) go first.
+    name: "change_lists",
+    sql: `
+      CREATE TABLE change_lists (
+        seq INTEGER PRIMARY KEY,
+        base_sha TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        limits TEXT NOT NULL,
+        truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
+        bytes INTEGER NOT NULL,
+        body TEXT NOT NULL,
+        UNIQUE (base_sha, head_sha, limits)
+      ) STRICT;
+    `,
+  },
 ];

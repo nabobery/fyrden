@@ -1,18 +1,26 @@
 // A pull request's files: compared from the merge base of its base and head
 // (three dots, as GitHub's), with patches, renames, pages that keep their
-// comparison, and cursors checked before they are used.
+// comparison, cursors checked before they are used, and the files changed
+// kept so that later pages and listings of a comparison read no trees.
 import { env } from "cloudflare:workers";
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
-import { oidFromHex } from "@fyrden/git-core";
+import { type ObjectReader, type Oid, oidFromHex, oidToHex } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import { RepoBrowse } from "../src/do/repo/browse.js";
+import {
+  type ChangeList,
+  ChangeLists,
+  type ChangeListsPolicy,
+} from "../src/do/repo/change-lists.js";
 import { TREE_ENTRY_MEMORY_BYTES } from "../src/do/repo/held-reads.js";
 import {
+  type ListingCursor,
   PULL_FILES_POLICY,
   type PullFilesPolicy,
   pullCommits,
   pullFiles,
+  pullFilesListing,
 } from "../src/do/repo/pull-files.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { advance, runJob, setPolicy } from "./helpers/maintenance.js";
@@ -156,6 +164,163 @@ describe("pull request files", () => {
   it("answers 404 for a pull request that does not exist", async () => {
     const missing = await json<{ code: string }>(api("GET", `${path}/pulls/9/files`, owner.token));
     expect(missing).toMatchObject({ status: 404, body: { code: "pull_not_found" } });
+  });
+});
+
+/** The work a files listing does: R2 GETs, trees read, objects located together. */
+type Work = { gets: number; trees: number; located: string[] };
+
+/** `reader`, counting into `work` the trees it reads and the objects it locates together. */
+function watched(reader: ObjectReader, work: Work): ObjectReader {
+  return new Proxy(reader, {
+    get(target, property) {
+      if (property === "readHeader")
+        return async (oid: Oid) => {
+          const header = await target.readHeader(oid);
+          if (header?.type === "tree") work.trees++;
+          return header;
+        };
+      if (property === "prefetch")
+        return (oids: Iterable<Oid>) => {
+          const all = [...oids];
+          work.located.push(...all.map(oidToHex));
+          return target.prefetch(all);
+        };
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+describe("a kept files listing", () => {
+  /** A page of pull request 1's files as the repository lists it, and the work it did. */
+  const listed = (from: ListingCursor | null, limit: number) =>
+    inRepo(env.REPO.getByName(repo.id), async (r) => {
+      const work: Work = { gets: 0, trees: 0, located: [] };
+      const browse = new RepoBrowse({ git: r.git, memoryBlocks: createClockBlockCache() });
+      const reader = browse.reader.bind(browse);
+      browse.reader = async () => watched(await reader(), work);
+      const bucket = r.git.bucket;
+      const get = bucket.get;
+      bucket.get = ((...args: Parameters<R2Bucket["get"]>) => {
+        work.gets++;
+        return get.apply(bucket, args);
+      }) as R2Bucket["get"];
+      try {
+        const page = await pullFilesListing(browse, r.pulls, r.git.commitGraph, r.changeLists, {
+          number: 1,
+          from,
+          limit,
+        });
+        if (!page.ok) throw new Error(page.code);
+        return { page: page.value, ...work };
+      } finally {
+        bucket.get = get;
+        browse.close();
+      }
+    });
+
+  it("lists the same comparison again without reading its trees, locating the page's files together", async () => {
+    const cold = await listed(null, 30);
+    expect(cold.trees).toBeGreaterThan(0);
+    const warm = await listed(null, 30);
+    expect(warm.trees).toBe(0);
+    expect(warm.page).toEqual(cold.page);
+    // The page's blobs (a.txt's two sides, b.txt, bin.dat, new.txt; the rename has no lines to compare).
+    expect(warm.located).toHaveLength(5);
+    expect(warm.located).toEqual(
+      expect.arrayContaining(
+        warm.page.files.filter((f) => f.status !== "renamed").map((f) => f.sha),
+      ),
+    );
+    expect(warm.gets).toBeLessThan(cold.gets);
+    // At most a batched index lookup (two reads) for each pack, and a read for each blob.
+    const packs = await inRepo(env.REPO.getByName(repo.id), (r) => r.git.registry.liveOwn().length);
+    expect(warm.gets).toBeLessThanOrEqual(2 * packs + warm.located.length);
+  });
+
+  it("reads no trees for a later page, and locates only that page's files", async () => {
+    const one = await listed(null, 1);
+    expect(one.trees).toBeGreaterThan(0);
+    expect(one.page.files.map((f) => f.filename)).toEqual(["a.txt"]);
+    const cursor = { listing: one.page.listing as string, start: one.page.next as number };
+    const two = await listed(cursor, 1);
+    expect(two.trees).toBe(0);
+    expect(two.page.files.map((f) => [f.filename, f.status])).toEqual([["b.txt", "removed"]]);
+    expect(two.located).toEqual([two.page.files[0]?.sha]);
+  });
+
+  it("works out a new head's comparison anew", async () => {
+    await listed(null, 30);
+    await commit("feature", [{ path: "late.txt", content: "late\n" }]);
+    const moved = await listed(null, 30);
+    expect(moved.trees).toBeGreaterThan(0);
+    expect(moved.page.files.map((f) => f.filename)).toContain("late.txt");
+  });
+
+  it("answers a kept listing byte for byte as it answered it first", async () => {
+    const text = async (query: string) =>
+      (await api("GET", `${path}/pulls/1/files${query}`, owner.token)).text();
+    const first = await text("?per_page=2");
+    const whole = await text("");
+    expect(await text("?per_page=2")).toBe(first);
+    expect(await text("")).toBe(whole);
+  });
+});
+
+describe("kept change lists", () => {
+  const list = (path: string): ChangeList => ({
+    changes: [
+      {
+        status: "added",
+        path,
+        previousPath: null,
+        oldMode: null,
+        newMode: 0o100644,
+        oldOid: null,
+        newOid: oidFromHex("1".repeat(40)),
+      },
+    ],
+    truncated: false,
+  });
+  const inFreshRepo = <R>(use: (lists: (policy: ChangeListsPolicy) => ChangeLists) => R) =>
+    inRepo(env.REPO.getByName(uniqueId("repo")), (r) =>
+      use((policy) => new ChangeLists(r.git, policy)),
+    );
+
+  it("keeps a bounded number of lists, found by their commits and limits, dropping the oldest", async () => {
+    const kept = await inFreshRepo((make) => {
+      const lists = make({ maxLists: 2, maxBytes: 1024 * 1024, maxListBytes: 1024 * 1024 });
+      for (const n of [1, 2, 3]) lists.keep(`base${n}`, "head", "limits", list(`file${n}`));
+      // The same comparison kept again (two requests worked it out at once): the first stays.
+      lists.keep("base3", "head", "limits", list("again"));
+      return {
+        dropped: lists.get("base1", "head", "limits"),
+        kept: lists.get("base3", "head", "limits"),
+        otherLimits: lists.get("base3", "head", "others"),
+        count: [2, 3].filter((n) => lists.get(`base${n}`, "head", "limits")).length,
+      };
+    });
+    expect(kept).toEqual({
+      dropped: undefined,
+      kept: list("file3"),
+      otherLimits: undefined,
+      count: 2,
+    });
+  });
+
+  it("keeps a bounded size of lists, dropping the oldest, and never one too long", async () => {
+    const kept = await inFreshRepo((make) => {
+      // Each list below takes a little over 1,000 bytes.
+      const lists = make({ maxLists: 100, maxBytes: 2_500, maxListBytes: 2_000 });
+      for (const n of [1, 2, 3])
+        lists.keep(`base${n}`, "head", "limits", list(`${n}`.repeat(1_000)));
+      lists.keep("long", "head", "limits", list("x".repeat(3_000)));
+      return ["base1", "base2", "base3", "long"].map(
+        (base) => lists.get(base, "head", "limits") !== undefined,
+      );
+    });
+    expect(kept).toEqual([false, true, true, false]);
   });
 });
 

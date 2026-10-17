@@ -104,6 +104,16 @@ CREATE TABLE audit_segments (
         created_at INTEGER NOT NULL,
         archived_at INTEGER
       ) STRICT;
+CREATE TABLE change_lists (
+        seq INTEGER PRIMARY KEY,
+        base_sha TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        limits TEXT NOT NULL,
+        truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
+        bytes INTEGER NOT NULL,
+        body TEXT NOT NULL,
+        UNIQUE (base_sha, head_sha, limits)
+      ) STRICT;
 CREATE TABLE claim_releases (
         pack_id TEXT PRIMARY KEY,
         network_id TEXT NOT NULL,

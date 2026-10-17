@@ -110,6 +110,7 @@ import {
   RepoBrowse,
   type TagPage,
 } from "./repo/browse.js";
+import { ChangeLists } from "./repo/change-lists.js";
 import { RepoComments } from "./repo/comments.js";
 import type { ConflictsView, MergedIntoHead } from "./repo/conflicts.js";
 import {
@@ -267,6 +268,9 @@ export class RepoDO extends MigratingDO {
   /** Pull requests between the repository's branches. */
   readonly pulls: RepoPulls;
 
+  /** The files pull requests' listings found changed, kept for their later pages and listings. */
+  readonly changeLists: ChangeLists;
+
   /** Reviews of pull requests, and reviews requested. */
   readonly reviews: RepoReviews;
 
@@ -331,6 +335,7 @@ export class RepoDO extends MigratingDO {
         reclaimAfterRestore(this.git);
       },
     );
+    this.changeLists = new ChangeLists(this.git);
     this.pulls = new RepoPulls({
       git: this.git,
       events: this.events,
@@ -1014,7 +1019,11 @@ export class RepoDO extends MigratingDO {
     return this.#browse("listPullFiles", async (browse) =>
       this.#refusesReads()
         ? fail(404, "repo_not_found", REPO_DELETED)
-        : pullFilesListing(browse, this.pulls, this.git.commitGraph, { number, from, limit }),
+        : pullFilesListing(browse, this.pulls, this.git.commitGraph, this.changeLists, {
+            number,
+            from,
+            limit,
+          }),
     );
   }
 
