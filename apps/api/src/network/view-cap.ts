@@ -157,8 +157,16 @@ export function swapCompactedView(
 }
 
 /**
+ * Packs recorded as merged into one pack at most: the most recently merged.
+ * A swap moves at most this many for each pack it merges. One dropped is
+ * borrowed again when an import names it. Proposed.
+ */
+export const MAX_MERGED_PER_PACK = 256;
+
+/**
  * In the swap's transaction: `sources` are merged into `output`, and so are
- * the packs merged into one of them before (one hop, whatever the chain).
+ * the packs merged into one of them before (one hop, whatever the chain),
+ * the oldest past `MAX_MERGED_PER_PACK` dropped.
  */
 function recordMerged(git: RepoGitStorage, output: string, sources: readonly string[]): void {
   const sql = git.context.storage.sql;
@@ -169,10 +177,19 @@ function recordMerged(git: RepoGitStorage, output: string, sources: readonly str
     list,
   );
   sql.exec(
-    `INSERT INTO view_merged (pack_id, into_pack_id) SELECT value, ? FROM json_each(?)
-     WHERE true ON CONFLICT (pack_id) DO UPDATE SET into_pack_id = excluded.into_pack_id`,
+    `INSERT INTO view_merged (pack_id, into_pack_id, merged_at) SELECT value, ?, ? FROM json_each(?)
+     WHERE true ON CONFLICT (pack_id) DO UPDATE SET into_pack_id = excluded.into_pack_id,
+       merged_at = excluded.merged_at`,
     output,
+    git.context.now(),
     list,
+  );
+  sql.exec(
+    `DELETE FROM view_merged WHERE pack_id IN (
+       SELECT pack_id FROM view_merged WHERE into_pack_id = ?
+       ORDER BY merged_at DESC, pack_id DESC LIMIT -1 OFFSET ?)`,
+    output,
+    MAX_MERGED_PER_PACK,
   );
 }
 

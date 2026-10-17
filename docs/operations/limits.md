@@ -115,9 +115,12 @@ revision is imported once the merges are done; it is refused when the
 merges leave nothing more to tell. A pack already merged counts as nothing
 new: a later import naming it again reads it through the merged pack, and
 borrows it again only once the merged pack has left the view (dropped by
-the repository's collection). A view over its cap all the same (the
-budget lowered since) leaves the merge job failing, tried again in case a
-collection drops packs.
+the repository's collection). Each merged pack remembers at most the 256
+packs most recently merged into it (merging it again moves them to the new
+one, so a merge moves at most 256 for each pack it takes); an older one is
+borrowed again when an import names it. A view over its cap all the same
+(the budget lowered since) leaves the merge job failing, tried again in
+case a collection drops packs.
 
 ### Push policy
 

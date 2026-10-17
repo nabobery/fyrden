@@ -787,17 +787,20 @@ export const repoSchema: readonly DoMigration[] = [
     version: 30,
     // The borrowed packs a view compaction merged, each with the pack that
     // holds its objects now (one hop: merging that one again moves its
-    // packs on to the new output). An import of a head that still names a
-    // merged pack reads it through that pack while the view holds it, and
-    // borrows it again only once that one is gone. Rows go when the row of
-    // the pack they were merged into is deleted, and all of them on detach.
+    // packs on to the new output) and when it was merged. An import of a
+    // head that still names a merged pack reads it through that pack while
+    // the view reads it, and borrows it again otherwise. One pack keeps a
+    // bounded number, those most recently merged into it (the oldest are
+    // dropped: borrowed again if named). Rows go when the row of the pack
+    // they were merged into is deleted, and all of them on detach.
     name: "view_merged",
     sql: `
       CREATE TABLE view_merged (
         pack_id TEXT PRIMARY KEY,
-        into_pack_id TEXT NOT NULL
+        into_pack_id TEXT NOT NULL,
+        merged_at INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;
-      CREATE INDEX view_merged_into ON view_merged (into_pack_id);
+      CREATE INDEX view_merged_into ON view_merged (into_pack_id, merged_at);
     `,
   },
 ];
