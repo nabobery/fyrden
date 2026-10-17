@@ -6,7 +6,6 @@ import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
 import { HOOK_POLICY } from "../src/do/repo/hooks.js";
-import { EFFECT_POLICY, INLINE_EFFECTS } from "../src/effects/journal.js";
 import { ATTEMPT_POLICY, reconcileWebhooks } from "../src/webhooks/deliver.js";
 import { webhookSink } from "../src/webhooks/sink.js";
 
@@ -63,14 +62,10 @@ const count = async (sql: string, ...values: unknown[]) =>
 
 describe("webhook retention", () => {
   it("deletes at least as many deliveries a day as Workers Free lets a deployment make", () => {
-    // Free's queues: 10,000 operations a day, three a message (verified:
-    // https://developers.cloudflare.com/queues/platform/pricing/), so at most a third as many
-    // events consumer invocations. Each delivers INLINE_EFFECTS webhook effects itself at most,
-    // the effects cron sweepBatch a run, and an effect makes a delivery for each hook it names.
-    const invocations = Math.floor(10_000 / 3);
-    const made =
-      (invocations * INLINE_EFFECTS + CRON_RUNS_A_DAY * EFFECT_POLICY.sweepBatch) *
-      HOOK_POLICY.maxHooks;
+    // Every delivery writes at least its own row, and D1 on Free writes 100,000 rows a day
+    // (verified: https://developers.cloudflare.com/d1/platform/pricing/), however fast effects
+    // are delivered.
+    const made = 100_000;
     expect(CRON_RUNS_A_DAY * ATTEMPT_POLICY.pruneBatch).toBeGreaterThanOrEqual(made);
     // One bulk R2 delete a run holds every body it deletes (R2 takes up to 1,000 keys a call).
     expect(ATTEMPT_POLICY.pruneBatch).toBeLessThanOrEqual(1_000);

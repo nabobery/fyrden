@@ -33,6 +33,7 @@ export function pullOutput(pull: PullView): PullOutput {
     head_repo_id: pull.headRepoId,
     mergeable: pull.mergeable,
     mergeable_state: pull.mergeableState,
+    mergeable_reason: pull.mergeableReason,
     draft: pull.draft,
     maintainer_can_modify: pull.maintainerCanModify,
     title: pull.title,

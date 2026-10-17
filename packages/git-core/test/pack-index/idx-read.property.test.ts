@@ -6,7 +6,12 @@ import { markPositions } from "../../src/graph/reachability.js";
 import { compareOids, OID_BYTES, type Oid, oidFromBytes } from "../../src/object/oid.js";
 import { decodeFanout, encodeFanout } from "../../src/pack/idx-format.js";
 import { openRangedIdx } from "../../src/pack/idx-range-read.js";
-import { type IdxEntry, PackIdx } from "../../src/pack/idx-read.js";
+import {
+  type IdxEntry,
+  type IdxLocation,
+  type IdxLookup,
+  PackIdx,
+} from "../../src/pack/idx-read.js";
 import { type IdxWriteInput, writeIdx } from "../../src/pack/idx-write.js";
 import { countingReader, hex, idxHasher } from "./support.js";
 
@@ -55,6 +60,11 @@ const entriesArb = fc
     return { count, oids: packed, offsets, crc32s };
   });
 
+/** A lookup's answer without its CRC32, as an index read by ranges gives it. */
+function location(found: IdxLookup | undefined): IdxLocation | undefined {
+  return found && { position: found.position, offset: found.offset };
+}
+
 /** The first entry (lowest offset) for each oid, as a lookup should return. */
 function model(input: IdxWriteInput): Map<string, { offset: number; crc32: number }> {
   const map = new Map<string, { offset: number; crc32: number }>();
@@ -78,6 +88,7 @@ describe("idx readers agree with a Map", () => {
         const expected = model(input);
         expect(idx.count).toBe(input.count);
         expect(idx.packChecksum()).toEqual(PACK_CHECKSUM);
+        expect(idx.byteLength).toBe(written.bytes.length);
         expect(await idx.verifyChecksum(idxHasher)).toBe(true);
         expect(encodeFanout(idx.fanout)).toEqual(written.bytes.subarray(8, 8 + 1024));
         expect(decodeFanout(encodeFanout(written.fanout))).toEqual(written.fanout);
@@ -106,7 +117,7 @@ describe("idx readers agree with a Map", () => {
             continue;
           }
           expect(got).toEqual({ position: got?.position, ...want });
-          expect(gotRanged).toEqual(got);
+          expect(gotRanged).toEqual({ position: got?.position, offset: want.offset });
           expect(hex(idx.oidAt(got?.position as number))).toBe(key);
           expect(hex(await ranged.oidAt(got?.position as number))).toBe(key);
           // The position is the first of a run of equal oids.
@@ -136,7 +147,7 @@ describe("idx readers agree with a Map", () => {
           ];
           const single = oids.map((oid) => idx.lookup(oid));
           expect(idx.lookupMany(oids)).toEqual(single);
-          expect(await ranged.lookupMany(oids, undefined, span)).toEqual(single);
+          expect(await ranged.lookupMany(oids, undefined, span)).toEqual(single.map(location));
         },
       ),
       { numRuns: 100 },
@@ -164,7 +175,7 @@ describe("idx readers agree with a Map", () => {
           expect(budget.reads).toBe(reader.calls);
           expect(budget.reads).toBeLessThanOrEqual(maxReads);
           for (const [i, oid] of oids.entries()) {
-            if (found[i] !== null) expect(found[i]).toEqual(idx.lookup(oid));
+            if (found[i] !== null) expect(found[i]).toEqual(location(idx.lookup(oid)));
           }
         },
       ),
@@ -185,8 +196,41 @@ describe("idx readers agree with a Map", () => {
     const oids = Array.from({ length: 200 }, (_, i) => new Uint8Array(OID_BYTES).fill(i));
     const found = await ranged.lookupMany(oids);
     expect(found.every((f) => f !== undefined)).toBe(true);
-    // The oid table, the CRC32s and the offsets: three reads for 200 oids.
-    expect(reader.calls).toBe(3);
+    // The oid table and the offsets: two reads for 200 oids.
+    expect(reader.calls).toBe(2);
+  });
+
+  it("a ranged lookup reads the oid's bucket and its offset, never its CRC32", async () => {
+    const count = 64;
+    const input: IdxWriteInput = {
+      count,
+      oids: Uint8Array.from({ length: count * OID_BYTES }, (_, i) =>
+        i % OID_BYTES === 0 ? i / OID_BYTES : 1,
+      ),
+      offsets: Float64Array.from({ length: count }, (_, i) => 12 + i * 40),
+      crc32s: Uint32Array.from({ length: count }, (_, i) => i + 1),
+    };
+    const written = await writeIdx(input, PACK_CHECKSUM, { createHasher: idxHasher });
+    const reads: [number, number][] = [];
+    const ranged = await openRangedIdx(
+      async (offset, length) => {
+        reads.push([offset, length]);
+        return written.bytes.subarray(offset, offset + length);
+      },
+      { fanout: written.fanout },
+    );
+    const budget = { reads: 0, maxReads: Number.POSITIVE_INFINITY };
+    const oid = input.oids.subarray(7 * OID_BYTES, 8 * OID_BYTES);
+    expect(await ranged.lookup(oid, 0, budget)).toEqual({ position: 7, offset: 12 + 7 * 40 });
+    // The bucket's one oid, then the offset after the CRC32 table.
+    const oidsAt = 8 + 1024;
+    const offsetsAt = oidsAt + count * (OID_BYTES + 4);
+    expect(reads).toEqual([
+      [oidsAt + 7 * OID_BYTES, OID_BYTES],
+      [offsetsAt + 7 * 4, 4],
+    ]);
+    expect(budget.reads).toBe(2);
+    expect(await ranged.crc32At(7)).toBe(8);
   });
 
   it("iterates by position in oid order, offsets and CRCs intact", async () => {
@@ -260,10 +304,6 @@ describe("idx readers agree with a Map", () => {
     const absent = new Uint8Array(20).fill(0x50);
     expect(await ranged.find(absent)).toBe(-1);
     expect(reader.calls).toBe(1);
-    expect(await ranged.lookup(input.oids.subarray(20, 40))).toEqual({
-      position: 1,
-      offset: 40,
-      crc32: 2,
-    });
+    expect(await ranged.lookup(input.oids.subarray(20, 40))).toEqual({ position: 1, offset: 40 });
   });
 });

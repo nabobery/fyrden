@@ -20,18 +20,28 @@ import type { PullRecord, RepoPulls } from "./pulls.js";
  * one job serves the queue, longest waiting first, one merge per slice. A
  * result is kept only for the pair it was worked out for, so a stale one is
  * never shown. Only the outcome is kept: a merge works its tree out again.
+ * A result past the budgets or unreadable waits in the queue to be worked
+ * out again, after a delay that doubles each time its pair comes to that.
  */
 
-/** What the background merge came to for one pair. */
+/**
+ * What the background merge came to for one pair: `unknown` past the
+ * budgets, `error` when an object could not be read.
+ */
 export type MergeabilityState = "clean" | "conflicts" | "manual" | "unknown" | "error";
 
 /** GitHub's `mergeable_state`, as far as Fyrden works it out. */
 export type MergeableState = "clean" | "dirty" | "draft" | "unknown";
 
+/** Why an open pull request's `mergeable` is null. */
+export type MergeableReason = "pending" | "too_expensive" | "unreadable";
+
 export interface MergeabilityView {
   /** Whether it merges without conflicts at its current base tip and head; null until known. */
   readonly mergeable: boolean | null;
   readonly mergeableState: MergeableState;
+  /** Why `mergeable` is null while open; null when it is known, and once closed. */
+  readonly mergeableReason: MergeableReason | null;
 }
 
 /** A pull request with whether it merges. */
@@ -43,6 +53,29 @@ export type PullView = PullRecord & MergeabilityView;
  * A pull request past them is `unknown` (merging it may still succeed).
  */
 export const MERGEABILITY_POLICY: MergePolicy = { ...MERGE_POLICY, maxReads: 150 };
+
+/**
+ * The version of the budgets (these, `MERGE_POLICY`'s) and of what reading
+ * an object costs against them, kept with each result past them or
+ * unreadable. Bump it with any change to either: a result kept under
+ * another version is worked out again when its pull request is asked for.
+ */
+export const MERGEABILITY_POLICY_VERSION = 2;
+
+/**
+ * The delay before a result past the budgets, or unreadable, is worked out
+ * again for the same pair: `firstMs`, doubling with each try to `maxMs`
+ * (Proposed).
+ */
+export const MERGEABILITY_RETRY = { firstMs: 10 * 60_000, maxMs: 6 * 60 * 60_000 } as const;
+
+/** The delay after the `attempts`-th result in a row past the budgets or unreadable. */
+export function mergeabilityRetryDelay(attempts: number): number {
+  return Math.min(
+    MERGEABILITY_RETRY.firstMs * 2 ** Math.max(0, attempts - 1),
+    MERGEABILITY_RETRY.maxMs,
+  );
+}
 
 /** The one job that serves the queue. */
 export const MERGEABILITY_JOB_ID = "mergeability";
@@ -80,7 +113,7 @@ export class RepoMergeability {
     }
     sql.exec(
       `INSERT INTO mergeability_jobs (pr_number, seq, requested_at) VALUES (?, 1, ?)
-       ON CONFLICT (pr_number) DO UPDATE SET seq = seq + 1`,
+       ON CONFLICT (pr_number) DO UPDATE SET ${REQUESTED_AGAIN}`,
       number,
       this.deps.git.context.now(),
     );
@@ -96,7 +129,7 @@ export class RepoMergeability {
     const queued = this.deps.git.context.storage.sql.exec(
       `INSERT INTO mergeability_jobs (pr_number, seq, requested_at)
        SELECT number, 1, ? FROM pull_requests WHERE base_ref = ? AND state = 'open'
-       ON CONFLICT (pr_number) DO UPDATE SET seq = seq + 1`,
+       ON CONFLICT (pr_number) DO UPDATE SET ${REQUESTED_AGAIN}`,
       this.deps.git.context.now(),
       branch,
     );
@@ -105,26 +138,39 @@ export class RepoMergeability {
 
   /**
    * An open pull request asked for: queued when nothing is known for its
-   * current pair and it is not waiting already; when it is waiting, its job
-   * is made to run (should it have stopped after failing). Not while the
-   * repository takes no changes.
+   * current pair, or what is known is due to be worked out again, and it is
+   * not waiting already; when it is waiting, its job is made to run (should
+   * it have stopped after failing), and a delay it waits out that is over
+   * (its budgets changed) is ended. Not while the repository takes no
+   * changes.
    */
   request(pull: PullRecord): void {
     if (pull.state !== "open" || !this.deps.takesChanges()) return;
     const { storage } = this.deps.git.context;
     storage.transactionSync(() => {
+      const now = this.deps.git.context.now();
+      const kept = this.#current(pull);
+      const due = kept === undefined || (retryAt(kept) ?? Number.POSITIVE_INFINITY) <= now;
       const waiting =
         storage.sql
           .exec("SELECT 1 FROM mergeability_jobs WHERE pr_number = ?", pull.number)
           .toArray().length > 0;
       if (waiting) {
-        // Revived only when it stopped: a queued job keeps its time (it may be waiting out
-        // a delay), a running one serves the queue.
+        const hurried =
+          due &&
+          storage.sql.exec(
+            "UPDATE mergeability_jobs SET requested_at = ? WHERE pr_number = ? AND requested_at > ?",
+            now,
+            pull.number,
+            now,
+          ).rowsWritten > 0;
+        // Otherwise revived only when it stopped: a queued job keeps its time (it may be
+        // waiting out a delay), a running one serves the queue.
         const job = this.deps.git.jobs.get(MERGEABILITY_JOB_ID);
-        if (job?.state !== "queued" && job?.state !== "running")
+        if (hurried || (job?.state !== "queued" && job?.state !== "running"))
           this.deps.git.jobs.ensure("mergeability", MERGEABILITY_JOB_ID);
       } else if (
-        this.#current(pull) === undefined &&
+        due &&
         // Without a base branch there is nothing to work out; made again, it queues itself.
         this.deps.pulls.branchTip(pull.baseRef) !== null
       )
@@ -132,10 +178,11 @@ export class RepoMergeability {
     });
   }
 
-  /** The pull request's mergeability at its current base tip and head (GitHub's fields). */
+  /** The pull request's mergeability at its current base tip and head (GitHub's fields, and why). */
   view(pull: PullRecord): MergeabilityView {
-    if (pull.state !== "open") return { mergeable: null, mergeableState: "unknown" };
-    const state = this.#current(pull);
+    if (pull.state !== "open")
+      return { mergeable: null, mergeableState: "unknown", mergeableReason: null };
+    const state = this.#current(pull)?.state;
     const mergeable =
       state === "clean" ? true : state === "conflicts" || state === "manual" ? false : null;
     return {
@@ -147,51 +194,71 @@ export class RepoMergeability {
           : mergeable === false
             ? "dirty"
             : "unknown",
+      mergeableReason: reasonOf(state),
     };
   }
 
   /** The kept result, when it is for the pull request's current base tip and head. */
-  #current(pull: PullRecord): MergeabilityState | undefined {
+  #current(pull: PullRecord): Kept | undefined {
     const row = this.#row(pull.number);
     const base = this.deps.pulls.branchTip(pull.baseRef);
     return row && base && row.base_sha === oidToHex(base) && row.head_sha === pull.headSha
-      ? row.state
+      ? row
       : undefined;
   }
 
-  #row(number: number) {
+  #row(number: number): Kept | undefined {
     return this.deps.git.context.storage.sql
-      .exec<{ base_sha: string; head_sha: string; state: MergeabilityState }>(
-        "SELECT base_sha, head_sha, state FROM mergeability WHERE pr_number = ?",
+      .exec<Kept>(
+        `SELECT base_sha, head_sha, state, computed_at, attempts, policy_version
+         FROM mergeability WHERE pr_number = ?`,
         number,
       )
       .toArray()[0];
   }
 
-  /** The queue's job: one pull request per slice, longest waiting first. */
+  /**
+   * The queue's job: one pull request per slice, longest waiting first, of
+   * those not waiting out a delay.
+   */
   handler(): JobHandler {
     return {
       memoryBytes: this.deps.policy().maxOutputBytes + 1024 * 1024,
       runSlice: async () => {
         // Results are written with events: not while the repository takes no changes.
         if (!this.deps.writable()) return { done: false, cursor: null, runAfterMs: 60_000 };
-        const job = this.deps.git.context.storage.sql
+        const { context } = this.deps.git;
+        const job = context.storage.sql
           .exec<{ pr_number: number; seq: number }>(
-            "SELECT pr_number, seq FROM mergeability_jobs ORDER BY requested_at, pr_number LIMIT 1",
+            `SELECT pr_number, seq FROM mergeability_jobs WHERE requested_at <= ?
+             ORDER BY requested_at, pr_number LIMIT 1`,
+            context.now(),
           )
           .toArray()[0];
         if (job) await this.#work(job.pr_number, job.seq);
         // Judged with no wait before the answer: a pull request queued meanwhile found this
         // job running and left it to this one.
-        return this.#waiting() ? { done: false, cursor: null, runAfterMs: 0 } : { done: true };
+        const next = this.#nextAt();
+        return next === null
+          ? { done: true }
+          : { done: false, cursor: null, runAfterMs: Math.max(0, next - context.now()) };
       },
     };
   }
 
-  #waiting(): boolean {
-    return (
-      this.deps.git.context.storage.sql.exec("SELECT 1 FROM mergeability_jobs LIMIT 1").toArray()
-        .length > 0
+  /** When the queue's next request is due, or null when none waits. */
+  #nextAt(): number | null {
+    return this.deps.git.context.storage.sql
+      .exec<{ at: number | null }>("SELECT min(requested_at) AS at FROM mergeability_jobs")
+      .one().at;
+  }
+
+  /** In the transaction or alone: the pull request's request waits until `at`. */
+  #defer(number: number, at: number): void {
+    this.deps.git.context.storage.sql.exec(
+      "UPDATE mergeability_jobs SET requested_at = ? WHERE pr_number = ?",
+      at,
+      number,
     );
   }
 
@@ -204,15 +271,20 @@ export class RepoMergeability {
     const baseTip = pull && this.deps.pulls.branchTip(pull.baseRef);
     // Closed, or its base branch is gone (made again, it is queued again).
     if (pull?.state !== "open" || !baseTip) return void done();
-    // Already worked out for this pair (the change that queued it was not a move); an
-    // error or a pair past the budget is not worked out again until either moves.
-    if (this.#current(pull) !== undefined) return void done();
+    // Already worked out for this pair (the change that queued it was not a move): kept,
+    // unless past the budgets or unreadable, which waits out its delay first.
+    const kept = this.#current(pull);
+    if (kept) {
+      const at = retryAt(kept);
+      if (at === undefined) return void done();
+      if (at > this.deps.git.context.now()) return this.#defer(number, at);
+    }
     const head = oidFromHex(pull.headSha);
     let outcome: TreeOutcome;
     try {
       outcome = await this.#outcome(baseTip, head);
     } catch (error) {
-      // Kept as an error for this pair rather than retried without end.
+      // Kept as an error for this pair, worked out again after a delay.
       this.deps.log().warn("working out mergeability failed", { number, error });
       outcome = { kind: "unreadable" };
     }
@@ -232,8 +304,11 @@ export class RepoMergeability {
         );
         return;
       }
-      this.#keep(now, baseTip, outcome);
-      done();
+      const again = this.#keep(now, baseTip, outcome);
+      // Past the budgets or unreadable: it waits its turn again (a request for the same pair
+      // that came meanwhile with it).
+      if (again === undefined) done();
+      else this.#defer(number, again);
     });
   }
 
@@ -255,30 +330,55 @@ export class RepoMergeability {
     );
   }
 
-  /** In the transaction: the result for the pair, and an event when the state changed. */
-  #keep(pull: PullRecord, baseTip: Oid, outcome: TreeOutcome): void {
+  /**
+   * In the transaction: the result for the pair, and an event when the
+   * state changed. Returns when it is to be worked out again, if past the
+   * budgets or unreadable.
+   */
+  #keep(pull: PullRecord, baseTip: Oid, outcome: TreeOutcome): number | undefined {
     const state = stateOf(outcome);
-    const previous = this.#row(pull.number)?.state;
-    this.deps.git.context.storage.sql.exec(
-      `INSERT INTO mergeability (pr_number, base_sha, head_sha, state, computed_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (pr_number) DO UPDATE SET base_sha = excluded.base_sha,
-         head_sha = excluded.head_sha, state = excluded.state, computed_at = excluded.computed_at`,
-      pull.number,
-      oidToHex(baseTip),
-      pull.headSha,
+    const base = oidToHex(baseTip);
+    const before = this.#row(pull.number);
+    // Counted for the pair and its budgets: a move or new budgets start the delays over.
+    const inARow =
+      before !== undefined &&
+      retried(before.state) &&
+      before.base_sha === base &&
+      before.head_sha === pull.headSha &&
+      before.policy_version === MERGEABILITY_POLICY_VERSION;
+    const kept: Kept = {
+      base_sha: base,
+      head_sha: pull.headSha,
       state,
-      this.deps.git.context.now(),
+      computed_at: this.deps.git.context.now(),
+      attempts: !retried(state) ? 0 : inARow ? before.attempts + 1 : 1,
+      policy_version: MERGEABILITY_POLICY_VERSION,
+    };
+    this.deps.git.context.storage.sql.exec(
+      `INSERT INTO mergeability
+         (pr_number, base_sha, head_sha, state, computed_at, attempts, policy_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (pr_number) DO UPDATE SET base_sha = excluded.base_sha,
+         head_sha = excluded.head_sha, state = excluded.state, computed_at = excluded.computed_at,
+         attempts = excluded.attempts, policy_version = excluded.policy_version`,
+      pull.number,
+      kept.base_sha,
+      kept.head_sha,
+      kept.state,
+      kept.computed_at,
+      kept.attempts,
+      kept.policy_version,
     );
-    if (previous === state) return;
+    const again = retryAt(kept);
+    if (before?.state === state) return again;
     const view = this.view(pull);
     this.deps.events.emitActivity("pull_request.mergeability", null, {
       number: pull.number,
       state,
-      previous_state: previous ?? null,
+      previous_state: before?.state ?? null,
       mergeable: view.mergeable,
       mergeable_state: view.mergeableState,
-      base_sha: oidToHex(baseTip),
+      base_sha: base,
       head_sha: pull.headSha,
       ...(outcome.kind === "conflicts" && {
         conflicts: outcome.conflicts.slice(0, CONFLICTS_NAMED).map((c) => ({
@@ -288,6 +388,52 @@ export class RepoMergeability {
         conflicts_total: outcome.conflicts.length,
       }),
     });
+    return again;
+  }
+}
+
+/** A result kept for a pair (a row of `mergeability`). */
+type Kept = {
+  readonly base_sha: string;
+  readonly head_sha: string;
+  readonly state: MergeabilityState;
+  readonly computed_at: number;
+  /** Results in a row past the budgets or unreadable for the pair and budgets; 0 otherwise. */
+  readonly attempts: number;
+  readonly policy_version: number;
+};
+
+/**
+ * A request queued again keeps its place, unless it waits out a delay: a
+ * change to the pull request or its base ends that.
+ */
+const REQUESTED_AGAIN = "seq = seq + 1, requested_at = min(requested_at, excluded.requested_at)";
+
+/** Whether a result is worked out again later for the same pair. */
+function retried(state: MergeabilityState): boolean {
+  return state === "unknown" || state === "error";
+}
+
+/**
+ * When a kept result is due to be worked out again: never when it is
+ * known; at once when kept under other budgets; otherwise after its delay.
+ */
+function retryAt(kept: Kept): number | undefined {
+  if (!retried(kept.state)) return undefined;
+  if (kept.policy_version !== MERGEABILITY_POLICY_VERSION) return 0;
+  return kept.computed_at + mergeabilityRetryDelay(kept.attempts);
+}
+
+function reasonOf(state: MergeabilityState | undefined): MergeableReason | null {
+  switch (state) {
+    case undefined:
+      return "pending";
+    case "unknown":
+      return "too_expensive";
+    case "error":
+      return "unreadable";
+    default:
+      return null;
   }
 }
 

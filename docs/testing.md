@@ -46,6 +46,16 @@ a machine short of memory add `--concurrency=1` to heavy runs (`test`,
   `runInDurableObject`, `evictDurableObject` and `applyD1Migrations` come from
   `cloudflare:test`.
 - D1 migrations are applied by `apps/api/test/setup/apply-migrations.ts`.
+  `apps/api/test/d1-schema.test.ts` keeps each database's schema in
+  `apps/api/migrations/<database>.expected.sql`, which `fyrden deploy` and
+  `fyrden doctor` compare deployments with: a new migration updates it with
+  `vitest run -u`. CI refuses a change to a migration already on the base
+  branch (`tools/ci/src/check-migrations.ts`).
+- Each Durable Object schema test upgrades an object from a frozen fixture of
+  every released version, the latest included (`test/fixtures/do-schemas/`),
+  and fails unless the newest fixture is the latest version: a new migration
+  adds the fixture of its own version. `expected.sql` follows the code, so only
+  those fixtures catch an edit to a released migration.
 - Every workerd test file captures logs (`test/setup/log-capture.ts`) and fails
   if a line contains an unredacted token.
 - An error thrown inside a Durable Object and caught by the test is still

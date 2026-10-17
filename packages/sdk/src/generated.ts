@@ -1625,8 +1625,10 @@ export type PullsListOutput = {
     head_repo_id: string | null;
     /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
     mergeable: boolean | null;
-    /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+    /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not known, for the reason `mergeable_reason` gives. */
     mergeable_state: "clean" | "dirty" | "draft" | "unknown";
+    /** Fyrden: why `mergeable` is null while open. `pending`: not worked out yet; `too_expensive`: past the budgets for working it out in the background (merging may still succeed); `unreadable`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed. */
+    mergeable_reason: "pending" | "too_expensive" | "unreadable" | null;
     draft: boolean;
     /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
     maintainer_can_modify: boolean;
@@ -1702,8 +1704,10 @@ export type PullsCreateOutput = {
   head_repo_id: string | null;
   /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
   mergeable: boolean | null;
-  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not known, for the reason `mergeable_reason` gives. */
   mergeable_state: "clean" | "dirty" | "draft" | "unknown";
+  /** Fyrden: why `mergeable` is null while open. `pending`: not worked out yet; `too_expensive`: past the budgets for working it out in the background (merging may still succeed); `unreadable`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed. */
+  mergeable_reason: "pending" | "too_expensive" | "unreadable" | null;
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
@@ -1766,8 +1770,10 @@ export type PullsGetOutput = {
   head_repo_id: string | null;
   /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
   mergeable: boolean | null;
-  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not known, for the reason `mergeable_reason` gives. */
   mergeable_state: "clean" | "dirty" | "draft" | "unknown";
+  /** Fyrden: why `mergeable` is null while open. `pending`: not worked out yet; `too_expensive`: past the budgets for working it out in the background (merging may still succeed); `unreadable`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed. */
+  mergeable_reason: "pending" | "too_expensive" | "unreadable" | null;
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
@@ -1840,8 +1846,10 @@ export type PullsUpdateOutput = {
   head_repo_id: string | null;
   /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
   mergeable: boolean | null;
-  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not known, for the reason `mergeable_reason` gives. */
   mergeable_state: "clean" | "dirty" | "draft" | "unknown";
+  /** Fyrden: why `mergeable` is null while open. `pending`: not worked out yet; `too_expensive`: past the budgets for working it out in the background (merging may still succeed); `unreadable`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed. */
+  mergeable_reason: "pending" | "too_expensive" | "unreadable" | null;
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
@@ -2665,8 +2673,10 @@ export type PullsRequestedReviewersAddOutput = {
   head_repo_id: string | null;
   /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
   mergeable: boolean | null;
-  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not known, for the reason `mergeable_reason` gives. */
   mergeable_state: "clean" | "dirty" | "draft" | "unknown";
+  /** Fyrden: why `mergeable` is null while open. `pending`: not worked out yet; `too_expensive`: past the budgets for working it out in the background (merging may still succeed); `unreadable`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed. */
+  mergeable_reason: "pending" | "too_expensive" | "unreadable" | null;
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
@@ -2733,8 +2743,10 @@ export type PullsRequestedReviewersRemoveOutput = {
   head_repo_id: string | null;
   /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
   mergeable: boolean | null;
-  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not known, for the reason `mergeable_reason` gives. */
   mergeable_state: "clean" | "dirty" | "draft" | "unknown";
+  /** Fyrden: why `mergeable` is null while open. `pending`: not worked out yet; `too_expensive`: past the budgets for working it out in the background (merging may still succeed); `unreadable`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed. */
+  mergeable_reason: "pending" | "too_expensive" | "unreadable" | null;
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;

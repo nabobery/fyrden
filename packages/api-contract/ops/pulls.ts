@@ -51,7 +51,13 @@ export const PullRequest = z.object({
   mergeable_state: z
     .enum(["clean", "dirty", "draft", "unknown"])
     .describe(
-      "`clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here.",
+      "`clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not known, for the reason `mergeable_reason` gives.",
+    ),
+  mergeable_reason: z
+    .enum(["pending", "too_expensive", "unreadable"])
+    .nullable()
+    .describe(
+      "Fyrden: why `mergeable` is null while open. `pending`: not worked out yet; `too_expensive`: past the budgets for working it out in the background (merging may still succeed); `unreadable`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed.",
     ),
   draft: z.boolean(),
   maintainer_can_modify: z

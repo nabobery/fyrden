@@ -16,10 +16,14 @@ import {
   searchOids,
 } from "./idx-format.js";
 
-/** One `.idx` entry: its position in oid order, pack offset and CRC32. */
-export interface IdxLookup {
+/** Where one `.idx` entry is: its position in oid order and its pack offset. */
+export interface IdxLocation {
   readonly position: number;
   readonly offset: number;
+}
+
+/** One `.idx` entry: its position in oid order, pack offset and CRC32. */
+export interface IdxLookup extends IdxLocation {
   readonly crc32: number;
 }
 
@@ -72,6 +76,11 @@ export class PackIdx {
   static parse(bytes: Uint8Array): PackIdx {
     const fanout = readIdxHeader(bytes);
     return new PackIdx(bytes, fanout, layoutForLength(fanout, bytes.length));
+  }
+
+  /** The length of the `.idx` it holds (the memory it keeps). */
+  get byteLength(): number {
+    return this.#bytes.byteLength;
   }
 
   /** The checksum of the pack this index describes. */

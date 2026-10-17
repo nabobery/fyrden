@@ -1,7 +1,7 @@
 import { DEFAULT_FALSE_POSITIVE_RATE, OidBloomFilter } from "./existence-filter.js";
 import { checkOidAt, decodeFanout, fanoutBucket, IDX_FANOUT_ENTRIES } from "./idx-format.js";
 import { type IdxRangeReader, RangedPackIdx } from "./idx-range-read.js";
-import type { IdxLookup, PackIdx } from "./idx-read.js";
+import type { IdxLocation, PackIdx } from "./idx-read.js";
 
 /**
  * What the registry keeps in memory per pack to answer "may this pack hold
@@ -52,7 +52,7 @@ export class PackExistenceSummary {
   }
 
   /** The oid's entry in the pack, reading the `.idx` only when the summary says "maybe". */
-  async lookup(oid: Uint8Array, idx: RangedPackIdx, at = 0): Promise<IdxLookup | undefined> {
+  async lookup(oid: Uint8Array, idx: RangedPackIdx, at = 0): Promise<IdxLocation | undefined> {
     if (!this.mayContain(oid, at)) return undefined;
     return idx.lookup(oid, at);
   }

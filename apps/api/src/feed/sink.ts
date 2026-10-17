@@ -12,8 +12,7 @@ import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effect
  * however many events name it. A feed applies an entry once however often
  * it comes, so a retried effect changes nothing it already changed. The
  * sink says how many calls an effect makes at most, so the events consumer
- * delivers itself only what its invocation's calls allow (the sweeper
- * takes four effects a run, at most 400 calls).
+ * and the sweeper deliver only what their invocation's calls allow.
  *
  * An account's `access.revoked` (principals no longer read some of its
  * repositories, at most 100 an event) becomes effects too, of at most 100

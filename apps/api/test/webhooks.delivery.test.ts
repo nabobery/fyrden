@@ -97,18 +97,18 @@ describe("webhooks", () => {
     expect(bound).toBeLessThan(1_000_000);
   });
 
-  it("leave a message to a later invocation once its D1 queries are spent, never the first", async () => {
+  it("leave a message to a later invocation once its calls are spent, never the first", async () => {
     await t.createHook();
     const events = (await t.outbox()).filter((e) => e.webhooks);
     const envelope = { sourceId: t.repo.id, events };
-    const spent = { left: 1, applied: true };
-    expect(
-      await applyEnvelope(t.testEnv(), envelope, { sinks: [webhookSink], queries: spent }),
-    ).toBe("deferred");
-    const fresh = { left: 1, applied: false };
-    expect(
-      await applyEnvelope(t.testEnv(), envelope, { sinks: [webhookSink], queries: fresh }),
-    ).toBe("applied");
+    const spent = { left: 1, reserved: 0, applied: true };
+    expect(await applyEnvelope(t.testEnv(), envelope, { sinks: [webhookSink], calls: spent })).toBe(
+      "deferred",
+    );
+    const fresh = { left: 1, reserved: 0, applied: false };
+    expect(await applyEnvelope(t.testEnv(), envelope, { sinks: [webhookSink], calls: fresh })).toBe(
+      "applied",
+    );
   });
 
   it("journal an envelope of 50 large pushes in at most ten statements", () => {

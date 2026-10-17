@@ -45,7 +45,9 @@ export const ATTEMPT_POLICY = {
   /** How late a due delivery's message may be before the cron sends another. */
   lateMs: 15 * 60_000,
   /** Due deliveries one cron run sends again, and dead claims it finishes. */
-  // A query or two each, beside the cron's other tasks (50 D1 queries an invocation on Free).
+  // A query or two each, beside the cron's other tasks: D1 queries share the
+  // invocation's 1,000 calls (a batch counts once; measured, see
+  // docs/operations/limits.md).
   reconcileBatch: 4,
   /** Hooks still to be turned off after a 410, told per run (two queries each). */
   disableBatch: 2,

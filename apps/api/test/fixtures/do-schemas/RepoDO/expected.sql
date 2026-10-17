@@ -104,6 +104,16 @@ CREATE TABLE audit_segments (
         created_at INTEGER NOT NULL,
         archived_at INTEGER
       ) STRICT;
+CREATE TABLE change_lists (
+        seq INTEGER PRIMARY KEY,
+        base_sha TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        limits TEXT NOT NULL,
+        truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
+        bytes INTEGER NOT NULL,
+        body TEXT NOT NULL,
+        UNIQUE (base_sha, head_sha, limits)
+      ) STRICT;
 CREATE TABLE claim_releases (
         pack_id TEXT PRIMARY KEY,
         network_id TEXT NOT NULL,
@@ -260,7 +270,7 @@ CREATE TABLE mergeability (
         head_sha TEXT NOT NULL,
         state TEXT NOT NULL CHECK (state IN ('clean', 'conflicts', 'manual', 'unknown', 'error')),
         computed_at INTEGER NOT NULL
-      ) STRICT;
+      , attempts INTEGER NOT NULL DEFAULT 0, policy_version INTEGER NOT NULL DEFAULT 0) STRICT;
 CREATE TABLE mergeability_jobs (
         pr_number INTEGER PRIMARY KEY,
         seq INTEGER NOT NULL,

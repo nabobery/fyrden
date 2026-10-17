@@ -201,6 +201,29 @@ describe("the conversation's merge box", () => {
     expect(page({ state: "closed" }, null)).not.toContain("Merge pull request");
   });
 
+  it("says why it is not known when the check went past its budget or could not read an object", () => {
+    const unknown = { mergeable: null, mergeable_state: "unknown" };
+    const pending = page({ ...unknown, mergeable_reason: "pending" }, null);
+    expect(pending).toContain("Checking whether it merges cleanly…");
+    expect(pending).not.toContain("went past its budget");
+    const expensive = page({ ...unknown, mergeable_reason: "too_expensive" }, null);
+    expect(expensive).toContain("Checking whether it merges cleanly went past its budget");
+    expect(expensive).toContain("it will be checked again later");
+    expect(expensive).toContain("If this persists, merge it locally.");
+    expect(expensive).toContain("Merge pull request");
+    expect(expensive).not.toContain("an object it needs could not be read");
+    const unreadable = page({ ...unknown, mergeable_reason: "unreadable" }, null);
+    expect(unreadable).toContain("an object it needs could not be read");
+    expect(unreadable).toContain("It will be checked again later.");
+    expect(unreadable).not.toContain("went past its budget");
+    expect(pending).toMatch(/<button type="button"[^>]*>Check again<\/button>/);
+    // A deferred check runs again only when its retry is due: the button just reloads.
+    for (const html of [expensive, unreadable]) {
+      expect(html).toMatch(/<button type="button"[^>]*>Refresh<\/button>/);
+      expect(html).not.toContain("Check again");
+    }
+  });
+
   it("lets the author only comment in a review", () => {
     expect(page({}, null)).toContain("you may only comment");
     expect(page({}, null, "usr_other")).not.toContain("you may only comment");

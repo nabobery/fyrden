@@ -73,7 +73,7 @@
 
   // Archives the directory's audit log to R2 and the other maintenance
   // tasks; the second, offset, retries effects and webhook deliveries in an
-  // invocation of its own (each has 50 D1 queries on Free). Proposed
+  // invocation of its own (each has its own 1,000 calls on Free). Proposed
   // intervals; Free allows a few cron triggers per account.
   "triggers": { "crons": ["*/5 * * * *", "2-59/5 * * * *"] },
 

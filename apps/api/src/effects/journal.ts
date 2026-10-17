@@ -71,22 +71,44 @@ export interface EffectPolicy {
   readonly leaseMs: number;
   /** How long delivered effects are kept (for dedupe evidence and debugging). */
   readonly retentionMs: number;
-  /** Effects one sweep delivers at most. */
-  readonly sweepBatch: number;
-  /** Calls to other services one sweep's deliveries make at most (see `effectCalls`). */
+  /**
+   * Effects one claim of a sweep takes at most: a sweep claims page after
+   * page while its calls last, so a page bounds the rows (and payloads) one
+   * query reads, not what a run delivers.
+   */
+  readonly sweepPage: number;
+  /** Calls to other services one sweep makes at most, its claims and marks included (see `effectCalls`). */
   readonly sweepCalls: number;
+  /**
+   * Effects one sweep delivers at most, whatever its calls allow: what a
+   * run delivers costs CPU time as well as calls (see `EFFECT_POLICY`).
+   */
+  readonly sweepLimit: number;
+  /**
+   * Payload bytes one sweep claims at most (a run's first effect goes
+   * whatever its size): reading and parsing payloads costs CPU time too.
+   */
+  readonly sweepBytes: number;
 }
 
 /**
- * Calls the effects cron makes besides its effects' deliveries: the
- * sweep's claim, marks and prune, and reconciling webhook deliveries
- * (about 25: its batches of 4 late sends, 2 hooks to turn off, and one
- * bulk delete of expired bodies). Counted from the code, with room.
+ * Calls the effects cron makes besides its sweep's claims and deliveries:
+ * the sweep's prune of effects past retention, and reconciling webhook
+ * deliveries (about 25:
+ * its batches of 4 late sends, 2 hooks to turn off, and one bulk delete of
+ * expired bodies). Counted from the code, with room.
  */
 export const CRON_CALLS = 50;
 
 /** Calls one effect of a sink delivering one at a time makes at most (its claim, its work, its outcome). */
 export const SINGLE_EFFECT_CALLS = 8;
+
+/**
+ * Calls one page of a sweep makes besides its effects' deliveries: its
+ * claim, giving back what its calls cannot cover, and a batch sink's mark
+ * and retry.
+ */
+export const SWEEP_ROUND_CALLS = 4;
 
 export const EFFECT_POLICY: EffectPolicy = {
   sweepAfterMs: 60_000,
@@ -95,19 +117,47 @@ export const EFFECT_POLICY: EffectPolicy = {
   maxAttempts: 20,
   leaseMs: 5 * 60 * 1000,
   retentionMs: 7 * 24 * 60 * 60 * 1000,
-  // Each costs about five D1 queries; Free allows 50 an invocation, the cron's other tasks included.
-  sweepBatch: 4,
+  // A webhook effect's payload holds its body (up to 192 KiB): a page reads under 5 MiB.
+  sweepPage: 25,
   // Free allows 1,000 calls an invocation (measured, docs/operations/limits.md): less the
-  // cron's own, and a margin.
+  // cron's other work, and a margin.
   sweepCalls: 900 - CRON_CALLS,
+  // CPU time, not calls, bounds a run: Free allows about 10 ms an invocation (verified,
+  // docs/operations/limits.md), and delivering a webhook effect took 0.26 ms of CPU with a
+  // small body and 0.5 ms with a 180 KB one (measured locally, 2026-10-17: the dispatcher and
+  // the webhook sink with their I/O stubbed), but a run of 20 took 42 to 86 ms on Free
+  // (measured, 2026-10-17): the limit keeps a run's work fixed, not within 10 ms. The bytes
+  // let at most 5 of the largest bodies (192 KiB) through.
+  sweepLimit: 20,
+  sweepBytes: 1024 * 1024,
 };
 
 /**
- * Effects one consumer invocation delivers itself, whatever its batch;
- * the rest wait for the sweeper (each costs about five D1 queries, of 50
- * an invocation on Free).
+ * Effects of sinks that deliver one at a time a consumer invocation of a
+ * full batch (5 messages, wrangler.jsonc) delivers itself; the rest wait
+ * for the sweeper. Each message fewer leaves room for as many more (see
+ * `inlineEffects`). Proposed.
  */
-export const INLINE_EFFECTS = 2;
+export const INLINE_EFFECTS = 1;
+
+/**
+ * The same for an invocation of one message: within a few ms of CPU time,
+ * as the sweep's `sweepLimit`, and its payloads within `sweepBytes` (5 of
+ * the largest webhook bodies, 192 KiB). Proposed: on Free a consumer
+ * invocation took 8 ms of CPU at the median and 44 ms at most (measured,
+ * 2026-10-17; docs/operations/limits.md).
+ */
+export const INLINE_EFFECTS_ALONE = 5;
+
+/**
+ * Effects of sinks that deliver one at a time an invocation of `messages`
+ * delivers itself, shared by its messages: the fewer it applies, the more
+ * of its calls and CPU are left for delivering. Its calls bound it too
+ * (see the events consumer).
+ */
+export function inlineEffects(messages: number): number {
+  return Math.max(INLINE_EFFECTS, INLINE_EFFECTS_ALONE - INLINE_EFFECTS * (messages - 1));
+}
 
 /**
  * Effects of sinks that deliver in batches one consumer invocation

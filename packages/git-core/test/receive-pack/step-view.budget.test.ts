@@ -78,7 +78,7 @@ describe("StepView call accounting", () => {
     const step = stepOver(idx);
     const packs = await step.locateMany(oids);
     expect(packs.every((pack) => pack?.packId === PACK_ID)).toBe(true);
-    // Many oid-table spans, then CRC32 and offset spans: far more than three reads.
+    // Many oid-table spans, then offset spans: far more than two reads.
     expect(reads()).toBeGreaterThan(20);
     expect(step.calls).toBe(reads());
     // The answers are remembered: a reader's lookup costs nothing more.
@@ -86,7 +86,6 @@ describe("StepView call accounting", () => {
     expect(found).toEqual({
       position: positions[100],
       offset: offsetOf(positions[100] as number),
-      crc32: 0,
     });
     expect(step.calls).toBe(reads());
   });
