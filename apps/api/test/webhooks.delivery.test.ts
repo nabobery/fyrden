@@ -395,11 +395,19 @@ describe("webhooks", () => {
     const rows = await t.deliveries();
     const byHook = (id: number) =>
       (rows.find((d) => d.hook_id === id) as { delivery_id: string }).delivery_id;
-    await attemptDelivery({ ...t.deps(), env: failingFor([stuck.id, other.id]) }, byHook(stuck.id));
-    await attemptDelivery({ ...t.deps(), env: failingFor([stuck.id, other.id]) }, byHook(other.id));
+    // Times a millisecond apart at least, so which waits longest is never a tie.
+    const at = Date.now();
+    await attemptDelivery(
+      { ...t.deps(at), env: failingFor([stuck.id, other.id]) },
+      byHook(stuck.id),
+    );
+    await attemptDelivery(
+      { ...t.deps(at + 1), env: failingFor([stuck.id, other.id]) },
+      byHook(other.id),
+    );
     // One a run: the stuck one first, then (behind it now) the other.
     const oneARun = {
-      ...t.deps(),
+      ...t.deps(at + 10),
       env: failingFor([stuck.id]),
       policy: { ...ATTEMPT_POLICY, disableBatch: 1 },
     };
