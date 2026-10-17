@@ -8,6 +8,7 @@
 
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, inject, it } from "vitest";
+import { liveViewPacks } from "../src/network/member.js";
 import { loadFixture } from "./helpers/fetch-repo.js";
 import { DAY } from "./helpers/gc.js";
 import { createRepo, type TestRepo } from "./helpers/git-http.js";
@@ -167,7 +168,8 @@ describe("deletion fence for a fork network's shared packs", () => {
       n.hooks = {
         // Paused inside the deletion, after the fence and before R2 deletes the bytes.
         whileDeleting: (packId) => {
-          answers.push(n.claim({ networkId, repoId: p.id, packIds: [packId] }));
+          const answer = n.claim({ networkId, repoId: p.id, packIds: [packId] });
+          if (answer.ok) answers.push(answer.gone);
         },
       };
     });
@@ -206,7 +208,7 @@ describe("deletion fence for a fork network's shared packs", () => {
     // The fence survived the failed slice: a restore's claim does not take the pack back.
     expect(
       await inNetwork(networkId, (n) => n.claim({ networkId, repoId: p.id, packIds: [first] })),
-    ).toEqual([first]);
+    ).toMatchObject({ ok: true, gone: [first] });
     expect(
       (await inNetwork(networkId, (n) => n.status())).deletions.map((d) => d.packId),
     ).toContain(first);
@@ -224,7 +226,9 @@ describe("deletion fence for a fork network's shared packs", () => {
     const [packId] = shared as [string];
     // Claims out of date (both released, though both views still read it).
     for (const repoId of [p.id, f.id])
-      await inNetwork(networkId, (n) => n.releaseClaims({ networkId, repoId, packIds: [packId] }));
+      await inNetwork(networkId, (n) =>
+        n.releaseClaims({ networkId, repoId, releases: [{ packId, upTo: 0 }] }),
+      );
     expect(
       (await inNetwork(networkId, (n) => n.status())).packs.find((x) => x.packId === packId)?.state,
     ).toBe("condemned");
@@ -236,6 +240,142 @@ describe("deletion fence for a fork network's shared packs", () => {
     expect(pack?.claims.length).toBe(1);
     expect(status.deletions).toEqual([]);
     expect(await stored(networkId, packId)).toBe(true);
+  });
+
+  /** The claim sequence `repo` has learnt of the network. */
+  const learnt = (repo: TestRepo, networkId: string) =>
+    inRepo(
+      repo.stub,
+      ({ git }) =>
+        git.context.storage.sql
+          .exec<{ seq: number }>(
+            "SELECT claim_seq AS seq FROM networks WHERE network_id = ?",
+            networkId,
+          )
+          .toArray()[0]?.seq ?? 0,
+    );
+
+  it("a refusal's claim is made at a sequence the member learns: only a release it records after drops it", async () => {
+    const { p, f, networkId, shared } = await sharedNetwork();
+    const [packId] = shared as [string];
+    const before = { [p.id]: await learnt(p, networkId), [f.id]: await learnt(f, networkId) };
+    for (const repoId of [p.id, f.id])
+      await inNetwork(networkId, (n) =>
+        n.releaseClaims({ networkId, repoId, releases: [{ packId, upTo: 0 }] }),
+      );
+    await advanceNetwork(networkId, 31 * DAY);
+    await runNetworkJob(networkId, "delete");
+    const claims = async () =>
+      (await inNetwork(networkId, (n) => n.status())).packs.find((x) => x.packId === packId)
+        ?.claims;
+    const [refused] = (await claims()) ?? [];
+    const member = refused === p.id ? p : f;
+    if (!refused) throw new Error("no member refused");
+    // A release the member recorded before its refusal (told late) leaves the claim.
+    const release = (upTo: number) =>
+      inNetwork(networkId, (n) =>
+        n.releaseClaims({ networkId, repoId: refused, releases: [{ packId, upTo }] }),
+      );
+    await release(before[refused] ?? 0);
+    expect(await claims()).toEqual([refused]);
+    // One it records after (bounded by what it learnt with the refusal) drops it.
+    const after = await learnt(member, networkId);
+    expect(after).toBeGreaterThan(before[refused] ?? 0);
+    await release(after);
+    expect(await claims()).toEqual([]);
+  });
+
+  it("a collection's claims are made at a sequence each member learns as it reports its view", async () => {
+    const { p, f, networkId, shared } = await sharedNetwork();
+    const [packId] = shared as [string];
+    const before = await learnt(f, networkId);
+    // F's claim gone (as a restore of the network object loses it), though its view holds the pack.
+    await inNetwork(networkId, (n) =>
+      n.releaseClaims({ networkId, repoId: f.id, releases: [{ packId, upTo: 0 }] }),
+    );
+    expect(await runNetworkJob(networkId, "gc")).not.toBe("failed");
+    const claims = async () =>
+      (await inNetwork(networkId, (n) => n.status())).packs.find((x) => x.packId === packId)
+        ?.claims;
+    expect(await claims()).toEqual([f.id, p.id].sort());
+    const release = (upTo: number) =>
+      inNetwork(networkId, (n) =>
+        n.releaseClaims({ networkId, repoId: f.id, releases: [{ packId, upTo }] }),
+      );
+    // A release F recorded before it reported its view (told late) leaves the claim.
+    await release(before);
+    expect(await claims()).toEqual([f.id, p.id].sort());
+    // One it records after drops it.
+    const after = await learnt(f, networkId);
+    expect(after).toBeGreaterThan(before);
+    await release(after);
+    expect(await claims()).toEqual([p.id]);
+  });
+
+  it("a release told again after the member claimed the pack anew leaves the new claim", async () => {
+    const { p, f, networkId, shared } = await sharedNetwork();
+    const [packId] = shared as [string];
+    const packs = await inRepo(p.stub, ({ git }) =>
+      liveViewPacks(git).filter((pack) => pack.packId === packId),
+    );
+    // F shares the pack (a pull request's import from P), as its view holds it.
+    const share = async () => {
+      const answer = await inNetwork(networkId, (n) =>
+        n.sharePacks({ networkId, writerRepoId: p.id, claimantRepoId: f.id, packs }),
+      );
+      if (!answer.ok) throw new Error(answer.error);
+      return answer.seq;
+    };
+    const release = (upTo: number) =>
+      inNetwork(networkId, (n) =>
+        n.releaseClaims({ networkId, repoId: f.id, releases: [{ packId, upTo }] }),
+      );
+    const claims = async () =>
+      (await inNetwork(networkId, (n) => n.status())).packs.find((x) => x.packId === packId)
+        ?.claims;
+    // F's view gives it up: the release is told, and told again later.
+    const first = await share();
+    await release(first);
+    expect(await claims()).toEqual([p.id]);
+    // F claims it anew before the second telling lands: the claim made since stays.
+    const again = await share();
+    expect(again).toBeGreaterThan(first);
+    await release(first);
+    expect(await claims()).toEqual([f.id, p.id].sort());
+    // F's release of the new claim drops it.
+    await release(again);
+    expect(await claims()).toEqual([p.id]);
+  });
+
+  it("a release told late leaves a claim made after the network object was restored to before it", async () => {
+    const { p, f, networkId, shared } = await sharedNetwork();
+    const [packId] = shared as [string];
+    const packs = await inRepo(p.stub, ({ git }) =>
+      liveViewPacks(git).filter((pack) => pack.packId === packId),
+    );
+    const share = async () => {
+      const answer = await inNetwork(networkId, (n) =>
+        n.sharePacks({ networkId, writerRepoId: p.id, claimantRepoId: f.id, packs }),
+      );
+      if (!answer.ok) throw new Error(answer.error);
+      return answer.seq;
+    };
+    // F shares the pack, then its view gives it up: its release names the sequence it learnt.
+    const first = await share();
+    // The network object is restored to a state from before that share (its sequence back with
+    // it), some time later; F shares the pack again.
+    await inNetwork(networkId, (n) => {
+      n.context.storage.sql.exec("UPDATE network_meta SET claim_seq = 0");
+    });
+    await advanceNetwork(networkId, 60_000);
+    const again = await share();
+    expect(again).toBeGreaterThan(first);
+    // F's release lands now: the claim made since the restore stays.
+    await inNetwork(networkId, (n) =>
+      n.releaseClaims({ networkId, repoId: f.id, releases: [{ packId, upTo: first }] }),
+    );
+    const status = await inNetwork(networkId, (n) => n.status());
+    expect(status.packs.find((x) => x.packId === packId)?.claims).toEqual([f.id, p.id].sort());
   });
 
   it("an acknowledgement condemns the member's row (no new leases); its leases hold deletion back past the retention", async () => {
@@ -251,7 +391,9 @@ describe("deletion fence for a fork network's shared packs", () => {
     expect(await runDetach(f.stub)).toBe("done");
     // Claims end early (F's ahead of its retire job, which waits for the lease).
     for (const repoId of [p.id, f.id])
-      await inNetwork(networkId, (n) => n.releaseClaims({ networkId, repoId, packIds: [packId] }));
+      await inNetwork(networkId, (n) =>
+        n.releaseClaims({ networkId, repoId, releases: [{ packId, upTo: 0 }] }),
+      );
     // P's view must not hold it for the deletion to go on: P repacks it away.
     await setPolicy(p.stub, { geometricFactor: 1000 });
     await runJob(p.stub, "repack");

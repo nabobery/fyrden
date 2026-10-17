@@ -40,6 +40,7 @@ CREATE INDEX reviews_standing_head
 CREATE INDEX revision_imports_waiting ON revision_imports (requested_at, pr_number);
 CREATE UNIQUE INDEX rulesets_name ON rulesets (name);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);
+CREATE INDEX view_merged_into ON view_merged (into_pack_id, merged_at);
 CREATE TABLE acl_snapshot (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         account_id TEXT NOT NULL DEFAULT '',
@@ -103,6 +104,11 @@ CREATE TABLE audit_segments (
         created_at INTEGER NOT NULL,
         archived_at INTEGER
       ) STRICT;
+CREATE TABLE claim_releases (
+        pack_id TEXT PRIMARY KEY,
+        network_id TEXT NOT NULL,
+        up_to INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE collect_requests (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         due_at INTEGER NOT NULL
@@ -263,7 +269,7 @@ CREATE TABLE mergeability_jobs (
 CREATE TABLE networks (
         network_id TEXT PRIMARY KEY,
         recorded_at INTEGER NOT NULL
-      ) STRICT;
+      , claim_seq INTEGER NOT NULL DEFAULT 0, released INTEGER NOT NULL DEFAULT 0) STRICT;
 CREATE TABLE outbox (
         source_seq INTEGER PRIMARY KEY,
         event TEXT NOT NULL CHECK (json_valid(event)),
@@ -520,6 +526,11 @@ CREATE TABLE uploads (
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
   ) STRICT;
+CREATE TABLE view_merged (
+        pack_id TEXT PRIMARY KEY,
+        into_pack_id TEXT NOT NULL,
+        merged_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE webhook_ids (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         last INTEGER NOT NULL

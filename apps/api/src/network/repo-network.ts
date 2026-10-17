@@ -121,12 +121,15 @@ export class RepoNetwork {
     return swapCompactedView(this.#git, output, sources);
   }
 
-  networkSnapshot(networkId: string): MemberPack[] {
-    return networkSnapshot(this.#git, networkId);
+  networkSnapshot(networkId: string, claimSeq: number): MemberPack[] {
+    return networkSnapshot(this.#git, networkId, claimSeq);
   }
 
-  condemnShared(packIds: readonly string[]): CondemnAnswer {
-    return condemnShared(this.#git, packIds);
+  condemnShared(
+    packIds: readonly string[],
+    claim: { readonly networkId: string; readonly seq: number },
+  ): CondemnAnswer {
+    return condemnShared(this.#git, packIds, claim);
   }
 
   registeredPacks(packIds: readonly string[]): string[] {

@@ -12,14 +12,26 @@ import {
 import { env } from "cloudflare:workers";
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import { checkOutboundUrl, type Resolver } from "@fyrden/adapters-cloudflare/net";
-import { type HttpTransport, oidToHex } from "@fyrden/git-core";
+import {
+  type ClientResponse,
+  encodePktLine,
+  encodeSideband,
+  type HttpTransport,
+  oidToHex,
+  SIDEBAND_DATA,
+  SIDEBAND_PROGRESS,
+} from "@fyrden/git-core";
 import { afterEach, describe, expect, inject, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
+import { CHUNKED_TUNING_DEFAULTS } from "../src/git/chunked/tuning.js";
 import type { ImportNetwork } from "../src/git/import/network.js";
 import { guardedTransport } from "../src/git/import/network.js";
+import { MultipartPackSink } from "../src/git/import/pack-parts.js";
+import type { WatchClock } from "../src/git/import/watch.js";
 import { RepoPush } from "../src/git/push/repo-push.js";
 import { api } from "./helpers/api.js";
 import type { RecordedExchange } from "./helpers/chunked-fixtures.js";
+import { parseFetchResponse } from "./helpers/fetch-repo.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { fromHex } from "./helpers/git-oracle.js";
 import { type PushTarget, pushTarget } from "./helpers/push.js";
@@ -66,7 +78,7 @@ const decoder = new TextDecoder();
 function replay(exchanges: readonly RecordedExchange[], seen: string[]): ImportNetwork {
   const resolve: Resolver = async () => ["93.184.215.14"];
   return {
-    resolve,
+    resolver: () => resolve,
     transport: (policy): HttpTransport => {
       let next = 0;
       return async (request) => {
@@ -286,7 +298,7 @@ describe("server-side import", () => {
     const target = await pushTarget();
     // The default transport (guardedFetch) with a name that now resolves privately.
     await useNetwork(target, {
-      resolve: async () => ["10.0.0.5"],
+      resolver: () => async () => ["10.0.0.5"],
       transport: guardedTransport,
     });
     const begun = await target.repo.stub.beginImport({
@@ -350,7 +362,7 @@ describe("server-side import", () => {
     await inRepo(target.repo.stub, (repo) => {
       const replayed = replay(cx.source.exchanges, []);
       repo.importNetwork = {
-        resolve: replayed.resolve,
+        resolver: replayed.resolver,
         transport: (policy, signal) => {
           const inner = replayed.transport(policy, signal);
           return async (request) => {
@@ -406,3 +418,413 @@ describe("server-side import", () => {
     expect(again.json.code).toBe("repo_not_empty");
   });
 });
+
+/** A clock the test moves by hand: each timer due on the way runs as it passes. */
+function manualClock() {
+  let now = 0;
+  const timers = new Set<{ readonly ms: number; due: number; readonly tick: () => void }>();
+  const clock: WatchClock = {
+    now: () => now,
+    every(ms, tick) {
+      const timer = { ms, due: now + ms, tick };
+      timers.add(timer);
+      return () => void timers.delete(timer);
+    },
+  };
+  const advance = (ms: number) => {
+    const end = now + ms;
+    for (;;) {
+      const next = [...timers].filter((t) => t.due <= end).sort((a, b) => a.due - b.due)[0];
+      if (!next) break;
+      now = next.due;
+      next.due += next.ms;
+      next.tick();
+    }
+    now = end;
+  };
+  return { clock, advance };
+}
+
+/** Never settles; rejects with the signal's reason once it is aborted. */
+function stalled(signal: AbortSignal): Promise<never> {
+  return new Promise((_, reject) => {
+    if (signal.aborted) reject(signal.reason);
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+}
+
+async function collect(body: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of body) chunks.push(chunk);
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let at = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, at);
+    at += chunk.length;
+  }
+  return out;
+}
+
+/** The pack request: the third of the import's requests (advertisement, ls-refs, fetch). */
+const FETCH = 2;
+
+type Pace = (
+  n: number,
+  body: Uint8Array,
+  signal: AbortSignal,
+) => AsyncIterable<Uint8Array> | "stall";
+
+/**
+ * The recorded source, answering request `n` (counted from 0) as `pace`
+ * decides: with a body that arrives on the test's clock, or not at all. The
+ * clock moves inside the import's own requests, so nothing waits on time.
+ */
+function pacedSource(
+  exchanges: readonly RecordedExchange[],
+  seen: string[],
+  pace: Pace,
+): ImportNetwork {
+  const replayed = replay(exchanges, seen);
+  return {
+    resolver: replayed.resolver,
+    transport: (policy, signal) => {
+      const inner = replayed.transport(policy, signal);
+      let n = 0;
+      return async (request): Promise<ClientResponse> => {
+        const response = await inner(request);
+        const paced = pace(n++, await collect(response.body), signal);
+        if (paced === "stall") return stalled(signal);
+        return { ...response, body: paced };
+      };
+    },
+  };
+}
+
+/** `body` in chunks of `chunk` bytes, the clock moving `everyMs` before each. */
+async function* trickle(
+  body: Uint8Array,
+  chunk: number,
+  everyMs: number,
+  advance: (ms: number) => void,
+) {
+  for (let at = 0; at < body.length; at += chunk) {
+    advance(everyMs);
+    yield body.subarray(at, at + chunk);
+  }
+}
+
+describe("a slow or stalled source", () => {
+  const { importDiscoveryMs, importIdleMs, minImportBytesPerSecond } = CHUNKED_TUNING_DEFAULTS;
+
+  async function start(
+    target: PushTarget,
+    exchanges: readonly RecordedExchange[],
+    pace: Pace,
+    vars: Record<string, string> = {},
+  ) {
+    const seen: string[] = [];
+    await inRepo(target.repo.stub, (repo) => {
+      repo.importNetwork = pacedSource(exchanges, seen, pace);
+    });
+    const started = await call(target, "POST", { url: SOURCE }, { ...OWN, ...vars });
+    expect(started.status).toBe(201);
+    return seen;
+  }
+
+  async function useClock(target: PushTarget) {
+    const manual = manualClock();
+    await inRepo(target.repo.stub, (repo) => {
+      repo.importClock = manual.clock;
+    });
+    return manual.advance;
+  }
+
+  /** As recorded, all at once. */
+  const asRecorded = (body: Uint8Array) => trickle(body, body.length, 0, () => {});
+
+  /** The import failed in its first slice, holding and leaving nothing; its error. */
+  async function failedAtOnce(target: PushTarget) {
+    expect(await runDurableObjectAlarm(target.repo.stub)).toBe(true);
+    const record = await target.repo.stub.importRecord();
+    expect(record?.state).toBe("failed");
+    expect(await repoState(target)).toMatchObject({ refs: {}, scratch: 0 });
+    const left = await inRepo(target.repo.stub, ({ git }) => ({
+      uploads: git.context.storage.sql
+        .exec<{ state: string; multipart_id: string | null }>(
+          "SELECT state, multipart_id FROM uploads",
+        )
+        .toArray(),
+      reserved: git.memory.stats().reservedBytes,
+    }));
+    expect(left).toEqual({ uploads: [{ state: "rejected", multipart_id: null }], reserved: 0 });
+    return record?.error;
+  }
+
+  it("fails when the source does not list its refs in time, asking for no pack", async () => {
+    const target = await pushTarget();
+    const advance = await useClock(target);
+    const seen = await start(target, cx.source.exchanges, (n, body) => {
+      if (n !== 0) return asRecorded(body);
+      advance(importDiscoveryMs);
+      return "stall";
+    });
+    expect(await failedAtOnce(target)).toBe(
+      `the source took too long: it did not list its branches and tags within ${importDiscoveryMs / 1000} s`,
+    );
+    expect(seen).toHaveLength(1);
+    // Over at once: the job does not ask the source again.
+    await runDurableObjectAlarm(target.repo.stub);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("fails when the source goes quiet in the middle of the pack, aborting the stored parts", async () => {
+    const target = await pushTarget();
+    const advance = await useClock(target);
+    const partBytes = 5 * 1024 * 1024;
+    let quiet = false;
+    await start(
+      target,
+      cx.largeSource.exchanges,
+      (n, body, signal) => {
+        if (n !== FETCH) return asRecorded(body);
+        return (async function* () {
+          // Past the first part, so a multipart upload exists when the source goes quiet.
+          yield body.subarray(0, partBytes + 64 * 1024);
+          quiet = true;
+          advance(importIdleMs);
+          await stalled(signal);
+        })();
+      },
+      { GIT_UPLOAD_PART_BYTES: String(partBytes) },
+    );
+    expect(await failedAtOnce(target)).toBe(
+      `the source took too long: it sent nothing for ${importIdleMs / 1000} s`,
+    );
+    expect(quiet).toBe(true);
+  });
+
+  it("fails when the source trickles below the floor, though it never goes quiet", async () => {
+    const target = await pushTarget();
+    const advance = await useClock(target);
+    // The pack over 1,000 s, a chunk a second: far below the floor.
+    await start(target, cx.source.exchanges, (n, body) =>
+      n === FETCH ? trickle(body, Math.ceil(body.length / 1000), 1000, advance) : asRecorded(body),
+    );
+    expect(await failedAtOnce(target)).toBe(
+      `the source took too long: it sent less than ${minImportBytesPerSecond / 1024} KiB/s for a minute`,
+    );
+  });
+
+  it("imports from a slow source that stays above the floor", async () => {
+    const target = await pushTarget();
+    const advance = await useClock(target);
+    let transferMs = 0;
+    await start(target, cx.largeSource.exchanges, (n, body) => {
+      if (n !== FETCH) return asRecorded(body);
+      // Twice the floor, a chunk a second.
+      const chunk = 2 * minImportBytesPerSecond;
+      transferMs = Math.ceil(body.length / chunk) * 1000;
+      return trickle(body, chunk, 1000, advance);
+    });
+    const record = await untilImported(target);
+    expect(record.error).toBeUndefined();
+    expect(record.state).toBe("committed");
+    // Minutes of transfer: the floor was checked many times.
+    expect(transferMs).toBeGreaterThan(3 * 60_000);
+    expect((await repoState(target)).refs).toEqual({ "refs/heads/main": cx.largeSource.main });
+  }, 20_000);
+
+  it("still stops a steady source at the overall limit", async () => {
+    const target = await pushTarget();
+    const advance = await useClock(target);
+    await start(
+      target,
+      cx.largeSource.exchanges,
+      (n, body) =>
+        n === FETCH ? trickle(body, 2 * minImportBytesPerSecond, 1000, advance) : asRecorded(body),
+      { GIT_IMPORT_MAX_MS: "60000" },
+    );
+    expect(await failedAtOnce(target)).toBe("the source took too long");
+  });
+
+  it.each([
+    ["progress", encodeSideband(SIDEBAND_PROGRESS, "x".repeat(20 * 1024))],
+    ["empty pack frames", repeated(encodeSideband(SIDEBAND_DATA, ""), 4 * 1024)],
+  ])("fails a source that sends only %s once the floor's grace is over", async (_what, frames) => {
+    const target = await pushTarget();
+    const advance = await useClock(target);
+    // About 20 KiB a second, none of it pack: above the floor counted in
+    // bytes received, far below it counted in pack bytes.
+    expect(frames.length).toBeGreaterThan(minImportBytesPerSecond);
+    await start(target, cx.source.exchanges, (n, body) => {
+      if (n !== FETCH) return asRecorded(body);
+      return (async function* () {
+        yield encodePktLine("packfile\n");
+        for (;;) {
+          advance(1000);
+          yield frames;
+        }
+      })();
+    });
+    expect(await failedAtOnce(target)).toBe(
+      `the source took too long: it sent less than ${minImportBytesPerSecond / 1024} KiB/s for a minute`,
+    );
+  });
+
+  it("releases the source's responses once the fetch is over, though they stay open after git's flush", async () => {
+    const target = await pushTarget();
+    const signals = new Set<AbortSignal>();
+    // Every answer as recorded (each ends with a flush), then no end.
+    await start(target, cx.source.exchanges, (_n, body, signal) => {
+      signals.add(signal);
+      return (async function* () {
+        yield body;
+        await stalled(signal);
+      })();
+    });
+    expect(await runDurableObjectAlarm(target.repo.stub)).toBe(true);
+    expect((await target.repo.stub.importRecord())?.state).toBe("indexing");
+    // Their signal, which cancels a `fetch` and its body, is aborted.
+    expect([...signals].map((s) => s.aborted)).toEqual([true]);
+    expect((await untilImported(target)).state).toBe("committed");
+  });
+
+  describe("fails when the watch trips while the pack is stored, though the source sent all of it", () => {
+    const partBytes = 5 * 1024 * 1024;
+    const idle = `: it sent nothing for ${importIdleMs / 1000} s`;
+    const packOf = (exchanges: readonly RecordedExchange[]) =>
+      parseFetchResponse(fromHex((exchanges[FETCH] as RecordedExchange).response)).pack?.length ??
+      0;
+
+    it.each([
+      // `step` lasts until the watch trips, once `at` pack bytes are in.
+      [
+        "its first part, its last frames to write",
+        cx.largeSource,
+        "write",
+        partBytes,
+        importIdleMs,
+        idle,
+      ],
+      [
+        "its last frame, git's flush to read",
+        cx.source,
+        "write",
+        packOf(cx.source.exchanges),
+        importIdleMs,
+        idle,
+      ],
+      [
+        "its upload's completion",
+        cx.largeSource,
+        "finish",
+        0,
+        CHUNKED_TUNING_DEFAULTS.maxImportMs,
+        "",
+      ],
+    ] as const)("%s", async (_what, source, step, at, ms, broken) => {
+      const target = await pushTarget();
+      const advance = await useClock(target);
+      // The whole answer in one chunk: the rest of the pack and git's flush
+      // are read without asking the source again.
+      await start(target, source.exchanges, (_n, body) => asRecorded(body), {
+        GIT_UPLOAD_PART_BYTES: String(partBytes),
+      });
+      let tripped = false;
+      /** Writes and completions started once the watch tripped. */
+      let late = 0;
+      const spies = (["write", "finish"] as const).map((method) => {
+        const original: (this: MultipartPackSink, ...args: never[]) => Promise<unknown> =
+          MultipartPackSink.prototype[method];
+        return vi.spyOn(MultipartPackSink.prototype, method).mockImplementation(async function (
+          this: MultipartPackSink,
+          ...args: never[]
+        ) {
+          if (tripped) late++;
+          const result = await original.apply(this, args);
+          if (!tripped && method === step && this.bytes >= at) {
+            tripped = true;
+            advance(ms);
+          }
+          return result as never;
+        } as never);
+      });
+      try {
+        expect(await failedAtOnce(target)).toBe(`the source took too long${broken}`);
+        expect(tripped).toBe(true);
+        expect(late).toBe(0);
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+    });
+  });
+
+  it("fails with the timeout when the upload's completion errors after the watch tripped", async () => {
+    const target = await pushTarget();
+    const advance = await useClock(target);
+    await start(target, cx.largeSource.exchanges, (_n, body) => asRecorded(body), {
+      GIT_UPLOAD_PART_BYTES: String(5 * 1024 * 1024),
+    });
+    const original = MultipartPackSink.prototype.finish;
+    const spy = vi.spyOn(MultipartPackSink.prototype, "finish").mockImplementation(async function (
+      this: MultipartPackSink,
+    ) {
+      await original.call(this);
+      advance(CHUNKED_TUNING_DEFAULTS.maxImportMs);
+      throw new Error("the bucket refused the completion");
+    });
+    try {
+      expect(await failedAtOnce(target)).toBe("the source took too long");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each([
+    ["its answer", false],
+    ["its answer's body", true],
+  ])("fails within the discovery limit when a name lookup stalls on %s", async (_what, inBody) => {
+    const target = await pushTarget();
+    const advance = await useClock(target);
+    // The default network: the guarded fetch, names resolved over DNS-over-HTTPS.
+    const realFetch = globalThis.fetch;
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (!url.startsWith("https://cloudflare-dns.com/")) return realFetch(input, init);
+      const signal = init?.signal;
+      if (!signal) throw new Error("a lookup the import cannot stop");
+      advance(importDiscoveryMs);
+      if (!inBody) return stalled(signal);
+      // A body that ends only by failing once the lookup's signal aborts, as `fetch` makes it.
+      const never = new ReadableStream({
+        start: (controller) => void stalled(signal).catch((reason) => controller.error(reason)),
+      });
+      return Promise.resolve(
+        new Response(never, { headers: { "Content-Type": "application/dns-json" } }),
+      );
+    });
+    try {
+      const begun = await target.repo.stub.beginImport({
+        principal: target.owner.principalId,
+        tokenId: "tok_unused",
+        repoId: target.repo.id,
+        url: "https://source.example/source.git",
+        ownHosts: ["fyrden.test"],
+        limits: { maxBytes: 1024 * 1024, maxMs: 10 * 60_000, partBytes: 5 * 1024 * 1024 },
+      });
+      expect(begun.ok).toBe(true);
+      expect(await failedAtOnce(target)).toBe(
+        `the source took too long: it did not list its branches and tags within ${importDiscoveryMs / 1000} s`,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+/** `bytes`, `times` times over. */
+function repeated(bytes: Uint8Array, times: number): Uint8Array {
+  const out = new Uint8Array(bytes.length * times);
+  for (let i = 0; i < times; i++) out.set(bytes, i * bytes.length);
+  return out;
+}

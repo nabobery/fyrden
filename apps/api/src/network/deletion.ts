@@ -1,5 +1,6 @@
 import { type JobHandler, packObjectKey, type SliceResult } from "@fyrden/adapters-cloudflare/git";
-import type { NetworkRuntime } from "./runtime.js";
+import type { RepoDO } from "../do/RepoDO.js";
+import { type NetworkRuntime, SliceCalls } from "./runtime.js";
 
 /*
  * Two-phase deletion of shared packs, as the network
@@ -11,7 +12,8 @@ import type { NetworkRuntime } from "./runtime.js";
  *    pack end. A member that cannot be reached, or does not answer, stays
  *    pending and blocks the deletion; it is asked again later. A member
  *    whose view still holds the pack refuses: the claims were out of date,
- *    so the pack is claimed again and the deletion dropped.
+ *    so the pack is claimed again (at a sequence the member learns as it
+ *    refuses, see claim-releases.ts) and the deletion dropped.
  * 2. Once every member has acknowledged, every lease they reported has
  *    ended and the retention has passed, the claims are checked again (a
  *    restore may have claimed the pack meanwhile) and, in the same
@@ -23,47 +25,91 @@ import type { NetworkRuntime } from "./runtime.js";
  * deletion is finished by the next run whatever happened to this one (R2
  * deletes are idempotent), and the R2 delete comes before the row that
  * records it.
+ *
+ * A pass goes through the deletions in pack id order, and each one's
+ * members in id order, asking each member once. A slice makes at most the
+ * policy's `sliceCalls` calls and saves where it stopped, so a member that
+ * did not answer is asked again next pass, not by the next slice.
  */
 
-export function deletionHandler(runtime: NetworkRuntime): JobHandler {
-  return { runSlice: () => deletionSlice(runtime) };
+/** Where a pass stopped: at the deletion of `pack`, its members up to `asked` asked. */
+interface DeletionCursor {
+  readonly v: 1;
+  readonly pack: string;
+  readonly asked?: string;
 }
 
-async function deletionSlice(runtime: NetworkRuntime): Promise<SliceResult> {
+const encode = (cursor: DeletionCursor) => new TextEncoder().encode(JSON.stringify(cursor));
+function decode(bytes: Uint8Array | null): DeletionCursor | undefined {
+  if (!bytes) return undefined;
+  try {
+    const value = JSON.parse(new TextDecoder().decode(bytes)) as DeletionCursor;
+    return value.v === 1 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function deletionHandler(runtime: NetworkRuntime): JobHandler {
+  return { runSlice: (job) => deletionSlice(runtime, decode(job.cursor)) };
+}
+
+async function deletionSlice(
+  runtime: NetworkRuntime,
+  saved: DeletionCursor | undefined,
+): Promise<SliceResult> {
   const { registry, env, hooks, policy, context } = runtime;
   const networkId = registry.networkId();
   if (!networkId) return { done: true };
   const deadline = context.now() + policy.sliceMs;
-  for (const deletion of registry.deletions()) {
-    if (context.now() >= deadline) return { done: false, cursor: null, runAfterMs: 0 };
+  const calls = new SliceCalls(policy.sliceCalls, context.metrics);
+  const deletions = registry
+    .deletions()
+    .filter((d) => !saved || d.packId >= saved.pack)
+    .sort((a, b) => (a.packId < b.packId ? -1 : 1));
+  for (const deletion of deletions) {
     const { packId } = deletion;
+    let asked = saved?.pack === packId ? saved.asked : undefined;
+    const paused = (): SliceResult => ({
+      done: false,
+      cursor: encode({ v: 1, pack: packId, ...(asked === undefined ? {} : { asked }) }),
+      runAfterMs: 0,
+    });
+    if (context.now() >= deadline) return paused();
     if (deletion.deletingSince !== null) {
       // Fenced by an earlier run that did not finish: finish it.
-      await deleteBytes(runtime, networkId, packId);
+      if (!calls.fits(1)) return paused();
+      await deleteBytes(runtime, calls, networkId, packId);
       continue;
     }
-    for (const repoId of deletion.acksPending) {
+    for (const repoId of [...deletion.acksPending].sort()) {
+      if (asked !== undefined && repoId <= asked) continue;
       if (!registry.member(repoId)) {
         registry.acknowledge(packId, repoId, 0);
+        asked = repoId;
         continue;
       }
-      let answer: Awaited<
-        ReturnType<DurableObjectStub<import("../do/RepoDO.js").RepoDO>["condemnShared"]>
-      >;
+      if (context.now() >= deadline || !calls.fits(1)) return paused();
+      calls.count("do.request", { class: "RepoDO", method: "condemnShared" });
+      let answer: Awaited<ReturnType<DurableObjectStub<RepoDO>["condemnShared"]>>;
+      // A refusal's claim is made at this sequence, which the member learns as it refuses.
+      const seq = registry.nextClaimSeq();
       try {
         await hooks.beforeAck?.(repoId, [packId]);
-        answer = await env.REPO.getByName(repoId).condemnShared([packId]);
+        answer = await env.REPO.getByName(repoId).condemnShared([packId], { networkId, seq });
       } catch (error) {
         runtime.log.warn("a member did not acknowledge a condemned pack", {
           repoId,
           packId,
           error,
         });
+        asked = repoId;
         continue;
       }
+      asked = repoId;
       if (!answer.ok) {
         // Still in that member's view: it claims the pack after all.
-        registry.claim([repoId], [packId]);
+        registry.claimAt(repoId, [packId], seq);
         registry.reprieve(packId);
         count(runtime, "reprieved");
         break;
@@ -74,6 +120,7 @@ async function deletionSlice(runtime: NetworkRuntime): Promise<SliceResult> {
     if (!current || current.acksPending.length > 0) continue;
     const now = context.now();
     if (now < current.notBefore || now < current.leasesUntil) continue;
+    if (!calls.fits(1)) return paused();
     await hooks.beforeDelete?.(packId);
     // Checked again after the pause: a claim made meanwhile keeps the pack.
     // Otherwise the fence goes up in the same transaction, before any byte goes.
@@ -86,16 +133,21 @@ async function deletionSlice(runtime: NetworkRuntime): Promise<SliceResult> {
       }
       return registry.fence(packId);
     });
-    if (fenced) await deleteBytes(runtime, networkId, packId);
+    if (fenced) await deleteBytes(runtime, calls, networkId, packId);
   }
   return next(runtime);
 }
 
 /** Phase 2 behind the fence: the R2 objects, then the row recording them deleted. */
-async function deleteBytes(runtime: NetworkRuntime, networkId: string, packId: string) {
-  const { env, hooks, registry, context } = runtime;
+async function deleteBytes(
+  runtime: NetworkRuntime,
+  calls: SliceCalls,
+  networkId: string,
+  packId: string,
+) {
+  const { env, hooks, registry } = runtime;
   await hooks.whileDeleting?.(packId);
-  context.metrics.count("r2.class_a", { bucket: "fyrden-git", op: "delete" });
+  calls.count("r2.class_a", { bucket: "fyrden-git", op: "delete" });
   await env.GIT.delete([
     packObjectKey(networkId, packId, "pack"),
     packObjectKey(networkId, packId, "idx"),

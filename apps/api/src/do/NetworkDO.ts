@@ -4,10 +4,10 @@ import {
   isNetworkId,
   JobQueue,
 } from "@fyrden/adapters-cloudflare/git";
-import { createLogger, createMetrics } from "@fyrden/adapters-cloudflare/obs";
+import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
 import { deletionHandler } from "../network/deletion.js";
-import { networkGcHandler } from "../network/gc.js";
+import { fenced, networkGcHandler, wakeGc } from "../network/gc.js";
 import { type GcState, type Member, NetworkRegistry } from "../network/registry.js";
 import {
   NETWORK_DEFAULTS,
@@ -84,10 +84,11 @@ export class NetworkDO extends MigratingDO {
     return undefined;
   }
 
-  /** Waits while the collection's fence is up; false when it is still up after the policy's wait. */
+  /** Waits while a collection holds its fence; false when it still does after the policy's wait. */
   async #passFence(): Promise<boolean> {
     const deadline = this.context.now() + this.policy.fenceWaitMs;
-    while (this.registry.gcState().fence) {
+    const runtime = this.runtime;
+    while (fenced(runtime)) {
       if (this.context.now() >= deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, FENCE_POLL_MS));
     }
@@ -170,16 +171,17 @@ export class NetworkDO extends MigratingDO {
    * A pull request's base comes to read packs of its head's repository
    * (behind the collection's fence, as a fork's start): packs the network
    * does not share yet become shared, written by that repository, which
-   * claims them; the base claims every one. Both must be active members.
-   * Answers the packs it could not claim (deleted, being deleted, or of
-   * another network): the base reads none of them.
+   * claims them; the base claims every one, at the network's next claim
+   * sequence (`seq`, see `NetworkRegistry.renewClaims`). Both must be
+   * active members. Answers the packs it could not claim (deleted, being
+   * deleted, or of another network): the base reads none of them.
    */
   async sharePacks(input: {
     networkId: string;
     writerRepoId: string;
     claimantRepoId: string;
     packs: readonly ViewPack[];
-  }): Promise<{ ok: true; gone: string[] } | NetworkFailure> {
+  }): Promise<{ ok: true; gone: string[]; seq: number } | NetworkFailure> {
     const bad = this.#ensure(input.networkId);
     if (bad) return bad;
     if (!(await this.#passFence()))
@@ -208,16 +210,13 @@ export class NetworkDO extends MigratingDO {
           gone.push(pack.packId);
           continue;
         }
-        if (known.has(pack.packId)) {
-          if (registry.packState(pack.packId) === "condemned") registry.reprieve(pack.packId);
-          registry.claim([input.claimantRepoId], [pack.packId]);
-        } else
-          registry.share([pack], () => input.writerRepoId, [
-            input.writerRepoId,
-            input.claimantRepoId,
-          ]);
+        if (!known.has(pack.packId))
+          registry.share([pack], () => input.writerRepoId, [input.writerRepoId]);
+        else if (registry.packState(pack.packId) === "condemned") registry.reprieve(pack.packId);
       }
-      return { ok: true as const, gone };
+      const claimed = input.packs.map((p) => p.packId).filter((id) => !gone.includes(id));
+      const seq = registry.renewClaims(input.claimantRepoId, claimed);
+      return { ok: true as const, gone, seq };
     });
   }
 
@@ -227,11 +226,16 @@ export class NetworkDO extends MigratingDO {
     this.registry.share([input.output], () => input.forkRepoId, [input.forkRepoId]);
   }
 
-  /** The fork is published: it is a full member, and the network is collected from now on. */
+  /**
+   * The fork is published: it is a full member, and the network is
+   * collected from now on (now, if a collection was waiting for it).
+   */
   completeFork(input: { networkId: string; forkRepoId: string }): boolean {
     this.registry.ensure(input.networkId);
     const done = this.registry.setMemberState(input.forkRepoId, ["joining"], "active");
-    scheduleNetworkGc(this.runtime, this.context.now() + this.policy.gcIntervalMs);
+    const runtime = this.runtime;
+    scheduleNetworkGc(runtime, this.context.now() + this.policy.gcIntervalMs);
+    wakeGc(runtime);
     return done;
   }
 
@@ -248,6 +252,7 @@ export class NetworkDO extends MigratingDO {
       return left;
     });
     if (unclaimed.length > 0) scheduleDeletions(this.runtime);
+    wakeGc(this.runtime);
   }
 
   /**
@@ -265,6 +270,8 @@ export class NetworkDO extends MigratingDO {
       return left;
     });
     if (unclaimed.length > 0) scheduleDeletions(this.runtime);
+    // It may have been the fork a collection waits for.
+    wakeGc(this.runtime);
   }
 
   /** Of `packIds`, the ones the network knows: their bytes are the network's to delete. */
@@ -273,14 +280,20 @@ export class NetworkDO extends MigratingDO {
   }
 
   /**
-   * `repoId`'s view no longer holds `packIds`. Shared packs nobody claims
-   * any more are condemned (and deleted after acknowledgements, leases and
-   * the retention).
+   * `repoId`'s view no longer holds the packs of `releases`: its claims on
+   * them go, each unless made again after the release's `upTo` (see
+   * `NetworkRegistry.releaseUpTo`), so a release told late or twice is
+   * harmless. Shared packs nobody claims any more are condemned (and
+   * deleted after acknowledgements, leases and the retention).
    */
-  releaseClaims(input: { networkId: string; repoId: string; packIds: readonly string[] }): void {
+  releaseClaims(input: {
+    networkId: string;
+    repoId: string;
+    releases: readonly { packId: string; upTo: number }[];
+  }): void {
     if (this.#ensure(input.networkId)) return;
     const unclaimed = this.context.storage.transactionSync(() => {
-      const left = this.registry.release(input.repoId, input.packIds);
+      const left = this.registry.releaseUpTo(input.repoId, input.releases);
       this.registry.condemn(left, this.policy.retentionMs);
       return left;
     });
@@ -288,25 +301,40 @@ export class NetworkDO extends MigratingDO {
   }
 
   /**
-   * `repoId`'s view holds `packIds` (a restored member re-claiming its
-   * packs): pending deletions of them are dropped. Returns the
-   * ones that are gone: deleted, or being deleted (past the deletion fence;
-   * those are not claimed).
+   * `repoId`'s registry holds `packIds` (a restored member claiming its
+   * packs again, see reclaim.ts): pending deletions of them are dropped,
+   * and those the network knows are claimed at its next claim sequence
+   * (`seq`, which the member learns), newer than the bound of any release
+   * the member recorded before its restore. Answers the ones that are gone:
+   * deleted, or being deleted (past the deletion fence; those are not
+   * claimed).
    */
-  claim(input: { networkId: string; repoId: string; packIds: readonly string[] }): string[] {
-    if (this.#ensure(input.networkId)) return [];
+  claim(input: {
+    networkId: string;
+    repoId: string;
+    packIds: readonly string[];
+  }): { ok: true; gone: string[]; seq: number } | NetworkFailure {
+    // A network never forked has nothing to claim.
+    if (this.registry.networkId() === undefined) return { ok: true, gone: [], seq: 0 };
+    const bad = this.#ensure(input.networkId);
+    if (bad) return bad;
+    const { registry } = this;
     return this.context.storage.transactionSync(() => {
+      const known = registry.known(input.packIds);
       const gone: string[] = [];
+      const claimed: string[] = [];
       for (const packId of input.packIds) {
-        const state = this.registry.packState(packId);
-        if (state === "deleted" || this.registry.deleting(packId)) gone.push(packId);
-        else if (state === "condemned") this.registry.reprieve(packId);
+        if (!known.has(packId)) continue;
+        const state = registry.packState(packId);
+        if (state === "deleted" || registry.deleting(packId)) {
+          gone.push(packId);
+          continue;
+        }
+        if (state === "condemned") registry.reprieve(packId);
+        claimed.push(packId);
       }
-      this.registry.claim(
-        [input.repoId],
-        input.packIds.filter((id) => !gone.includes(id)),
-      );
-      return gone;
+      const seq = registry.renewClaims(input.repoId, claimed);
+      return { ok: true as const, gone, seq };
     });
   }
 
@@ -397,12 +425,21 @@ export class NetworkDO extends MigratingDO {
     };
   }
 
+  /**
+   * Runs the network's due jobs as a measured invocation: the job queue
+   * starts no slice once its calls near the invocation's budget.
+   */
   override async alarm(): Promise<void> {
     const runtime = this.runtime;
-    await this.jobs.runDue(
-      { network_gc: networkGcHandler(runtime), network_delete: deletionHandler(runtime) },
-      this.#memory,
-      this.context.now() + ALARM_BUDGET_MS,
+    await measureInvocation(
+      this.context.metrics,
+      { where: "do", op: "alarm", doClass: "NetworkDO" },
+      () =>
+        this.jobs.runDue(
+          { network_gc: networkGcHandler(runtime), network_delete: deletionHandler(runtime) },
+          this.#memory,
+          this.context.now() + ALARM_BUDGET_MS,
+        ),
     );
   }
 }

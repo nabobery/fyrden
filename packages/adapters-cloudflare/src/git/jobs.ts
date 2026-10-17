@@ -29,6 +29,7 @@ export const JOB_KINDS = [
   "pull_follow",
   "view_compact",
   "pull_refollow",
+  "network_reclaim",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 

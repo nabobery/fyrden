@@ -41,6 +41,7 @@ import { answerFetchPlan, FETCH_LEASE_TTL_MS } from "../git/fetch/plan.js";
 import type { FetchPlanReply, FetchPlanRequest } from "../git/fetch/wire.js";
 import { type BeginImport, type ImportRecord, RepoImports } from "../git/import/job.js";
 import { defaultImportNetwork, type ImportNetwork } from "../git/import/network.js";
+import { systemClock, type WatchClock } from "../git/import/watch.js";
 import type { GcHooks } from "../git/maintenance/gc-job.js";
 import { maintenanceHandlers } from "../git/maintenance/handlers.js";
 import { MAINTENANCE_DEFAULTS, type MaintenancePolicy } from "../git/maintenance/policy.js";
@@ -56,6 +57,7 @@ import {
   type PushProgress,
   RepoPush,
 } from "../git/push/repo-push.js";
+import { ClaimReleases } from "../network/claim-releases.js";
 import type { DetachHooks } from "../network/detach.js";
 import {
   IMPORT_POLICY,
@@ -65,7 +67,8 @@ import {
   publishStaged,
 } from "../network/pull-import.js";
 import { type NoticeAnswer, PullSource, type RevisionNotice } from "../network/pull-source.js";
-import { networkMembersAfter, networkRetire, soleNetworkMember } from "../network/repo-client.js";
+import { networkReclaimHandler, reclaimAfterRestore } from "../network/reclaim.js";
+import { networkMembersAfter, soleNetworkMember } from "../network/repo-client.js";
 import { type CopyStep, type CopyStepInput, RepoNetwork } from "../network/repo-network.js";
 import type {
   CommitPage,
@@ -75,7 +78,11 @@ import type {
   MemberPack,
   ViewPack,
 } from "../network/types.js";
-import { type CompactSliceInput, viewCompactionHandler } from "../network/view-cap.js";
+import {
+  type CompactSliceInput,
+  forgetMerged,
+  viewCompactionHandler,
+} from "../network/view-cap.js";
 import { platformSigner } from "../signing/platform-key.js";
 import { secretKeys } from "../webhooks/secrets.js";
 import {
@@ -296,6 +303,15 @@ export class RepoDO extends MigratingDO {
       }),
       setAlarm: (at) => this.#arm(at),
     });
+    this.retireOptions = {
+      network: new ClaimReleases({
+        network: (networkId) => env.NETWORK.getByName(networkId),
+        git: this.git,
+        repoId: () => this.#repoId(),
+        log: () => this.#log(),
+      }),
+      forget: (packId) => forgetMerged(this.git, packId),
+    };
     this.auditBucket = env.ASSETS;
     this.sendEvents = async (envelope) => {
       await env.EVENTS.send(envelope, { contentType: "json" });
@@ -310,7 +326,10 @@ export class RepoDO extends MigratingDO {
       this.git,
       this.outbox,
       () => this.#repoId(),
-      () => this.pullSource.restored(),
+      () => {
+        this.pullSource.restored();
+        reclaimAfterRestore(this.git);
+      },
     );
     this.pulls = new RepoPulls({
       git: this.git,
@@ -1526,12 +1545,12 @@ export class RepoDO extends MigratingDO {
   /** Repack and garbage-collection budgets and timings. Tests may replace them. */
   maintenance: MaintenancePolicy = MAINTENANCE_DEFAULTS;
   /**
-   * Options of the pack retire job (retention, deletion fence, and the fork
-   * network, which packs it shares are released to). Tests may replace them.
+   * Options of the pack retire job (retention, deletion fence, the fork
+   * network, which packs it shares are released to, and the view
+   * compaction's merges into a pack, forgotten with its row). Tests may
+   * replace them.
    */
-  retireOptions: PackRetireOptions = {
-    network: networkRetire(this.env, () => this.#repoId()),
-  };
+  retireOptions: PackRetireOptions;
   /** Hooks into garbage-collection slices. For tests. */
   gcHooks: GcHooks = {};
 
@@ -1710,6 +1729,9 @@ export class RepoDO extends MigratingDO {
   /** How imports reach the network: the guarded fetch. Tests may replace it. */
   importNetwork: ImportNetwork = defaultImportNetwork();
 
+  /** The time an import's fetch is watched by (how slow its source may be). Tests may replace it. */
+  importClock: WatchClock = systemClock;
+
   #importer: RepoImports | undefined;
 
   #imports(): RepoImports {
@@ -1721,6 +1743,7 @@ export class RepoDO extends MigratingDO {
       this.git.context.metrics,
       this.#log(),
       () => this.importNetwork,
+      () => this.importClock,
       (principalId) => this.acl.roleOf(principalId, "write"),
       () => this.events.account()?.ownerGen,
       (principal, updates, grantId, head) =>
@@ -1854,6 +1877,12 @@ export class RepoDO extends MigratingDO {
       revision_import: this.pullImports.handler(),
       pull_follow: this.#forkPulls.followHandler(),
       pull_refollow: this.pullSource.refollowHandler(),
+      network_reclaim: networkReclaimHandler({
+        git: this.git,
+        network: (networkId) => this.env.NETWORK.getByName(networkId),
+        repoId: () => this.#repoId(),
+        log: () => this.#log(),
+      }),
       view_compact: viewCompactionHandler({
         git: this.git,
         policy: () => this.maintenance,
@@ -2208,17 +2237,27 @@ export class RepoDO extends MigratingDO {
     return this.#network().swapCompacted(output, sources);
   }
 
-  /** The registry rows of packs under `networkId` (the network collection's snapshot). */
-  networkSnapshot(networkId: string): MemberPack[] {
+  /**
+   * The registry rows of packs under `networkId` (the network collection's
+   * snapshot), which it claims at `claimSeq`.
+   */
+  networkSnapshot(networkId: string, claimSeq: number): MemberPack[] {
     // An erased object restarted with empty storage holds nothing: it says
     // so by failing, and the network checks the directory.
     if (!this.#hasGitStorage()) throw new Error("git storage is not initialized");
-    return this.#network().networkSnapshot(networkId);
+    return this.#network().networkSnapshot(networkId, claimSeq);
   }
 
-  /** Acknowledges shared packs the network condemns (no new leases), with when leases on them end. */
-  condemnShared(packIds: readonly string[]): CondemnAnswer {
-    return this.#network().condemnShared(packIds);
+  /**
+   * Acknowledges shared packs the network condemns (no new leases), with
+   * when leases on them end; refuses for packs its view holds, which the
+   * network then claims again at `claim.seq`.
+   */
+  condemnShared(
+    packIds: readonly string[],
+    claim: { readonly networkId: string; readonly seq: number },
+  ): CondemnAnswer {
+    return this.#network().condemnShared(packIds, claim);
   }
 
   /** Of `packIds`, those this registry names (the network's orphan sweep asks every member). */

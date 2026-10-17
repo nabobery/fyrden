@@ -7,8 +7,10 @@
 // in progress, and X survives.
 
 import { env } from "cloudflare:workers";
+import { createDoMemoryBudget, DEFAULT_JOB_POLICY } from "@fyrden/adapters-cloudflare/git";
 import { beforeAll, describe, expect, inject, it } from "vitest";
-import { NETWORK_DEFAULTS } from "../src/network/runtime.js";
+import { networkGcHandler } from "../src/network/gc.js";
+import { NETWORK_DEFAULTS, NETWORK_GC_JOB_ID } from "../src/network/runtime.js";
 import { loadFixture } from "./helpers/fetch-repo.js";
 import { DAY, moveRef } from "./helpers/gc.js";
 import { createRepo, type TestRepo } from "./helpers/git-http.js";
@@ -128,6 +130,47 @@ describe("network collection vs fork creation", () => {
     // Retried after the mark, it succeeds.
     const { repo } = await fork(owner, f0, owner);
     expect(repo.id).toMatch(/^rep_/);
+  });
+
+  it("a collection that fails for good lifts its fence: forks are created again, and it runs again later", async () => {
+    const { p, networkId } = await network();
+    await inNetwork(networkId, (n) => {
+      n.policy = { ...NETWORK_DEFAULTS, fenceWaitMs: 0 };
+      n.hooks = {
+        onMarkMember: () => {
+          throw new Error("member unreachable");
+        },
+      };
+    });
+    // Every attempt fails; the last one fails the job, its fence still up.
+    const failed = await inNetwork(networkId, async (n) => {
+      n.startGc();
+      for (let i = 0; i < DEFAULT_JOB_POLICY.maxAttempts; i++)
+        await n.jobs.runJob(
+          NETWORK_GC_JOB_ID,
+          networkGcHandler(n.runtime),
+          createDoMemoryBudget(16 * 1024 * 1024),
+          0,
+        );
+      return n.jobs.get(NETWORK_GC_JOB_ID)?.state;
+    });
+    expect(failed).toBe("failed");
+    expect((await inNetwork(networkId, (n) => n.status())).gc).toMatchObject({
+      phase: "mark",
+      fence: true,
+    });
+
+    const { repo } = await fork(owner, p, owner);
+    const after = await inNetwork(networkId, (n) => ({
+      gc: n.registry.gcState(),
+      job: n.jobs.get(NETWORK_GC_JOB_ID)?.state,
+    }));
+    expect(after.gc).toMatchObject({ phase: "idle", fence: false });
+    expect(after.job).toBe("queued");
+    expect(
+      (await inNetwork(networkId, (n) => n.status())).members.find((m) => m.repoId === repo.id)
+        ?.state,
+    ).toBe("active");
   });
 
   it("the mark does not start while a fork is joining", async () => {

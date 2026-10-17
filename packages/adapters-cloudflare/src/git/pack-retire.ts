@@ -24,8 +24,10 @@ import { countRowsWritten, first, type GitStorageContext, rows, run } from "./sq
  *
  * In a fork network, a pack the network shares (a borrowed pack, or an own
  * pack another member borrows) is the network object's to delete: once
- * condemned here and unleased, this repository releases its claim on it
- * and drops its row, and never deletes its bytes (see `NetworkRetire`).
+ * condemned here and unleased, this repository drops its row, recording in
+ * the same transaction that it gives up its claim on it, and tells the
+ * network so on this pass or a later one; it never deletes its bytes (see
+ * `NetworkRetire`).
  *
  * Every step is safe to redo: rows change state in a transaction that
  * re-checks leases, R2 deletes come before the row deletes that record
@@ -55,14 +57,26 @@ export interface NetworkPackRef {
 }
 
 /**
+ * How far a pass told the network of the releases recorded: all of them,
+ * some (more are left), or none (it could not be reached; they are kept).
+ */
+export type ReleaseDelivery = "done" | "more" | "failed";
+
+/**
  * The fork network's side of retiring packs. A pack the network shares has
  * the network object as its lifetime authority.
  */
 export interface NetworkRetire {
   /** Of `packs`, the ids their network shares (any member but this one may read them). */
   shared(packs: readonly NetworkPackRef[]): Promise<ReadonlySet<string>>;
-  /** Gives up this repository's claims on `packs`: its view no longer holds them. */
-  release(packs: readonly NetworkPackRef[]): Promise<void>;
+  /**
+   * In the transaction that deletes the pack's row: records that this
+   * repository gives up its claim on it (its view no longer holds it),
+   * kept until `deliver` has told the network.
+   */
+  release(pack: NetworkPackRef): void;
+  /** Tells the network of at most `max` recorded releases. */
+  deliver(max: number): Promise<ReleaseDelivery>;
 }
 
 export interface PackRetireOptions {
@@ -92,13 +106,21 @@ export interface PackRetireOptions {
    */
   readonly network?: NetworkRetire;
   /**
+   * Called in the transaction that deletes a pack's row (after its bytes
+   * are deleted, or with its claim's release recorded): drops what the
+   * repository records of it outside the git storage tables.
+   */
+  readonly forget?: (packId: PackId) => void;
+  /**
    * Called after a pack is chosen for deletion and before its bytes are
    * deleted (the gap a network-wide fence must survive). For tests.
    */
   readonly beforeDelete?: (packId: PackId) => Promise<void>;
 }
 
-export const PACK_RETIRE_DEFAULTS: Required<Omit<PackRetireOptions, "beforeDelete" | "network">> = {
+export const PACK_RETIRE_DEFAULTS: Required<
+  Omit<PackRetireOptions, "beforeDelete" | "network" | "forget">
+> = {
   retentionMs: 30 * DAY,
   fetchObjectTtlMs: 60 * 60 * 1000,
   staleOutputTtlMs: DAY,
@@ -143,8 +165,8 @@ export function packRetireHandler(
   return { runSlice: () => retire.runSlice() };
 }
 
-type RetireConfig = Required<Omit<PackRetireOptions, "beforeDelete" | "network">> &
-  Pick<PackRetireOptions, "network">;
+type RetireConfig = Required<Omit<PackRetireOptions, "beforeDelete" | "network" | "forget">> &
+  Pick<PackRetireOptions, "network" | "forget">;
 
 class PackRetire {
   readonly #context: GitStorageContext;
@@ -158,6 +180,17 @@ class PackRetire {
   }
 
   async runSlice(): Promise<SliceResult> {
+    const finished = await this.#retireDue();
+    // The releases recorded in this slice, and those an earlier one could not tell.
+    const told = (await this.config.network?.deliver(this.config.maxDeletionsPerSlice)) ?? "done";
+    if (told === "failed") return { done: false, cursor: null, runAfterMs: this.config.recheckMs };
+    if (!finished || told === "more")
+      return { done: false, cursor: null, runAfterMs: this.config.continueAfterMs };
+    return this.#nextPass();
+  }
+
+  /** Retires the packs that are due, within the slice's budget: false when it ran out first. */
+  async #retireDue(): Promise<boolean> {
     const deadline = this.#now() + this.config.maxSliceMs;
     let deletions = 0;
     const skipped = new Set<string>();
@@ -171,13 +204,13 @@ class PackRetire {
       () => this.#nextDeletable(skipped),
     ]) {
       for (let pack = step(); pack; pack = step()) {
-        if (spent()) return { done: false, cursor: null, runAfterMs: this.config.continueAfterMs };
+        if (spent()) return false;
         const removed = await this.#retire(pack);
         if (removed === 0) skipped.add(pack.pack_id);
         deletions += removed;
       }
     }
-    return this.#nextPass();
+    return true;
   }
 
   #now(): number {
@@ -258,8 +291,14 @@ class PackRetire {
    */
   async #retire(pack: RawPack): Promise<number> {
     const packId = pack.pack_id as PackId;
-    if (pack.state === "condemned" && pack.kind !== "fetch" && (await this.#sharedPack(pack)))
-      return this.#release(pack);
+    const { network } = this.config;
+    if (
+      network &&
+      pack.state === "condemned" &&
+      pack.kind !== "fetch" &&
+      (await this.#sharedPack(pack, network))
+    )
+      return this.#release(pack, network);
     const keys = packR2Keys(pack);
     if (!keys) return 0;
     if (pack.state === "condemned" && pack.kind !== "fetch") {
@@ -270,16 +309,7 @@ class PackRetire {
     // a condemned pack gets none afterwards.
     if (!this.#condemnIfUnleased(pack)) return 0;
     await this.git.bucket.delete(keys);
-    const { storage } = this.#context;
-    const written = storage.transactionSync(
-      () =>
-        run(storage, "DELETE FROM leases WHERE pack_id = ?", packId) +
-        run(
-          storage,
-          "DELETE FROM packs WHERE pack_id = ? AND state IN ('condemned', 'discarded')",
-          packId,
-        ),
-    );
+    const written = this.#deleteRow(packId, ["condemned", "discarded"]);
     countRowsWritten(this.#context, "retire.delete", written);
     if (pack.kind === "fetch") this.#countMetric("expired_fetch", 1);
     else if (pack.state === "condemned") this.#countMetric("deleted", 1);
@@ -288,33 +318,52 @@ class PackRetire {
   }
 
   /** Whether the network shares the pack, so its bytes are the network's to delete. */
-  async #sharedPack(pack: RawPack): Promise<boolean> {
-    const { network } = this.config;
-    if (!network) return false;
+  async #sharedPack(pack: RawPack, network: NetworkRetire): Promise<boolean> {
     if (pack.origin === "borrowed") return true;
     const ref = { packId: pack.pack_id as PackId, networkId: pack.network_id };
     return (await network.shared([ref])).has(pack.pack_id);
   }
 
   /**
-   * Releases this repository's claim on a condemned pack its network
-   * shares, then drops the row; the bytes stay for the network to delete.
-   * Returns 1 when the row is gone, 0 when the pack was skipped (leased).
+   * Drops the row of a condemned pack its network shares and, in the same
+   * transaction, records the release of this repository's claim on it,
+   * which the slice tells the network at its end (or a later one, until
+   * the network has it); the bytes stay for the network to delete. So a row
+   * here always comes with its claim: the pack may be taken back from it (a
+   * pull request's import does) and is still claimed. Returns 1 when the
+   * row is gone, 0 when the pack was skipped (leased).
    */
-  async #release(pack: RawPack): Promise<number> {
-    const network = this.config.network as NetworkRetire;
+  #release(pack: RawPack, network: NetworkRetire): number {
+    // Checked condemned and unleased, and the row deleted, with nothing awaited in between.
     if (!this.#condemnIfUnleased(pack)) return 0;
-    // Condemned and unleased: no new lease can be granted from here on.
-    await network.release([{ packId: pack.pack_id as PackId, networkId: pack.network_id }]);
-    const { storage } = this.#context;
-    const written = storage.transactionSync(
-      () =>
-        run(storage, "DELETE FROM leases WHERE pack_id = ?", pack.pack_id) +
-        run(storage, "DELETE FROM packs WHERE pack_id = ? AND state = 'condemned'", pack.pack_id),
-    );
+    const ref = { packId: pack.pack_id as PackId, networkId: pack.network_id };
+    const written = this.#deleteRow(pack.pack_id, ["condemned"], () => network.release(ref));
     countRowsWritten(this.#context, "retire.release", written);
     this.#countMetric("released", 1);
     return 1;
+  }
+
+  /**
+   * In one transaction: the pack's leases, and its row while it is in one
+   * of `states`, with what else records it (`forget`) and, once the row is
+   * gone, `deleted`. Returns the rows written.
+   */
+  #deleteRow(packId: string, states: readonly string[], deleted?: () => void): number {
+    const { storage } = this.#context;
+    return storage.transactionSync(() => {
+      const leases = run(storage, "DELETE FROM leases WHERE pack_id = ?", packId);
+      const row = run(
+        storage,
+        "DELETE FROM packs WHERE pack_id = ? AND state IN (SELECT value FROM json_each(?))",
+        packId,
+        JSON.stringify(states),
+      );
+      if (row > 0) {
+        this.config.forget?.(packId as PackId);
+        deleted?.();
+      }
+      return leases + row;
+    });
   }
 
   /**

@@ -1,4 +1,5 @@
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
+CREATE INDEX members_joined ON members (joined_at, repo_id);
 CREATE INDEX network_packs_state ON network_packs (state);
 CREATE INDEX pack_claims_repo ON pack_claims (repo_id);
 CREATE TABLE deletions (
@@ -42,7 +43,7 @@ CREATE TABLE network_meta (
         membership_version INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
-      ) STRICT;
+      , claim_seq INTEGER NOT NULL DEFAULT 0) STRICT;
 CREATE TABLE network_packs (
         pack_id TEXT PRIMARY KEY,
         writer_repo_id TEXT NOT NULL,
@@ -54,6 +55,6 @@ CREATE TABLE network_packs (
 CREATE TABLE pack_claims (
         pack_id TEXT NOT NULL,
         repo_id TEXT NOT NULL,
-        claimed_at INTEGER NOT NULL,
+        claimed_at INTEGER NOT NULL, seq INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (pack_id, repo_id)
       ) STRICT, WITHOUT ROWID;

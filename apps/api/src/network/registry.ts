@@ -52,6 +52,23 @@ function chunks<T>(items: readonly T[]): T[][] {
 }
 const placeholders = (n: number) => Array.from({ length: n }, () => "?").join(", ");
 
+/**
+ * Claim sequences per millisecond of the network object's clock. A
+ * sequence is the larger of the last one stored plus one and the clock in
+ * milliseconds times this. A point-in-time recovery takes the stored one
+ * back (https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/),
+ * not the clock, so a sequence answered after a recovery is still larger
+ * than any answered before it, while:
+ * - the clock of the instance answering after the recovery is behind the
+ *   one that answered before it by less than the recovery took (clock
+ *   skew between instances is far smaller than that; unverified);
+ * - the object answers fewer than this many sequences a millisecond on
+ *   average (each goes with a call between objects).
+ * Sequences stay exact: below `Number.MAX_SAFE_INTEGER` (2^53 - 1) until the
+ * clock reaches 2^43 ms (the year 2248), and SQLite integers hold 64 bits.
+ */
+const CLAIM_SEQS_PER_MS = 1024;
+
 const exec = (sql: Sql, query: string, ...bindings: unknown[]) => {
   const cursor = sql.sql.exec(query, ...bindings);
   cursor.toArray();
@@ -62,6 +79,20 @@ const all = <T extends Record<string, SqlStorageValue>>(
   query: string,
   ...bindings: unknown[]
 ): T[] => sql.sql.exec<T>(query, ...bindings).toArray();
+
+type MemberRow = {
+  repo_id: string;
+  parent_repo_id: string | null;
+  state: string;
+  joined_at: number;
+};
+const MEMBER_COLUMNS = "repo_id, parent_repo_id, state, joined_at";
+const toMember = (r: MemberRow): Member => ({
+  repoId: r.repo_id,
+  parentRepoId: r.parent_repo_id,
+  state: r.state as MemberState,
+  joinedAt: r.joined_at,
+});
 
 export class NetworkRegistry {
   constructor(private readonly context: Pick<GitStorageContext, "storage" | "now">) {}
@@ -108,28 +139,43 @@ export class NetworkRegistry {
     );
   }
 
-  members(states?: readonly MemberState[]): Member[] {
-    const rows = all<{
-      repo_id: string;
-      parent_repo_id: string | null;
-      state: string;
-      joined_at: number;
-    }>(
+  /** The members (of `states`, when given) in the order they joined; the first `limit` of them, when given. */
+  members(states?: readonly MemberState[], limit?: number): Member[] {
+    return all<MemberRow>(
       this.#sql,
-      `SELECT repo_id, parent_repo_id, state, joined_at FROM members
-       ${states ? `WHERE state IN (${placeholders(states.length)})` : ""} ORDER BY joined_at, repo_id`,
+      `SELECT ${MEMBER_COLUMNS} FROM members
+       ${states ? `WHERE state IN (${placeholders(states.length)})` : ""} ORDER BY joined_at, repo_id
+       ${limit === undefined ? "" : "LIMIT ?"}`,
       ...(states ?? []),
-    );
-    return rows.map((r) => ({
-      repoId: r.repo_id,
-      parentRepoId: r.parent_repo_id,
-      state: r.state as MemberState,
-      joinedAt: r.joined_at,
-    }));
+      ...(limit === undefined ? [] : [limit]),
+    ).map(toMember);
   }
 
   member(repoId: string): Member | undefined {
-    return this.members().find((m) => m.repoId === repoId);
+    return all<MemberRow>(
+      this.#sql,
+      `SELECT ${MEMBER_COLUMNS} FROM members WHERE repo_id = ?`,
+      repoId,
+    ).map(toMember)[0];
+  }
+
+  /**
+   * The first member (of `states`, when given) after `after`, a member's
+   * `[joinedAt, repoId]` (or from the first), in the order members joined:
+   * one seek, however many members there are.
+   */
+  memberAfter(
+    after: readonly [number, string] | undefined,
+    states?: readonly MemberState[],
+  ): Member | undefined {
+    return all<MemberRow>(
+      this.#sql,
+      `SELECT ${MEMBER_COLUMNS} FROM members WHERE (joined_at, repo_id) > (?, ?)
+       ${states ? `AND state IN (${placeholders(states.length)})` : ""}
+       ORDER BY joined_at, repo_id LIMIT 1`,
+      ...(after ?? [Number.MIN_SAFE_INTEGER, ""]),
+      ...(states ?? []),
+    ).map(toMember)[0];
   }
 
   /** Adds a member (the first one, the network's root, joins `active`). */
@@ -212,6 +258,11 @@ export class NetworkRegistry {
     );
   }
 
+  /**
+   * Claims `packIds` for every repository in `repoIds`, at sequence 0 (a
+   * claim already made stays as it is): only claims no release of the
+   * repository's can name yet (see claim-releases.ts).
+   */
   claim(repoIds: readonly string[], packIds: readonly string[]): void {
     const now = this.context.now();
     for (const repoId of repoIds)
@@ -224,6 +275,81 @@ export class NetworkRegistry {
           repoId,
           now,
         );
+  }
+
+  /**
+   * The network's next claim sequence, larger than every one it answered
+   * before, a recovery of this object to an earlier state included (see
+   * `CLAIM_SEQS_PER_MS`).
+   */
+  nextClaimSeq(): number {
+    const seq = all<{ seq: number }>(
+      this.#sql,
+      "UPDATE network_meta SET claim_seq = max(claim_seq + 1, ?) RETURNING claim_seq AS seq",
+      Math.floor(this.context.now()) * CLAIM_SEQS_PER_MS,
+    )[0]?.seq;
+    if (seq === undefined) throw new Error("the network object has no id recorded");
+    return seq;
+  }
+
+  /**
+   * Claims `packIds` for `repoId` (a pull request's base sharing its head's
+   * packs, a restored member claiming its packs again) at the network's
+   * next claim sequence; returns it. A release the repository recorded
+   * before it learnt this sequence names an earlier one, so it leaves these
+   * claims (see `releaseUpTo`).
+   */
+  renewClaims(repoId: string, packIds: readonly string[]): number {
+    const seq = this.nextClaimSeq();
+    this.claimAt(repoId, packIds, seq);
+    return seq;
+  }
+
+  /**
+   * Claims `packIds` for `repoId` at sequence `seq` (from `nextClaimSeq`),
+   * made at `at`: a claim already made keeps the later of each.
+   */
+  claimAt(
+    repoId: string,
+    packIds: readonly string[],
+    seq: number,
+    at: number = this.context.now(),
+  ): void {
+    for (const packId of packIds)
+      exec(
+        this.#sql,
+        `INSERT INTO pack_claims (pack_id, repo_id, claimed_at, seq) VALUES (?, ?, ?, ?)
+         ON CONFLICT (pack_id, repo_id) DO UPDATE SET seq = max(seq, excluded.seq),
+           claimed_at = max(claimed_at, excluded.claimed_at)`,
+        packId,
+        repoId,
+        at,
+        seq,
+      );
+  }
+
+  /**
+   * Claims `packIds` for `repoId` as held at `since` (a collection's start)
+   * or later, at `seq` (the sequence the member learnt as it reported its
+   * view): new claims, and older ones renewed (see `releaseUnrenewed`).
+   */
+  hold(repoId: string, packIds: readonly string[], since: number, seq: number): void {
+    this.claimAt(repoId, packIds, seq, Math.max(this.context.now(), since));
+  }
+
+  /**
+   * Drops the claims recorded before `since` (a collection's start) and
+   * not renewed since: once every member has said what its view holds,
+   * claims on packs it no longer holds. Joining members were not asked:
+   * their claims stay.
+   */
+  releaseUnrenewed(since: number): void {
+    exec(
+      this.#sql,
+      `DELETE FROM pack_claims WHERE claimed_at < ?
+         AND repo_id IN (SELECT repo_id FROM members WHERE state <> 'joining')`,
+      since,
+    );
   }
 
   claimsOf(repoId: string): string[] {
@@ -252,6 +378,28 @@ export class NetworkRegistry {
         ...batch,
       );
     return this.unclaimed(packIds);
+  }
+
+  /**
+   * Drops `repoId`'s claims on the packs of `releases`, each only while its
+   * sequence is at most the release's `upTo` (the latest the repository had
+   * learnt when its view gave the pack up): a claim made again since, which
+   * a release arriving late must not undo, stays. Returns the shared packs
+   * no member claims any more.
+   */
+  releaseUpTo(
+    repoId: string,
+    releases: readonly { readonly packId: string; readonly upTo: number }[],
+  ): string[] {
+    for (const release of releases)
+      exec(
+        this.#sql,
+        "DELETE FROM pack_claims WHERE pack_id = ? AND repo_id = ? AND seq <= ?",
+        release.packId,
+        repoId,
+        release.upTo,
+      );
+    return this.unclaimed(releases.map((r) => r.packId));
   }
 
   /** Of `packIds`, the shared packs nobody claims. */

@@ -118,8 +118,9 @@ export async function compactBorrowedSlice(
 /**
  * Swaps a finished compaction into the view: the output goes live as a
  * borrowed (network-owned) pack, the sources are superseded (their claims
- * are released by the retire job). Returns the output as the network
- * records it.
+ * are released by the retire job) and recorded as merged into it (an
+ * import naming one again reads it there). Returns the output as the
+ * network records it.
  */
 export function swapCompactedView(
   git: RepoGitStorage,
@@ -142,6 +143,7 @@ export function swapCompactedView(
       throw new Error(`compacted pack ${output} is not finished`);
     storage.sql.exec("UPDATE packs SET origin = 'borrowed' WHERE pack_id = ?", output).toArray();
     for (const id of sources) git.registry.transition(id, ["live"], "superseded");
+    recordMerged(git, output, sources);
     // A push indexed against a source depends on the output now (it holds all their objects).
     replaceUploadDependencies(git, sources as PackId[], [output as PackId]);
     storage.sql
@@ -152,6 +154,71 @@ export function swapCompactedView(
   const out = liveViewPacks(git).find((p) => p.packId === output);
   if (!out) throw new Error(`compacted pack ${output} is not in the view`);
   return out;
+}
+
+/**
+ * Packs recorded as merged into one pack at most: the most recently merged.
+ * A swap moves at most this many for each pack it merges. One dropped is
+ * borrowed again when an import names it. Proposed.
+ */
+export const MAX_MERGED_PER_PACK = 256;
+
+/**
+ * In the swap's transaction: `sources` are merged into `output`, and so are
+ * the packs merged into one of them before (one hop, whatever the chain),
+ * the oldest past `MAX_MERGED_PER_PACK` dropped.
+ */
+function recordMerged(git: RepoGitStorage, output: string, sources: readonly string[]): void {
+  const sql = git.context.storage.sql;
+  const list = JSON.stringify(sources);
+  sql.exec(
+    "UPDATE view_merged SET into_pack_id = ? WHERE into_pack_id IN (SELECT value FROM json_each(?))",
+    output,
+    list,
+  );
+  sql.exec(
+    `INSERT INTO view_merged (pack_id, into_pack_id, merged_at) SELECT value, ?, ? FROM json_each(?)
+     WHERE true ON CONFLICT (pack_id) DO UPDATE SET into_pack_id = excluded.into_pack_id,
+       merged_at = excluded.merged_at`,
+    output,
+    git.context.now(),
+    list,
+  );
+  sql.exec(
+    `DELETE FROM view_merged WHERE pack_id IN (
+       SELECT pack_id FROM view_merged WHERE into_pack_id = ?
+       ORDER BY merged_at DESC, pack_id DESC LIMIT -1 OFFSET ?)`,
+    output,
+    MAX_MERGED_PER_PACK,
+  );
+}
+
+/**
+ * Of `packIds`, those a view compaction merged into a pack the registry
+ * still has: that pack and its state (live: the view reads the merged
+ * pack's objects there).
+ */
+export function mergedInto(
+  git: RepoGitStorage,
+  packIds: readonly string[],
+): Map<string, { readonly packId: string; readonly state: string }> {
+  const rows = git.context.storage.sql
+    .exec<{ pack_id: string; into_pack_id: string; state: string }>(
+      `SELECT m.pack_id, m.into_pack_id, p.state FROM view_merged m
+       JOIN packs p ON p.pack_id = m.into_pack_id
+       WHERE m.pack_id IN (SELECT value FROM json_each(?))`,
+      JSON.stringify(packIds),
+    )
+    .toArray();
+  return new Map(rows.map((r) => [r.pack_id, { packId: r.into_pack_id, state: r.state }]));
+}
+
+/**
+ * In the transaction deleting `packId`'s row: the packs merged into it are
+ * no longer read through it.
+ */
+export function forgetMerged(git: RepoGitStorage, packId: string): void {
+  git.context.storage.sql.exec("DELETE FROM view_merged WHERE into_pack_id = ?", packId);
 }
 
 /** Packs one view compaction merges at most (their indexes are loaded per slice). Proposed. */

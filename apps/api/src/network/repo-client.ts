@@ -1,38 +1,11 @@
-import type { NetworkPackRef, NetworkRetire } from "@fyrden/adapters-cloudflare/git";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 
 /*
- * How a repository object reaches its fork network's object: for retiring
- * packs the network shares, for the orphan sweep's gate, and to report a
- * finished detach; and the network's other members, from the directory.
+ * How a repository object reaches its fork network's object: for the
+ * orphan sweep's gate, and to report a finished detach; and the network's
+ * other members, from the directory. (Its claims given up as it retires
+ * packs go through `ClaimReleases`.)
  */
-
-function byNetwork(packs: readonly NetworkPackRef[]): Map<string, string[]> {
-  const out = new Map<string, string[]>();
-  for (const pack of packs)
-    out.set(pack.networkId, [...(out.get(pack.networkId) ?? []), pack.packId]);
-  return out;
-}
-
-/** The retire job's network side: packs the network shares are released to it, never deleted here. */
-export function networkRetire(env: Env, repoId: () => string): NetworkRetire {
-  return {
-    async shared(packs) {
-      const out = new Set<string>();
-      for (const [networkId, ids] of byNetwork(packs))
-        for (const id of await env.NETWORK.getByName(networkId).sharedPacks(ids)) out.add(id);
-      return out;
-    },
-    async release(packs) {
-      for (const [networkId, packIds] of byNetwork(packs))
-        await env.NETWORK.getByName(networkId).releaseClaims({
-          networkId,
-          repoId: repoId(),
-          packIds,
-        });
-    },
-  };
-}
 
 /** Whether `repoId` may sweep its network's pack prefix alone (the network object answers from its membership). */
 export function soleNetworkMember(env: Env, networkId: string, repoId: string): Promise<boolean> {

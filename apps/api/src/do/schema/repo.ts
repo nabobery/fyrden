@@ -783,4 +783,40 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX refollow_bases_due ON refollow_bases (next_at);
     `,
   },
+  {
+    version: 30,
+    // The borrowed packs a view compaction merged, each with the pack that
+    // holds its objects now (one hop: merging that one again moves its
+    // packs on to the new output) and when it was merged. An import of a
+    // head that still names a merged pack reads it through that pack while
+    // the view reads it, and borrows it again otherwise. One pack keeps a
+    // bounded number, those most recently merged into it (the oldest are
+    // dropped: borrowed again if named). Rows go when the row of the pack
+    // they were merged into is deleted, and all of them on detach.
+    // And the claims on its network's packs the retire job gave up (in the
+    // transaction that deleted the pack's row), each kept until the network
+    // has been told, with the latest claim sequence the repository had
+    // learnt of that network then (the network drops a claim made at it or
+    // before, never one made again since); for each network, that latest
+    // sequence (`claim_seq`, from the network's claims) and how many
+    // claims the retire job has given up (`released`: an import whose
+    // share saw another count shares again before it adopts).
+    name: "view_merged",
+    sql: `
+      CREATE TABLE view_merged (
+        pack_id TEXT PRIMARY KEY,
+        into_pack_id TEXT NOT NULL,
+        merged_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX view_merged_into ON view_merged (into_pack_id, merged_at);
+
+      CREATE TABLE claim_releases (
+        pack_id TEXT PRIMARY KEY,
+        network_id TEXT NOT NULL,
+        up_to INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      ALTER TABLE networks ADD COLUMN claim_seq INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE networks ADD COLUMN released INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];

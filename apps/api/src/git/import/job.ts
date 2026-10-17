@@ -7,12 +7,14 @@ import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { RepoRole } from "@fyrden/domain";
 import { FetchClientError, ProtocolError, SmartHttpClient } from "@fyrden/git-core";
 import { buildCommandHead, type RefUpdateSpec, readPushReport } from "../chunked/head.js";
+import { CHUNKED_TUNING_DEFAULTS } from "../chunked/tuning.js";
 import { reauthorizeByToken } from "../push/reauthorize-token.js";
 import type { RepoPush } from "../push/repo-push.js";
 import { BUCKET_NAME, headKey, packKey } from "../push/scratch.js";
 import { type ImportNetwork, importPolicy } from "./network.js";
 import { MultipartPackSink } from "./pack-parts.js";
 import { IMPORT_REF_PREFIXES, MAX_IMPORT_REFS, selectImportRefs } from "./refs.js";
+import { type ImportPace, SourceTooSlowError, TransferWatch, type WatchClock } from "./watch.js";
 
 /*
  * Server-side import, in the repository object. One import at a time, into
@@ -21,7 +23,8 @@ import { IMPORT_REF_PREFIXES, MAX_IMPORT_REFS, selectImportRefs } from "./refs.j
  *   fetching    connect to the source (smart HTTP, protocol v2), list its
  *               branches and tags, write the command section that creates
  *               them, and fetch one pack into an R2 multipart upload; one
- *               alarm slice, bounded in bytes and time
+ *               alarm slice, bounded in bytes and time, a slow or stalled
+ *               source stopped early (./watch.ts)
  *   indexing    the push path's resumable index job (fsck, connectivity)
  *   committing  re-authorize the importer by token id, then the push
  *               commit: every ref in one transaction
@@ -37,6 +40,24 @@ export interface ImportLimits {
   readonly maxBytes: number;
   readonly maxMs: number;
   readonly partBytes: number;
+  /*
+   * How slow the source may be (./watch.ts); absent in the records of
+   * imports begun before these limits existed, which take the defaults.
+   */
+  readonly discoveryMs?: number;
+  readonly idleMs?: number;
+  readonly minBytesPerSecond?: number;
+}
+
+/** The watch's limits for an import. */
+function paceOf(limits: ImportLimits): ImportPace {
+  const defaults = CHUNKED_TUNING_DEFAULTS;
+  return {
+    maxMs: limits.maxMs,
+    discoveryMs: limits.discoveryMs ?? defaults.importDiscoveryMs,
+    idleMs: limits.idleMs ?? defaults.importIdleMs,
+    minBytesPerSecond: limits.minBytesPerSecond ?? defaults.minImportBytesPerSecond,
+  };
 }
 
 export interface ImportRecord {
@@ -99,6 +120,8 @@ export class RepoImports {
     private readonly log: Logger,
     /** Read on each fetch, so tests can replace it. */
     private readonly network: () => ImportNetwork,
+    /** The time the fetch's watch keeps; read on each fetch, so tests can replace it. */
+    private readonly clock: () => WatchClock,
     /** A principal's role for a write, from the repository's ACL snapshot. */
     private readonly writerRole: (principalId: string) => Promise<RepoRole | null>,
     /** The repository's owner generation (bumped by a transfer); undefined without an identity. */
@@ -235,21 +258,35 @@ export class RepoImports {
 
   /** Fetches the source's pack into the upload; the record comes back `indexing` (or done). */
   async #fetch(record: ImportRecord): Promise<ImportRecord> {
-    const { uploadId } = record;
     // A fetch cut short by a reset left a multipart upload: abort it and start over.
-    await this.#abortMultipart(uploadId);
+    await this.#abortMultipart(record.uploadId);
+    const watch = new TransferWatch(paceOf(record.limits), this.clock());
+    try {
+      return await this.#fetchWatched(record, watch);
+    } catch (error) {
+      // Work outside the watch (the upload's completion) failing after a trip is the trip's doing.
+      throw watch.signal.reason instanceof SourceTooSlowError ? watch.signal.reason : error;
+    } finally {
+      watch.stop();
+    }
+  }
+
+  async #fetchWatched(record: ImportRecord, watch: TransferWatch): Promise<ImportRecord> {
+    const { uploadId } = record;
     const network = this.network();
-    const policy = importPolicy(record.ownHosts, network.resolve);
-    const signal = AbortSignal.timeout(record.limits.maxMs);
-    const client = await SmartHttpClient.connect({
-      transport: network.transport(policy, signal),
-      url: record.url,
-      agent: AGENT,
-      limits: { maxPackBytes: record.limits.maxBytes, maxRefs: MAX_IMPORT_REFS * 2 },
+    const policy = importPolicy(record.ownHosts, network.resolver(watch.signal));
+    const transport = watch.transport(network.transport(policy, watch.signal));
+    const { client, advertised } = await watch.run("discovery", async () => {
+      const client = await SmartHttpClient.connect({
+        transport,
+        url: record.url,
+        agent: AGENT,
+        limits: { maxPackBytes: record.limits.maxBytes, maxRefs: MAX_IMPORT_REFS * 2 },
+      });
+      const advertised = await client.lsRefs({ prefixes: IMPORT_REF_PREFIXES, symrefs: true });
+      return { client, advertised };
     });
-    const selection = selectImportRefs(
-      await client.lsRefs({ prefixes: IMPORT_REF_PREFIXES, symrefs: true }),
-    );
+    const selection = selectImportRefs(advertised);
     if (selection.updates.length > MAX_IMPORT_REFS)
       throw new ImportError(`the source has more than ${MAX_IMPORT_REFS} branches and tags`);
     const listed = {
@@ -290,9 +327,12 @@ export class RepoImports {
         return saving;
       },
     });
-    await client.fetchPack(selection.wants, sink);
+    await watch.run("transfer", () => client.fetchPack(selection.wants, watch.sink(sink)));
     const size = await sink.finish();
     this.git.uploads.clearMultipart(uploadId);
+    // Past the overall limit by the time the upload completed: the failure's
+    // cleanup deletes the stored pack with the upload's other scratch objects.
+    watch.signal.throwIfAborted();
     if (size !== sink.bytes) throw new ImportError("the stored pack has the wrong length");
     if (
       !this.push.splitBodyStored(uploadId, {
@@ -342,8 +382,7 @@ export class RepoImports {
 
   async #fail(record: ImportRecord, error: unknown): Promise<ImportRecord> {
     const message = importErrorMessage(error);
-    if (!(error instanceof ImportError || error instanceof FetchClientError))
-      this.log.warn("import failed", { uploadId: record.uploadId, error });
+    if (!reportedAsIs(error)) this.log.warn("import failed", { uploadId: record.uploadId, error });
     await this.#abortMultipart(record.uploadId);
     await this.push.abort(record.uploadId);
     return this.#save({ ...record, state: "failed", error: message });
@@ -378,9 +417,18 @@ class ImportError extends Error {
   override name = "ImportError";
 }
 
+/** A failure whose message the import status shows as it is. */
+function reportedAsIs(error: unknown): error is Error {
+  return (
+    error instanceof ImportError ||
+    error instanceof FetchClientError ||
+    error instanceof SourceTooSlowError
+  );
+}
+
 /** What the import status shows for a failure: known errors as they are, others generically. */
 function importErrorMessage(error: unknown): string {
-  if (error instanceof ImportError || error instanceof FetchClientError) return error.message;
+  if (reportedAsIs(error)) return error.message;
   if (error instanceof ProtocolError) return `the source broke the git protocol: ${error.message}`;
   if (error instanceof Error && error.name === "SsrfError") return error.message;
   if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError"))

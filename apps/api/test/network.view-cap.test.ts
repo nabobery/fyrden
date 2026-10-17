@@ -7,7 +7,12 @@
 
 import { beforeAll, describe, expect, inject, it } from "vitest";
 import type { ViewPack } from "../src/network/types.js";
-import { chooseBaseCompaction } from "../src/network/view-cap.js";
+import {
+  chooseBaseCompaction,
+  forgetMerged,
+  MAX_MERGED_PER_PACK,
+  swapCompactedView,
+} from "../src/network/view-cap.js";
 import { loadFixture } from "./helpers/fetch-repo.js";
 import { objectsOf } from "./helpers/gc.js";
 import type { TestRepo } from "./helpers/git-http.js";
@@ -111,5 +116,64 @@ describe("view cap", () => {
       );
     // Only the clone's materialised fetch pack is left besides the live view.
     expect((await viewOf(f2)).filter((p) => p.state !== "live" && p.kind !== "fetch")).toEqual([]);
+  });
+
+  it("moves a bounded number of merge records per swap, however long the chain of compactions", async () => {
+    const repo = await createRepo(owner.principalId);
+    const swaps = 2 * MAX_MERGED_PER_PACK + 10;
+    const work = await inRepo(repo.stub, ({ git }) => {
+      const sql = git.context.storage.sql;
+      const networkId = git.networkId();
+      const add = (id: string, state: string) => {
+        const now = git.context.now();
+        sql.exec(
+          `INSERT INTO packs (pack_id, network_id, r2_key, origin, kind, state, object_count,
+             bytes, created_at, last_touched_at)
+           VALUES (?, ?, ?, 'borrowed', 'compact', ?, 1, 1, ?, ?)`,
+          id,
+          networkId,
+          `net/${networkId}/p/${id}.pack`,
+          state,
+          now,
+          now,
+        );
+      };
+      const into = (id: string) =>
+        sql
+          .exec<{ n: number }>("SELECT count(*) AS n FROM view_merged WHERE into_pack_id = ?", id)
+          .one().n;
+      // Each compaction merges the previous one's output with one new pack.
+      let previous = "pack-0";
+      add(previous, "live");
+      let most = 0;
+      for (let i = 1; i <= swaps; i++) {
+        const added = `pack-${i}`;
+        const output = `output-${i}`;
+        add(added, "live");
+        add(output, "indexing");
+        // The records the swap moves: those of the packs merged into its sources.
+        most = Math.max(most, into(previous) + into(added));
+        swapCompactedView(git, output, [previous, added]);
+        previous = output;
+      }
+      const kept = into(previous);
+      const newest = sql
+        .exec<{ pack_id: string }>(
+          "SELECT pack_id FROM view_merged WHERE into_pack_id = ? AND pack_id = ?",
+          previous,
+          `pack-${swaps}`,
+        )
+        .toArray().length;
+      // The output's row goes: so do its records.
+      forgetMerged(git, previous);
+      const left = sql.exec<{ n: number }>("SELECT count(*) AS n FROM view_merged").one().n;
+      return { most, kept, newest, left };
+    });
+    expect(work).toEqual({
+      most: MAX_MERGED_PER_PACK,
+      kept: MAX_MERGED_PER_PACK,
+      newest: 1,
+      left: 0,
+    });
   });
 });

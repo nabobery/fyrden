@@ -11,6 +11,7 @@ import {
 import { openRequestBlockCache } from "../git/cache/pack-blocks.js";
 import { liveView } from "../git/pack-view.js";
 import { peelAll } from "../git/peel.js";
+import { learnClaimSeq } from "./claim-releases.js";
 import type {
   CommitPage,
   CommitRowData,
@@ -363,26 +364,51 @@ export function finishFork(
 /** States of a member's registry row that hold (claim) a pack. */
 const HOLDING_STATES = ["indexing", "indexed", "live", "garbage", "superseded", "condemned"];
 
-/** The member's registry rows of packs stored under `networkId`, for the network collection. */
-export function networkSnapshot(git: RepoGitStorage, networkId: string): MemberPack[] {
+/**
+ * The member's registry rows of packs stored under `networkId`, for the
+ * network collection, which claims them at sequence `claimSeq`: learnt as
+ * they are read, so a release recorded from now on covers those claims
+ * (see claim-releases.ts).
+ */
+export function networkSnapshot(
+  git: RepoGitStorage,
+  networkId: string,
+  claimSeq: number,
+): MemberPack[] {
+  learnClaimSeq(git, networkId, claimSeq);
+  return heldPacks(git, networkId).map((r) => ({
+    packId: r.pack_id,
+    networkId: r.network_id,
+    state: r.state,
+    origin: r.origin,
+  }));
+}
+
+/** The registry rows that hold (claim) a pack, under `networkId` or any network. */
+export function heldPacks(git: RepoGitStorage, networkId?: string) {
   return git.context.storage.sql
     .exec<{ pack_id: string; network_id: string; state: string; origin: string }>(
       `SELECT pack_id, network_id, state, origin FROM packs
-       WHERE network_id = ? AND state IN (${HOLDING_STATES.map(() => "?").join(", ")})`,
-      networkId,
+       WHERE state IN (${HOLDING_STATES.map(() => "?").join(", ")})
+       ${networkId === undefined ? "" : "AND network_id = ?"} ORDER BY pack_id`,
       ...HOLDING_STATES,
+      ...(networkId === undefined ? [] : [networkId]),
     )
-    .toArray()
-    .map((r) => ({ packId: r.pack_id, networkId: r.network_id, state: r.state, origin: r.origin }));
+    .toArray();
 }
 
 /**
  * Phase 1 of the deletion of shared packs, at this member: a pack this
  * view no longer reads (superseded) is condemned, so it gets no new lease;
- * one it still reads (live, garbage, being indexed) refuses the deletion.
+ * one it still reads (live, garbage, being indexed) refuses the deletion,
+ * and the network claims it again at `claim.seq`, learnt with the refusal.
  * Answers with when this member's leases on them end.
  */
-export function condemnShared(git: RepoGitStorage, packIds: readonly string[]): CondemnAnswer {
+export function condemnShared(
+  git: RepoGitStorage,
+  packIds: readonly string[],
+  claim: { readonly networkId: string; readonly seq: number },
+): CondemnAnswer {
   const { storage } = git.context;
   const now = git.context.now();
   return storage.transactionSync((): CondemnAnswer => {
@@ -406,7 +432,10 @@ export function condemnShared(git: RepoGitStorage, packIds: readonly string[]): 
         .one().at as number | null;
       leasesUntil = Math.max(leasesUntil, lease ?? 0);
     }
-    return inView.length > 0 ? { ok: false, inView } : { ok: true, leasesUntil };
+    if (inView.length === 0) return { ok: true, leasesUntil };
+    // Claimed again at `claim.seq`: a release recorded from now on covers that claim.
+    learnClaimSeq(git, claim.networkId, claim.seq);
+    return { ok: false, inView };
   });
 }
 
