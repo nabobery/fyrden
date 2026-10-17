@@ -795,7 +795,10 @@ export const repoSchema: readonly DoMigration[] = [
     // they were merged into is deleted, and all of them on detach.
     // And the claims on its network's packs the retire job gave up (in the
     // transaction that deleted the pack's row), each kept until the network
-    // has been told.
+    // has been told, with the latest claim sequence the repository had
+    // learnt of that network then (the network drops a claim made at it or
+    // before, never one made again since); for each network, that latest
+    // sequence (`claim_seq`, from its answers to shares).
     name: "view_merged",
     sql: `
       CREATE TABLE view_merged (
@@ -807,8 +810,10 @@ export const repoSchema: readonly DoMigration[] = [
 
       CREATE TABLE claim_releases (
         pack_id TEXT PRIMARY KEY,
-        network_id TEXT NOT NULL
+        network_id TEXT NOT NULL,
+        up_to INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;
+      ALTER TABLE networks ADD COLUMN claim_seq INTEGER NOT NULL DEFAULT 0;
     `,
   },
 ];

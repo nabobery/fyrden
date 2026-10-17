@@ -43,7 +43,7 @@ CREATE TABLE network_meta (
         membership_version INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
-      ) STRICT;
+      , claim_seq INTEGER NOT NULL DEFAULT 0) STRICT;
 CREATE TABLE network_packs (
         pack_id TEXT PRIMARY KEY,
         writer_repo_id TEXT NOT NULL,
@@ -55,6 +55,6 @@ CREATE TABLE network_packs (
 CREATE TABLE pack_claims (
         pack_id TEXT NOT NULL,
         repo_id TEXT NOT NULL,
-        claimed_at INTEGER NOT NULL,
+        claimed_at INTEGER NOT NULL, seq INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (pack_id, repo_id)
       ) STRICT, WITHOUT ROWID;

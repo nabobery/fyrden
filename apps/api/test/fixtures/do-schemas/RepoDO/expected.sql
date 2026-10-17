@@ -106,7 +106,8 @@ CREATE TABLE audit_segments (
       ) STRICT;
 CREATE TABLE claim_releases (
         pack_id TEXT PRIMARY KEY,
-        network_id TEXT NOT NULL
+        network_id TEXT NOT NULL,
+        up_to INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;
 CREATE TABLE collect_requests (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -268,7 +269,7 @@ CREATE TABLE mergeability_jobs (
 CREATE TABLE networks (
         network_id TEXT PRIMARY KEY,
         recorded_at INTEGER NOT NULL
-      ) STRICT;
+      , claim_seq INTEGER NOT NULL DEFAULT 0) STRICT;
 CREATE TABLE outbox (
         source_seq INTEGER PRIMARY KEY,
         event TEXT NOT NULL CHECK (json_valid(event)),

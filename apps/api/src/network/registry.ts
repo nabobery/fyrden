@@ -241,6 +241,7 @@ export class NetworkRegistry {
     );
   }
 
+  /** Claims `packIds` for every repository in `repoIds`, at sequence 0 (a claim already made stays as it is). */
   claim(repoIds: readonly string[], packIds: readonly string[]): void {
     const now = this.context.now();
     for (const repoId of repoIds)
@@ -253,6 +254,34 @@ export class NetworkRegistry {
           repoId,
           now,
         );
+  }
+
+  /**
+   * Claims `packIds` for `repoId` (a pull request's base sharing its head's
+   * packs) at the network's next claim sequence, which a claim already made
+   * takes too; returns it. A release the repository recorded before it
+   * learnt this sequence names an earlier one, so it leaves these claims
+   * (see `releaseUpTo`).
+   */
+  renewClaims(repoId: string, packIds: readonly string[]): number {
+    const now = this.context.now();
+    const seq = all<{ seq: number }>(
+      this.#sql,
+      "UPDATE network_meta SET claim_seq = claim_seq + 1 RETURNING claim_seq AS seq",
+    )[0]?.seq;
+    if (seq === undefined) throw new Error("the network object has no id recorded");
+    for (const packId of packIds)
+      exec(
+        this.#sql,
+        `INSERT INTO pack_claims (pack_id, repo_id, claimed_at, seq) VALUES (?, ?, ?, ?)
+         ON CONFLICT (pack_id, repo_id) DO UPDATE SET seq = excluded.seq,
+           claimed_at = max(claimed_at, excluded.claimed_at)`,
+        packId,
+        repoId,
+        now,
+        seq,
+      );
+    return seq;
   }
 
   /**
@@ -313,6 +342,28 @@ export class NetworkRegistry {
         ...batch,
       );
     return this.unclaimed(packIds);
+  }
+
+  /**
+   * Drops `repoId`'s claims on the packs of `releases`, each only while its
+   * sequence is at most the release's `upTo` (the latest the repository had
+   * learnt when its view gave the pack up): a claim made again since, which
+   * a release arriving late must not undo, stays. Returns the shared packs
+   * no member claims any more.
+   */
+  releaseUpTo(
+    repoId: string,
+    releases: readonly { readonly packId: string; readonly upTo: number }[],
+  ): string[] {
+    for (const release of releases)
+      exec(
+        this.#sql,
+        "DELETE FROM pack_claims WHERE pack_id = ? AND repo_id = ? AND seq <= ?",
+        release.packId,
+        repoId,
+        release.upTo,
+      );
+    return this.unclaimed(releases.map((r) => r.packId));
   }
 
   /** Of `packIds`, the shared packs nobody claims. */

@@ -122,6 +122,14 @@ borrowed again when an import names it. A view over its cap all the same
 (the budget lowered since) leaves the merge job failing, tried again in
 case a collection drops packs.
 
+A repository gives up its claim on a pack of the network as its retire job
+drops the pack's row. The network is told at the end of that pass, at most
+100 releases a pass and one call per network; a release it could not be
+told is kept and told again on a pass 10 minutes later. A release removes
+only a claim no newer than the repository knew of when it gave the pack
+up, so one that lands late or twice never undoes a pull request's import
+that claimed the pack again since.
+
 ### Push policy
 
 - **Ref names** follow git's own rules (`git check-ref-format`), must start

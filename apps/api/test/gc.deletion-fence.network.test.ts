@@ -8,6 +8,7 @@
 
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, inject, it } from "vitest";
+import { liveViewPacks } from "../src/network/member.js";
 import { loadFixture } from "./helpers/fetch-repo.js";
 import { DAY } from "./helpers/gc.js";
 import { createRepo, type TestRepo } from "./helpers/git-http.js";
@@ -224,7 +225,9 @@ describe("deletion fence for a fork network's shared packs", () => {
     const [packId] = shared as [string];
     // Claims out of date (both released, though both views still read it).
     for (const repoId of [p.id, f.id])
-      await inNetwork(networkId, (n) => n.releaseClaims({ networkId, repoId, packIds: [packId] }));
+      await inNetwork(networkId, (n) =>
+        n.releaseClaims({ networkId, repoId, releases: [{ packId, upTo: 0 }] }),
+      );
     expect(
       (await inNetwork(networkId, (n) => n.status())).packs.find((x) => x.packId === packId)?.state,
     ).toBe("condemned");
@@ -236,6 +239,41 @@ describe("deletion fence for a fork network's shared packs", () => {
     expect(pack?.claims.length).toBe(1);
     expect(status.deletions).toEqual([]);
     expect(await stored(networkId, packId)).toBe(true);
+  });
+
+  it("a release told again after the member claimed the pack anew leaves the new claim", async () => {
+    const { p, f, networkId, shared } = await sharedNetwork();
+    const [packId] = shared as [string];
+    const packs = await inRepo(p.stub, ({ git }) =>
+      liveViewPacks(git).filter((pack) => pack.packId === packId),
+    );
+    // F shares the pack (a pull request's import from P), as its view holds it.
+    const share = async () => {
+      const answer = await inNetwork(networkId, (n) =>
+        n.sharePacks({ networkId, writerRepoId: p.id, claimantRepoId: f.id, packs }),
+      );
+      if (!answer.ok) throw new Error(answer.error);
+      return answer.seq;
+    };
+    const release = (upTo: number) =>
+      inNetwork(networkId, (n) =>
+        n.releaseClaims({ networkId, repoId: f.id, releases: [{ packId, upTo }] }),
+      );
+    const claims = async () =>
+      (await inNetwork(networkId, (n) => n.status())).packs.find((x) => x.packId === packId)
+        ?.claims;
+    // F's view gives it up: the release is told, and told again later.
+    const first = await share();
+    await release(first);
+    expect(await claims()).toEqual([p.id]);
+    // F claims it anew before the second telling lands: the claim made since stays.
+    const again = await share();
+    expect(again).toBeGreaterThan(first);
+    await release(first);
+    expect(await claims()).toEqual([f.id, p.id].sort());
+    // F's release of the new claim drops it.
+    await release(again);
+    expect(await claims()).toEqual([p.id]);
   });
 
   it("an acknowledgement condemns the member's row (no new leases); its leases hold deletion back past the retention", async () => {
@@ -251,7 +289,9 @@ describe("deletion fence for a fork network's shared packs", () => {
     expect(await runDetach(f.stub)).toBe("done");
     // Claims end early (F's ahead of its retire job, which waits for the lease).
     for (const repoId of [p.id, f.id])
-      await inNetwork(networkId, (n) => n.releaseClaims({ networkId, repoId, packIds: [packId] }));
+      await inNetwork(networkId, (n) =>
+        n.releaseClaims({ networkId, repoId, releases: [{ packId, upTo: 0 }] }),
+      );
     // P's view must not hold it for the deletion to go on: P repacks it away.
     await setPolicy(p.stub, { geometricFactor: 1000 });
     await runJob(p.stub, "repack");

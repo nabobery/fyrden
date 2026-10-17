@@ -11,7 +11,10 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   forked from. A fork is `joining` until it is published. Members are
  *   walked in the order they joined (`members_joined`, v3).
  * - `network_packs`: packs the network shares, for which this object is the
- *   lifetime authority; `pack_claims`: which members' views hold them.
+ *   lifetime authority; `pack_claims`: which members' views hold them, each
+ *   claim with the sequence it was last made at (`seq`, v4: a pull request's
+ *   share takes the network's next, `network_meta.claim_seq`; other claims
+ *   0), so a member's release removes only a claim no newer than it knew.
  * - `gc_state`: the network collection's epoch, phase and fence (the
  *   collection's cursor is its job's cursor, in `jobs`).
  * - `deletions`: shared packs condemned and waiting for every member's
@@ -106,6 +109,14 @@ export const networkSchema: readonly DoMigration[] = [
     name: "members_joined",
     sql: `
       CREATE INDEX members_joined ON members (joined_at, repo_id);
+    `,
+  },
+  {
+    version: 4,
+    name: "claim_seq",
+    sql: `
+      ALTER TABLE network_meta ADD COLUMN claim_seq INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE pack_claims ADD COLUMN seq INTEGER NOT NULL DEFAULT 0;
     `,
   },
 ];

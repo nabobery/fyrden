@@ -171,16 +171,17 @@ export class NetworkDO extends MigratingDO {
    * A pull request's base comes to read packs of its head's repository
    * (behind the collection's fence, as a fork's start): packs the network
    * does not share yet become shared, written by that repository, which
-   * claims them; the base claims every one. Both must be active members.
-   * Answers the packs it could not claim (deleted, being deleted, or of
-   * another network): the base reads none of them.
+   * claims them; the base claims every one, at the network's next claim
+   * sequence (`seq`, see `NetworkRegistry.renewClaims`). Both must be
+   * active members. Answers the packs it could not claim (deleted, being
+   * deleted, or of another network): the base reads none of them.
    */
   async sharePacks(input: {
     networkId: string;
     writerRepoId: string;
     claimantRepoId: string;
     packs: readonly ViewPack[];
-  }): Promise<{ ok: true; gone: string[] } | NetworkFailure> {
+  }): Promise<{ ok: true; gone: string[]; seq: number } | NetworkFailure> {
     const bad = this.#ensure(input.networkId);
     if (bad) return bad;
     if (!(await this.#passFence()))
@@ -209,16 +210,13 @@ export class NetworkDO extends MigratingDO {
           gone.push(pack.packId);
           continue;
         }
-        if (known.has(pack.packId)) {
-          if (registry.packState(pack.packId) === "condemned") registry.reprieve(pack.packId);
-          registry.claim([input.claimantRepoId], [pack.packId]);
-        } else
-          registry.share([pack], () => input.writerRepoId, [
-            input.writerRepoId,
-            input.claimantRepoId,
-          ]);
+        if (!known.has(pack.packId))
+          registry.share([pack], () => input.writerRepoId, [input.writerRepoId]);
+        else if (registry.packState(pack.packId) === "condemned") registry.reprieve(pack.packId);
       }
-      return { ok: true as const, gone };
+      const claimed = input.packs.map((p) => p.packId).filter((id) => !gone.includes(id));
+      const seq = registry.renewClaims(input.claimantRepoId, claimed);
+      return { ok: true as const, gone, seq };
     });
   }
 
@@ -282,14 +280,20 @@ export class NetworkDO extends MigratingDO {
   }
 
   /**
-   * `repoId`'s view no longer holds `packIds`. Shared packs nobody claims
-   * any more are condemned (and deleted after acknowledgements, leases and
-   * the retention).
+   * `repoId`'s view no longer holds the packs of `releases`: its claims on
+   * them go, each unless made again after the release's `upTo` (see
+   * `NetworkRegistry.releaseUpTo`), so a release told late or twice is
+   * harmless. Shared packs nobody claims any more are condemned (and
+   * deleted after acknowledgements, leases and the retention).
    */
-  releaseClaims(input: { networkId: string; repoId: string; packIds: readonly string[] }): void {
+  releaseClaims(input: {
+    networkId: string;
+    repoId: string;
+    releases: readonly { packId: string; upTo: number }[];
+  }): void {
     if (this.#ensure(input.networkId)) return;
     const unclaimed = this.context.storage.transactionSync(() => {
-      const left = this.registry.release(input.repoId, input.packIds);
+      const left = this.registry.releaseUpTo(input.repoId, input.releases);
       this.registry.condemn(left, this.policy.retentionMs);
       return left;
     });
