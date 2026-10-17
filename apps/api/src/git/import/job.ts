@@ -271,7 +271,7 @@ export class RepoImports {
   async #fetchWatched(record: ImportRecord, watch: TransferWatch): Promise<ImportRecord> {
     const { uploadId } = record;
     const network = this.network();
-    const policy = importPolicy(record.ownHosts, network.resolve);
+    const policy = importPolicy(record.ownHosts, network.resolver(watch.signal));
     const transport = watch.transport(network.transport(policy, watch.signal));
     const { client, advertised } = await watch.run("discovery", async () => {
       const client = await SmartHttpClient.connect({

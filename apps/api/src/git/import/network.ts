@@ -55,14 +55,14 @@ export async function checkImportUrl(raw: string, policy: SsrfPolicy): Promise<I
 
 /** How an import reaches the network; tests replace it. */
 export interface ImportNetwork {
-  /** Resolves names for the guard. */
-  readonly resolve: Resolver;
+  /** Resolves names for the guard of one import's requests; `signal` stops every lookup. */
+  resolver(signal: AbortSignal): Resolver;
   /** The client's transport for one import, every request guarded by `policy`. */
   transport(policy: SsrfPolicy, signal: AbortSignal): HttpTransport;
 }
 
 export const defaultImportNetwork = (): ImportNetwork => ({
-  resolve: dohResolver(),
+  resolver: (signal) => dohResolver(undefined, signal),
   transport: guardedTransport,
 });
 

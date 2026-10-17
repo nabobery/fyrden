@@ -76,7 +76,7 @@ const decoder = new TextDecoder();
 function replay(exchanges: readonly RecordedExchange[], seen: string[]): ImportNetwork {
   const resolve: Resolver = async () => ["93.184.215.14"];
   return {
-    resolve,
+    resolver: () => resolve,
     transport: (policy): HttpTransport => {
       let next = 0;
       return async (request) => {
@@ -296,7 +296,7 @@ describe("server-side import", () => {
     const target = await pushTarget();
     // The default transport (guardedFetch) with a name that now resolves privately.
     await useNetwork(target, {
-      resolve: async () => ["10.0.0.5"],
+      resolver: () => async () => ["10.0.0.5"],
       transport: guardedTransport,
     });
     const begun = await target.repo.stub.beginImport({
@@ -360,7 +360,7 @@ describe("server-side import", () => {
     await inRepo(target.repo.stub, (repo) => {
       const replayed = replay(cx.source.exchanges, []);
       repo.importNetwork = {
-        resolve: replayed.resolve,
+        resolver: replayed.resolver,
         transport: (policy, signal) => {
           const inner = replayed.transport(policy, signal);
           return async (request) => {
@@ -484,7 +484,7 @@ function pacedSource(
 ): ImportNetwork {
   const replayed = replay(exchanges, seen);
   return {
-    resolve: replayed.resolve,
+    resolver: replayed.resolver,
     transport: (policy, signal) => {
       const inner = replayed.transport(policy, signal);
       let n = 0;
@@ -685,6 +685,47 @@ describe("a slow or stalled source", () => {
     // Their signal, which cancels a `fetch` and its body, is aborted.
     expect([...signals].map((s) => s.aborted)).toEqual([true]);
     expect((await untilImported(target)).state).toBe("committed");
+  });
+
+  it.each([
+    ["its answer", false],
+    ["its answer's body", true],
+  ])("fails within the discovery limit when a name lookup stalls on %s", async (_what, inBody) => {
+    const target = await pushTarget();
+    const advance = await useClock(target);
+    // The default network: the guarded fetch, names resolved over DNS-over-HTTPS.
+    const realFetch = globalThis.fetch;
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (!url.startsWith("https://cloudflare-dns.com/")) return realFetch(input, init);
+      const signal = init?.signal;
+      if (!signal) throw new Error("a lookup the import cannot stop");
+      advance(importDiscoveryMs);
+      if (!inBody) return stalled(signal);
+      // A body that ends only by failing once the lookup's signal aborts, as `fetch` makes it.
+      const never = new ReadableStream({
+        start: (controller) => void stalled(signal).catch((reason) => controller.error(reason)),
+      });
+      return Promise.resolve(
+        new Response(never, { headers: { "Content-Type": "application/dns-json" } }),
+      );
+    });
+    try {
+      const begun = await target.repo.stub.beginImport({
+        principal: target.owner.principalId,
+        tokenId: "tok_unused",
+        repoId: target.repo.id,
+        url: "https://source.example/source.git",
+        ownHosts: ["fyrden.test"],
+        limits: { maxBytes: 1024 * 1024, maxMs: 10 * 60_000, partBytes: 5 * 1024 * 1024 },
+      });
+      expect(begun.ok).toBe(true);
+      expect(await failedAtOnce(target)).toBe(
+        `the source took too long: it did not list its branches and tags within ${importDiscoveryMs / 1000} s`,
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

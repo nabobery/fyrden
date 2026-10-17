@@ -17,12 +17,12 @@ import type { FetchPackSink, HttpTransport } from "@fyrden/git-core";
  *              GRACE_MS + WINDOW_MS + B / minBytesPerSecond at most
  *   overall    the whole fetch must finish in `maxMs`
  *
- * The watch checks every `TICK_MS`. A source too slow has its requests
- * aborted through their signal (as the overall limit always was: `fetch`
- * rejects, and its body stops, once its signal aborts), and its pack stops
- * at the next chunk. Once the fetch is over the signal is aborted too, so no
- * response the client stopped reading (it stops at git's flush, not at the
- * body's end) stays open.
+ * The watch checks every `TICK_MS`. Everything the fetch does takes the
+ * watch's signal: name lookups and requests (`fetch` rejects, and its body
+ * stops, once its signal aborts). A source too slow has them aborted, and
+ * its pack stops at the next chunk. Once the fetch is over the signal is
+ * aborted too, so no response the client stopped reading (it stops at git's
+ * flush, not at the body's end) stays open.
  */
 
 export interface ImportPace {

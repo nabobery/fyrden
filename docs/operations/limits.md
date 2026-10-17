@@ -297,7 +297,7 @@ repository:
 
   | Limit | Default | Variable |
   |---|---|---|
-  | Connecting and listing the branches and tags | 30 s | `GIT_IMPORT_DISCOVERY_MS` |
+  | Connecting (name lookups included) and listing the branches and tags | 30 s | `GIT_IMPORT_DISCOVERY_MS` |
   | Nothing received while the pack streams (keepalives and progress messages count) | 60 s (git's upload-pack sends a keepalive every 5 s by default while it prepares the pack) | `GIT_IMPORT_IDLE_MS` |
   | Pack throughput, over every minute after the first two (pack data only: progress messages and keepalives do not count) | at least 16 KiB/s (a 4 GiB import needs about 7 MiB/s to finish in time) | `GIT_IMPORT_MIN_BYTES_PER_SECOND` |
 
