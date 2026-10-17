@@ -271,7 +271,9 @@ Fyrden's git operations in one repository share a 72 MiB pool (default) and
 wait for room rather than exceed it. Besides the pool, a repository keeps
 pack blocks (16 MiB) and pack indexes (8 MiB) in memory between requests, so
 finding an object in a pack it read recently reads nothing from R2; an index
-over 2 MiB (a pack of about 75,000 objects) is read by ranges instead.
+over 2 MiB (a pack of about 75,000 objects) is read by ranges instead. Index
+reads in flight count against the 8 MiB too: when they fill it, further index
+reads wait for them to finish.
 
 ## Chunked upload sessions
 

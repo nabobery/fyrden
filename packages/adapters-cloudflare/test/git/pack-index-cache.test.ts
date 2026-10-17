@@ -1,7 +1,7 @@
 import { createSha1Hasher, PackIdx, writeIdx } from "@fyrden/git-core";
 import { describe, expect, it } from "vitest";
 import { DO_MEMORY } from "../../src/git/memory-budget.js";
-import { PackIndexCache } from "../../src/git/pack-index-cache.js";
+import { type HeldPackIndex, PackIndexCache } from "../../src/git/pack-index-cache.js";
 
 /** An `.idx` of `count` entries: 1,072 + 28 × count bytes. */
 async function idxOf(count: number): Promise<PackIdx> {
@@ -24,6 +24,44 @@ async function idxOf(count: number): Promise<PackIdx> {
 }
 
 const bytesOf = (count: number) => 1072 + 28 * count;
+
+/** A fanout: 1 KiB. */
+const fanout = () => new Uint32Array(256);
+
+/** Index loads that finish only when the test says, recording which ones started. */
+class Loads {
+  readonly started: string[] = [];
+  readonly #open = new Map<string, PromiseWithResolvers<HeldPackIndex>>();
+
+  /** Loads started and not finished. */
+  get inFlight(): number {
+    return this.#open.size;
+  }
+
+  of(packId: string): () => Promise<HeldPackIndex> {
+    return () => {
+      this.started.push(packId);
+      const load = Promise.withResolvers<HeldPackIndex>();
+      this.#open.set(packId, load);
+      return load.promise;
+    };
+  }
+
+  resolve(packId: string, held: HeldPackIndex): void {
+    this.#take(packId).resolve(held);
+  }
+
+  reject(packId: string, error: Error): void {
+    this.#take(packId).reject(error);
+  }
+
+  #take(packId: string): PromiseWithResolvers<HeldPackIndex> {
+    const load = this.#open.get(packId);
+    if (!load) throw new Error(`no load of ${packId} in flight`);
+    this.#open.delete(packId);
+    return load;
+  }
+}
 
 describe("pack index cache", () => {
   it("is carved out of the object's fixed memory, beside the block cache", () => {
@@ -123,5 +161,89 @@ describe("pack index cache", () => {
     expect(cache.get("live")).toBe(idx);
     expect(cache.count).toBe(1);
     expect(cache.bytes).toBe(bytesOf(10));
+  });
+
+  it("keeps loads waiting for room within its bound, never evicting one in flight", async () => {
+    const cache = new PackIndexCache(4096);
+    const loads = new Loads();
+    const ids = Array.from({ length: 10 }, (_, i) => `p${i}`);
+    const results = ids.map((id) => cache.load(id, 1024, loads.of(id)));
+    // Room for four: the other six wait instead of evicting a load in flight.
+    expect(loads.started).toEqual(["p0", "p1", "p2", "p3"]);
+    expect(cache.bytes).toBe(4096);
+    expect(cache.count).toBe(10);
+    for (const [i, id] of ids.entries()) {
+      const held = fanout();
+      loads.resolve(id, held);
+      expect(await results[i]).toBe(held);
+      expect(loads.inFlight * 1024).toBeLessThanOrEqual(cache.bytes);
+      expect(cache.bytes).toBeLessThanOrEqual(cache.maxBytes);
+    }
+    expect(loads.started).toEqual(ids);
+    // Each settled load made room for a waiting one; the last four are held.
+    expect(cache.bytes).toBe(4096);
+    for (const id of ["p6", "p7", "p8", "p9"]) expect(cache.get(id)).toBeDefined();
+    expect(cache.get("p5")).toBeUndefined();
+  });
+
+  it("shares a load in flight with a repeated lookup, even when out of room", async () => {
+    const cache = new PackIndexCache(4096);
+    const loads = new Loads();
+    const first = ["a", "b", "c", "d", "e"].map((id) => cache.load(id, 1024, loads.of(id)));
+    const again = cache.load("a", 1024, loads.of("a"));
+    expect(loads.started).toEqual(["a", "b", "c", "d"]);
+    const held = fanout();
+    loads.resolve("a", held);
+    expect(await first[0]).toBe(held);
+    expect(await again).toBe(held);
+    // "a" settling made room for "e"; nothing loaded "a" twice.
+    expect(loads.started).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  it("does not keep a load larger than its room while others are in flight", async () => {
+    const cache = new PackIndexCache(4096);
+    const loads = new Loads();
+    const small = cache.load("small", 512, loads.of("small"));
+    for (const id of ["b", "c", "d"]) void cache.load(id, 1024, loads.of(id));
+    void cache.load("e", 512, loads.of("e"));
+    expect(cache.bytes).toBe(4096);
+    // 1 KiB came back for 512 bytes of room, and the rest is set aside for the loads in flight.
+    const held = fanout();
+    loads.resolve("small", held);
+    expect(await small).toBe(held);
+    expect(cache.get("small")).toBeUndefined();
+    expect(cache.bytes).toBe(3584);
+    expect(cache.count).toBe(4);
+    expect(loads.inFlight).toBe(4);
+  });
+
+  it("gives the room of a failed load to a load waiting for it", async () => {
+    const cache = new PackIndexCache(4096);
+    const loads = new Loads();
+    const results = ["a", "b", "c", "d", "e"].map((id) => cache.load(id, 1024, loads.of(id)));
+    expect(loads.started).toEqual(["a", "b", "c", "d"]);
+    loads.reject("b", new Error("R2 is down"));
+    await expect(results[1]).rejects.toThrow("R2 is down");
+    expect(loads.started).toEqual(["a", "b", "c", "d", "e"]);
+    expect(cache.bytes).toBe(4096);
+    expect(cache.count).toBe(4);
+  });
+
+  it("counts the load of a pack that left the repository until it settles", async () => {
+    const cache = new PackIndexCache(64 * 1024);
+    const loads = new Loads();
+    const first = cache.load("gone", 1024, loads.of("gone"));
+    cache.retain(new Set(["live"]));
+    expect(cache.bytes).toBe(1024);
+    // A lookup while it loads still shares the load.
+    const again = cache.load("gone", 1024, loads.of("gone"));
+    expect(loads.started).toEqual(["gone"]);
+    const held = fanout();
+    loads.resolve("gone", held);
+    expect(await first).toBe(held);
+    expect(await again).toBe(held);
+    expect(cache.get("gone")).toBeUndefined();
+    expect(cache.bytes).toBe(0);
+    expect(cache.count).toBe(0);
   });
 });
