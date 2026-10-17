@@ -327,6 +327,9 @@ export class RepoImports {
     await watch.run("transfer", () => client.fetchPack(selection.wants, watch.sink(sink)));
     const size = await sink.finish();
     this.git.uploads.clearMultipart(uploadId);
+    // Past the overall limit by the time the upload completed: the failure's
+    // cleanup deletes the stored pack with the upload's other scratch objects.
+    watch.signal.throwIfAborted();
     if (size !== sink.bytes) throw new ImportError("the stored pack has the wrong length");
     if (
       !this.push.splitBodyStored(uploadId, {

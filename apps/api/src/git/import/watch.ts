@@ -15,14 +15,16 @@ import type { FetchPackSink, HttpTransport } from "@fyrden/git-core";
  *              (pack bytes only, not progress or empty frames): a pack of B
  *              bytes holds the object for about
  *              GRACE_MS + WINDOW_MS + B / minBytesPerSecond at most
- *   overall    the whole fetch must finish in `maxMs`
+ *   overall    the whole fetch, the upload's completion included, must
+ *              finish in `maxMs`
  *
  * The watch checks every `TICK_MS`. Everything the fetch does takes the
  * watch's signal: name lookups and requests (`fetch` rejects, and its body
- * stops, once its signal aborts). A source too slow has them aborted, and
- * its pack stops at the next chunk. Once the fetch is over the signal is
- * aborted too, so no response the client stopped reading (it stops at git's
- * flush, not at the body's end) stays open.
+ * stops, once its signal aborts). A source too slow has them aborted, its
+ * pack stops at the next chunk or write, and work that finishes after the
+ * trip fails all the same. Once the fetch is over the signal is aborted too,
+ * so no response the client stopped reading (it stops at git's flush, not at
+ * the body's end) stays open.
  */
 
 export interface ImportPace {
@@ -110,17 +112,21 @@ export class TransferWatch {
     };
   }
 
-  /** `inner`, the pack bytes it is given counted. */
+  /** `inner`, the pack bytes it is given counted, and no write started once the watch trips. */
   sink(inner: FetchPackSink): FetchPackSink {
     return {
       write: async (chunk) => {
+        this.signal.throwIfAborted();
         this.#packBytes += chunk.length;
         await inner.write(chunk);
       },
     };
   }
 
-  /** Runs one phase of the fetch; a failure once the watch has tripped is the trip's. */
+  /**
+   * Runs one phase of the fetch; it fails with the trip once the watch has
+   * tripped, even when its work (a write that took that long) then succeeds.
+   */
   async run<T>(phase: Phase, work: () => Promise<T>): Promise<T> {
     this.signal.throwIfAborted();
     const now = this.clock.now();
@@ -128,7 +134,9 @@ export class TransferWatch {
     this.#lastByteAt = now;
     this.#samples = [{ at: now, bytes: this.#packBytes }];
     try {
-      return await work();
+      const result = await work();
+      this.signal.throwIfAborted();
+      return result;
     } catch (error) {
       throw this.signal.aborted ? this.signal.reason : error;
     } finally {

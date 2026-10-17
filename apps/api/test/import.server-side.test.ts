@@ -26,10 +26,12 @@ import { createApp } from "../src/app.js";
 import { CHUNKED_TUNING_DEFAULTS } from "../src/git/chunked/tuning.js";
 import type { ImportNetwork } from "../src/git/import/network.js";
 import { guardedTransport } from "../src/git/import/network.js";
+import { MultipartPackSink } from "../src/git/import/pack-parts.js";
 import type { WatchClock } from "../src/git/import/watch.js";
 import { RepoPush } from "../src/git/push/repo-push.js";
 import { api } from "./helpers/api.js";
 import type { RecordedExchange } from "./helpers/chunked-fixtures.js";
+import { parseFetchResponse } from "./helpers/fetch-repo.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { fromHex } from "./helpers/git-oracle.js";
 import { type PushTarget, pushTarget } from "./helpers/push.js";
@@ -685,6 +687,76 @@ describe("a slow or stalled source", () => {
     // Their signal, which cancels a `fetch` and its body, is aborted.
     expect([...signals].map((s) => s.aborted)).toEqual([true]);
     expect((await untilImported(target)).state).toBe("committed");
+  });
+
+  describe("fails when the watch trips while the pack is stored, though the source sent all of it", () => {
+    const partBytes = 5 * 1024 * 1024;
+    const idle = `: it sent nothing for ${importIdleMs / 1000} s`;
+    const packOf = (exchanges: readonly RecordedExchange[]) =>
+      parseFetchResponse(fromHex((exchanges[FETCH] as RecordedExchange).response)).pack?.length ??
+      0;
+
+    it.each([
+      // `step` lasts until the watch trips, once `at` pack bytes are in.
+      [
+        "its first part, its last frames to write",
+        cx.largeSource,
+        "write",
+        partBytes,
+        importIdleMs,
+        idle,
+      ],
+      [
+        "its last frame, git's flush to read",
+        cx.source,
+        "write",
+        packOf(cx.source.exchanges),
+        importIdleMs,
+        idle,
+      ],
+      [
+        "its upload's completion",
+        cx.largeSource,
+        "finish",
+        0,
+        CHUNKED_TUNING_DEFAULTS.maxImportMs,
+        "",
+      ],
+    ] as const)("%s", async (_what, source, step, at, ms, broken) => {
+      const target = await pushTarget();
+      const advance = await useClock(target);
+      // The whole answer in one chunk: the rest of the pack and git's flush
+      // are read without asking the source again.
+      await start(target, source.exchanges, (_n, body) => asRecorded(body), {
+        GIT_UPLOAD_PART_BYTES: String(partBytes),
+      });
+      let tripped = false;
+      /** Writes and completions started once the watch tripped. */
+      let late = 0;
+      const spies = (["write", "finish"] as const).map((method) => {
+        const original: (this: MultipartPackSink, ...args: never[]) => Promise<unknown> =
+          MultipartPackSink.prototype[method];
+        return vi.spyOn(MultipartPackSink.prototype, method).mockImplementation(async function (
+          this: MultipartPackSink,
+          ...args: never[]
+        ) {
+          if (tripped) late++;
+          const result = await original.apply(this, args);
+          if (!tripped && method === step && this.bytes >= at) {
+            tripped = true;
+            advance(ms);
+          }
+          return result as never;
+        } as never);
+      });
+      try {
+        expect(await failedAtOnce(target)).toBe(`the source took too long${broken}`);
+        expect(tripped).toBe(true);
+        expect(late).toBe(0);
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+    });
   });
 
   it.each([
