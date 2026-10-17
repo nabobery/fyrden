@@ -1,6 +1,13 @@
 import { join } from "node:path";
 import { AccountError, pinAccount, resolveAccount } from "../account.ts";
-import { checkD1Schema, driftMessage, queryRemote, SCHEMA_RUNBOOK } from "../d1-schema.ts";
+import {
+  checkD1Schema,
+  driftMessage,
+  type MigrationGap,
+  migrationGap,
+  queryRemote,
+  SCHEMA_RUNBOOK,
+} from "../d1-schema.ts";
 import { readApiConfig, resourcePlan } from "../resources.ts";
 import { DIRTY_SUFFIX, UNKNOWN_COMMIT } from "../source.ts";
 import { WranglerError, type WranglerRunner, wrangler } from "../wrangler.ts";
@@ -71,11 +78,16 @@ export async function doctor(
     if (missing.includes(`d1:${db.name}`)) continue;
     if (db.migrationsDir) {
       try {
-        const check = await checkD1Schema(runner, apiDir, {
-          name: db.name,
-          migrationsDir: db.migrationsDir,
-        });
-        if (check.problems.length === 0)
+        const target = { name: db.name, migrationsDir: db.migrationsDir };
+        // The expected schema is the one after every migration here: compare only a database
+        // that applied exactly those, as fyrden deploy does once it has applied them.
+        const gap = await migrationGap(runner, apiDir, target);
+        const check =
+          gap.pending.length === 0 && gap.unknown.length === 0
+            ? await checkD1Schema(runner, apiDir, target)
+            : undefined;
+        if (!check) log(`WARN ${db.name} schema not compared: ${gapMessage(gap)}`);
+        else if (check.problems.length === 0)
           log(`ok   ${db.name} schema matches ${check.expectedFile}`);
         else {
           schemaDrift.push(db.name);
@@ -103,6 +115,18 @@ export async function doctor(
       .join(", ")}; larger pushes need \`fyrden push --chunked\``,
   );
   return { authenticated: true, missing, schemaDrift };
+}
+
+/** What stands between a database's applied migrations and the checkout's. */
+function gapMessage(gap: MigrationGap): string {
+  const parts: string[] = [];
+  if (gap.pending.length > 0)
+    parts.push(`not yet applied: ${gap.pending.join(", ")} (fyrden deploy applies them)`);
+  if (gap.unknown.length > 0)
+    parts.push(
+      `applied but not in this checkout: ${gap.unknown.join(", ")} (check out the commit it runs)`,
+    );
+  return parts.join("; ");
 }
 
 /** How many effects are in each state, and how old the oldest of each is: a stuck backlog shows here. */

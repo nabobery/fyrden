@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseExpectedSchema, type SchemaObject } from "../src/d1-schema.ts";
 import type { RunResult, WranglerRunner } from "../src/wrangler.ts";
@@ -20,6 +20,8 @@ export function fakeWrangler() {
     d1: new Map<string, string>(),
     /** Each D1 database's schema objects. */
     d1Schema: new Map<string, SchemaObject[]>(),
+    /** The migration files each D1 database has applied, by name (its d1_migrations table). */
+    d1Migrations: new Map<string, string[]>(),
     /** What fyrden-org answers to the effects summary, one row per state. */
     effects: [] as { state: string; count: number; oldest: number }[],
     /** fyrden-api's versions, latest last, with the vars each was deployed with. */
@@ -169,6 +171,14 @@ export function fakeWrangler() {
         const schema = state.d1Schema.get(name) ?? [];
         const have = new Set(schema.map((o) => o.name));
         state.d1Schema.set(name, [...schema, ...expected.filter((o) => !have.has(o.name))]);
+        const applied = state.d1Migrations.get(name) ?? [];
+        const files = readdirSync(join(options.cwd as string, dir as string)).filter((f) =>
+          f.endsWith(".sql"),
+        );
+        state.d1Migrations.set(name, [
+          ...applied,
+          ...files.sort().filter((f) => !applied.includes(f)),
+        ]);
         return ok();
       }
       if (args[0] === "d1" && args[1] === "execute") {
@@ -176,8 +186,12 @@ export function fakeWrangler() {
         const sql = args[args.indexOf("--command") + 1] as string;
         if (!state.d1.has(db)) return fail(`Couldn't find DB with name '${db}'`);
         const schema = state.d1Schema.get(db) ?? [];
+        const migrations = state.d1Migrations.get(db);
         let results: unknown[];
-        if (sql.includes("FROM sqlite_schema")) results = schema;
+        if (sql.includes("FROM d1_migrations")) {
+          if (!migrations) return fail("no such table: d1_migrations: SQLITE_ERROR [code: 7500]");
+          results = migrations.map((name) => ({ name }));
+        } else if (sql.includes("FROM sqlite_schema")) results = schema;
         else if (sql.includes("FROM effects") && schema.some((o) => o.name === "effects"))
           results = state.effects;
         else return fail("no such table: effects: SQLITE_ERROR [code: 7500]");

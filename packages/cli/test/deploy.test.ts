@@ -493,8 +493,11 @@ describe("fyrden doctor", () => {
     );
     expect(lines).toContain("ok   fyrden-org schema matches apps/api/migrations/org.expected.sql");
     const executed = fake.calls.filter((c) => c.args[1] === "execute");
+    // Each database's applied migrations, then its schema; and fyrden-org's effects.
     expect(executed.map((c) => c.args[2])).toEqual([
       "fyrden-directory",
+      "fyrden-directory",
+      "fyrden-org",
       "fyrden-org",
       "fyrden-org",
     ]);
@@ -528,6 +531,48 @@ describe("fyrden doctor", () => {
     );
     expect(lines).toContain(
       "ok   fyrden-directory schema matches apps/api/migrations/directory.expected.sql",
+    );
+  });
+
+  it("compares a schema only once the checkout's migrations are all applied, naming those that are not", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    // A deployment from before the checkout's latest org migration: as that migration found it.
+    const applied = fake.state.d1Migrations.get("fyrden-org") ?? [];
+    const latest = applied.at(-1) ?? "";
+    expect(latest).toBe("0006_effects_due_order.sql");
+    fake.state.d1Migrations.set("fyrden-org", applied.slice(0, -1));
+    const org = fake.state.d1Schema.get("fyrden-org") ?? [];
+    fake.state.d1Schema.set("fyrden-org", [
+      ...org.filter((o) => o.name !== "effects_due_order"),
+      {
+        type: "index",
+        name: "effects_due",
+        sql: "CREATE INDEX effects_due ON effects (next_attempt_at) WHERE state = 'pending'",
+      },
+    ]);
+    let { report, lines } = await doctorLines(fake);
+    expect(report.schemaDrift).toEqual([]);
+    expect(lines).toContain(
+      `WARN fyrden-org schema not compared: not yet applied: ${latest} (fyrden deploy applies them)`,
+    );
+    expect(lines).toContain(
+      "ok   fyrden-directory schema matches apps/api/migrations/directory.expected.sql",
+    );
+
+    // A deployment from a later checkout than this one.
+    fake.state.d1Migrations.set("fyrden-org", [...applied, "0007_later.sql"]);
+    ({ report, lines } = await doctorLines(fake));
+    expect(report.schemaDrift).toEqual([]);
+    expect(lines).toContain(
+      "WARN fyrden-org schema not compared: applied but not in this checkout: 0007_later.sql (check out the commit it runs)",
+    );
+
+    // A database no migration has been applied to yet.
+    fake.state.d1Migrations.delete("fyrden-directory");
+    ({ lines } = await doctorLines(fake));
+    expect(lines.find((l) => l.startsWith("WARN fyrden-directory"))).toMatch(
+      /^WARN fyrden-directory schema not compared: not yet applied: 0001_\S+\.sql, /,
     );
   });
 

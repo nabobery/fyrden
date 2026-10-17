@@ -28,7 +28,12 @@ node packages/cli/src/index.ts doctor
 ```
 
 A drifted database prints a `FAIL` line naming each object that is missing,
-differs, or is not in the repository, and doctor exits 1. SQLite stores each
+differs, or is not in the repository, and doctor exits 1. The expected file is
+the schema after every migration in the checkout, so doctor compares only a
+database that applied exactly those (wrangler's `d1_migrations` table). Any
+other prints a `WARN` line naming the migrations it has not applied
+(`fyrden deploy` applies them, then compares), or has applied that the
+checkout lacks (check out the commit the deployment runs). SQLite stores each
 definition as the migration wrote it, so the check compares the tokens SQLite
 reads, as written: comments and the spacing between tokens are ignored, but
 letter case is not (`DEFAULT Alpha` and `DEFAULT alpha` are different

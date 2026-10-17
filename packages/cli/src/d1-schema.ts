@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type WranglerRunner, wrangler } from "./wrangler.ts";
 
@@ -226,6 +226,46 @@ export async function queryRemote<T>(
   if (!result?.results)
     throw new Error(`wrangler d1 execute ${db} answered no results: ${out.slice(0, 500)}`);
   return result.results;
+}
+
+// wrangler's record of the migrations it applied to a database (its default
+// table; wrangler.jsonc names no other), one row a migration file by name.
+const APPLIED_QUERY = "SELECT name FROM d1_migrations ORDER BY id";
+// wrangler makes the table when it first applies a migration.
+const NONE_APPLIED = /no such table: d1_migrations/;
+
+export interface MigrationGap {
+  /** The folder's migrations the database has not applied, in order. */
+  pending: string[];
+  /** Migrations the database applied that the folder does not have. */
+  unknown: string[];
+}
+
+/**
+ * How a deployed database's applied migrations differ from a checkout's.
+ * Its schema matches the expected file only when they do not: the file is
+ * the schema after every migration in the folder.
+ */
+export async function migrationGap(
+  runner: WranglerRunner,
+  apiDir: string,
+  db: { name: string; migrationsDir: string },
+): Promise<MigrationGap> {
+  const local = (await readdir(join(apiDir, db.migrationsDir))).filter((f) => f.endsWith(".sql"));
+  local.sort();
+  const applied = await queryRemote<{ name: string }>(runner, apiDir, db.name, APPLIED_QUERY).then(
+    (rows) => rows.map((row) => row.name),
+    (error: unknown) => {
+      if (error instanceof Error && NONE_APPLIED.test(error.message)) return [];
+      throw error;
+    },
+  );
+  const done = new Set(applied);
+  const have = new Set(local);
+  return {
+    pending: local.filter((name) => !done.has(name)),
+    unknown: applied.filter((name) => !have.has(name)),
+  };
 }
 
 export interface SchemaCheck {
