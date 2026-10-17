@@ -515,7 +515,7 @@ describe("fyrden doctor", () => {
     await deploy(deps(fake.runner).d);
     const org = fake.state.d1Schema.get("fyrden-org") ?? [];
     fake.state.d1Schema.set("fyrden-org", [
-      ...org.filter((o) => o.name !== "effects" && o.name !== "effects_due"),
+      ...org.filter((o) => o.name !== "effects" && o.name !== "effects_due_order"),
       { type: "table", name: "effects", sql: "CREATE TABLE effects (effect_id TEXT PRIMARY KEY)" },
       { type: "table", name: "scratch", sql: "CREATE TABLE scratch (x)" },
     ]);
@@ -523,7 +523,7 @@ describe("fyrden doctor", () => {
     expect(report.schemaDrift).toEqual(["fyrden-org"]);
     expect(lines).toContain(
       "FAIL fyrden-org schema differs from apps/api/migrations/org.expected.sql: " +
-        "effects (table) differs, effects_due (index) is missing, scratch (table) is not in the repository. " +
+        "effects (table) differs, effects_due_order (index) is missing, scratch (table) is not in the repository. " +
         "Repair it as docs/operations/d1-schema.md says.",
     );
     expect(lines).toContain(

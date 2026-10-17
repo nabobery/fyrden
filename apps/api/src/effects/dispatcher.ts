@@ -124,7 +124,10 @@ export async function sweepEffects(deps: DispatchDeps): Promise<number> {
  * `first`), so a sweep reads no more than it may deliver. The claim lasts
  * from now, not from `due`: a page taken late in a slow sweep holds its
  * effects as long as the first page did, and an overlapping run cannot
- * take them over at once.
+ * take them over at once. The innermost query reads only the first `limit`
+ * due effects, in the order of the `effects_due_order` index, and the
+ * running payload sum covers just those: a backlog, or a burst due at one
+ * time, costs the claim no more than a page.
  */
 async function claimDue(
   deps: DispatchDeps,
@@ -143,11 +146,12 @@ async function claimDue(
          SELECT effect_id FROM (
            SELECT effect_id, row_number() OVER oldest AS n,
              sum(length(CAST(payload AS BLOB))) OVER oldest AS upto
-           FROM effects
-           WHERE state = 'pending' AND next_attempt_at <= ?3
-             AND (lease_until IS NULL OR lease_until <= ?3)
-           WINDOW oldest AS (ORDER BY next_attempt_at, effect_id ROWS UNBOUNDED PRECEDING)
-           ORDER BY next_attempt_at, effect_id LIMIT ?4)
+           FROM (
+             SELECT effect_id, next_attempt_at, payload FROM effects
+             WHERE state = 'pending' AND next_attempt_at <= ?3
+               AND (lease_until IS NULL OR lease_until <= ?3)
+             ORDER BY next_attempt_at, effect_id LIMIT ?4)
+           WINDOW oldest AS (ORDER BY next_attempt_at, effect_id ROWS UNBOUNDED PRECEDING))
          WHERE upto <= ?5 OR (n = 1 AND ?6))
        ${RETURNING}, length(CAST(payload AS BLOB)) AS bytes`,
     )

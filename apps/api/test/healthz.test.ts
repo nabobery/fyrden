@@ -107,7 +107,9 @@ describe("GET /healthz", () => {
     const { results } = await env.ORG_READ.prepare(
       `EXPLAIN QUERY PLAN ${OLDEST_PENDING_EFFECT}`,
     ).all<{ detail: string }>();
-    expect(results.map((r) => r.detail).join("\n")).toMatch(/USING (COVERING )?INDEX effects_due/);
+    expect(results.map((r) => r.detail).join("\n")).toMatch(
+      /USING (COVERING )?INDEX effects_due_order\b/,
+    );
   });
 
   it("leaves no probe object behind in R2", async () => {

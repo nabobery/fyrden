@@ -93,8 +93,8 @@ CREATE TABLE webhook_deliveries (
 -- index effects_done
 CREATE INDEX effects_done ON effects (done_at) WHERE state = 'done';
 
--- index effects_due
-CREATE INDEX effects_due ON effects (next_attempt_at) WHERE state = 'pending';
+-- index effects_due_order
+CREATE INDEX effects_due_order ON effects (next_attempt_at, effect_id) WHERE state = 'pending';
 
 -- index effects_failed
 CREATE INDEX effects_failed ON effects (next_attempt_at) WHERE state = 'failed';

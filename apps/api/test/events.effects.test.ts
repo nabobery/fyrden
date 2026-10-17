@@ -434,6 +434,38 @@ async function untouched(repoId: string): Promise<number> {
   return results.length;
 }
 
+/** A sweep's claim of due effects: its SQL, its arguments and the rows D1 read for it. */
+type Claim = { query: string; args: unknown[]; rowsRead: number };
+
+/** `db`, recording each claim of due effects a sweep makes through it. */
+function recordingClaims(db: D1Database): { db: D1Database; claims: Claim[] } {
+  const claims: Claim[] = [];
+  const recording = new Proxy(db, {
+    get(target, prop) {
+      if (prop === "prepare")
+        return (query: string) => {
+          const statement = target.prepare(query);
+          if (!query.includes("row_number() OVER")) return statement;
+          return {
+            bind: (...args: unknown[]) => {
+              const bound = statement.bind(...args);
+              return {
+                all: async () => {
+                  const result = await bound.all();
+                  claims.push({ query, args, rowsRead: result.meta.rows_read });
+                  return result;
+                },
+              };
+            },
+          };
+        };
+      const value = Reflect.get(target, prop);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { db: recording, claims };
+}
+
 describe("effects throughput", () => {
   it("delivers a bounded number of effects a run, and the next runs go on from there", async () => {
     const at = T0 + 1;
@@ -481,6 +513,43 @@ describe("effects throughput", () => {
     expect(await untouched(repoId)).toBe(1);
     expect(await run()).toBe(1);
     expect(received.size).toBe(2);
+  });
+
+  it("claims a burst due at one time by reading a page of it, oldest first and by id among equals", async () => {
+    const at = T0 + 7;
+    await settleOthersDue(at);
+    const repoId = await listedRepo();
+    const { sink, calls } = recordingSink(repoId);
+    const burst = 1000;
+    await dueEffects(repoId, burst, T0);
+    // Due before the burst: it goes first, though its id sorts after every one of the burst's.
+    const earlier = `${repoId}:2:1:test_hook:hook_1`;
+    await env.ORG_READ.prepare(
+      `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
+       VALUES (?1, 'test_hook', 'hook_1', '{}', ?2, ?2)`,
+    )
+      .bind(earlier, T0 - 1)
+      .run();
+    const { db, claims } = recordingClaims(env.ORG_READ);
+    const limit = EFFECT_POLICY.sweepLimit;
+    expect(await sweep([sink], at, db)).toBe(limit);
+
+    // The rows the claim always took: by due time, then by id (as text) among the burst's.
+    const byId = Array.from({ length: burst }, (_, i) => `${repoId}:1:${i + 1}:test_hook:hook_1`);
+    byId.sort();
+    expect([...calls].sort()).toEqual([earlier, ...byId.slice(0, limit - 1)].sort());
+    // One claim, reading in index order and stopping after its page, with no sort: a few rows
+    // read for each effect it claims (161 measured for 20, the same with a burst of 30 or
+    // 3,000), where reading and sorting the whole burst read 1,163.
+    expect(claims).toHaveLength(1);
+    const claim = claims[0] as Claim;
+    expect(claim.rowsRead).toBeLessThanOrEqual(10 * limit);
+    const { results } = await env.ORG_READ.prepare(`EXPLAIN QUERY PLAN ${claim.query}`)
+      .bind(...claim.args)
+      .all<{ detail: string }>();
+    const plan = results.map((row) => row.detail).join("\n");
+    expect(plan).toMatch(/SEARCH effects USING INDEX effects_due_order \(next_attempt_at<\?\)/);
+    expect(plan).not.toMatch(/TEMP B-TREE/);
   });
 
   it("gives each page a claim from when it is taken, so a slow sweep's later page is not taken over", async () => {

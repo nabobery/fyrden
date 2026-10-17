@@ -226,10 +226,10 @@ describe("diffSchema", () => {
       expect(diffSchema(org, actual)).toEqual(["effects (table) differs"]);
     }
     const renamedIndex = org.map((o) =>
-      o.name === "effects_due" ? { ...o, name: "effects_pending" } : o,
+      o.name === "effects_due_order" ? { ...o, name: "effects_pending" } : o,
     );
     expect(diffSchema(org, renamedIndex)).toEqual([
-      "effects_due (index) is missing",
+      "effects_due_order (index) is missing",
       "effects_pending (index) is not in the repository",
     ]);
   });

@@ -24,7 +24,7 @@ async function timed(check: () => Promise<boolean>): Promise<HealthCheck> {
  */
 export const EFFECTS_OVERDUE_MS = 15 * 60 * 1000;
 
-/** The oldest pending effect's due time, through the `effects_due` index: one row read. */
+/** The oldest pending effect's due time, through the `effects_due_order` index: one row read. */
 export const OLDEST_PENDING_EFFECT =
   "SELECT next_attempt_at FROM effects WHERE state = 'pending' ORDER BY next_attempt_at LIMIT 1";
 
