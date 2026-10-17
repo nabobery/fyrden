@@ -314,8 +314,9 @@ repository:
   (default 10 minutes) of fetching per import.
 - **A slow source is stopped early.** The fetch runs in the repository's
   Durable Object, which stays active, and is billed for its duration, while
-  it waits on the source ([platform limit](https://developers.cloudflare.com/queues/platform/limits/):
-  a Durable Object remains active while pending I/O is in flight), so a
+  it waits on the source ([platform pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/):
+  pending I/O keeps an object in memory, and it incurs duration charges
+  during that time), so a
   source that stalls or trickles does not hold it for the
   whole 10 minutes (Proposed defaults, checked every 5 seconds):
 
