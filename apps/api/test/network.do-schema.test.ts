@@ -9,8 +9,9 @@ import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
 import { networkSchema } from "../src/do/schema/network.js";
 import networkV0 from "./fixtures/do-schemas/NetworkDO/v0.sql?raw";
+import networkV2 from "./fixtures/do-schemas/NetworkDO/v2.sql?raw";
 
-const versions: Record<number, string> = { 0: networkV0 };
+const versions: Record<number, string> = { 0: networkV0, 2: networkV2 };
 
 describe("NetworkDO schema", () => {
   it("matches the committed expected schema (no drift)", async () => {
