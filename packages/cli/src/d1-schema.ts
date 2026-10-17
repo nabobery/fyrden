@@ -22,7 +22,7 @@ export const SCHEMA_RUNBOOK = "docs/operations/d1-schema.md";
 // The objects the migrations make, as apps/api/test/d1-schema.test.ts selects
 // them: no internal tables (SQLite's, Cloudflare's, wrangler's migration log)
 // and no index SQLite makes itself (no SQL).
-const SCHEMA_QUERY =
+export const SCHEMA_QUERY =
   "SELECT type, name, sql FROM sqlite_schema WHERE sql IS NOT NULL " +
   "AND substr(name, 1, 7) <> 'sqlite_' AND substr(name, 1, 4) <> '_cf_' AND name <> 'd1_migrations'";
 
@@ -54,53 +54,100 @@ export function parseExpectedSchema(text: string): SchemaObject[] {
   return objects;
 }
 
+// SQLite's keywords (verified: https://www.sqlite.org/lang_keywords.html). A
+// quoted name spelled like one keeps its quotes: unquoted it could read as the
+// keyword (`DEFAULT "current_time"` is a string, `DEFAULT current_time` the time).
+const KEYWORDS = new Set(
+  `abort action add after all alter always analyze and as asc attach autoincrement before
+  begin between by cascade case cast check collate column commit conflict constraint create
+  cross current current_date current_time current_timestamp database default deferrable
+  deferred delete desc detach distinct do drop each else end escape except exclude exclusive
+  exists explain fail filter first following for foreign from full generated glob group groups
+  having if ignore immediate in index indexed initially inner insert instead intersect into is
+  isnull join key last left like limit match materialized natural no not nothing notnull null
+  nulls of offset on or order others outer over partition plan pragma preceding primary query
+  raise range recursive references regexp reindex release rename replace restrict returning
+  right rollback row rows savepoint select set table temp temporary then ties to transaction
+  trigger unbounded union unique update using vacuum values view virtual when where window
+  with without`.split(/\s+/),
+);
+
+// SQLite's tokens as its tokenizer reads them (verified:
+// https://sqlite.org/src/file/src/tokenize.c): every character from U+0080 on
+// is a name character, and only these five are whitespace.
+const SPACE = /[ \t\n\f\r]+/y;
+const NUMBER = /0[xX][0-9a-fA-F]+|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/y;
+const WORD = /[\w$\u0080-\uffff]+/y;
+const BARE_NAME = /^[A-Za-z_\u0080-\uffff][\w$\u0080-\uffff]*$/;
+const OPERATORS = ["->>", "->", "||", "<=", ">=", "<>", "!=", "==", "<<", ">>"];
+const QUOTES: Record<string, string> = { "'": "'", '"': '"', "`": "`", "[": "]" };
+
+/** SQLite compares keywords and names ignoring the case of ASCII letters only. */
+const foldCase = (text: string) => text.replace(/[A-Z]/g, (ch) => ch.toLowerCase());
+
+/** A name in one spelling however it was quoted: bare when it can be, else in double quotes. */
+function nameToken(name: string): string {
+  const folded = foldCase(name);
+  return BARE_NAME.test(name) && !KEYWORDS.has(folded)
+    ? folded
+    : `"${folded.replaceAll('"', '""')}"`;
+}
+
+/** The match of a sticky pattern at `at`, if there is one. */
+function matchAt(pattern: RegExp, sql: string, at: number): string | undefined {
+  pattern.lastIndex = at;
+  return pattern.exec(sql)?.[0];
+}
+
 /**
- * The SQL without comments, with every run of whitespace as one space and
- * none inside brackets or before a comma, so only a real change differs.
- * String literals and quoted names are kept as they are.
+ * The SQL as its tokens, one space apart, so two texts SQLite reads the same
+ * way compare equal: comments and the spacing between tokens are dropped,
+ * keywords and names lose their letter case, and a quoted name is spelled
+ * one way (`"effects"`, `[effects]` and `effects` are one name). String
+ * literals and numbers are kept exactly as written.
  */
 export function normaliseSql(sql: string): string {
-  // Alternately SQL and a quoted literal or name.
-  const parts: string[] = [];
-  let code = "";
+  const tokens: string[] = [];
   let i = 0;
   while (i < sql.length) {
     const ch = sql[i] as string;
-    if (ch === "-" && sql[i + 1] === "-") {
+    const close = QUOTES[ch];
+    const space = matchAt(SPACE, sql, i);
+    const number = matchAt(NUMBER, sql, i);
+    const word = matchAt(WORD, sql, i);
+    if (space) i += space.length;
+    else if (sql.startsWith("--", i)) {
       const end = sql.indexOf("\n", i);
       i = end === -1 ? sql.length : end;
-      code += " ";
-    } else if (ch === "/" && sql[i + 1] === "*") {
+    } else if (sql.startsWith("/*", i)) {
       const end = sql.indexOf("*/", i + 2);
       i = end === -1 ? sql.length : end + 2;
-      code += " ";
-    } else if (ch === "'" || ch === '"' || ch === "`" || ch === "[") {
-      const close = ch === "[" ? "]" : ch;
+    } else if (close) {
       let j = i + 1;
-      // A doubled quote inside a literal or name is an escaped quote.
+      // A doubled quote inside a literal or name is an escaped quote; a
+      // bracketed name has no escape.
       while (j < sql.length && (sql[j] !== close || (close !== "]" && sql[j + 1] === close)))
         j += sql[j] === close ? 2 : 1;
-      parts.push(code, sql.slice(i, j + 1));
-      code = "";
+      tokens.push(
+        ch === "'"
+          ? sql.slice(i, j + 1)
+          : nameToken(sql.slice(i + 1, j).replaceAll(close + close, close)),
+      );
       i = j + 1;
+    } else if (number) {
+      tokens.push(number);
+      i += number.length;
+    } else if (word) {
+      tokens.push(foldCase(word));
+      i += word.length;
     } else {
-      code += ch;
-      i++;
+      const operator = OPERATORS.find((op) => sql.startsWith(op, i)) ?? ch;
+      tokens.push(operator);
+      i += operator.length;
     }
   }
-  parts.push(code);
-  return parts
-    .map((part, index) =>
-      index % 2 === 1
-        ? part
-        : part
-            .replace(/\s+/g, " ")
-            .replace(/\( /g, "(")
-            .replace(/ ([),])/g, "$1"),
-    )
-    .join("")
-    .trim()
-    .replace(/ ?;$/, "");
+  if (tokens.at(-1) === ";") tokens.pop();
+  return tokens.join(" ");
 }
 
 /** Each object that is missing, extra or different, in the expected file's order. */

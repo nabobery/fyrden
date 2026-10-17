@@ -28,8 +28,11 @@ node packages/cli/src/index.ts doctor
 ```
 
 A drifted database prints a `FAIL` line naming each object that is missing,
-differs, or is not in the repository, and doctor exits 1. Comments and
-whitespace are ignored. To see the deployed definitions:
+differs, or is not in the repository, and doctor exits 1. Comments, spacing,
+the letter case of keywords and names, and how a name is quoted are ignored:
+SQLite stores a renamed table as `CREATE TABLE "name" (...)`, which matches
+`CREATE TABLE name (...)`. String literals and numbers must match exactly. To
+see the deployed definitions:
 
 ```sh
 cd apps/api
@@ -46,8 +49,10 @@ either:
 - **A forward migration** (preferred): a new numbered file that brings both
   a drifted and a healthy database to one schema. SQLite cannot add a column
   only if it is missing, so rebuild the table: create it under a new name
-  with the expected definition, copy the columns both versions have, drop the
-  old table, rename the new one and recreate its indexes. Update the expected
+  with its definition from the expected file (only the name changed), copy
+  the columns both versions have, drop the old table (which drops its
+  indexes), rename the new one to the old name and recreate its indexes as
+  the expected file has them. Update the expected
   file (`pnpm --filter @fyrden/api exec vitest run test/d1-schema.test.ts -u`),
   review the diff, and deploy.
 - **A reviewed one-off repair** of that deployment only, when a forward
