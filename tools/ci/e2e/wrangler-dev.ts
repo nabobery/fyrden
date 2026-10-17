@@ -100,7 +100,11 @@ export function spawnOwned(
       process.kill(-child.pid, sig);
       return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+      const { code } = error as NodeJS.ErrnoException;
+      if (code === "ESRCH") return false;
+      // macOS refuses to signal a group whose last processes have exited but
+      // are not reaped yet: still there, nothing left to end.
+      if (code === "EPERM") return true;
       throw error;
     }
   };

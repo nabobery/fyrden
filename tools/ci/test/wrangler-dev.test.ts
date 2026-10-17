@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import { type AddressInfo, createServer, type Socket } from "node:net";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { spawnOwned } from "../e2e/wrangler-dev.ts";
 
 /** A Node process running `script`, owned as wrangler dev is, once it has printed `ready`. */
@@ -95,6 +95,25 @@ describe("stopping wrangler dev", () => {
     await stop();
     expect(child.exitCode).toBe(0);
     expect(child.signalCode).toBeNull();
+  });
+
+  it("waits out a group the system refuses to signal while its last processes are reaped", async () => {
+    const { child, stop } = await started(`console.log("ready"); ${KEEP_RUNNING}`);
+    const pid = child.pid as number;
+    // As macOS answers for a group left with processes not reaped yet.
+    const real = process.kill.bind(process);
+    let refusals = 3;
+    const kill = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+      if (target === -pid && signal === 0 && refusals > 0) {
+        refusals--;
+        throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+      }
+      return real(target, signal);
+    });
+    onTestFinished(() => kill.mockRestore());
+    await stop();
+    expect(refusals).toBe(0);
+    expect(child.signalCode).not.toBeNull();
   });
 
   it.each(["SIGINT", "SIGTERM"] as const)(
