@@ -41,13 +41,14 @@ function Mergeability({ pull, conflicts }: { pull: PullRequest; conflicts: strin
     }, MERGEABILITY_RECHECK_MS);
     return () => clearTimeout(timer);
   }, [working, revalidator]);
+  // Reloading shows the latest result; a deferred check is not started again by it.
   const checkAgain = (
     <button
       type="button"
       onClick={() => void revalidator.revalidate()}
       disabled={revalidator.state !== "idle"}
     >
-      Check again
+      {deferred ? "Refresh" : "Check again"}
     </button>
   );
   switch (pull.mergeable_state) {

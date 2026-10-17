@@ -216,8 +216,11 @@ describe("the conversation's merge box", () => {
     expect(unreadable).toContain("an object it needs could not be read");
     expect(unreadable).toContain("It will be checked again later.");
     expect(unreadable).not.toContain("went past its budget");
-    for (const html of [pending, expensive, unreadable]) {
-      expect(html).toMatch(/<button type="button"[^>]*>Check again<\/button>/);
+    expect(pending).toMatch(/<button type="button"[^>]*>Check again<\/button>/);
+    // A deferred check runs again only when its retry is due: the button just reloads.
+    for (const html of [expensive, unreadable]) {
+      expect(html).toMatch(/<button type="button"[^>]*>Refresh<\/button>/);
+      expect(html).not.toContain("Check again");
     }
   });
 
