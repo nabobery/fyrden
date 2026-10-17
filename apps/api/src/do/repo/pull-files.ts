@@ -50,6 +50,18 @@ export const PULL_FILES_POLICY = {
   maxInlinePatchBytes: 64 * 1024,
   /** UTF-8 bytes of patch text one page carries. */
   maxPagePatchBytes: 1024 * 1024,
+  /** Files whose patches a page reads at once. Proposed. */
+  filesAtOnce: 6,
+  /**
+   * A request's last R2 reads, which a page spends on one file at a time,
+   * in order, so that files read ahead leave an earlier one the reads it
+   * needs. A quarter of the browse budget: room for the files already
+   * reading to finish what they started (a few reads each for files
+   * stored whole) and for the earliest to follow its sides' delta chains;
+   * only a file needing more than that can still be left fewer reads than
+   * reading the files one by one would leave it. Proposed.
+   */
+  serialReads: 200,
 };
 export type PullFilesPolicy = typeof PULL_FILES_POLICY;
 
@@ -127,9 +139,6 @@ function utf8Length(text: string): number {
   }
   return bytes;
 }
-
-/** Files whose patches a page reads at once. Proposed. */
-const PAGE_FILES_AT_ONCE = 6;
 
 /**
  * One page of the files a pull request changes, compared from `mergeBase`
@@ -242,8 +251,9 @@ const patched = (change: ListedChange) =>
 /**
  * The page of `changes` from `input.start`, with patches, within the
  * page's budgets. A few files are read at once, their objects located
- * together first; each is taken in order, so the page ends where reading
- * them one by one would end it.
+ * together first, and the request's last reads go to one file at a time
+ * (see `ReadTurns`); each is taken in order, so the page ends where
+ * reading them one by one would end it.
  */
 async function page(
   browse: RepoBrowse,
@@ -265,20 +275,22 @@ async function page(
       if (!(error instanceof ReadBudgetError)) throw error;
     }
   }
+  const turns = new ReadTurns(browse, policy.serialReads);
   const views: Promise<{ view: PullFileView } | { error: unknown }>[] = [];
   const read = (i: number) => {
     const change = listed[i];
     if (change)
-      views[i] = fileView(browse, change, policy).then(
+      views[i] = fileView(browse, change, policy, () => turns.turn(i)).then(
         (view) => ({ view }),
         (error: unknown) => ({ error }),
       );
   };
-  for (let i = 0; i < PAGE_FILES_AT_ONCE; i++) read(i);
+  for (let i = 0; i < policy.filesAtOnce; i++) read(i);
   const files: PullFileView[] = [];
   let patchBytes = 0;
   try {
     for (const [i, change] of listed.entries()) {
+      turns.first(i);
       const outcome = await views[i];
       let view: PullFileView;
       if (outcome && "view" in outcome) view = outcome.view;
@@ -293,10 +305,12 @@ async function page(
       patchBytes += bytes;
       browse.take(2 * view.filename.length + bytes + 256);
       files.push(view);
-      read(i + PAGE_FILES_AT_ONCE);
+      read(i + policy.filesAtOnce);
     }
   } finally {
-    // Files read past where the page ends finish before the request does.
+    // Files read past where the page ends read no further, and finish
+    // before the request does (and its reader is closed).
+    turns.end();
     await Promise.all(views);
   }
   const end = input.start + files.length;
@@ -324,11 +338,71 @@ function bare(change: ListedChange): PullFileView {
   };
 }
 
-/** A file's listing with its patch, reading both sides within the policy's bounds. */
+/**
+ * Turns at the request's last reads while a page reads its files. Once
+ * `serialReads` or fewer are left, a file waits before each of its reads
+ * (its sides' headers, then their bodies) until the files before it are
+ * taken, so they get the reads that reading the files one by one would
+ * give them. Once the page has ended, no file reads on.
+ */
+class ReadTurns {
+  /** The earliest file not taken yet: it never waits. */
+  #first = 0;
+  #ended = false;
+  readonly #waiting = new Map<number, { go: () => void; stop: (error: Error) => void }>();
+
+  constructor(
+    private readonly browse: RepoBrowse,
+    private readonly serialReads: number,
+  ) {}
+
+  /** Settles when file `i` may read on; fails once the page has ended. */
+  turn(i: number): Promise<void> {
+    if (this.#ended) return Promise.reject(new Error("the page has ended"));
+    const left = this.browse.policy.maxReads - this.browse.reads;
+    if (i <= this.#first || left > this.serialReads) return Promise.resolve();
+    return new Promise((go, stop) => this.#waiting.set(i, { go, stop }));
+  }
+
+  /** File `i` is the earliest not taken. */
+  first(i: number): void {
+    this.#first = i;
+    this.#waiting.get(i)?.go();
+    this.#waiting.delete(i);
+  }
+
+  /** The page has ended: files waiting read no more. */
+  end(): void {
+    this.#ended = true;
+    for (const { stop } of this.#waiting.values()) stop(new Error("the page has ended"));
+    this.#waiting.clear();
+  }
+}
+
+/**
+ * `read` of a change's two sides at once. A side that fails waits for the
+ * other, so nothing reads on, or holds memory, once the caller has moved
+ * on and the request's reader may be closed.
+ */
+async function bothSides<T>(
+  change: ListedChange,
+  read: (oid: Oid | null) => Promise<T>,
+): Promise<[T, T]> {
+  const [before, after] = await Promise.allSettled([read(change.oldOid), read(change.newOid)]);
+  if (before.status === "rejected") throw before.reason;
+  if (after.status === "rejected") throw after.reason;
+  return [before.value, after.value];
+}
+
+/**
+ * A file's listing with its patch, reading both sides within the policy's
+ * bounds; `turn` settles when it may read (see `ReadTurns`).
+ */
 async function fileView(
   browse: RepoBrowse,
   change: ListedChange,
   policy: PullFilesPolicy,
+  turn: () => Promise<void>,
 ): Promise<PullFileView> {
   const view = bare(change);
   if (isGitlink(change.oldMode) || isGitlink(change.newMode))
@@ -336,15 +410,17 @@ async function fileView(
   // The same content (a rename, a mode change) has no lines to compare.
   if (sameContent(change)) return view;
   const reader = await browse.reader();
+  await turn();
   const sizeOf = async (oid: Oid | null) => {
     if (!oid) return 0;
     const header = await reader.readHeader(oid);
     if (header?.type !== "blob") throw new UnreadableObjectError();
     return header.size;
   };
-  const [oldSize, newSize] = await Promise.all([sizeOf(change.oldOid), sizeOf(change.newOid)]);
+  const [oldSize, newSize] = await bothSides(change, sizeOf);
   if (oldSize > policy.maxSideBytes || newSize > policy.maxSideBytes)
     return { ...view, patchOmitted: "too_large" };
+  await turn();
   const hold = browse.hold(oldSize + newSize);
   if (!hold) return { ...view, patchOmitted: "budget" };
   try {
@@ -354,7 +430,7 @@ async function fileView(
       if (object?.type !== "blob") throw new UnreadableObjectError();
       return object.bytes;
     };
-    const [before, after] = await Promise.all([read(change.oldOid), read(change.newOid)]);
+    const [before, after] = await bothSides(change, read);
     const diff = diffFile(before, after);
     if (diff.kind === "binary") return { ...view, patchOmitted: "binary" };
     if (diff.kind === "too_large") return { ...view, patchOmitted: "too_large" };

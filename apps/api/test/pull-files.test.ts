@@ -7,6 +7,7 @@ import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
 import { type ObjectReader, type Oid, oidFromHex, oidToHex } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
+import type { RepoDO } from "../src/do/RepoDO.js";
 import { RepoBrowse } from "../src/do/repo/browse.js";
 import {
   type ChangeList,
@@ -33,6 +34,7 @@ type File = {
   filename: string;
   previous_filename?: string;
   status: string;
+  sha: string;
   additions: number;
   deletions: number;
   patch?: string;
@@ -581,5 +583,173 @@ describe("pull request file limits", () => {
     expect(listed.files.map((f) => f.filename)).toContain("many/0");
     // The directory's tree: a hundred entries of a few bytes each.
     expect(Math.max(...held)).toBeGreaterThanOrEqual(100 * TREE_ENTRY_MEMORY_BYTES);
+  });
+});
+
+describe("a page's files read at once", () => {
+  /** The comparison of pull request 1, its files listed and kept (later pages read no trees). */
+  const comparison = async () => {
+    const { merge_base_sha, head_sha } = (await files()).body;
+    return { mergeBase: oidFromHex(merge_base_sha), head: oidFromHex(head_sha) };
+  };
+  /**
+   * A browse request in `r` allowed `maxReads` R2 reads, with no Cache API
+   * tier: every block it has not read itself is a read.
+   */
+  const browsing = (r: RepoDO, maxReads?: number) =>
+    new RepoBrowse({
+      git: r.git,
+      memoryBlocks: createClockBlockCache(),
+      policy: { cacheCalls: 0, ...(maxReads !== undefined && { maxReads }) },
+    });
+
+  it("gives each file the reads reading the files one at a time would, whatever is left", async () => {
+    const compared = await comparison();
+    const serial = { ...PULL_FILES_POLICY, filesAtOnce: 1 };
+    // Few reads kept for one file at a time, so the files read at once run into them.
+    const atOnce = { ...PULL_FILES_POLICY, serialReads: 4 };
+    const outcome = await inRepo(env.REPO.getByName(repo.id), async (r) => {
+      const read = async (policy: PullFilesPolicy, maxReads?: number) => {
+        const browse = browsing(r, maxReads);
+        try {
+          const page = await pullFiles(
+            browse,
+            r.git.commitGraph,
+            { ...compared, start: 0, limit: 30 },
+            policy,
+            r.changeLists,
+          );
+          return { page: JSON.stringify(page), reads: browse.reads };
+        } finally {
+          browse.close();
+        }
+      };
+      const whole = await read(serial);
+      const differing: number[] = [];
+      let short = 0;
+      for (let budget = 0; budget <= whole.reads + atOnce.serialReads + 2; budget++) {
+        const one = await read(serial, budget);
+        if (one.page !== whole.page) short++;
+        if ((await read(atOnce, budget)).page !== one.page) differing.push(budget);
+      }
+      return { differing, short, whole: whole.page };
+    });
+    expect(JSON.parse(outcome.whole).value.files).toHaveLength(5);
+    // The budgets tried include ones too small for every patch.
+    expect(outcome.short).toBeGreaterThan(0);
+    expect(outcome.differing).toEqual([]);
+  });
+
+  /**
+   * Lists a page of `limit` of pull request 1's files with `policy` while
+   * one reader call is held until the code has had every chance to go on
+   * without it, and says what happened, in order: that call finishing,
+   * memory released, the page answered. `plan` says, for each call of
+   * `method` (counted from 1) and its object, whether it is held, fails (the
+   * object is missing) or runs.
+   */
+  const holding = async (
+    policy: PullFilesPolicy,
+    limit: number,
+    method: "readHeader" | "readObject",
+    plan: (call: number, oid: string) => "hold" | "fail" | "run",
+  ) => {
+    const compared = await comparison();
+    return inRepo(env.REPO.getByName(repo.id), async (r) => {
+      const events: string[] = [];
+      let holdStarted = () => {};
+      const started = new Promise<void>((resolve) => {
+        holdStarted = resolve;
+      });
+      let endHold = () => {};
+      const ended = new Promise<void>((resolve) => {
+        endHold = resolve;
+      });
+      const browse = browsing(r);
+      const open = browse.reader.bind(browse);
+      let calls = 0;
+      browse.reader = async () => {
+        const reader = await open();
+        return new Proxy(reader, {
+          get(target, property) {
+            if (property === method)
+              return async (oid: Oid) => {
+                const step = plan(++calls, oidToHex(oid));
+                if (step === "fail") return undefined;
+                if (step === "run") return target[method](oid);
+                holdStarted();
+                await ended;
+                const result = await target[method](oid);
+                events.push("held call done");
+                return result;
+              };
+            const value = Reflect.get(target, property);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      };
+      const hold = browse.hold.bind(browse);
+      browse.hold = (bytes) => {
+        const reservation = hold(bytes);
+        return (
+          reservation && {
+            bytes: reservation.bytes,
+            release: () => {
+              events.push("memory released");
+              reservation.release();
+            },
+          }
+        );
+      };
+      try {
+        const page = pullFiles(
+          browse,
+          r.git.commitGraph,
+          { ...compared, start: 0, limit },
+          policy,
+          r.changeLists,
+        ).then((listed) => {
+          events.push("page answered");
+          return listed;
+        });
+        await started;
+        // biome-ignore lint/style/noRestrictedGlobals: a deliberate yield. Every pending microtask runs before it ends, and cleaning up without the held call needs no more than those, so the yield can only show cleanup waiting when it does wait.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        endHold();
+        const listed = await page;
+        return { events, code: listed.ok ? null : listed.code };
+      } finally {
+        browse.close();
+      }
+    });
+  };
+
+  for (const method of ["readHeader", "readObject"] as const)
+    it(`cleans up after a file whose side fails only once its other side is read (${method})`, async () => {
+      // A page of a.txt alone, both of whose sides are read: the first call is held, the second fails.
+      const outcome = await holding(PULL_FILES_POLICY, 1, method, (call) =>
+        call === 1 ? "hold" : call === 2 ? "fail" : "run",
+      );
+      expect(outcome.code).toBe("unreadable");
+      expect(outcome.events).toEqual(
+        method === "readObject"
+          ? ["held call done", "memory released", "page answered"]
+          : ["held call done", "page answered"],
+      );
+    });
+
+  it("answers a page that ended early only once the files read past its end are read", async () => {
+    const { body } = await files();
+    const bin = body.files.find((f) => f.filename === "bin.dat");
+    // The page ends after a.txt, whose patch fills it, while bin.dat (the third file) is read.
+    const outcome = await holding(
+      { ...PULL_FILES_POLICY, maxPagePatchBytes: 1 },
+      30,
+      "readHeader",
+      (_, oid) => (oid === bin?.sha ? "hold" : "run"),
+    );
+    expect(outcome.code).toBeNull();
+    expect(outcome.events.at(-1)).toBe("page answered");
+    expect(outcome.events).toContain("held call done");
   });
 });
