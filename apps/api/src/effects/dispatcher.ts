@@ -124,10 +124,12 @@ export async function sweepEffects(deps: DispatchDeps): Promise<number> {
  * `first`), so a sweep reads no more than it may deliver. The claim lasts
  * from now, not from `due`: a page taken late in a slow sweep holds its
  * effects as long as the first page did, and an overlapping run cannot
- * take them over at once. The innermost query reads only the first `limit`
- * due effects, in the order of the `effects_due_order` index, and the
- * running payload sum covers just those: a backlog, or a burst due at one
- * time, costs the claim no more than a page.
+ * take them over at once. The innermost query reads due effects in the
+ * order of the `effects_due_order` index and stops at the first `limit` it
+ * may claim, and the running payload sum covers just those: a backlog, or
+ * a burst due at one time, costs the claim a page. It also reads past due
+ * effects another claim still holds (the index has no lease): at most those
+ * claimed in the last `leaseMs`, as a consumer stopped mid-delivery leaves.
  */
 async function claimDue(
   deps: DispatchDeps,
