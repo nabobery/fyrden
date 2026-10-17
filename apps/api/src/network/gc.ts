@@ -22,11 +22,13 @@ import type { MemberPack } from "./types.js";
  * 1. Mark, behind the fence: no fork is created and no detach starts while
  *    it runs (they wait, then get a retryable refusal), and it does not
  *    start while a fork is joining (it waits until that fork is published
- *    or abandoned). Each member reports its view (the registry rows of
- *    packs under the network's prefix). A member's claims become exactly
- *    the shared packs its view holds; claims recorded after the epoch began
- *    are kept as they are. Shared packs no member claims are condemned
- *    (two-phase deletion, deletion.ts). The fence lifts.
+ *    or abandoned). Each member in turn reports its view (the registry rows
+ *    of packs under the network's prefix), and claims the shared packs its
+ *    view holds as of the epoch. Once all have, the claims from before the
+ *    epoch no member renewed are released, so a member's claims become
+ *    exactly the shared packs its view holds (claims recorded after the
+ *    epoch began are kept as they are). Shared packs no member claims are
+ *    condemned (two-phase deletion, deletion.ts). The fence lifts.
  * 2. Sweep: objects under `net/<nid>/p/` that no member's registry and not
  *    the network names, older than the sweep TTL, are deleted (the orphan
  *    sweep a lone repository runs for itself). Page by page: the members
@@ -36,7 +38,9 @@ import type { MemberPack } from "./types.js";
  *
  * A slice makes at most the policy's `sliceCalls` calls and saves its place
  * (the member it reached, the page and what is known of it), so a network
- * with many members is collected over several slices and alarms.
+ * with many members is collected over several slices and alarms. What the
+ * members answered is recorded as it comes (claims, and what of the page is
+ * still unnamed), so the place saved stays small however large the network.
  *
  * Which objects of a shared pack each member reaches is each member's own
  * collection's question: it marks borrowed packs too, never rewrites them,
@@ -46,15 +50,16 @@ import type { MemberPack } from "./types.js";
  * is not done yet.
  */
 
+/** A member's place in the order members joined: `[joinedAt, repoId]`. */
+type MemberPlace = readonly [number, string];
+
 interface GcCursor {
-  readonly v: 1;
+  readonly v: 2;
   readonly epoch: number;
   readonly phase: "mark" | "sweep";
   readonly startedAt: number;
-  readonly members: readonly string[];
-  readonly next: number;
-  /** Per member snapshotted so far, the network's packs its view holds. */
-  readonly holds: Readonly<Record<string, readonly string[]>>;
+  /** The last member the mark has asked: members are asked in the order they joined. */
+  readonly marked?: MemberPlace;
   /** The R2 list cursor of the sweep's next page. */
   readonly list?: string;
   /** The sweep's page whose members are being asked. */
@@ -65,28 +70,32 @@ interface GcCursor {
 interface SweepPage extends PackPrefixPage {
   /** Its packs the network does not hold and no member asked so far names. */
   readonly unnamed: readonly string[];
-  /** The last member asked, as `[joinedAt, repoId]`: members are asked in the order they joined. */
-  readonly asked?: readonly [number, string];
+  /** The last member asked: members are asked in the order they joined. */
+  readonly asked?: MemberPlace;
 }
 
 /** The collection is due, and waits for a fork that is joining (`wakeGc`). */
 interface GcWait {
-  readonly v: 1;
+  readonly v: 2;
   readonly phase: "wait";
 }
 
 /** Registry states of a member's row that count as holding the pack. */
 const HOLDING = new Set(["indexing", "indexed", "live", "garbage", "superseded", "condemned"]);
 
+/** The members a mark asks (a fork still joining is waited for before the epoch opens). */
+const MARKED = ["active", "detaching", "detached"] as const;
+
 /** Calls one question to a member may take: the call, and the directory check if it fails. */
 const MEMBER_CALLS = 2;
 
 const encode = (cursor: GcCursor | GcWait) => new TextEncoder().encode(JSON.stringify(cursor));
+/** A saved cursor; one of an earlier shape is not resumed (the collection opens a new epoch). */
 function decode(bytes: Uint8Array | null): GcCursor | GcWait | undefined {
   if (!bytes) return undefined;
   try {
     const value = JSON.parse(new TextDecoder().decode(bytes)) as GcCursor | GcWait;
-    return value.v === 1 ? value : undefined;
+    return value.v === 2 ? value : undefined;
   } catch {
     return undefined;
   }
@@ -125,7 +134,7 @@ async function gcSlice(
     if ("waitUntil" in started)
       return {
         done: false,
-        cursor: encode({ v: 1, phase: "wait" }),
+        cursor: encode({ v: 2, phase: "wait" }),
         runAfterMs: started.waitUntil - context.now(),
       };
     cursor = started;
@@ -137,24 +146,27 @@ async function gcSlice(
   }
   const paused = (): SliceResult => ({ done: false, cursor: encode(cursor), runAfterMs: 0 });
   if (cursor.phase === "mark") {
-    while (cursor.next < cursor.members.length) {
+    for (;;) {
+      const member = registry.memberAfter(cursor.marked, MARKED);
+      if (!member) break;
       if (context.now() >= deadline || !calls.fits(MEMBER_CALLS)) return paused();
-      const repoId = cursor.members[cursor.next] as string;
+      const { repoId } = member;
       await runtime.hooks.onMarkMember?.(cursor.epoch, repoId);
-      // A member deleted since the snapshot holds nothing (its storage may be gone).
+      // A member deleted meanwhile holds nothing (its storage may be gone).
       const view: MemberPack[] = registry.member(repoId)
-        ? await askMember<MemberPack[]>(runtime, calls, repoId, "networkSnapshot", [], (member) =>
-            member.networkSnapshot(networkId),
+        ? await askMember<MemberPack[]>(runtime, calls, repoId, "networkSnapshot", [], (stub) =>
+            stub.networkSnapshot(networkId),
           )
         : [];
-      cursor = {
-        ...cursor,
-        next: cursor.next + 1,
-        holds: { ...cursor.holds, [repoId]: holdings(runtime, repoId, view) },
-      };
+      const { startedAt } = cursor;
+      context.storage.transactionSync(() => {
+        if (registry.member(repoId))
+          registry.hold(repoId, holdings(runtime, repoId, view), startedAt);
+      });
+      cursor = { ...cursor, marked: [member.joinedAt, repoId] };
     }
-    decide(runtime, cursor);
-    cursor = { ...cursor, phase: "sweep" };
+    decide(runtime, cursor.startedAt);
+    cursor = { v: 2, epoch: cursor.epoch, phase: "sweep", startedAt: cursor.startedAt };
   }
   for (;;) {
     if (context.now() >= deadline) return paused();
@@ -235,15 +247,7 @@ function start(runtime: NetworkRuntime): GcCursor | { readonly waitUntil: number
     }
     const epoch = registry.gcState().epoch + 1;
     registry.setGcState({ epoch, phase: "mark", fence: true });
-    return {
-      v: 1 as const,
-      epoch,
-      phase: "mark" as const,
-      startedAt: now,
-      members: registry.members(["active", "detaching", "detached"]).map((m) => m.repoId),
-      next: 0,
-      holds: {},
-    };
+    return { v: 2 as const, epoch, phase: "mark" as const, startedAt: now };
   });
 }
 
@@ -305,28 +309,15 @@ function holdings(runtime: NetworkRuntime, repoId: string, view: readonly Member
   return held.filter((p) => known.has(p.packId) || p.origin === "borrowed").map((p) => p.packId);
 }
 
-/** Replaces each snapshotted member's claims with what its view holds; condemns what nobody claims; lifts the fence. */
-function decide(runtime: NetworkRuntime, cursor: GcCursor): void {
+/**
+ * Every member has claimed what its view holds: releases the claims they
+ * did not renew in the epoch begun at `startedAt`; condemns what nobody
+ * claims; lifts the fence.
+ */
+function decide(runtime: NetworkRuntime, startedAt: number): void {
   const { registry, context, policy } = runtime;
   context.storage.transactionSync(() => {
-    for (const repoId of cursor.members) {
-      // Deleted since the snapshot: its claims went with it.
-      if (!registry.member(repoId)) continue;
-      const holds = new Set(cursor.holds[repoId] ?? []);
-      const before = context.storage.sql
-        .exec<{ pack_id: string }>(
-          "SELECT pack_id FROM pack_claims WHERE repo_id = ? AND claimed_at < ?",
-          repoId,
-          cursor.startedAt,
-        )
-        .toArray()
-        .map((r) => r.pack_id);
-      registry.release(
-        repoId,
-        before.filter((id) => !holds.has(id)),
-      );
-      registry.claim([repoId], [...holds]);
-    }
+    registry.releaseUnrenewed(startedAt);
     const unclaimed = registry.allUnclaimed();
     registry.condemn(unclaimed, policy.retentionMs);
     if (unclaimed.length > 0) {

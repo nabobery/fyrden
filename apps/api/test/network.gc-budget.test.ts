@@ -86,14 +86,26 @@ function slice(networkId: string, job: "gc" | "delete") {
         n.jobs.ensure(job === "gc" ? "network_gc" : "network_delete", jobId);
       const handler = job === "gc" ? networkGcHandler(n.runtime) : deletionHandler(n.runtime);
       await n.jobs.runJob(jobId, handler, createDoMemoryBudget(16 * 1024 * 1024), 0);
+      const after = n.jobs.get(jobId);
       return {
         calls: currentInvocation()?.tally.internal ?? 0,
-        state: n.jobs.get(jobId)?.state,
+        state: after?.state,
+        cursorBytes: after?.cursor?.byteLength ?? 0,
         due: dueAt(n, jobId) <= n.context.now(),
         phase: n.registry.gcState().phase,
       };
     }),
   );
+}
+
+/** Runs collection slices until the job is not due now, at most `max`; each slice's result. */
+async function collect(networkId: string, max = 100) {
+  const ran: Awaited<ReturnType<typeof slice>>[] = [];
+  for (let i = 0; i < max; i++) {
+    ran.push(await slice(networkId, "gc"));
+    if (!ran.at(-1)?.due) break;
+  }
+  return ran;
 }
 
 /** When the job `jobId` runs next. */
@@ -228,6 +240,40 @@ describe("network collection within a call budget", () => {
     for (let i = 0; i < 20 && gc.phase !== "idle"; i++) gc = await alarm();
     expect(gc).toMatchObject({ epoch: 1, phase: "idle", fence: false });
     for (const key of orphans) expect(await exists(key)).toBe(false);
+  });
+
+  it("a slice saves only its place, however many packs the members' views hold", async () => {
+    const { p, forks, networkId } = await network();
+    // Retained borrowed packs in every member's registry; long ids stand in
+    // for many packs: carried in a saved place, they would pass the 2 MB a
+    // Durable Object row holds.
+    const held = new Map<string, string[]>();
+    for (const repo of [p, ...forks]) {
+      const ids = Array.from({ length: 800 }, () => `${newPackId()}${"x".repeat(1_000)}`);
+      held.set(repo.id, ids);
+      await inRepo(repo.stub, ({ git }) => {
+        for (const id of ids)
+          git.context.storage.sql.exec(
+            `INSERT INTO packs (pack_id, network_id, r2_key, origin, kind, state, created_at, last_touched_at)
+             VALUES (?, ?, '', 'borrowed', 'pack', 'superseded', 0, 0)`,
+            id,
+            networkId,
+          );
+      });
+    }
+    await setNetworkPolicy(networkId, { sliceCalls: 2, sweepListLimit: 2 });
+    await inNetwork(networkId, (n) => n.startGc());
+
+    const ran = await collect(networkId);
+    expect(ran.filter((r) => r.phase === "mark").length).toBeGreaterThanOrEqual(2);
+    expect(Math.max(...ran.map((r) => r.cursorBytes))).toBeLessThan(4 * 1024);
+    const claims = await inNetwork(networkId, (n) => ({
+      gc: n.registry.gcState(),
+      of: Object.fromEntries([...held.keys()].map((id) => [id, n.registry.claimsOf(id)])),
+    }));
+    expect(claims.gc).toMatchObject({ epoch: 1, phase: "idle", fence: false });
+    // Each member claims what its view holds.
+    for (const [id, ids] of held) expect(claims.of[id]).toEqual(expect.arrayContaining(ids));
   });
 
   it("the sweep finds the next member to ask with a bounded read, however many members there are", async () => {

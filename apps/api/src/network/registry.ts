@@ -255,6 +255,38 @@ export class NetworkRegistry {
         );
   }
 
+  /**
+   * Claims `packIds` for `repoId` as held at `since` (a collection's start)
+   * or later: new claims, and older ones renewed (see `releaseUnrenewed`).
+   */
+  hold(repoId: string, packIds: readonly string[], since: number): void {
+    const at = Math.max(this.context.now(), since);
+    for (const packId of packIds)
+      exec(
+        this.#sql,
+        `INSERT INTO pack_claims (pack_id, repo_id, claimed_at) VALUES (?, ?, ?)
+         ON CONFLICT (pack_id, repo_id) DO UPDATE SET claimed_at = max(claimed_at, excluded.claimed_at)`,
+        packId,
+        repoId,
+        at,
+      );
+  }
+
+  /**
+   * Drops the claims recorded before `since` (a collection's start) and
+   * not renewed since: once every member has said what its view holds,
+   * claims on packs it no longer holds. Joining members were not asked:
+   * their claims stay.
+   */
+  releaseUnrenewed(since: number): void {
+    exec(
+      this.#sql,
+      `DELETE FROM pack_claims WHERE claimed_at < ?
+         AND repo_id IN (SELECT repo_id FROM members WHERE state <> 'joining')`,
+      since,
+    );
+  }
+
   claimsOf(repoId: string): string[] {
     return all<{ pack_id: string }>(
       this.#sql,
