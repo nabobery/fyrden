@@ -158,16 +158,39 @@ describe("diffSchema", () => {
     expect(diffSchema(expected, expected)).toEqual([]);
   });
 
+  it("tells apart objects of different types that share a name", () => {
+    // SQLite keeps triggers apart from tables, indexes and views: a trigger may share a table's name.
+    const effects = table("effects", "CREATE TABLE effects (id TEXT)");
+    const trigger = {
+      type: "trigger",
+      name: "effects",
+      sql: "CREATE TRIGGER effects AFTER INSERT ON repos BEGIN SELECT 1; END",
+    };
+    const repos = table("repos", "CREATE TABLE repos (id TEXT)");
+    expect(diffSchema([effects, trigger, repos], [trigger, repos, effects])).toEqual([]);
+    expect(diffSchema([effects, repos], [repos, trigger, effects])).toEqual([
+      "effects (trigger) is not in the repository",
+    ]);
+    expect(diffSchema([effects, trigger, repos], [effects, repos])).toEqual([
+      "effects (trigger) is missing",
+    ]);
+  });
+
+  /** The objects SQLite stores for a database, as the deployed check reads them. */
+  function schemaOf(db: DatabaseSync): SchemaObject[] {
+    return db
+      .prepare(SCHEMA_QUERY)
+      .all()
+      .map((row) => ({ type: String(row.type), name: String(row.name), sql: String(row.sql) }));
+  }
+
   /** The objects SQLite stores for a database after running its migrations in order. */
   function migrated(db: DatabaseSync, dir: string): SchemaObject[] {
     for (const file of readdirSync(resolve(migrations, dir))
       .filter((f) => f.endsWith(".sql"))
       .sort())
       db.exec(readFileSync(resolve(migrations, dir, file), "utf8"));
-    return db
-      .prepare(SCHEMA_QUERY)
-      .all()
-      .map((row) => ({ type: String(row.type), name: String(row.name), sql: String(row.sql) }));
+    return schemaOf(db);
   }
 
   it.each(["directory", "org"])(
@@ -185,7 +208,7 @@ describe("diffSchema", () => {
   const org = parseExpectedSchema(readFileSync(resolve(migrations, "org.expected.sql"), "utf8"));
   const effects = org.find((o) => o.name === "effects") ?? { type: "table", name: "", sql: "" };
 
-  /** The committed `fyrden-org` schema with `effects` rebuilt as docs/operations/d1-schema.md says. */
+  /** The committed `fyrden-org` schema with `effects` rebuilt by renaming a new table into place. */
   function rebuiltOrg(definition: string): SchemaObject[] {
     const db = new DatabaseSync(":memory:");
     for (const object of org) db.exec(object.sql);
@@ -203,13 +226,10 @@ describe("diffSchema", () => {
     for (const object of org)
       if (object.type === "index" && object.sql.includes(" ON effects ")) db.exec(object.sql);
     expect(db.prepare("SELECT count(*) AS n FROM effects").get()).toEqual({ n: 1 });
-    return db
-      .prepare(SCHEMA_QUERY)
-      .all()
-      .map((row) => ({ type: String(row.type), name: String(row.name), sql: String(row.sql) }));
+    return schemaOf(db);
   }
 
-  it("accepts a table rebuilt by the repair steps, which SQLite stores with its name quoted", () => {
+  it("accepts a table rebuilt by renaming, which SQLite stores with its name quoted", () => {
     expect(effects.name).toBe("effects");
     const actual = rebuiltOrg(effects.sql);
     expect(actual.find((o) => o.name === "effects")?.sql).toMatch(/^CREATE TABLE "effects" \(/);
@@ -232,5 +252,89 @@ describe("diffSchema", () => {
       "effects_due_order (index) is missing",
       "effects_pending (index) is not in the repository",
     ]);
+  });
+
+  const directory = parseExpectedSchema(
+    readFileSync(resolve(migrations, "directory.expected.sql"), "utf8"),
+  );
+  const principals = directory.find((o) => o.name === "principals") ?? effects;
+
+  /**
+   * A `fyrden-directory` whose `principals` lacks a column, with an org and
+   * its member, and foreign keys enforced as D1 does.
+   */
+  function driftedDirectory(): DatabaseSync {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = on");
+    for (const object of directory)
+      db.exec(
+        object === principals
+          ? object.sql.replace(
+              / require_dpop INTEGER NOT NULL DEFAULT 0\n {2}CHECK \(require_dpop IN \(0, 1\)\),/,
+              "",
+            )
+          : object.sql,
+      );
+    db.exec(`INSERT INTO principals (id, type, handle, created_at) VALUES
+      ('org', 'org', 'acme', 1), ('usr', 'user', 'ada', 1)`);
+    db.exec(`INSERT INTO memberships (org_id, principal_id, role, created_at) VALUES
+      ('org', 'usr', 'owner', 1)`);
+    return db;
+  }
+
+  /** Runs `steps` in one transaction with foreign keys deferred, as a D1 migration would. */
+  function migrate(db: DatabaseSync, steps: string[]): void {
+    db.exec("BEGIN");
+    try {
+      db.exec("PRAGMA defer_foreign_keys = on");
+      for (const step of steps) db.exec(step);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  const columns = "id, type, handle, display_name, owner_id, is_instance_admin, created_at";
+  const indexes = directory
+    .filter((o) => o.type === "index" && o.sql.includes(" ON principals "))
+    .map((o) => o.sql);
+
+  it("rebuilds a table other tables reference by the repair steps docs/operations/d1-schema.md gives", () => {
+    const db = driftedDirectory();
+    expect(diffSchema(directory, schemaOf(db))).toEqual(["principals (table) differs"]);
+    migrate(db, [
+      "CREATE TABLE principals_copy AS SELECT * FROM principals",
+      "DROP TABLE principals",
+      principals.sql,
+      `INSERT INTO principals (${columns}) SELECT ${columns} FROM principals_copy`,
+      "DROP TABLE principals_copy",
+      ...indexes,
+    ]);
+    expect(diffSchema(directory, schemaOf(db))).toEqual([]);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(db.prepare("SELECT count(*) AS n FROM memberships").get()).toEqual({ n: 1 });
+  });
+
+  it("fails such a rebuild that renames the new table into place, or loses a referenced row", () => {
+    const db = driftedDirectory();
+    const renamed = [
+      principals.sql.replace(/^CREATE TABLE principals /, "CREATE TABLE principals_new "),
+      `INSERT INTO principals_new (${columns}) SELECT ${columns} FROM principals`,
+      "DROP TABLE principals",
+      "ALTER TABLE principals_new RENAME TO principals",
+    ];
+    expect(() => migrate(db, renamed)).toThrow(/FOREIGN KEY constraint failed/);
+    const losing = [
+      "CREATE TABLE principals_copy AS SELECT * FROM principals WHERE id <> 'usr'",
+      "DROP TABLE principals",
+      principals.sql,
+      `INSERT INTO principals (${columns}) SELECT ${columns} FROM principals_copy`,
+      "DROP TABLE principals_copy",
+    ];
+    expect(() => migrate(db, losing)).toThrow(/FOREIGN KEY constraint failed/);
+    // Both rolled back: the drifted table and its rows are as they were.
+    expect(diffSchema(directory, schemaOf(db))).toEqual(["principals (table) differs"]);
+    expect(db.prepare("SELECT count(*) AS n FROM principals").get()).toEqual({ n: 2 });
   });
 });

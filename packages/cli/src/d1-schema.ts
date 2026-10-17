@@ -188,19 +188,22 @@ function sameSql(a: string, b: string): boolean {
   );
 }
 
+/** An object's identity: a trigger may share a table's name, so its type is part of it. */
+const keyOf = (object: SchemaObject) => `${object.type} ${object.name}`;
+
 /** Each object that is missing, extra or different, in the expected file's order. */
 export function diffSchema(expected: SchemaObject[], actual: SchemaObject[]): string[] {
-  const deployed = new Map(actual.map((o) => [o.name, o]));
-  const known = new Set(expected.map((o) => o.name));
+  const deployed = new Map(actual.map((o) => [keyOf(o), o]));
+  const known = new Set(expected.map(keyOf));
   const problems: string[] = [];
   for (const object of expected) {
-    const found = deployed.get(object.name);
+    const found = deployed.get(keyOf(object));
     if (!found) problems.push(`${object.name} (${object.type}) is missing`);
-    else if (found.type !== object.type || !sameSql(found.sql, object.sql))
+    else if (!sameSql(found.sql, object.sql))
       problems.push(`${object.name} (${object.type}) differs`);
   }
   for (const object of actual)
-    if (!known.has(object.name))
+    if (!known.has(keyOf(object)))
       problems.push(`${object.name} (${object.type}) is not in the repository`);
   return problems;
 }

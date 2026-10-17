@@ -53,11 +53,25 @@ either:
 
 - **A forward migration** (preferred): a new numbered file that brings both
   a drifted and a healthy database to one schema. SQLite cannot add a column
-  only if it is missing, so rebuild the table: create it under a new name
-  with its definition from the expected file (only the name changed), copy
-  the columns both versions have, drop the old table (which drops its
-  indexes), rename the new one to the old name and recreate its indexes as
-  the expected file has them. Update the expected
+  only if it is missing, so rebuild the table, in this order:
+
+  1. `PRAGMA defer_foreign_keys = on;`, so rows of other tables that
+     reference it may point nowhere until the migration ends. D1 checks
+     them then, and fails the migration with `FOREIGN KEY constraint failed`
+     if any still does ([D1 docs](https://developers.cloudflare.com/d1/sql-api/foreign-keys/)).
+  2. Copy its rows aside: `CREATE TABLE <name>_copy AS SELECT * FROM <name>;`
+  3. `DROP TABLE <name>;`, which drops its indexes and triggers.
+  4. Create it with its definition from the expected file, and insert into
+     it the columns both versions have, from the copy.
+  5. `DROP TABLE <name>_copy;`, then recreate its indexes and triggers as the
+     expected file has them.
+
+  Inserting the rows back is what satisfies the references to them:
+  creating the new table under another name and renaming it into place does
+  not, so on a table others reference (`principals`, for one) that order
+  fails the migration, and so does a rebuild that loses a referenced row.
+  A table that no other table references and that was rebuilt by renaming
+  still passes `fyrden doctor` (see Detecting). Update the expected
   file (`pnpm --filter @fyrden/api exec vitest run test/d1-schema.test.ts -u`),
   review the diff, and deploy.
 - **A reviewed one-off repair** of that deployment only, when a forward
