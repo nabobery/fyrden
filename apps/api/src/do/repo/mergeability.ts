@@ -60,7 +60,7 @@ export const MERGEABILITY_POLICY: MergePolicy = { ...MERGE_POLICY, maxReads: 150
  * unreadable. Bump it with any change to either: a result kept under
  * another version is worked out again when its pull request is asked for.
  */
-export const MERGEABILITY_POLICY_VERSION = 1;
+export const MERGEABILITY_POLICY_VERSION = 2;
 
 /**
  * The delay before a result past the budgets, or unreadable, is worked out
