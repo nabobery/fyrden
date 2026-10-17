@@ -127,6 +127,8 @@ describe("effects journal", () => {
   });
 
   it("retries a failed delivery from the sweeper, with backoff", async () => {
+    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
+    await settleOthersDue(T0 + 10 * EFFECT_POLICY.backoffMs);
     const repoId = await listedRepo();
     const { sink, received, failNext } = recordingSink(repoId);
     failNext(2);
@@ -146,6 +148,8 @@ describe("effects journal", () => {
   });
 
   it("delivers again with the same id after a crash between delivery and the mark, and the destination dedupes", async () => {
+    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
+    await settleOthersDue(T0 + EFFECT_POLICY.leaseMs);
     const repoId = await listedRepo();
     const { sink, received, calls } = recordingSink(repoId);
     // The mark after the first delivery is lost.
@@ -193,6 +197,8 @@ describe("effects journal", () => {
   });
 
   it("never lets the consumer and the sweeper deliver one effect at once", async () => {
+    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
+    await settleOthersDue(T0 + EFFECT_POLICY.sweepAfterMs);
     const repoId = await listedRepo();
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
@@ -228,6 +234,8 @@ describe("effects journal", () => {
   });
 
   it("lets the sweeper take over an expired claim, and ignores the late outcome of the old holder", async () => {
+    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
+    await settleOthersDue(T0 + EFFECT_POLICY.leaseMs);
     const repoId = await listedRepo();
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
@@ -368,6 +376,8 @@ describe("effects journal", () => {
   });
 
   it("marks an effect failed after the last attempt, or when its sink is gone", async () => {
+    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
+    await settleOthersDue(T0 + EFFECT_POLICY.maxAttempts * EFFECT_POLICY.maxBackoffMs);
     const repoId = await listedRepo();
     const { sink, failNext } = recordingSink(repoId);
     failNext(1_000);
@@ -399,6 +409,8 @@ describe("effects journal", () => {
   });
 
   it("deletes delivered effects after the retention", async () => {
+    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
+    await settleOthersDue(T0 + EFFECT_POLICY.retentionMs);
     const repoId = await listedRepo();
     const { sink } = recordingSink(repoId);
     await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {

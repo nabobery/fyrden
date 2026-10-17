@@ -223,6 +223,8 @@ describe("the feed sink", () => {
   });
 
   it("retries only the effects naming a recipient that failed, and the sweeper delivers them", async () => {
+    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
+    await settleOthersDue(T0 + EFFECT_POLICY.backoffMs);
     const repoId = await listedRepo();
     const [a, b, c] = ["usr_a", "usr_b", "usr_c"].map((p) => `${p}${repoId}`) as [
       string,
