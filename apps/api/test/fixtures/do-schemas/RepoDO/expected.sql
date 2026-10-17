@@ -269,7 +269,7 @@ CREATE TABLE mergeability_jobs (
 CREATE TABLE networks (
         network_id TEXT PRIMARY KEY,
         recorded_at INTEGER NOT NULL
-      , claim_seq INTEGER NOT NULL DEFAULT 0) STRICT;
+      , claim_seq INTEGER NOT NULL DEFAULT 0, released INTEGER NOT NULL DEFAULT 0) STRICT;
 CREATE TABLE outbox (
         source_seq INTEGER PRIMARY KEY,
         event TEXT NOT NULL CHECK (json_valid(event)),

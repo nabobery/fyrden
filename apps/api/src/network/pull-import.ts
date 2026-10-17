@@ -2,7 +2,7 @@ import type { JobHandler, RepoGitStorage, SliceResult } from "@fyrden/adapters-c
 import type { Logger } from "@fyrden/adapters-cloudflare/obs";
 import { oidFromBytes, oidFromHex, oidToHex } from "@fyrden/git-core";
 import { GC_JOB_ID, inProgress, scheduleGc } from "../git/maintenance/schedule.js";
-import { learnClaimSeq } from "./claim-releases.js";
+import { learnClaimSeq, releasesSoFar } from "./claim-releases.js";
 import { liveViewPacks } from "./member.js";
 import type { CommitRowData, ViewPack } from "./types.js";
 import {
@@ -24,9 +24,9 @@ import {
  * 2. share: the network records them as shared, claimed by the base.
  * 3. adopt: they join the base's view as borrowed packs (one the base's
  *    collection dropped is taken back); a view over its cap gets a
- *    compaction of its oldest borrowed packs, on its own job. One the base
- *    retired since the share (its claim released after it) is shared again
- *    first.
+ *    compaction of its oldest borrowed packs, on its own job. Once the base
+ *    has given up a claim since the share (its release may land after it,
+ *    see claim-releases.ts), they are shared again first.
  * 4. graph: the head's verified commit rows the base lacks are copied page
  *    by page, kept apart under the revision's own key until it publishes:
  *    the base's commit graph only ever holds whole histories, so a page
@@ -72,11 +72,12 @@ export interface ImportState {
   /** The base's network when it began: a detach since leaves the head's packs behind. */
   readonly networkId?: string;
   /**
-   * Of its packs, those the base's registry had a row of when they were
-   * shared: one gone by adoption was retired meanwhile, its claim released
-   * maybe after the share.
+   * How many claims the base had given up in its network as it shared them
+   * (`releasesSoFar`): another count by adoption means one was given up
+   * since, its release maybe landing after the share, so they are shared
+   * again.
    */
-  readonly held?: readonly string[];
+  readonly released?: number;
   readonly frontier?: readonly string[];
   readonly staged?: number;
 }
@@ -126,7 +127,16 @@ export type ViewDeps = Pick<ImportDeps, "git" | "ownCap" | "rewriteObjects">;
 export interface CallBudget {
   used: number;
   readonly max: number;
+  /** Times an import of the invocation went back to share (see `MAX_RESHARES`). */
+  reshares?: number;
 }
+
+/**
+ * Times one invocation's import shares its packs again because the base
+ * gave up a claim meanwhile; past it, it is busy (tried again later). Each
+ * share is a call counted against the budget too.
+ */
+const MAX_RESHARES = 3;
 
 /**
  * Runs one step of `work` (not `publish`, which is the caller's) and
@@ -172,8 +182,8 @@ export async function runImportStep(
         return { ...work, step: "snapshot", leaseId: null, state: {} };
       const packs = work.state.packs ?? [];
       const networkId = git.networkId();
-      // The base's rows of them now: one gone by adoption was retired after this share.
-      const held = [...packStates(git, packs).keys()];
+      // Read as the share goes out: a claim given up after this may have its release land after it.
+      const released = releasesSoFar(git, networkId);
       budget.used++;
       const shared = await env.NETWORK.getByName(networkId).sharePacks({
         networkId,
@@ -189,7 +199,7 @@ export async function runImportStep(
       learnClaimSeq(git, networkId, shared.seq);
       if (shared.gone.length > 0)
         throw new ImportFailed("packs_gone", "packs of the head were deleted meanwhile");
-      return { ...work, step: "adopt", state: { ...work.state, held } };
+      return { ...work, step: "adopt", state: { ...work.state, released } };
     }
     case "adopt": {
       if (leftNetwork(git, work))
@@ -202,8 +212,13 @@ export async function runImportStep(
       const current = borrowedLive(git);
       // Packs it reads already add nothing: a view over its cap all the same takes them.
       if (adopted.length > current.length) admit(deps, adopted, current);
-      // Retired since the share: its claim may be gone, so it is claimed again first.
-      if (!adoptPacks(git, packs, work.state.held ?? [])) return { ...work, step: "share" };
+      // A claim given up since the share: they are claimed again first.
+      if (!adoptPacks(git, packs, work.state.released)) {
+        budget.reshares = (budget.reshares ?? 0) + 1;
+        if (budget.reshares > MAX_RESHARES)
+          throw new ImportBusy("the base keeps giving up claims on packs; try again shortly");
+        return { ...work, step: "share" };
+      }
       // Over the cap: compacted on the view's own job; the import goes on meanwhile.
       if (adopted.length > compactionLimits(deps.ownCap(), deps.rewriteObjects()).limit)
         scheduleViewCompaction(git);
@@ -309,17 +324,6 @@ function hasCommit(git: RepoGitStorage, hex: string): boolean {
   return git.commitGraph.readSync([oidFromHex(hex)], "verified")[0] !== undefined;
 }
 
-/** The registry states of those of `packs` the base has a row of. */
-function packStates(git: RepoGitStorage, packs: readonly ViewPack[]): Map<string, string> {
-  const rows = git.context.storage.sql
-    .exec<{ pack_id: string; state: string }>(
-      "SELECT pack_id, state FROM packs WHERE pack_id IN (SELECT value FROM json_each(?))",
-      JSON.stringify(packs.map((p) => p.packId)),
-    )
-    .toArray();
-  return new Map(rows.map((r) => [r.pack_id, r.state]));
-}
-
 /** The live borrowed packs of the base's view, oldest first. */
 function borrowedLive(git: RepoGitStorage): ViewPack[] {
   return liveViewPacks(git).filter((p) => p.origin === "borrowed");
@@ -417,22 +421,22 @@ const HELD = ["garbage", "superseded", "condemned"] as const;
  * back, one it is done with (deleted, discarded) is registered again; one
  * not finished yet is waited for. One the view compaction merged into a
  * pack the view reads is read there; one merged into a pack gone from the
- * view is borrowed again. False, adopting none, when one `held` when
- * shared is gone: retired since, its claim may have been released after
- * the share, so it is to be shared again. Safe to repeat.
+ * view is borrowed again. False, adopting none, when the base has given up
+ * a claim since they were shared (`released`, the count then, differs): its
+ * release may land after the share and remove the claim on one of them
+ * (whether the view held it when shared or not), so they are to be shared
+ * again. Safe to repeat.
  */
 function adoptPacks(
   git: RepoGitStorage,
   packs: readonly ViewPack[],
-  held: readonly string[],
+  released: number | undefined,
 ): boolean {
   const { storage } = git.context;
   const now = git.context.now();
   return storage.transactionSync((): boolean => {
+    if (releasesSoFar(git, git.networkId()) !== released) return false;
     const covered = readThroughMerge(git, packs);
-    const rows = packStates(git, packs);
-    const retired = (id: string) => !rows.has(id) && held.includes(id);
-    if (packs.some((p) => !covered.has(p.packId) && retired(p.packId))) return false;
     // With the packs: their collection, should the import never end (an interrupted opening).
     if (packs.length > 0) collectLater(git);
     for (const pack of packs) {

@@ -128,7 +128,9 @@ drops the pack's row. The network is told at the end of that pass, at most
 told is kept and told again on a pass 10 minutes later. A release removes
 only a claim no newer than the repository knew of when it gave the pack
 up, so one that lands late or twice never undoes a pull request's import
-that claimed the pack again since.
+that claimed the pack again since. An import whose repository gave up any
+claim between sharing its packs and adopting them shares them again first;
+more than 3 times within one request, it answers 409 `busy`.
 
 ### Push policy
 

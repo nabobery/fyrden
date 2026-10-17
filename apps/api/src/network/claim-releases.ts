@@ -31,9 +31,10 @@ import type { Logger } from "@fyrden/adapters-cloudflare/obs";
  * holds it again only through a share.
  *
  * A share sent before the release was recorded may have made its claims at
- * a sequence the bound covers: an import adopts a pack its base had a row
- * of when it shared it only while the row is there still, and shares it
- * again otherwise.
+ * a sequence the bound covers. The same transaction therefore counts the
+ * release (`networks.released`): an import adopts the packs it shared only
+ * while the count is the one it read as it sent the share, and shares them
+ * again otherwise (see `releasesSoFar`).
  *
  * A release is kept until the network has answered it: one the network
  * could not be told (the call failed, or the object was reset first) is
@@ -82,6 +83,12 @@ export class ClaimReleases implements NetworkRetire {
       pack.packId,
       pack.networkId,
     );
+    context.storage.sql.exec(
+      `INSERT INTO networks (network_id, recorded_at, released) VALUES (?, ?, 1)
+       ON CONFLICT (network_id) DO UPDATE SET released = released + 1`,
+      pack.networkId,
+      context.now(),
+    );
   }
 
   async deliver(max: number): Promise<ReleaseDelivery> {
@@ -123,6 +130,19 @@ export class ClaimReleases implements NetworkRetire {
         );
     }
   }
+}
+
+/**
+ * How many claims the repository has given up in `networkId` so far: an
+ * import reads it as it sends its share, and shares again when it differs
+ * by adoption.
+ */
+export function releasesSoFar(git: RepoGitStorage, networkId: string): number {
+  return (
+    git.context.storage.sql
+      .exec<{ released: number }>("SELECT released FROM networks WHERE network_id = ?", networkId)
+      .toArray()[0]?.released ?? 0
+  );
 }
 
 /** Records that `networkId` answered a share of the repository's at claim sequence `seq`. */

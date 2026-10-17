@@ -19,7 +19,15 @@ import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { allocateEpoch } from "../src/events/epochs.js";
 import { ClaimReleases, type ReleaseNetwork } from "../src/network/claim-releases.js";
-import { REVISION_IMPORT_JOB } from "../src/network/pull-import.js";
+import {
+  IMPORT_POLICY,
+  ImportBusy,
+  type ImportDeps,
+  type ImportWork,
+  importIdOf,
+  REVISION_IMPORT_JOB,
+  runImportStep,
+} from "../src/network/pull-import.js";
 import { PULL_NOTICES_JOB, PULL_REFOLLOW_JOB } from "../src/network/pull-source.js";
 import {
   runUnderWay,
@@ -1500,6 +1508,80 @@ describe("the base's view", () => {
       api("GET", `${base.path}/pulls/1/files`, owner.token),
     );
     expect(files.body.files.map((f) => f.filename)).toEqual(["b.txt", "c.txt"]);
+  });
+
+  it("never adopts unclaimed a pack another import adopted and gave up after this one shared it", async () => {
+    const stub = env.REPO.getByName(base.id);
+    expect((await open(contributor, `${contributor.handle}:main`)).status).toBe(201);
+    const networkId = await inRepo(stub, (r: RepoDO) => r.git.networkId());
+    const network = env.NETWORK.getByName(networkId);
+    const { next, step } = await pushImported();
+    for (let i = 0; i < 5 && (await step()) !== "adopt"; i++);
+    // Shared, not adopted yet: one of its packs, the push's, the base's view has no row of.
+    const [pushed, ...others] = await inRepo(stub, (r: RepoDO) =>
+      (r.pullImports.get(1)?.state.packs ?? [])
+        .map((p) => p.packId)
+        .filter((id) => r.git.registry.get(id) === undefined),
+    );
+    if (!pushed) throw new Error("the import borrows nothing new");
+    expect(others).toEqual([]);
+    const claims = async () =>
+      (await network.status()).packs.find((p) => p.packId === pushed)?.claims;
+    // Another import of the revision (a second pull request) shares and adopts it; the base's
+    // view gives it up (as a compaction merging it would) and its retire job releases the claim.
+    await moveForkBranch("twin", ZERO, next);
+    expect((await open(contributor, `${contributor.handle}:twin`)).status).toBe(201);
+    expect((await packStates(stub)).find((p) => p.pack_id === pushed)?.state).toBe("live");
+    await inRepo(stub, (r: RepoDO) => condemnRow(r, pushed));
+    await runJob(stub, "retire-packs");
+    expect(await claims()).toEqual([fork.id]);
+    // The first import shares it again rather than adopt it unclaimed.
+    expect(await step()).toBe("share");
+    expect(await step()).toBe("adopt");
+    expect(await claims()).toEqual([base.id, fork.id].sort());
+    for (let i = 0; i < 10 && (await pull()).head.sha !== next; i++) await step();
+    expect((await pull()).head.sha).toBe(next);
+    expect((await packStates(stub)).find((p) => p.pack_id === pushed)?.state).toBe("live");
+    expect(await claims()).toEqual([base.id, fork.id].sort());
+  });
+
+  it("is busy, not sharing on and on, when the base gives up a claim before every adoption", async () => {
+    const stub = env.REPO.getByName(base.id);
+    expect((await open(contributor, `${contributor.handle}:main`)).status).toBe(201);
+    const { step } = await pushImported();
+    for (let i = 0; i < 5 && (await step()) !== "adopt"; i++);
+    const seen = await inRepo(stub, async (r: RepoDO) => {
+      const row = r.pullImports.get(1);
+      if (!row) throw new Error("no import waits");
+      const deps: ImportDeps = {
+        git: r.git,
+        env,
+        repoId: () => base.id,
+        ownCap: () => r.packCap.cap,
+        rewriteObjects: () => r.maintenance.maxRewriteObjects,
+        log: () => testLog,
+      };
+      // Shared before a claim was given up, each time it comes to adopt (one invocation's budget).
+      const work: ImportWork = {
+        importId: importIdOf(row),
+        headRepoId: row.headRepoId,
+        sha: row.sha,
+        step: "adopt",
+        leaseId: row.leaseId,
+        state: { ...row.state, released: -1 },
+      };
+      const budget = { used: 0, max: 40 };
+      const steps: string[] = [];
+      for (let i = 0; i < 4; i++)
+        steps.push(
+          await runImportStep(deps, work, IMPORT_POLICY, budget).then(
+            (next) => next.step,
+            (error: unknown) => (error instanceof ImportBusy ? "busy" : String(error)),
+          ),
+        );
+      return steps;
+    });
+    expect(seen).toEqual(["share", "share", "share", "busy"]);
   });
 
   it("reads no release recorded to share, and a pass's worth to tell them", async () => {
