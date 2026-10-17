@@ -57,6 +57,7 @@ import {
   type PushProgress,
   RepoPush,
 } from "../git/push/repo-push.js";
+import { type ClaimReleaseHooks, ClaimReleases } from "../network/claim-releases.js";
 import type { DetachHooks } from "../network/detach.js";
 import {
   IMPORT_POLICY,
@@ -66,7 +67,7 @@ import {
   publishStaged,
 } from "../network/pull-import.js";
 import { type NoticeAnswer, PullSource, type RevisionNotice } from "../network/pull-source.js";
-import { networkMembersAfter, networkRetire, soleNetworkMember } from "../network/repo-client.js";
+import { networkMembersAfter, soleNetworkMember } from "../network/repo-client.js";
 import { type CopyStep, type CopyStepInput, RepoNetwork } from "../network/repo-network.js";
 import type {
   CommitPage,
@@ -301,6 +302,17 @@ export class RepoDO extends MigratingDO {
       }),
       setAlarm: (at) => this.#arm(at),
     });
+    this.#claimReleases = new ClaimReleases({
+      env,
+      git: this.git,
+      repoId: () => this.#repoId(),
+      log: () => this.#log(),
+      hooks: () => this.releaseHooks,
+    });
+    this.retireOptions = {
+      network: this.#claimReleases,
+      forget: (packId) => forgetMerged(this.git, packId),
+    };
     this.auditBucket = env.ASSETS;
     this.sendEvents = async (envelope) => {
       await env.EVENTS.send(envelope, { contentType: "json" });
@@ -1530,16 +1542,17 @@ export class RepoDO extends MigratingDO {
 
   /** Repack and garbage-collection budgets and timings. Tests may replace them. */
   maintenance: MaintenancePolicy = MAINTENANCE_DEFAULTS;
+  /** Claims on the fork network's packs the retire job gave up, told to the network in order with new ones. */
+  readonly #claimReleases: ClaimReleases;
+  /** Hooks into telling the network of released claims. For tests. */
+  releaseHooks: ClaimReleaseHooks = {};
   /**
    * Options of the pack retire job (retention, deletion fence, the fork
    * network, which packs it shares are released to, and the view
    * compaction's merges into a pack, forgotten with its row). Tests may
    * replace them.
    */
-  retireOptions: PackRetireOptions = {
-    network: networkRetire(this.env, () => this.#repoId()),
-    forget: (packId) => forgetMerged(this.git, packId),
-  };
+  retireOptions: PackRetireOptions;
   /** Hooks into garbage-collection slices. For tests. */
   gcHooks: GcHooks = {};
 
@@ -1984,6 +1997,7 @@ export class RepoDO extends MigratingDO {
       ownCap: () => this.packCap.cap,
       rewriteObjects: () => this.maintenance.maxRewriteObjects,
       log: () => this.#log(),
+      releases: this.#claimReleases,
     };
   }
 

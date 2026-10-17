@@ -104,6 +104,10 @@ CREATE TABLE audit_segments (
         created_at INTEGER NOT NULL,
         archived_at INTEGER
       ) STRICT;
+CREATE TABLE claim_releases (
+        pack_id TEXT PRIMARY KEY,
+        network_id TEXT NOT NULL
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE collect_requests (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         due_at INTEGER NOT NULL

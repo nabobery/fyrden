@@ -1,8 +1,15 @@
 import { env } from "cloudflare:workers";
 import type { PackId } from "@fyrden/git-core";
 import { describe, expect, it } from "vitest";
+import type { Job } from "../../src/git/jobs.js";
 import { fetchObjectKey, newPackId, packObjectKey } from "../../src/git/keys.js";
-import { packRetireHandler, RETIRE_JOB_ID } from "../../src/git/pack-retire.js";
+import {
+  type NetworkRetire,
+  PACK_RETIRE_DEFAULTS,
+  packRetireHandler,
+  RETIRE_JOB_ID,
+  type ReleaseDelivery,
+} from "../../src/git/pack-retire.js";
 import { RepoGitStorage } from "../../src/git/repo-git-storage.js";
 import { inProbe, newProbe } from "./harness.js";
 import type { GitStoreProbeDO } from "./probe-do.js";
@@ -188,5 +195,54 @@ describe("pack retire job", () => {
       expect(row.state).toBe("queued");
       expect(row.at).toBe(clock.now + 30 * DAY);
     });
+  });
+
+  it("records the release of a shared pack's claim with its row's deletion, and passes again until the network is told", async () => {
+    const { stub, networkId } = await newProbe();
+    const clock: Clock = { now: Date.now() };
+    const packId = await inProbe(stub, async (probe) => {
+      const git = clocked(probe, clock);
+      const borrowed = await packIn(git, "condemned");
+      git.context.storage.sql.exec(
+        "UPDATE packs SET origin = 'borrowed', last_touched_at = 0 WHERE pack_id = ?",
+        borrowed,
+      );
+      const recorded: { packId: string; rowLeft: boolean }[] = [];
+      const answers: ReleaseDelivery[] = ["failed", "more", "done"];
+      const network: NetworkRetire = {
+        shared: async () => new Set(),
+        release: (pack) => {
+          recorded.push({ packId: pack.packId, rowLeft: state(git, pack.packId) !== undefined });
+        },
+        deliver: async () => answers.shift() ?? "done",
+      };
+      const handler = packRetireHandler(git, { network });
+      const job: Job = {
+        jobId: RETIRE_JOB_ID,
+        kind: "retire_packs",
+        cursor: null,
+        attempts: 0,
+        claim: 0,
+      };
+      // Not told: looked at again later.
+      expect(await handler.runSlice(job)).toEqual({
+        done: false,
+        cursor: null,
+        runAfterMs: PACK_RETIRE_DEFAULTS.recheckMs,
+      });
+      expect(recorded).toEqual([{ packId: borrowed, rowLeft: false }]);
+      expect(state(git, borrowed)).toBeUndefined();
+      // Told in part: the rest soon.
+      expect(await handler.runSlice(job)).toEqual({
+        done: false,
+        cursor: null,
+        runAfterMs: PACK_RETIRE_DEFAULTS.continueAfterMs,
+      });
+      expect(await handler.runSlice(job)).toEqual({ done: true });
+      expect(recorded).toHaveLength(1);
+      return borrowed;
+    });
+    // The bytes are the network's to delete.
+    expect(await exists(packObjectKey(networkId, packId, "pack"))).toBe(true);
   });
 });

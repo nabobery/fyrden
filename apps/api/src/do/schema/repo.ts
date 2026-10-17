@@ -793,6 +793,9 @@ export const repoSchema: readonly DoMigration[] = [
     // bounded number, those most recently merged into it (the oldest are
     // dropped: borrowed again if named). Rows go when the row of the pack
     // they were merged into is deleted, and all of them on detach.
+    // And the claims on its network's packs the retire job gave up (in the
+    // transaction that deleted the pack's row), each kept until the network
+    // has been told.
     name: "view_merged",
     sql: `
       CREATE TABLE view_merged (
@@ -801,6 +804,11 @@ export const repoSchema: readonly DoMigration[] = [
         merged_at INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;
       CREATE INDEX view_merged_into ON view_merged (into_pack_id, merged_at);
+
+      CREATE TABLE claim_releases (
+        pack_id TEXT PRIMARY KEY,
+        network_id TEXT NOT NULL
+      ) STRICT, WITHOUT ROWID;
     `,
   },
 ];

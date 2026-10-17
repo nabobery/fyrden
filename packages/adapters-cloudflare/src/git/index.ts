@@ -56,6 +56,7 @@ export {
   packR2Keys,
   packRetireHandler,
   RETIRE_JOB_ID,
+  type ReleaseDelivery,
   schedulePackRetire,
 } from "./pack-retire.js";
 export { DEFAULT_PART_BYTES, type NewPackUnit, R2PackStore } from "./r2-pack-store.js";

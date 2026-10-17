@@ -2,6 +2,7 @@ import type { JobHandler, RepoGitStorage, SliceResult } from "@fyrden/adapters-c
 import type { Logger } from "@fyrden/adapters-cloudflare/obs";
 import { oidFromBytes, oidFromHex, oidToHex } from "@fyrden/git-core";
 import { GC_JOB_ID, inProgress, scheduleGc } from "../git/maintenance/schedule.js";
+import type { ClaimReleases } from "./claim-releases.js";
 import { liveViewPacks } from "./member.js";
 import type { CommitRowData, ViewPack } from "./types.js";
 import {
@@ -20,7 +21,8 @@ import {
  * 1. snapshot: the head's repository leases the packs that may hold the
  *    revision and names them; all are borrowed (one live in the base's view
  *    already too, so the import checks it is still there when it publishes).
- * 2. share: the network records them as shared, claimed by the base.
+ * 2. share: the network records them as shared, claimed by the base (once
+ *    no release of the base's claim on one is still to land).
  * 3. adopt: they join the base's view as borrowed packs (one the base's
  *    collection dropped is taken back); a view over its cap gets a
  *    compaction of its oldest borrowed packs, on its own job. One the base
@@ -116,6 +118,8 @@ export interface ImportDeps {
   /** Objects one compaction of the view may rewrite (the maintenance policy's budget). */
   readonly rewriteObjects: () => number;
   readonly log: () => Logger;
+  /** The base's claims its retire job gave up: told to the network before it claims packs again. */
+  readonly releases: Pick<ClaimReleases, "claimAgain">;
 }
 
 /** What judging the base's view of borrowed packs needs. */
@@ -170,15 +174,23 @@ export async function runImportStep(
       if ((work.state.leaseUntil ?? 0) <= git.context.now())
         return { ...work, step: "snapshot", leaseId: null, state: {} };
       const packs = work.state.packs ?? [];
-      // The base's rows of them now: one gone by adoption was retired after this share.
-      const held = [...packStates(git, packs).keys()];
-      budget.used++;
-      const shared = await env.NETWORK.getByName(git.networkId()).sharePacks({
-        networkId: git.networkId(),
-        writerRepoId: work.headRepoId,
-        claimantRepoId: deps.repoId(),
-        packs,
-      });
+      let held: string[] = [];
+      // With no release of the base's claims on them still to land after it.
+      const shared = await deps.releases.claimAgain(
+        packs.map((p) => p.packId),
+        budget,
+        async () => {
+          // The base's rows of them now: one gone by adoption was retired after this share.
+          held = [...packStates(git, packs).keys()];
+          budget.used++;
+          return await env.NETWORK.getByName(git.networkId()).sharePacks({
+            networkId: git.networkId(),
+            writerRepoId: work.headRepoId,
+            claimantRepoId: deps.repoId(),
+            packs,
+          });
+        },
+      );
       if (!shared.ok) {
         if (shared.code === "network_busy") throw new ImportBusy(shared.error);
         throw new ImportFailed("not_member", shared.error);
@@ -397,10 +409,11 @@ const SETTLING = new Set(["pending", "indexing", "indexed"]);
 /**
  * Registry states of a pack the base no longer reads but still holds:
  * taken back live. While the row is here, so is the base's claim on the
- * network (the retire job deletes the row before it releases the claim),
- * so the network deletes nothing taken back. A pack whose row is gone has
- * its claim released maybe: it is claimed again (shared) before it is
- * borrowed.
+ * network (the retire job deletes the row in the transaction that records
+ * the claim's release, which it tells the network after), so the network
+ * deletes nothing taken back. A pack whose row is gone has its claim
+ * released maybe, or about to be: it is claimed again (shared, once that
+ * release has landed) before it is borrowed.
  */
 const HELD = ["garbage", "superseded", "condemned"] as const;
 
