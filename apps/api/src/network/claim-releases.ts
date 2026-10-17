@@ -12,8 +12,10 @@ import type { Logger } from "@fyrden/adapters-cloudflare/obs";
  * share claims the head's packs for the base).
  *
  * Each share answers the sequence the network made its claims at, newer
- * for every share, and the repository keeps the latest it has learnt of
- * each network (`networks.claim_seq`). A release is recorded in the
+ * for every share, a share after a point-in-time recovery of the network's
+ * object included (sequences follow its clock, see `CLAIM_SEQS_PER_MS`),
+ * and the repository keeps the latest it has learnt of each network
+ * (`networks.claim_seq`). A release is recorded in the
  * transaction that deletes the pack's row, bounded by that latest sequence
  * (`up_to`), and the network drops the claim only if it was made at the
  * bound or before. So a release that lands late never removes a claim made

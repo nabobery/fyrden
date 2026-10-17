@@ -276,6 +276,37 @@ describe("deletion fence for a fork network's shared packs", () => {
     expect(await claims()).toEqual([p.id]);
   });
 
+  it("a release told late leaves a claim made after the network object was restored to before it", async () => {
+    const { p, f, networkId, shared } = await sharedNetwork();
+    const [packId] = shared as [string];
+    const packs = await inRepo(p.stub, ({ git }) =>
+      liveViewPacks(git).filter((pack) => pack.packId === packId),
+    );
+    const share = async () => {
+      const answer = await inNetwork(networkId, (n) =>
+        n.sharePacks({ networkId, writerRepoId: p.id, claimantRepoId: f.id, packs }),
+      );
+      if (!answer.ok) throw new Error(answer.error);
+      return answer.seq;
+    };
+    // F shares the pack, then its view gives it up: its release names the sequence it learnt.
+    const first = await share();
+    // The network object is restored to a state from before that share (its sequence back with
+    // it), some time later; F shares the pack again.
+    await inNetwork(networkId, (n) => {
+      n.context.storage.sql.exec("UPDATE network_meta SET claim_seq = 0");
+    });
+    await advanceNetwork(networkId, 60_000);
+    const again = await share();
+    expect(again).toBeGreaterThan(first);
+    // F's release lands now: the claim made since the restore stays.
+    await inNetwork(networkId, (n) =>
+      n.releaseClaims({ networkId, repoId: f.id, releases: [{ packId, upTo: first }] }),
+    );
+    const status = await inNetwork(networkId, (n) => n.status());
+    expect(status.packs.find((x) => x.packId === packId)?.claims).toEqual([f.id, p.id].sort());
+  });
+
   it("an acknowledgement condemns the member's row (no new leases); its leases hold deletion back past the retention", async () => {
     const { p, f, networkId, shared } = await sharedNetwork();
     const [packId] = shared as [string];

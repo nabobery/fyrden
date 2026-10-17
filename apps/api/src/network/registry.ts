@@ -52,6 +52,23 @@ function chunks<T>(items: readonly T[]): T[][] {
 }
 const placeholders = (n: number) => Array.from({ length: n }, () => "?").join(", ");
 
+/**
+ * Claim sequences per millisecond of the network object's clock. A
+ * sequence is the larger of the last one stored plus one and the clock in
+ * milliseconds times this. A point-in-time recovery takes the stored one
+ * back (https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/),
+ * not the clock, so a sequence answered after a recovery is still larger
+ * than any answered before it, while:
+ * - the clock of the instance answering after the recovery is behind the
+ *   one that answered before it by less than the recovery took (clock
+ *   skew between instances is far smaller than that; unverified);
+ * - the object answers fewer than this many sequences a millisecond on
+ *   average (each goes with a call between objects).
+ * Sequences stay exact: below `Number.MAX_SAFE_INTEGER` (2^53 - 1) until the
+ * clock reaches 2^43 ms (the year 2248), and SQLite integers hold 64 bits.
+ */
+const CLAIM_SEQS_PER_MS = 1024;
+
 const exec = (sql: Sql, query: string, ...bindings: unknown[]) => {
   const cursor = sql.sql.exec(query, ...bindings);
   cursor.toArray();
@@ -257,6 +274,21 @@ export class NetworkRegistry {
   }
 
   /**
+   * The network's next claim sequence, larger than every one it answered
+   * before, a recovery of this object to an earlier state included (see
+   * `CLAIM_SEQS_PER_MS`).
+   */
+  nextClaimSeq(): number {
+    const seq = all<{ seq: number }>(
+      this.#sql,
+      "UPDATE network_meta SET claim_seq = max(claim_seq + 1, ?) RETURNING claim_seq AS seq",
+      Math.floor(this.context.now()) * CLAIM_SEQS_PER_MS,
+    )[0]?.seq;
+    if (seq === undefined) throw new Error("the network object has no id recorded");
+    return seq;
+  }
+
+  /**
    * Claims `packIds` for `repoId` (a pull request's base sharing its head's
    * packs) at the network's next claim sequence, which a claim already made
    * takes too; returns it. A release the repository recorded before it
@@ -265,11 +297,7 @@ export class NetworkRegistry {
    */
   renewClaims(repoId: string, packIds: readonly string[]): number {
     const now = this.context.now();
-    const seq = all<{ seq: number }>(
-      this.#sql,
-      "UPDATE network_meta SET claim_seq = claim_seq + 1 RETURNING claim_seq AS seq",
-    )[0]?.seq;
-    if (seq === undefined) throw new Error("the network object has no id recorded");
+    const seq = this.nextClaimSeq();
     for (const packId of packIds)
       exec(
         this.#sql,
