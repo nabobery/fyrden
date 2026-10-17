@@ -23,7 +23,6 @@ import {
   type ReleaseNetwork,
   recordRelease,
 } from "../src/network/claim-releases.js";
-import { reclaimHeld } from "../src/network/member.js";
 import {
   IMPORT_POLICY,
   ImportBusy,
@@ -34,6 +33,12 @@ import {
   runImportStep,
 } from "../src/network/pull-import.js";
 import { PULL_NOTICES_JOB, PULL_REFOLLOW_JOB } from "../src/network/pull-source.js";
+import {
+  NETWORK_RECLAIM_JOB,
+  networkReclaimHandler,
+  type ReclaimNetwork,
+  reclaimAfterRestore,
+} from "../src/network/reclaim.js";
 import {
   runUnderWay,
   scheduleViewCompaction,
@@ -1445,6 +1450,44 @@ describe("the base's view", () => {
     return { next, step };
   };
 
+  /**
+   * As a restore leaves the base once the runbook took the next restore
+   * generation: the object started again, it takes the generation.
+   */
+  const takeRestoreGeneration = async () => {
+    await allocateEpoch(env.DIRECTORY, base.id);
+    await runInDurableObject(env.REPO.getByName(base.id), (_: RepoDO, state) =>
+      state.abort(),
+    ).catch(() => {});
+    // A stub of its own: one made before the reset is broken by it.
+    const stub = env.REPO.getByName(base.id);
+    await stub.checkEpoch();
+    return stub;
+  };
+  /** Runs the base's reclaim job (through `network`, a stand-in for its stubs, when given). */
+  const runReclaim = (network?: (r: RepoDO) => (networkId: string) => ReclaimNetwork) =>
+    inRepo(env.REPO.getByName(base.id), async (r: RepoDO) => {
+      const handler = networkReclaimHandler({
+        git: r.git,
+        network: network?.(r) ?? ((id) => env.NETWORK.getByName(id)),
+        repoId: () => base.id,
+        log: () => testLog,
+      });
+      return (await r.git.jobs.runJob(NETWORK_RECLAIM_JOB, handler, r.git.memory, 0)).state;
+    });
+  /** The claim sequence the base has learnt of `networkId`. */
+  const learntSeq = (networkId: string) =>
+    inRepo(
+      env.REPO.getByName(base.id),
+      (r: RepoDO) =>
+        r.git.context.storage.sql
+          .exec<{ seq: number }>(
+            "SELECT claim_seq AS seq FROM networks WHERE network_id = ?",
+            networkId,
+          )
+          .toArray()[0]?.seq ?? 0,
+    );
+
   it("keeps a claim shared again though a replaced instance's release of the old one lands after it", async () => {
     const stub = env.REPO.getByName(base.id);
     const forkStub = env.REPO.getByName(fork.id);
@@ -1516,7 +1559,7 @@ describe("the base's view", () => {
   });
 
   it("keeps the claims a restore makes again, though a release from before the restore lands after them", async () => {
-    const stub = env.REPO.getByName(base.id);
+    let stub = env.REPO.getByName(base.id);
     const forkStub = env.REPO.getByName(fork.id);
     expect((await open(contributor, `${contributor.handle}:main`)).status).toBe(201);
     const [borrowed] = await borrowedCounts(stub);
@@ -1568,8 +1611,13 @@ describe("the base's view", () => {
       insert("networks", saved.network);
       insert("packs", saved.row);
     });
-    // The restore runbook claims again what the restored registry holds.
-    expect(await stub.reclaimNetworkPacks()).toEqual([]);
+    // Taking its new restore generation queues the job claiming again what its registry holds.
+    stub = await takeRestoreGeneration();
+    expect(await inRepo(stub, (r: RepoDO) => r.git.jobs.get(NETWORK_RECLAIM_JOB)?.state)).toBe(
+      "queued",
+    );
+    expect(await runReclaim()).toBe("done");
+    expect(await learntSeq(networkId)).toBeGreaterThan(Number(saved.network.claim_seq));
     expect((await network.status()).packs).toContainEqual({
       packId,
       state: "shared",
@@ -1611,24 +1659,22 @@ describe("the base's view", () => {
     const packId = borrowed.pack_id;
     const networkId = await inRepo(stub, (r: RepoDO) => r.git.networkId());
     const network = env.NETWORK.getByName(networkId);
-    // The restore runbook claims the registry's packs again; while its claim is on the way, the
-    // retire job drops the pack's row (released, bounded by the sequence the base knew then).
-    const answer = await inRepo(stub, (r: RepoDO) =>
-      reclaimHeld(
-        r.git,
-        (id) => ({
-          claim: async (input) => {
-            r.git.context.storage.transactionSync(() => {
-              r.git.context.storage.sql.exec("DELETE FROM packs WHERE pack_id = ?", packId);
-              recordRelease(r.git, { packId, networkId });
-            });
-            return env.NETWORK.getByName(id).claim(input);
-          },
-        }),
-        base.id,
-      ),
-    );
-    expect(answer).toEqual([]);
+    // The base claims its registry's packs again after a restore; while its claim is on the way,
+    // the retire job drops the pack's row (released, bounded by the sequence the base knew then).
+    await inRepo(stub, (r: RepoDO) => {
+      r.git.context.storage.transactionSync(() => reclaimAfterRestore(r.git));
+    });
+    expect(
+      await runReclaim((r) => (id) => ({
+        claim: async (input) => {
+          r.git.context.storage.transactionSync(() => {
+            r.git.context.storage.sql.exec("DELETE FROM packs WHERE pack_id = ?", packId);
+            recordRelease(r.git, { packId, networkId });
+          });
+          return env.NETWORK.getByName(id).claim(input);
+        },
+      })),
+    ).toBe("done");
     expect((await network.status()).packs).toContainEqual({
       packId,
       state: "shared",
@@ -1640,6 +1686,70 @@ describe("the base's view", () => {
       packId,
       state: "shared",
       claims: [fork.id],
+    });
+  });
+
+  it("claims its packs again on its own once it takes a restore generation, retrying a network it cannot reach", async () => {
+    let stub = env.REPO.getByName(base.id);
+    expect((await open(contributor, `${contributor.handle}:main`)).status).toBe(201);
+    const [borrowed] = await borrowedCounts(stub);
+    if (!borrowed) throw new Error("the base borrows nothing");
+    const packId = borrowed.pack_id;
+    const networkId = await inRepo(stub, (r: RepoDO) => r.git.networkId());
+    const network = env.NETWORK.getByName(networkId);
+    // A release the base recorded after the point it is restored to has landed: its row is back
+    // with the restore, its claim is not.
+    const before = await learntSeq(networkId);
+    await network.releaseClaims({
+      networkId,
+      repoId: base.id,
+      releases: [{ packId, upTo: before }],
+    });
+    expect((await network.status()).packs).toContainEqual({
+      packId,
+      state: "shared",
+      claims: [fork.id],
+    });
+    stub = await takeRestoreGeneration();
+    // A network it cannot reach is asked again later, from where the job was.
+    expect(
+      await runReclaim(() => () => ({
+        claim: async () => {
+          throw new Error("network unreachable");
+        },
+      })),
+    ).toBe("queued");
+    expect(await inRepo(stub, (r: RepoDO) => r.git.jobs.get(NETWORK_RECLAIM_JOB)?.attempts)).toBe(
+      0,
+    );
+    // Its alarm runs the job once due.
+    await inRepo(stub, (r: RepoDO) => {
+      r.git.context.storage.sql.exec(
+        "UPDATE jobs SET next_run_at = ? WHERE job_id = ?",
+        r.git.context.now(),
+        NETWORK_RECLAIM_JOB,
+      );
+      return r.alarm();
+    });
+    expect(await inRepo(stub, (r: RepoDO) => r.git.jobs.get(NETWORK_RECLAIM_JOB)?.state)).toBe(
+      "done",
+    );
+    expect((await network.status()).packs).toContainEqual({
+      packId,
+      state: "shared",
+      claims: [base.id, fork.id].sort(),
+    });
+    expect(await learntSeq(networkId)).toBeGreaterThan(before);
+    // A late duplicate of the release from before the restore leaves the claim.
+    await network.releaseClaims({
+      networkId,
+      repoId: base.id,
+      releases: [{ packId, upTo: before }],
+    });
+    expect((await network.status()).packs).toContainEqual({
+      packId,
+      state: "shared",
+      claims: [base.id, fork.id].sort(),
     });
   });
 

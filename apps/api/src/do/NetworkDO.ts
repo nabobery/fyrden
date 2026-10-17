@@ -302,7 +302,7 @@ export class NetworkDO extends MigratingDO {
 
   /**
    * `repoId`'s registry holds `packIds` (a restored member claiming its
-   * packs again, see `reclaimHeld`): pending deletions of them are dropped,
+   * packs again, see reclaim.ts): pending deletions of them are dropped,
    * and those the network knows are claimed at its next claim sequence
    * (`seq`, which the member learns), newer than the bound of any release
    * the member recorded before its restore. Answers the ones that are gone:

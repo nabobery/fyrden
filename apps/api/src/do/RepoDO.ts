@@ -67,6 +67,7 @@ import {
   publishStaged,
 } from "../network/pull-import.js";
 import { type NoticeAnswer, PullSource, type RevisionNotice } from "../network/pull-source.js";
+import { networkReclaimHandler, reclaimAfterRestore } from "../network/reclaim.js";
 import { networkMembersAfter, soleNetworkMember } from "../network/repo-client.js";
 import { type CopyStep, type CopyStepInput, RepoNetwork } from "../network/repo-network.js";
 import type {
@@ -325,7 +326,10 @@ export class RepoDO extends MigratingDO {
       this.git,
       this.outbox,
       () => this.#repoId(),
-      () => this.pullSource.restored(),
+      () => {
+        this.pullSource.restored();
+        reclaimAfterRestore(this.git);
+      },
     );
     this.pulls = new RepoPulls({
       git: this.git,
@@ -1873,6 +1877,12 @@ export class RepoDO extends MigratingDO {
       revision_import: this.pullImports.handler(),
       pull_follow: this.#forkPulls.followHandler(),
       pull_refollow: this.pullSource.refollowHandler(),
+      network_reclaim: networkReclaimHandler({
+        git: this.git,
+        network: (networkId) => this.env.NETWORK.getByName(networkId),
+        repoId: () => this.#repoId(),
+        log: () => this.#log(),
+      }),
       view_compact: viewCompactionHandler({
         git: this.git,
         policy: () => this.maintenance,
@@ -2248,16 +2258,6 @@ export class RepoDO extends MigratingDO {
     claim: { readonly networkId: string; readonly seq: number },
   ): CondemnAnswer {
     return this.#network().condemnShared(packIds, claim);
-  }
-
-  /**
-   * A restore runbook's step once the repository is restored and has taken
-   * its new restore generation, before it serves again: claims again in its
-   * fork networks every pack its registry holds (see `reclaimHeld`).
-   * Answers the packs whose bytes the network has deleted or is deleting.
-   */
-  reclaimNetworkPacks(): Promise<string[]> {
-    return this.#network().reclaim();
   }
 
   /** Of `packIds`, those this registry names (the network's orphan sweep asks every member). */

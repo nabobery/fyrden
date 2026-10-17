@@ -1,9 +1,5 @@
 import { createWorkersZlib, DEFAULT_CACHE_API_CALLS } from "@fyrden/adapters-cloudflare";
-import {
-  type RefActor,
-  type RepoGitStorage,
-  schedulePackRetire,
-} from "@fyrden/adapters-cloudflare/git";
+import type { RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import {
   type BlockCache,
   ObjectReader,
@@ -15,7 +11,7 @@ import {
 import { openRequestBlockCache } from "../git/cache/pack-blocks.js";
 import { liveView } from "../git/pack-view.js";
 import { peelAll } from "../git/peel.js";
-import { learnClaimSeq, recordRelease } from "./claim-releases.js";
+import { learnClaimSeq } from "./claim-releases.js";
 import type {
   CommitPage,
   CommitRowData,
@@ -31,8 +27,7 @@ import type {
  * new fork (refs, live packs, its commit-graph closure page by page), how a
  * fork starts from that, and what the network object asks of a member
  * (a snapshot of its view, acknowledging condemned packs, which pack ids
- * its registry names), and claiming its packs again after a restore.
- * Everything runs inside the repository object.
+ * its registry names). Everything runs inside the repository object.
  */
 
 /** Refs a fork copies: branches and tags (pull request and other refs stay with the parent). */
@@ -390,7 +385,7 @@ export function networkSnapshot(
 }
 
 /** The registry rows that hold (claim) a pack, under `networkId` or any network. */
-function heldPacks(git: RepoGitStorage, networkId?: string) {
+export function heldPacks(git: RepoGitStorage, networkId?: string) {
   return git.context.storage.sql
     .exec<{ pack_id: string; network_id: string; state: string; origin: string }>(
       `SELECT pack_id, network_id, state, origin FROM packs
@@ -400,52 +395,6 @@ function heldPacks(git: RepoGitStorage, networkId?: string) {
       ...(networkId === undefined ? [] : [networkId]),
     )
     .toArray();
-}
-
-/** What a restored member asks of a fork network's object (its stub). */
-export interface ReclaimNetwork {
-  claim(input: {
-    networkId: string;
-    repoId: string;
-    packIds: readonly string[];
-  }): Promise<{ ok: true; gone: string[]; seq: number } | { ok: false; error: string }>;
-}
-
-/**
- * After a point-in-time restore of the repository (a step of the restore
- * runbook, before it serves again): claims again, in each network its
- * registry stores packs under, every pack its rows hold. The restored rows
- * may name packs whose claims the repository gave up after the restore
- * point, their releases told already or still on their way; the network
- * claims them at a sequence newer than any of those releases' bounds, so
- * none of them removes these claims, and the repository learns it. A row
- * its retire job dropped while the claim was on its way had its release
- * bounded before that sequence: it is released again, bounded by it.
- * Answers the packs the network has deleted or is deleting.
- */
-export async function reclaimHeld(
-  git: RepoGitStorage,
-  network: (networkId: string) => ReclaimNetwork,
-  repoId: string,
-): Promise<string[]> {
-  const byNetwork = new Map<string, string[]>();
-  for (const row of heldPacks(git))
-    byNetwork.set(row.network_id, [...(byNetwork.get(row.network_id) ?? []), row.pack_id]);
-  const gone: string[] = [];
-  for (const [networkId, packIds] of byNetwork) {
-    const answer = await network(networkId).claim({ networkId, repoId, packIds });
-    if (!answer.ok) throw new Error(answer.error);
-    git.context.storage.transactionSync(() => {
-      learnClaimSeq(git, networkId, answer.seq);
-      const kept = new Set(registeredPacks(git, packIds));
-      const dropped = packIds.filter((packId) => !kept.has(packId));
-      for (const packId of dropped) recordRelease(git, { packId, networkId });
-      // Told on the retire job's next pass.
-      if (dropped.length > 0) schedulePackRetire(git.jobs, git.context.now());
-    });
-    gone.push(...answer.gone);
-  }
-  return gone;
 }
 
 /**

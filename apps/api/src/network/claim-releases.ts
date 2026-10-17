@@ -39,9 +39,12 @@ import type { Logger } from "@fyrden/adapters-cloudflare/obs";
  *   `releasesSoFar`).
  * - restored with the repository: a point-in-time restore brings back rows
  *   whose releases were recorded, and maybe told, after the restore point.
- *   The restore runbook, before the repository serves again, claims every
- *   pack its rows hold again (`reclaimHeld`) at a sequence answered after
- *   the restore.
+ *   Taking the new restore generation queues a job that claims every pack
+ *   the rows hold again (reclaim.ts), at a sequence answered after the
+ *   restore. Until it has run (normally on the next alarm; a network it
+ *   cannot reach is asked again later) such a row may have no claim: the
+ *   retention keeps its bytes for 30 days from its condemnation, which came
+ *   after the restore point.
  * The network's questions of a member also claim a pack its view holds,
  * should its claim be gone (lost with a recovery of the network's object,
  * or a restored member not claimed again yet): a collection's (what its
@@ -50,8 +53,8 @@ import type { Logger } from "@fyrden/adapters-cloudflare/obs";
  * member as it reads its rows, so a release recorded after that read
  * covers the claim, and one recorded before it bounds the claim of a row
  * that came back since only as above. (A member restored while a question
- * to it is on its way may answer with an older sequence: the runbook's
- * claim, after the restore, covers that.) The other claims are made at
+ * to it is on its way may answer with an older sequence: the reclaim job,
+ * queued after the restore, covers that.) The other claims are made at
  * sequence 0, leaving one made already as it is, and no release by their
  * claimant can name the pack yet: a fork's (a new repository), the
  * writer's of a pack the network learns of only now (the retire job

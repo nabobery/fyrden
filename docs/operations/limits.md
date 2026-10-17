@@ -134,9 +134,15 @@ object's clock as well as by what it stored). An import whose repository gave up
 claim between sharing its packs and adopting them shares them again first;
 more than 3 times within one request, it answers 409 `busy`. A repository
 restored to an earlier point in time claims again every pack its restored
-registry holds (`reclaimNetworkPacks` on its object, a restore step before
-it serves again), and no release it recorded after that point removes
-those claims. Likewise a release recorded before a member says its view
+registry holds: taking its new restore generation (at once when the
+restore asks for it, otherwise with its first write) queues a job that
+does so on the object's next alarm, a network at a time, asking a network
+it cannot reach again after 30 seconds, doubling to an hour. No release it
+recorded after the restore point removes those claims. Until the job has
+run, a restored row whose claim such a release removed has none: the
+network keeps the pack's bytes for 30 days after condemning it (which came
+after the restore point), and deletes them only if the job has still not
+run by then. Likewise a release recorded before a member says its view
 holds a pack (to a collection, or refusing a deletion) leaves the claim
 the network makes again for it.
 
