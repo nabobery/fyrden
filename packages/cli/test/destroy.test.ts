@@ -52,6 +52,7 @@ async function deployedAccount() {
     plan: "paid",
     runner: fake.runner,
     buildWeb: async () => {},
+    source: { commit: "0123abc", dirty: false },
     randomSecret: () => "s3cret-value",
     onSecretGenerated: () => {},
     log: () => {},

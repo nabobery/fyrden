@@ -9,11 +9,12 @@ import { destroy } from "./commands/destroy.ts";
 import { doctor } from "./commands/doctor.ts";
 import { PUSH_USAGE, parsePushArgs, push } from "./commands/push.ts";
 import { nodePushDeps } from "./commands/push-node.ts";
+import { readSource } from "./source.ts";
 import { nodeWranglerRunner } from "./wrangler.ts";
 
 const USAGE = `usage:
   fyrden deploy [--plan free|paid]   create resources, migrate and deploy both Workers
-  fyrden doctor                      check login and resources without changing anything
+  fyrden doctor                      check login, resources and D1 schemas without changing anything
   fyrden destroy [--yes]             list what deploy created; with --yes delete it all (data loss)
   ${PUSH_USAGE}
                                      push, checking the size first; --chunked uploads a large push in parts`;
@@ -102,7 +103,9 @@ export async function main(argv: string[]): Promise<number> {
   const runner = nodeWranglerRunner(repoRoot);
   if (command === "doctor") {
     const report = await doctor(repoRoot, runner, log);
-    return report.authenticated && report.missing.length === 0 ? 0 : 1;
+    return report.authenticated && report.missing.length === 0 && report.schemaDrift.length === 0
+      ? 0
+      : 1;
   }
   if (command === "destroy") {
     // Without --yes (in CI too) this is a dry run.
@@ -123,6 +126,7 @@ export async function main(argv: string[]): Promise<number> {
     buildWeb: async () => {
       await promisify(execFile)("pnpm", ["--filter", "@fyrden/web", "build"], { cwd: repoRoot });
     },
+    source: await readSource(repoRoot),
     ...envDeployOptions(process.env),
     onSecretGenerated: (secret) =>
       log(

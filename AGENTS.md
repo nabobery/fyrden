@@ -51,8 +51,10 @@ pnpm audit                      # known advisories (CI fails on high and critica
 3. **Schema changes are forward-only.** Durable Object schemas are lists of
    numbered migrations (`apps/api/src/do/schema/`); never edit a released
    migration. Destructive steps must be marked as contract steps. D1 changes
-   are new numbered files in `apps/api/migrations/`. Update the committed
-   expected schema snapshot and add a fixture for each released version.
+   are new numbered files in `apps/api/migrations/`; CI refuses a change to
+   one already on the base branch. Update the committed expected schema
+   snapshots, and add the fixture of each new Durable Object schema version
+   with its migration (the latest version has one too).
 4. **Never log secrets.** Use the logger from `@fyrden/adapters-cloudflare/obs`;
    wrap secret values with `secret()`. Integration tests fail if any log line
    contains an unredacted token.

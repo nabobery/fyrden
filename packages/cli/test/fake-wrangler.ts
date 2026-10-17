@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseExpectedSchema, type SchemaObject } from "../src/d1-schema.ts";
 import type { RunResult, WranglerRunner } from "../src/wrangler.ts";
 
 /**
@@ -9,10 +10,20 @@ import type { RunResult, WranglerRunner } from "../src/wrangler.ts";
  * delete a Worker that still consumes a queue (code 10064, seen live) and R2's
  * refusal to delete a bucket that holds objects or incomplete multipart
  * uploads (code 10008).
+ *
+ * D1 migrations are modelled by what they leave behind: applying them adds
+ * the repository's expected objects a database lacks and leaves the ones it
+ * has as they are, as D1 skips a migration it recorded by file name.
  */
 export function fakeWrangler() {
   const state = {
     d1: new Map<string, string>(),
+    /** Each D1 database's schema objects. */
+    d1Schema: new Map<string, SchemaObject[]>(),
+    /** What fyrden-org answers to the effects summary, one row per state. */
+    effects: [] as { state: string; count: number; oldest: number }[],
+    /** fyrden-api's versions, latest last, with the vars each was deployed with. */
+    apiVersions: [] as { id: string; vars: Record<string, string> }[],
     r2: new Set<string>(),
     /** Object counts of buckets that are not empty. */
     r2Objects: new Map<string, number>(),
@@ -148,7 +159,45 @@ export function fakeWrangler() {
       }
       if (cmd === "d1 migrations apply") {
         state.migrated.push(name);
+        const config = readConfig(args, options.cwd) as {
+          d1_databases?: { database_name: string; migrations_dir: string }[];
+        };
+        const dir = config.d1_databases?.find((d) => d.database_name === name)?.migrations_dir;
+        const expected = parseExpectedSchema(
+          readFileSync(join(options.cwd as string, `${dir}.expected.sql`), "utf8"),
+        );
+        const schema = state.d1Schema.get(name) ?? [];
+        const have = new Set(schema.map((o) => o.name));
+        state.d1Schema.set(name, [...schema, ...expected.filter((o) => !have.has(o.name))]);
         return ok();
+      }
+      if (args[0] === "d1" && args[1] === "execute") {
+        const db = args[2] as string;
+        const sql = args[args.indexOf("--command") + 1] as string;
+        if (!state.d1.has(db)) return fail(`Couldn't find DB with name '${db}'`);
+        const schema = state.d1Schema.get(db) ?? [];
+        let results: unknown[];
+        if (sql.includes("FROM sqlite_schema")) results = schema;
+        else if (sql.includes("FROM effects") && schema.some((o) => o.name === "effects"))
+          results = state.effects;
+        else return fail("no such table: effects: SQLITE_ERROR [code: 7500]");
+        return ok(JSON.stringify([{ results, success: true, meta: {} }]));
+      }
+      if (cmd === "deployments status --name") {
+        const latest = state.apiVersions.at(-1);
+        if (args[3] !== "fyrden-api" || !latest)
+          return fail(`The Worker ${args[3]} has no deployments.`);
+        return ok(JSON.stringify({ versions: [{ version_id: latest.id, percentage: 100 }] }));
+      }
+      if (args[0] === "versions" && args[1] === "view") {
+        const version = state.apiVersions.find((v) => v.id === args[2]);
+        if (!version) return fail(`version ${args[2]} not found [code: 10007]`);
+        const bindings = Object.entries(version.vars).map(([n, text]) => ({
+          type: "plain_text",
+          name: n,
+          text,
+        }));
+        return ok(JSON.stringify({ id: version.id, resources: { bindings } }));
       }
       if (args[0] === "secret" && args[1] === "list") {
         if (!state.deployed.includes(args[3] as string))
@@ -170,13 +219,11 @@ export function fakeWrangler() {
         if (worker === "fyrden-api" && !state.secrets.has("BOOTSTRAP_SECRET")) {
           return fail("The following required secrets have not been set: BOOTSTRAP_SECRET");
         }
-        const configIndex = args.indexOf("-c");
-        if (configIndex >= 0 && options.cwd) {
-          const config = JSON.parse(
-            readFileSync(join(options.cwd, args[configIndex + 1] as string), "utf8"),
-          ) as {
+        if (args.includes("-c") && options.cwd) {
+          const config = readConfig(args, options.cwd) as {
             tail_consumers?: { service: string }[];
             queues?: { consumers?: { queue: string }[] };
+            vars?: Record<string, string>;
           };
           const missingTail = (config.tail_consumers ?? []).find(
             (t) => !state.deployed.includes(t.service),
@@ -186,6 +233,7 @@ export function fakeWrangler() {
           state.tailAttached = (config.tail_consumers ?? []).length > 0;
           for (const { queue } of config.queues?.consumers ?? [])
             state.consumers.set(queue, new Set([...(state.consumers.get(queue) ?? []), worker]));
+          state.apiVersions.push({ id: `ver-${next++}`, vars: config.vars ?? {} });
         }
         state.deployed.push(worker);
         return ok(`Deployed ${worker}\n  https://${worker}.acct.workers.dev`);
@@ -194,4 +242,10 @@ export function fakeWrangler() {
     },
   };
   return { runner, state, calls };
+}
+
+/** The generated (plain JSON) config a command names with `-c`. */
+function readConfig(args: string[], cwd: string | undefined): Record<string, unknown> {
+  const file = args[args.indexOf("-c") + 1] as string;
+  return JSON.parse(readFileSync(join(cwd as string, file), "utf8")) as Record<string, unknown>;
 }
