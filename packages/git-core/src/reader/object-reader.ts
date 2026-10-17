@@ -25,6 +25,13 @@ import { checkView, type RepoView, type ViewPack } from "./view.js";
  */
 const CHAIN_READ_BYTES = 256 * 1024;
 
+/**
+ * Most lookups a reader remembers besides `prefetch`'s (each about 150
+ * bytes, unverified estimate): enough for reads of one object close
+ * together to share one lookup, without growing with a long walk.
+ */
+const RECENT_LOCATIONS = 4096;
+
 export interface ReaderLimits {
   /** Largest object or delta result, as the parser caps it (32 MiB). */
   readonly maxObjectBytes: number;
@@ -108,6 +115,8 @@ export class ObjectReader {
   readonly #reservation: MemoryReservation;
   /** Where `prefetch` found objects, by hex oid (undefined: in no pack of the view). */
   readonly #located = new Map<string, Location | undefined>();
+  /** Where other lookups found objects, by hex oid, oldest first; at most `RECENT_LOCATIONS`. */
+  readonly #recent = new Map<string, Location | undefined>();
   #released = false;
 
   private constructor(
@@ -148,6 +157,8 @@ export class ObjectReader {
     if (this.#released) return;
     this.#released = true;
     this.#cache.clear();
+    this.#located.clear();
+    this.#recent.clear();
     this.#reservation.release();
   }
 
@@ -404,7 +415,10 @@ export class ObjectReader {
     return found;
   }
 
-  /** The first pack of the view holding `oid` (trying `prefer` first), or undefined. */
+  /**
+   * The first pack of the view holding `oid` (trying `prefer` first), or
+   * undefined. Remembered for the reader's later lookups of the same oid.
+   */
   async #locate(oid: Uint8Array, prefer?: number): Promise<Location | undefined> {
     if (oid.length !== OID_BYTES) throw new RangeError(`an oid has ${OID_BYTES} bytes`);
     const { packs } = this.#view;
@@ -414,14 +428,20 @@ export class ObjectReader {
       const found = await this.#lookupIn(prefer, oid);
       if (found) return found;
     }
-    const hex = this.#located.size > 0 ? oidHex(oid) : "";
+    const hex = oidHex(oid);
     if (this.#located.has(hex)) return this.#located.get(hex);
-    for (let index = 0; index < packs.length; index++) {
-      if (index === prefer) continue;
-      const found = await this.#lookupIn(index, oid);
-      if (found) return found;
+    if (this.#recent.has(hex)) return this.#recent.get(hex);
+    let found: Location | undefined;
+    for (let index = 0; index < packs.length && !found; index++) {
+      if (index !== prefer) found = await this.#lookupIn(index, oid);
     }
-    return undefined;
+    // A header read then a body read (or `has` then a read) look the object up once.
+    if (this.#recent.size >= RECENT_LOCATIONS) {
+      const oldest = this.#recent.keys().next();
+      if (!oldest.done) this.#recent.delete(oldest.value);
+    }
+    this.#recent.set(hex, found);
+    return found;
   }
 
   async #lookupIn(index: number, oid: Uint8Array): Promise<Location | undefined> {

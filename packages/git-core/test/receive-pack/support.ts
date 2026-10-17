@@ -127,6 +127,7 @@ export function memoryServer(): MemoryServer {
                 onLookup?.(p.packId, oid.subarray(at ?? 0, (at ?? 0) + 20));
                 return parsed.lookup(oid, at);
               },
+              crc32At: (position: number) => parsed.crc32At(position),
             },
           };
         }),

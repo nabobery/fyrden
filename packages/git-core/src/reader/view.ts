@@ -1,6 +1,6 @@
 import { PACK_HEADER_BYTES, PACK_TRAILER_BYTES } from "../pack/entry-header.js";
 import type { PackExistenceSummary } from "../pack/existence-summary.js";
-import type { IdxLookup, IdxReadBudget } from "../pack/idx-read.js";
+import type { IdxLocation, IdxReadBudget } from "../pack/idx-read.js";
 import { isPackId, type PackId } from "../ports/pack-store.js";
 
 /**
@@ -10,11 +10,12 @@ import { isPackId, type PackId } from "../ports/pack-store.js";
  * included), so callers can count their store calls.
  */
 export interface PackIdxSource {
+  /** Where the oid's entry is; its CRC32 is not read (`crc32At` reads it). */
   lookup(
     oid: Uint8Array,
     at?: number,
     budget?: IdxReadBudget,
-  ): IdxLookup | undefined | Promise<IdxLookup | undefined>;
+  ): IdxLocation | undefined | Promise<IdxLocation | undefined>;
   /**
    * Optional: `lookup` for many oids with coalesced reads (both `.idx`
    * classes have it). Callers that check many objects at once use it when
@@ -24,7 +25,9 @@ export interface PackIdxSource {
   lookupMany?(
     oids: readonly Uint8Array[],
     budget?: IdxReadBudget,
-  ): (IdxLookup | undefined | null)[] | Promise<(IdxLookup | undefined | null)[]>;
+  ): (IdxLocation | undefined | null)[] | Promise<(IdxLocation | undefined | null)[]>;
+  /** The CRC32 of the entry at `position`, for copying the entry verbatim. */
+  crc32At(position: number, budget?: IdxReadBudget): number | Promise<number>;
 }
 
 /** One live pack of a repository, as its registry row describes it. */

@@ -11,7 +11,12 @@ import {
   readLargeOffset,
   searchOids,
 } from "./idx-format.js";
-import { type IdxLookup, type IdxReadBudget, layoutForLength, readIdxHeader } from "./idx-read.js";
+import {
+  type IdxLocation,
+  type IdxReadBudget,
+  layoutForLength,
+  readIdxHeader,
+} from "./idx-read.js";
 
 /**
  * Reads `length` bytes at `offset` of an `.idx` (an R2 range GET, usually
@@ -39,8 +44,8 @@ export interface OpenRangedIdxOptions {
  * fetched whole (design: fanout in memory, then only the needed slice of the
  * oid table). Costs per lookup: none when the oid's fanout bucket is empty;
  * otherwise one read of the bucket's oids (20 bytes × bucket size, about
- * 78 KB for a million-object pack), then one read each for the offset and
- * the CRC32 (two reads in parallel), plus one more for a 64-bit offset.
+ * 78 KB for a million-object pack), then one read for the offset, plus one
+ * more for a 64-bit offset.
  */
 export async function openRangedIdx(
   readRange: IdxRangeReader,
@@ -105,36 +110,34 @@ export class RangedPackIdx {
     return found < 0 ? -1 : lo + found;
   }
 
-  /** One oid's entry; its reads are added to `budget` when given. */
-  async lookup(oid: Uint8Array, at = 0, budget?: IdxReadBudget): Promise<IdxLookup | undefined> {
+  /**
+   * One oid's entry, without its CRC32 (`crc32At` reads that); its reads
+   * are added to `budget` when given.
+   */
+  async lookup(oid: Uint8Array, at = 0, budget?: IdxReadBudget): Promise<IdxLocation | undefined> {
     const read = counted(this.#read, budget);
     const position = await this.#find(read, oid, at);
     if (position < 0) return undefined;
-    const [offset, crc32] = await Promise.all([
-      this.#offsetAt(read, position),
-      readUint32(read, this.#layout.crc32sAt + position * 4),
-    ]);
-    return { position, offset, crc32 };
+    return { position, offset: await this.#offsetAt(read, position) };
   }
 
   /**
    * `lookup` for many oids with coalesced reads: the oid-table slices of
-   * their fanout buckets, then the CRC32s and offsets of the entries found,
-   * each table read in spans of at most `maxSpanBytes` (one read per table
-   * for a small index, instead of three per oid). A bucket larger than the
-   * span is still read whole, as `find` reads it; 64-bit offsets are read
-   * one by one.
+   * their fanout buckets, then the offsets of the entries found, each table
+   * read in spans of at most `maxSpanBytes` (one read per table for a small
+   * index, instead of two per oid). A bucket larger than the span is still
+   * read whole, as `find` reads it; 64-bit offsets are read one by one.
    *
    * With a budget, an oid-table span is read only while its read and the
-   * CRC32 and offset reads its entries could need still fit in
-   * `budget.maxReads`, and a 64-bit offset only while its read fits; the
-   * oids left unanswered are `null`, the others are answered as without it.
+   * offset reads its entries could need still fit in `budget.maxReads`, and
+   * a 64-bit offset only while its read fits; the oids left unanswered are
+   * `null`, the others are answered as without it.
    */
   async lookupMany(
     oids: readonly Uint8Array[],
     budget?: IdxReadBudget,
     maxSpanBytes = DEFAULT_SPAN_BYTES,
-  ): Promise<(IdxLookup | undefined | null)[]> {
+  ): Promise<(IdxLocation | undefined | null)[]> {
     const read = counted(this.#read, budget);
     const maxReads = budget?.maxReads ?? Number.POSITIVE_INFINITY;
     const spent = () => budget?.reads ?? 0;
@@ -158,7 +161,7 @@ export class RangedPackIdx {
     for (const bucket of buckets) {
       if (bucket.hi === bucket.lo) for (const i of bucket.items) answered[i] = true;
     }
-    // Entries per CRC32 or offset read, and the reads still owed for the spans read so far.
+    // Entries per offset read, and the reads still owed for the spans read so far.
     const wordsPerRead = Math.max(1, Math.floor(maxSpanBytes / 4));
     let owed = 0;
     const spans = coalesce(
@@ -167,10 +170,10 @@ export class RangedPackIdx {
       maxSpanBytes,
     );
     for (const span of spans) {
-      // The entries found in one span need at most this many CRC32 reads, and as many offset reads.
+      // The entries found in one span need at most this many offset reads.
       const words = Math.ceil((span.hi - span.lo) / wordsPerRead);
-      if (spent() + owed + 1 + 2 * words > maxReads) break;
-      owed += 2 * words;
+      if (spent() + owed + 1 + words > maxReads) break;
+      owed += words;
       const slice = await readExactly(
         read,
         this.#layout.oidsAt + span.lo * OID_BYTES,
@@ -186,7 +189,6 @@ export class RangedPackIdx {
       }
     }
     const found = [...new Set(positions.filter((p) => p >= 0))].sort((a, b) => a - b);
-    const crc32s = await this.#readWords(read, this.#layout.crc32sAt, found, maxSpanBytes);
     const smalls = await this.#readWords(read, this.#layout.offsetsAt, found, maxSpanBytes);
     const offsets = new Map<number, number>();
     for (const position of found) {
@@ -201,7 +203,7 @@ export class RangedPackIdx {
       if (position < 0) return undefined;
       const offset = offsets.get(position);
       if (offset === undefined) return null;
-      return { position, offset, crc32: crc32s.get(position) as number };
+      return { position, offset };
     });
   }
 
@@ -228,9 +230,10 @@ export class RangedPackIdx {
     return oidFromBytes(await readExactly(this.#read, at, OID_BYTES));
   }
 
-  async crc32At(position: number): Promise<number> {
+  /** The entry's CRC32; its read is added to `budget` when given. */
+  async crc32At(position: number, budget?: IdxReadBudget): Promise<number> {
     this.#checkPosition(position);
-    return readUint32(this.#read, this.#layout.crc32sAt + position * 4);
+    return readUint32(counted(this.#read, budget), this.#layout.crc32sAt + position * 4);
   }
 
   /** The entry's pack offset. Throws `IdxError` for a bad large-offset reference. */

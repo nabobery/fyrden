@@ -197,7 +197,10 @@ async function fetchView(
     view.push({
       packId: row.packId,
       bytes: row.bytes,
-      idx: { lookup: async (oid, at) => (await idx()).lookup(oid, at) },
+      idx: {
+        lookup: async (oid, at) => (await idx()).lookup(oid, at),
+        crc32At: async (position) => (await idx()).crc32At(position),
+      },
     });
     candidates.push({
       packId: row.packId,

@@ -1,9 +1,9 @@
 import { type Oid, oidFromBytes, oidToHex } from "../object/oid.js";
-import type { IdxLookup, IdxReadBudget } from "../pack/idx-read.js";
+import type { IdxLocation, IdxReadBudget } from "../pack/idx-read.js";
 import type { PackStore } from "../ports/pack-store.js";
 import type { RepoView, ViewPack } from "../reader/view.js";
 
-type Found = IdxLookup | undefined;
+type Found = IdxLocation | undefined;
 
 /** Most `.idx` reads one single lookup makes: the bucket's oids, the CRC32, the offset and a 64-bit offset. */
 const MAX_LOOKUP_READS = 4;
@@ -33,7 +33,10 @@ export class StepView {
       scope: view.scope,
       packs: view.packs.map((pack, i) => ({
         ...pack,
-        idx: { lookup: (oid: Uint8Array, at = 0) => this.#lookup(i, oid, at) },
+        idx: {
+          lookup: (oid: Uint8Array, at = 0) => this.#lookup(i, oid, at),
+          crc32At: (position: number) => pack.idx.crc32At(position, this.#idxReads),
+        },
       })),
     };
     this.packStore = {

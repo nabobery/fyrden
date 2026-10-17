@@ -47,6 +47,9 @@ function lazyIdx(read: IdxRangeReader): PackIdxSource {
       if (!opened && budget && budget.reads + 1 > budget.maxReads) return oids.map(() => null);
       return (await open(budget)).lookupMany(oids, budget);
     },
+    async crc32At(position, budget) {
+      return (await open(budget)).crc32At(position, budget);
+    },
   };
 }
 
