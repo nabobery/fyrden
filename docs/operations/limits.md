@@ -341,7 +341,10 @@ an alarm starts no slice past 800 calls, so a network with many members is
 collected over as many alarms as it needs. A collection due while a fork is
 being created waits for it: it runs as soon as the fork is published or
 abandoned, and a fork still unfinished after 1 hour is taken as abandoned
-and removed.
+and removed. While a collection asks the members what they read, creating
+a fork, detaching, and a pull request from a fork wait for it up to 10
+seconds, then answer `network_busy` (retry later); a collection that fails
+for good stops holding them up and runs again a day later.
 
 ## Repository deletion
 

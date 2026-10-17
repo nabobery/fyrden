@@ -7,7 +7,7 @@ import {
 import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
 import { deletionHandler } from "../network/deletion.js";
-import { networkGcHandler, wakeGc } from "../network/gc.js";
+import { fenced, networkGcHandler, wakeGc } from "../network/gc.js";
 import { type GcState, type Member, NetworkRegistry } from "../network/registry.js";
 import {
   NETWORK_DEFAULTS,
@@ -84,10 +84,11 @@ export class NetworkDO extends MigratingDO {
     return undefined;
   }
 
-  /** Waits while the collection's fence is up; false when it is still up after the policy's wait. */
+  /** Waits while a collection holds its fence; false when it still does after the policy's wait. */
   async #passFence(): Promise<boolean> {
     const deadline = this.context.now() + this.policy.fenceWaitMs;
-    while (this.registry.gcState().fence) {
+    const runtime = this.runtime;
+    while (fenced(runtime)) {
       if (this.context.now() >= deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, FENCE_POLL_MS));
     }

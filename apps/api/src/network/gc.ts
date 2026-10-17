@@ -117,6 +117,25 @@ export function wakeGc(runtime: NetworkRuntime): void {
     scheduleNetworkGc(runtime, context.now());
 }
 
+/**
+ * Whether a collection holds the fence. One whose job ended without
+ * lifting it (it failed for good, or is gone) no longer does: the fence is
+ * lifted here and the collection is due again after the interval, so forks
+ * and detaches wait only while a mark can still finish.
+ */
+export function fenced(runtime: NetworkRuntime): boolean {
+  const { registry, jobs, context, policy, log } = runtime;
+  if (!registry.gcState().fence) return false;
+  const job = jobs.get(NETWORK_GC_JOB_ID)?.state;
+  if (job === "queued" || job === "running") return true;
+  context.storage.transactionSync(() => {
+    registry.setGcState({ phase: "idle", fence: false });
+    scheduleNetworkGc(runtime, context.now() + policy.gcIntervalMs);
+  });
+  log.warn("network collection ended with its fence up; lifted", { job: job ?? "missing" });
+  return false;
+}
+
 async function gcSlice(
   runtime: NetworkRuntime,
   saved: GcCursor | GcWait | undefined,
