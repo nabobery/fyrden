@@ -1,4 +1,10 @@
-import { BASE64_RUN, base64RunHasToken, decodeAsciiPercent, TOKEN_IN_TEXT } from "@fyrden/domain";
+import {
+  BASE64_RUN,
+  base64RunHasToken,
+  decodeAsciiPercent,
+  TOKEN_IN_TEXT,
+  WEBHOOK_SECRET_IN_TEXT,
+} from "@fyrden/domain";
 
 /**
  * Log redaction. Applied to every structured log line, so a token
@@ -35,6 +41,7 @@ export function redactString(input: string): string {
   // caught by the same patterns as a plain one.
   let out = decodeAsciiPercent(input);
   out = out.replace(TOKEN_IN_TEXT, (_, type: string) => `fyrden_${type}_${REDACTED}`);
+  out = out.replace(WEBHOOK_SECRET_IN_TEXT, `whsec_${REDACTED}`);
   out = out.replace(
     AUTH_SCHEME,
     (_, scheme: string, space: string) => `${scheme}${space}${REDACTED}`,

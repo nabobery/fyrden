@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { addPendingCommits } from "../../src/graph/commit-graph.js";
+import { WalkLimitError } from "../../src/graph/errors.js";
 import { mergeBases } from "../../src/graph/merge-base.js";
 import { isAncestor, reachableCommits } from "../../src/graph/reachability.js";
 import { oidToHex } from "../../src/object/oid.js";
@@ -14,13 +15,16 @@ import { fakeOid } from "./support.js";
  * 20,000 commits and find two bases. A walk from tip to root covers all
  * 100,000.
  *
- * Measured [M] (Apple M4, Node 24, in-memory fake graph, 2026-10-11):
- * insert with generation numbers 433 ms, merge-base 72 ms (two bases, about
- * 20,000 commits walked), is-ancestor(root, tip) 127 ms and rev-list of all
- * 100,000 commits 266 ms. The bounds asserted below are deliberately
- * generous so the test does not flake on slow CI machines; a Durable Object
- * reading SQLite rows will be slower and is measured separately.
+ * The work is asserted as commits walked (each walk's `maxCommits`), never
+ * as time. Measured [M] (Apple M4, Node 24, in-memory fake graph,
+ * 2026-10-11): insert with generation numbers 433 ms, merge-base 72 ms,
+ * is-ancestor(root, tip) 127 ms and rev-list of all 100,000 commits 266 ms;
+ * `FYRDEN_BENCH=1` prints the times again. A Durable Object reading SQLite
+ * rows is slower and is measured separately.
  */
+const BENCH = Boolean(process.env.FYRDEN_BENCH);
+// biome-ignore lint/style/noRestrictedGlobals: printed under FYRDEN_BENCH, never asserted.
+const clock = () => performance.now();
 const PER_BRANCH = 50_000;
 
 function history(): { commits: CommitInfo[]; a: string; b: string; root: string } {
@@ -49,39 +53,50 @@ function history(): { commits: CommitInfo[]; a: string; b: string; root: string 
   return { commits, a: `a${PER_BRANCH}`, b: `b${PER_BRANCH}`, root: "root" };
 }
 
-describe("walk performance on 100k commits", () => {
-  it("merge-base in 72 ms measured, bounded at 5 s", async () => {
+describe("walks on 100k commits", () => {
+  it("find the two merge bases within 25,000 commits walked, and walk the rest once", async () => {
     const { commits, a, b, root } = history();
     const graph = createMemoryCommitGraph();
 
-    let start = performance.now();
+    let start = clock();
     await addPendingCommits(graph, "import", commits);
     await graph.promote("import");
-    const insertMs = performance.now() - start;
+    const insertMs = clock() - start;
 
-    start = performance.now();
-    const bases = await mergeBases(graph, "verified", fakeOid(a), [fakeOid(b)]);
-    const mergeBaseMs = performance.now() - start;
+    // Bounded: the walk stops at the boundary, so a budget a little above
+    // its 20,000 commits is enough, and one well below it is not.
+    await expect(
+      mergeBases(graph, "verified", fakeOid(a), [fakeOid(b)], { maxCommits: 10_000 }),
+    ).rejects.toThrow(WalkLimitError);
+    start = clock();
+    const bases = await mergeBases(graph, "verified", fakeOid(a), [fakeOid(b)], {
+      maxCommits: 25_000,
+    });
+    const mergeBaseMs = clock() - start;
     expect(bases.map(oidToHex).sort()).toEqual(
       [fakeOid("a39999"), fakeOid("b39999")].map(oidToHex).sort(),
     );
 
-    start = performance.now();
-    expect(await isAncestor(graph, "verified", fakeOid(root), fakeOid(a))).toBe(true);
-    const ancestorMs = performance.now() - start;
+    start = clock();
+    expect(
+      await isAncestor(graph, "verified", fakeOid(root), fakeOid(a), {
+        maxCommits: commits.length,
+      }),
+    ).toBe(true);
+    const ancestorMs = clock() - start;
 
-    start = performance.now();
-    const all = await reachableCommits(graph, "verified", [fakeOid(a), fakeOid(b)]);
-    const revListMs = performance.now() - start;
+    start = clock();
+    const all = await reachableCommits(graph, "verified", [fakeOid(a), fakeOid(b)], [], {
+      maxCommits: commits.length,
+    });
+    const revListMs = clock() - start;
     expect(all.size).toBe(commits.length);
 
-    console.info(
-      `100k commits: insert ${insertMs.toFixed(0)} ms, merge-base ${mergeBaseMs.toFixed(0)} ms, ` +
-        `is-ancestor(root) ${ancestorMs.toFixed(0)} ms, rev-list ${revListMs.toFixed(0)} ms, ` +
-        `walk table ${(all.byteLength / 1024 / 1024).toFixed(1)} MiB of oids`,
-    );
-    expect(mergeBaseMs).toBeLessThan(5_000);
-    expect(ancestorMs).toBeLessThan(5_000);
-    expect(revListMs).toBeLessThan(5_000);
+    if (BENCH)
+      console.info(
+        `100k commits: insert ${insertMs.toFixed(0)} ms, merge-base ${mergeBaseMs.toFixed(0)} ms, ` +
+          `is-ancestor(root) ${ancestorMs.toFixed(0)} ms, rev-list ${revListMs.toFixed(0)} ms, ` +
+          `walk table ${(all.byteLength / 1024 / 1024).toFixed(1)} MiB of oids`,
+      );
   }, 60_000);
 });

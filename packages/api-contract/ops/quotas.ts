@@ -1,4 +1,4 @@
-import { HANDLE_PATTERN } from "@fyrden/domain";
+import { HANDLE_SHAPE, MAX_HANDLE_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation, INSTANCE_ADMIN } from "../src/op.js";
 
@@ -42,7 +42,12 @@ export const getOrgQuota = defineOperation({
   summary: "Get an organization's quota",
   description: "An organization's quota and its use, for its members.",
   input: z.object({
-    org: z.string().regex(HANDLE_PATTERN).describe("The organization's handle."),
+    org: z
+      .string()
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
+      .describe("The organization's handle."),
   }),
   output: Quota,
   permission: "members:read",
@@ -65,7 +70,12 @@ export const setQuota = defineOperation({
   description:
     "Sets a user's or organization's limits; null goes back to the instance default, and a limit left out is kept. Lowering a limit below the use refuses new repositories and pushes; nothing is deleted. Instance administrators only.",
   input: z.object({
-    account: z.string().regex(HANDLE_PATTERN).describe("The user's or organization's handle."),
+    account: z
+      .string()
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
+      .describe("The user's or organization's handle."),
     max_repos: z.number().int().min(0).nullable().optional(),
     max_storage_bytes: z.number().int().min(0).nullable().optional(),
   }),

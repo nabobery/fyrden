@@ -31,7 +31,8 @@ import {
  *
  * 1. Snapshot: the live packs and garbage packs are the sources (borrowed
  *    ones too: a fork network's packs this repository reads); the roots
- *    are the refs, then the reflog entries within the retention.
+ *    are the refs, then the reflog entries within the retention and the
+ *    further roots the repository names (its pull requests' recorded bases).
  * 2. Mark: every object reachable from the refs, then from the reflog, in
  *    one bit set per source (the refs-only marks are kept: they decide
  *    which packs are all-reachable).
@@ -80,6 +81,7 @@ export interface GcCursor {
   }[];
   /** The mark checkpoint (`mark-<seq>`); 0 before the first save. */
   readonly seq: number;
+  /** Roots marked after the refs: the reflog's and the further ones the repository names. */
   readonly reflogRoots: number;
   /** Indexes into `sources`: what the `gc` output keeps (reachable objects). */
   readonly gcSources?: readonly number[];
@@ -110,12 +112,14 @@ export function gcHandler(
   log: Logger,
   blocks?: () => BlockCache,
   hooks: GcHooks = {},
+  /** Further roots, walked with the reflog's. */
+  roots: () => readonly Oid[] = () => [],
 ): JobHandler {
   return {
     runSlice: async (job) => {
       const cursor = decodeJson<GcCursor>(job.cursor);
       await hooks.onSlice?.(cursor?.v === 1 ? cursor : undefined);
-      return new GcSlice(git, policy(), log, blocks?.(), hooks).run(
+      return new GcSlice(git, policy(), log, blocks?.(), hooks, roots).run(
         job,
         cursor?.v === 1 ? cursor : undefined,
       );
@@ -133,6 +137,7 @@ class GcSlice {
     readonly log: Logger,
     readonly blocks: BlockCache | undefined,
     readonly hooks: GcHooks = {},
+    readonly roots: () => readonly Oid[] = () => [],
   ) {
     this.deadline = git.context.now() + policy.sliceMs;
   }
@@ -210,6 +215,11 @@ class GcSlice {
         roots.set(Array.from(bytes).join(","), bytes);
       }
     }
+    // Further roots the repository keeps (pull requests' recorded bases) go with the reflog's.
+    // One recorded after this read was a branch's tip when recorded: the refs this run marks
+    // from, or an update after `reflogSeq` the swap's catch-up walks from, reach it. And a
+    // later run reads it before condemning anything this run leaves garbage.
+    for (const oid of this.roots()) roots.set(Array.from(oid).join(","), oid);
     const packed = new Uint8Array(roots.size * 20);
     let at = 0;
     for (const oid of roots.values()) {

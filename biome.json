@@ -73,7 +73,8 @@
               "options": {
                 "deniedGlobals": {
                   "setTimeout": "Tests wait on explicit signals, never on time: a sleep or a timed wait passes or fails with the runner's speed (docs/testing.md). Pause code at a hook, drive alarms yourself (the clock is held a day ahead), or, for a deliberate yield, add a biome-ignore saying why.",
-                  "setInterval": "Tests wait on explicit signals, never on time: a sleep or a timed wait passes or fails with the runner's speed (docs/testing.md). Pause code at a hook, drive alarms yourself (the clock is held a day ahead), or, for a deliberate yield, add a biome-ignore saying why."
+                  "setInterval": "Tests wait on explicit signals, never on time: a sleep or a timed wait passes or fails with the runner's speed (docs/testing.md). Pause code at a hook, drive alarms yourself (the clock is held a day ahead), or, for a deliberate yield, add a biome-ignore saying why.",
+                  "performance": "Tests never assert on elapsed time: a time bound passes or fails with the runner's speed (docs/testing.md). Assert the work instead (rows read, commits walked, steps counted); a benchmark prints times only under FYRDEN_BENCH, with a biome-ignore saying so."
                 }
               }
             },

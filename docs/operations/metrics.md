@@ -89,6 +89,7 @@ The latest point of a group is its current value.
 | Metric | Dimensions | Value |
 |---|---|---|
 | `git.push` | `outcome` (`committed`, `partial`, `rejected`, `refused`, `failed`), `what` (`pushes`, `objects`, `bytes`, `refs`) | Per finished push: 1 for `pushes`, else the amount |
+| `push.version_retry` | `class` | Per commit attempt of a push tried again because another push to the repository (any branch) committed first |
 | `git.pack_cap` | `outcome` (`within`, `merged`, `refused_budget`, `refused_leased`) | Push commits checked against the pack-count cap (a push without `--atomic` commits once per ref) |
 | `git.fetch` | `request` (`clone`, `fetch`, `negotiate`, `refused`), `plan` (`as-is`, `stitched`, `regenerated`, `none`), `mode` (`stored`: Free serving, `transport`: Paid serving), `cached` (`true`, `false`) | 1 per fetch request |
 | `git.fetch.bytes_out` | `mode` | Response bytes sent for one fetch |

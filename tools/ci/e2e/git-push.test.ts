@@ -3,7 +3,7 @@
 // atomic push with one refused ref, push options, and a body larger than
 // git's http.postBuffer (sent chunked). After each, `git ls-remote` shows
 // the refs expected. Storage is a fresh temporary directory.
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { mentionsToken } from "@fyrden/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startWranglerDev } from "./wrangler-dev.js";
+import { startWranglerDev, type WranglerDev } from "./wrangler-dev.js";
 
 const root = resolve(import.meta.dirname, "../../..");
 const apiConfig = join(root, "apps/api/wrangler.jsonc");
@@ -27,8 +27,7 @@ const bootstrapSecret = `e2e-${crypto.randomUUID()}`;
 const BODY_LIMIT = 6 * 1024 * 1024;
 
 let scratch = "";
-let dev: ChildProcess | undefined;
-let closed: Promise<void> = Promise.resolve();
+let server: WranglerDev | undefined;
 let output = "";
 let token = "";
 let handle = "";
@@ -157,7 +156,7 @@ beforeAll(async () => {
   );
   expect(migrate.code, migrate.stdout + migrate.stderr).toBe(0);
 
-  const server = await startWranglerDev({
+  server = await startWranglerDev({
     args: [
       "-c",
       apiConfig,
@@ -173,8 +172,6 @@ beforeAll(async () => {
       output += text;
     },
   });
-  dev = server.child;
-  closed = server.closed;
   port = server.port;
   origin = `http://127.0.0.1:${port}`;
 
@@ -189,11 +186,13 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  if (dev && dev.exitCode === null && dev.signalCode === null) dev.kill("SIGTERM");
-  await Promise.race([closed, new Promise((give) => setTimeout(give, 10_000))]);
-  // Neither the Workers nor wrangler's access log may print a token.
-  expect(output.split("\n").filter(mentionsToken)).toEqual([]);
-  if (scratch) await rm(scratch, { recursive: true, force: true });
+  try {
+    await server?.stop();
+    // Neither the Workers nor wrangler's access log may print a token.
+    expect(output.split("\n").filter(mentionsToken)).toEqual([]);
+  } finally {
+    if (scratch) await rm(scratch, { recursive: true, force: true });
+  }
 });
 
 describe("stock git push against fyrden-api (wrangler dev)", () => {

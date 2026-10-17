@@ -1,3 +1,4 @@
+import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import {
   createSha1Hasher,
   encodeCommit,
@@ -9,6 +10,7 @@ import {
   treeEntries,
 } from "@fyrden/git-core";
 import { BUSY as BROWSE_BUSY, type Browsed, fail, guarded, type RepoBrowse } from "./browse.js";
+import { REPO_DELETED } from "./events.js";
 import {
   BUSY,
   FILE_WRITE_POLICY,
@@ -120,7 +122,7 @@ export function templateTree(
 export interface TemplateWriteInput
   extends Pick<
     FileWriteInput,
-    "principal" | "tokenId" | "repoId" | "committer" | "message" | "requestId"
+    "principal" | "tokenId" | "repoId" | "committer" | "author" | "message" | "requestId"
   > {}
 
 /**
@@ -163,7 +165,7 @@ export async function writeTemplate(
     const unsigned = {
       tree: tree.oid,
       parents: [],
-      author: committer,
+      author: input.author ? ident(input.author, now) : committer,
       committer,
       headers: [],
       message: new TextEncoder().encode(input.message),
@@ -189,4 +191,117 @@ export async function writeTemplate(
     ok: true,
     value: { branch: ref.slice("refs/heads/".length), commit: oidToHex(commit) },
   };
+}
+
+/** What a generation settled as abandoned answers its own late commit. */
+const GENERATION_ABANDONED =
+  "the generation from the template was abandoned; the repository is being deleted";
+
+export interface GenerationDeps {
+  readonly git: RepoGitStorage;
+  /** The Worker's bindings, read at each use (tests may replace them). */
+  readonly env: () => Env;
+  /** No read: the repository is gone or going. */
+  readonly refusesReads: () => boolean;
+  /** Whether the repository's git storage exists (none after an erase). */
+  readonly hasGitStorage: () => boolean;
+  /** Takes the directory's epoch (a commit needs it first). */
+  readonly checkEpoch: () => Promise<void>;
+  /** The write deps of the current invocation. */
+  readonly writeDeps: () => Promise<FileWriteDeps>;
+  /** For tests: runs before the first commit is written. */
+  readonly hooks: () => { readonly beforeWrite?: () => Promise<void> };
+}
+
+/**
+ * A new repository's generation from a template, while it is pending: its
+ * marker (the template), recorded before the storage exists so no write is
+ * admitted ahead of it; its first commit; and its settling when its
+ * request could not confirm it.
+ */
+export class TemplateGeneration {
+  constructor(private readonly deps: GenerationDeps) {}
+
+  /** Records that the repository is generated from `templateId` (before its storage exists). */
+  record(templateId: string): void {
+    this.deps.git.context.storage.sql.exec(
+      `INSERT INTO generation (id, template_id, started_at) VALUES (1, ?, ?)
+       ON CONFLICT (id) DO NOTHING`,
+      templateId,
+      this.deps.git.context.now(),
+    );
+  }
+
+  /**
+   * What the first commit is made of: the template's tree, once the
+   * repository is still being generated (and not abandoned).
+   */
+  async template(): Promise<Browsed<TemplateTree>> {
+    if (this.deps.refusesReads()) return fail(404, "repo_not_found", REPO_DELETED);
+    const templateId = this.templateId();
+    if (templateId === undefined)
+      return fail(409, "not_generating", "The repository is not being generated from a template.");
+    if (this.abandoned() !== undefined)
+      return fail(409, "generation_abandoned", GENERATION_ABANDONED);
+    const template = await this.deps.env().REPO.getByName(templateId).templateTree();
+    if (!template.ok) return template;
+    await this.deps.hooks().beforeWrite?.();
+    return template;
+  }
+
+  /** Makes the first commit from `template` (see `writeTemplate`); the marker goes with it. */
+  async write(
+    input: TemplateWriteInput,
+    template: TemplateTree,
+  ): Promise<Browsed<{ branch: string; commit: string }>> {
+    // Its commit needs the restore generation taken (a cold instance has not yet).
+    await this.deps.checkEpoch();
+    const made = await writeTemplate(await this.deps.writeDeps(), input, template);
+    if (made.ok) this.deps.git.context.storage.sql.exec("DELETE FROM generation");
+    return made;
+  }
+
+  /**
+   * Settles a generation its request could not confirm: `committed` when
+   * the repository has refs (its first commit was made: nothing else
+   * writes while it is pending), whether or not its marker was cleared;
+   * `abandoned` while it is pending without them, after which its commit
+   * is refused at the commit point, so the repository can be deleted
+   * without losing a late one; `none` otherwise (no repository here, as
+   * after an erase, or no generation). One synchronous transaction, so it
+   * cannot interleave with that commit.
+   */
+  abandon(): "committed" | "abandoned" | "none" {
+    const { git } = this.deps;
+    return git.context.storage.transactionSync(() => {
+      const committed = this.deps.hasGitStorage() && git.refStore.readRefsSync().refs.size > 0;
+      if (this.templateId() === undefined)
+        return committed ? ("committed" as const) : ("none" as const);
+      if (committed) {
+        git.context.storage.sql.exec("DELETE FROM generation");
+        return "committed" as const;
+      }
+      git.context.storage.sql.exec(
+        "UPDATE generation SET abandoned_at = ? WHERE abandoned_at IS NULL",
+        git.context.now(),
+      );
+      return "abandoned" as const;
+    });
+  }
+
+  /** Why a commit is refused: the generation it would finish was abandoned. */
+  abandoned(): string | undefined {
+    return this.deps.git.context.storage.sql
+      .exec<{ abandoned_at: number | null }>("SELECT abandoned_at FROM generation")
+      .toArray()[0]?.abandoned_at != null
+      ? GENERATION_ABANDONED
+      : undefined;
+  }
+
+  /** The template this repository is still being generated from, if it is. */
+  templateId(): string | undefined {
+    return this.deps.git.context.storage.sql
+      .exec<{ template_id: string }>("SELECT template_id FROM generation")
+      .toArray()[0]?.template_id;
+  }
 }

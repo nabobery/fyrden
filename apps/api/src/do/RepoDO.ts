@@ -1,6 +1,6 @@
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
-import { readGrantLinks } from "@fyrden/adapters-cloudflare/auth";
 import {
+  DERIVED_REF_PREFIX,
   isNetworkId,
   type JobHandler,
   type JobKind,
@@ -16,30 +16,18 @@ import {
   atInvocationEnd,
   createLogger,
   createMetrics,
+  currentInvocation,
   measureInvocation,
   type RequestMeta,
 } from "@fyrden/adapters-cloudflare/obs";
 import {
   type Envelope,
-  principalTypeOf,
   protectsBranch,
-  REPO_ROLES,
   type RepoRole,
+  type ReviewEvent,
+  rootIdentity,
 } from "@fyrden/domain";
-import {
-  type BlockCache,
-  bytesBody,
-  encodePushResponse,
-  failAtomically,
-  type LsRefsArgs,
-  liveCommands,
-  type Oid,
-  oidToHex,
-  type PackId,
-  planPush,
-  readPushBody,
-} from "@fyrden/git-core";
-import { readModelFor } from "../events/read-model.js";
+import { type BlockCache, type LsRefsArgs, type Oid, oidToHex } from "@fyrden/git-core";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
 import { checkObjectAccess } from "../git/cache/object-check.js";
@@ -53,7 +41,6 @@ import { answerFetchPlan, FETCH_LEASE_TTL_MS } from "../git/fetch/plan.js";
 import type { FetchPlanReply, FetchPlanRequest } from "../git/fetch/wire.js";
 import { type BeginImport, type ImportRecord, RepoImports } from "../git/import/job.js";
 import { defaultImportNetwork, type ImportNetwork } from "../git/import/network.js";
-import { openLiveReader, ReadBudgetError } from "../git/live-reader.js";
 import type { GcHooks } from "../git/maintenance/gc-job.js";
 import { maintenanceHandlers } from "../git/maintenance/handlers.js";
 import { MAINTENANCE_DEFAULTS, type MaintenancePolicy } from "../git/maintenance/policy.js";
@@ -70,7 +57,15 @@ import {
   RepoPush,
 } from "../git/push/repo-push.js";
 import type { DetachHooks } from "../network/detach.js";
-import { networkRetire, soleNetworkMember } from "../network/repo-client.js";
+import {
+  IMPORT_POLICY,
+  type ImportDeps,
+  type ImportPolicy,
+  PullImports,
+  publishStaged,
+} from "../network/pull-import.js";
+import { type NoticeAnswer, PullSource, type RevisionNotice } from "../network/pull-source.js";
+import { networkMembersAfter, networkRetire, soleNetworkMember } from "../network/repo-client.js";
 import { type CopyStep, type CopyStepInput, RepoNetwork } from "../network/repo-network.js";
 import type {
   CommitPage,
@@ -80,9 +75,9 @@ import type {
   MemberPack,
   ViewPack,
 } from "../network/types.js";
-import type { CompactSliceInput } from "../network/view-cap.js";
+import { type CompactSliceInput, viewCompactionHandler } from "../network/view-cap.js";
 import { platformSigner } from "../signing/platform-key.js";
-import { type SignedFact, verdicts } from "../signing/verification.js";
+import { secretKeys } from "../webhooks/secrets.js";
 import {
   AUDIT_ARCHIVE_JOB,
   AUDIT_ARCHIVE_POLICY,
@@ -93,16 +88,11 @@ import {
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
 import type { AclSnapshot } from "./OrgDO.js";
-import {
-  CONFIRMED_KEEP_MS,
-  STORAGE_CHARGE_TTL_MS,
-  STORAGE_QUOTA_EXCEEDED,
-  STORAGE_QUOTA_UNAVAILABLE,
-} from "./org/quotas.js";
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
+import { RepoAdministration, type RepoDetails, type RulesetChange } from "./repo/administration.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
+import { RepoAuthority } from "./repo/authority.js";
 import {
-  BROWSE_POLICY,
   type Browsed,
   type CommitView,
   type CompareView,
@@ -113,6 +103,8 @@ import {
   RepoBrowse,
   type TagPage,
 } from "./repo/browse.js";
+import { RepoComments } from "./repo/comments.js";
+import type { ConflictsView, MergedIntoHead } from "./repo/conflicts.js";
 import {
   type ContentsView,
   contents,
@@ -122,6 +114,7 @@ import {
   type TreeListing,
   treeListing,
 } from "./repo/contents.js";
+import { readDirectoryEpoch } from "./repo/epoch.js";
 import { type EraseOutcome, eraseRepository, recordNetwork } from "./repo/erase.js";
 import {
   type JobActor,
@@ -132,38 +125,55 @@ import {
   type RepoIdentity,
   type RepoUpdate,
 } from "./repo/events.js";
+import { RepoFeed } from "./repo/feed.js";
+import { type FeedViewAnswer, RepoFeedView } from "./repo/feed-view.js";
 import {
   type FileWriteDeps,
   type FileWriteInput,
   type FileWriteResult,
   writeFiles,
 } from "./repo/file-writes.js";
+import { ForkPulls, type PullHeadWrite } from "./repo/fork-pulls.js";
 import {
-  checkPushRules,
-  hasPrecheckRules,
-  precheckPushRules,
-  type RuleSnapshot,
-} from "./repo/push-rules.js";
+  type ApplySuggestionsInput,
+  HeadBranchWrites,
+  type ResolveConflictsInput,
+  type UpdateBranchInput,
+} from "./repo/head-writes.js";
+import { type HookForDelivery, type HookView, RepoHooks } from "./repo/hooks.js";
+import { MERGE_POLICY, type MergeMade, type MergePolicy } from "./repo/merge.js";
+import { MERGEABILITY_POLICY, type PullView, RepoMergeability } from "./repo/mergeability.js";
 import {
-  RepoRulesets,
-  type RuleSuite,
-  type RulesetInput,
-  type RulesetRecord,
-} from "./repo/rulesets.js";
-import { factOf } from "./repo/signature.js";
+  type NewReviewComment,
+  type PullChangeRefusal,
+  PullDiscussion,
+} from "./repo/pull-discussion.js";
+import { type ListingCursor, pullCommitsListing, pullFilesListing } from "./repo/pull-files.js";
+import { type MergePullInput, PullMerging } from "./repo/pull-merging.js";
+import { type ForkPullOpened, type PullOpened, PullOpening } from "./repo/pull-opening.js";
 import {
+  type OpenPull,
+  type PullCaller,
+  type PullChangeFailure,
+  type PullPatch,
+  type PullRecord,
+  RepoPulls,
+} from "./repo/pulls.js";
+import { hasPrecheckRules } from "./repo/push-rules.js";
+import { REBASE_POLICY, type RebasePolicy } from "./repo/rebase-replay.js";
+import { RebaseSagas } from "./repo/rebase-saga.js";
+import { RepoReviewComments } from "./repo/review-comments.js";
+import { RepoReviews } from "./repo/reviews.js";
+import { RepoRulesets, type RuleSuite, type RulesetRecord } from "./repo/rulesets.js";
+import { StorageCharges } from "./repo/storage-charges.js";
+import {
+  TemplateGeneration,
   type TemplateTree,
   type TemplateWriteInput,
   templateTree,
-  writeTemplate,
 } from "./repo/template.js";
+import type { WriteContext, WriteRefusal } from "./repo/write-context.js";
 import { repoSchema } from "./schema/repo.js";
-
-/** What a repository object knows of the repository's details. */
-export interface RepoDetails {
-  readonly headTarget: string | null;
-  readonly description: string | null;
-}
 
 /**
  * Wall-clock budget for one alarm run of background jobs: no new slice
@@ -172,14 +182,6 @@ export interface RepoDetails {
  * of CPU an alarm gets (measured on Workers Free, 2026-10-10).
  */
 const ALARM_BUDGET_MS = 5_000;
-/** The job that tells the account of committed uploads it was not told of at once. */
-const STORAGE_CONFIRM_JOB = "storage-confirm";
-/** How long before an owed confirmation is tried (again). Proposed. */
-const STORAGE_CONFIRM_RETRY_MS = 60_000;
-/** Owed confirmations one slice tells. Proposed. */
-const STORAGE_CONFIRM_BATCH = 50;
-/** How long a confirmation stays owed: within the account's memory of the ones it took. */
-const STORAGE_OWED_MAX_AGE_MS = CONFIRMED_KEEP_MS - 24 * 60 * 60 * 1000;
 /** How long an archive request builds before it answers "building". Proposed. */
 const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
 
@@ -193,10 +195,6 @@ const DELETION_SLICE = {
 } as const;
 
 /** One repository: refs, packs, its events and audit log. Keyed by the immutable repo id. */
-/** What a generation settled as abandoned answers its own late commit. */
-const GENERATION_ABANDONED =
-  "the generation from the template was abandoned; the repository is being deleted";
-
 export class RepoDO extends MigratingDO {
   static readonly schema = repoSchema;
 
@@ -217,6 +215,36 @@ export class RepoDO extends MigratingDO {
   /** Access decisions, from the account's ACL snapshot. */
   readonly acl: RepoAcl;
 
+  /** Effective roles and the rulesets' judgement of writes. */
+  readonly #authority: RepoAuthority;
+
+  /** The repository's generation from a template, while it is pending. */
+  readonly #generation: TemplateGeneration;
+
+  /** Changes only an administrator may make: settings, rulesets, webhooks. */
+  readonly #admin: RepoAdministration;
+
+  /** The repository as activity feeds read it. */
+  readonly #feedView: RepoFeedView;
+
+  /** The account's storage quota, as pushes charge it. */
+  readonly #storageCharges: StorageCharges;
+
+  /** Review requests, diff threads and the standing a merge is judged by. */
+  readonly #discussion: PullDiscussion;
+
+  /** Merges of pull requests into their base branches. */
+  readonly #merging: PullMerging;
+
+  /** Writes of pull requests' head branches made through this repository. */
+  readonly #headWrites: HeadBranchWrites;
+
+  /** Pull requests between this repository and others of its fork network. */
+  readonly #forkPulls: ForkPulls;
+
+  /** Pull requests opened, from this repository's branches or another's of its network. */
+  readonly #opening: PullOpening;
+
   /** Pulls the account's ACL snapshot for this repository. Tests may replace it. */
   pullAcl: (accountId: string) => Promise<AclSnapshot>;
 
@@ -228,6 +256,34 @@ export class RepoDO extends MigratingDO {
 
   /** The repository's events and audit rows, written with each change. */
   readonly events: RepoEvents;
+
+  /** Pull requests between the repository's branches. */
+  readonly pulls: RepoPulls;
+
+  /** Reviews of pull requests, and reviews requested. */
+  readonly reviews: RepoReviews;
+
+  /** Conversation comments on pull requests. */
+  readonly comments: RepoComments;
+
+  /** Comments on pull requests' diffs, and their threads. */
+  readonly reviewComments: RepoReviewComments;
+
+  /** Whether open pull requests merge cleanly, worked out in the background. */
+  readonly mergeability: RepoMergeability;
+
+  /** This repository's branches that are heads of pull requests into other members of its network. */
+  readonly pullSource: PullSource;
+
+  /** Revisions of pull requests' heads in other repositories, being imported. */
+  readonly pullImports: PullImports;
+
+  /** Rebase merges of pull requests, made over several steps. */
+  readonly rebases: RebaseSagas;
+
+  /** The repository's webhooks. */
+  readonly hooks: RepoHooks;
+  readonly feed: RepoFeed;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -250,7 +306,109 @@ export class RepoDO extends MigratingDO {
       metrics: this.git.context.metrics,
       doClass: this.git.context.doClass,
     });
-    this.events = new RepoEvents(this.git, this.outbox, () => this.#repoId());
+    this.events = new RepoEvents(
+      this.git,
+      this.outbox,
+      () => this.#repoId(),
+      () => this.pullSource.restored(),
+    );
+    this.pulls = new RepoPulls({
+      git: this.git,
+      events: this.events,
+      repoId: () => this.#repoId(),
+      stale: (number, open) => this.mergeability.stale(number, open),
+      staleBase: (branch) => this.mergeability.staleBase(branch),
+      follow: (pull) => this.#forkPulls.follow(pull),
+    });
+    this.pullSource = new PullSource({
+      git: this.git,
+      repoId: () => this.#repoId(),
+      tell: (baseRepoId, notice) => this.#forkPulls.tell(baseRepoId, notice),
+      log: () => this.#log(),
+      epoch: () => this.events.epochGen(),
+      members: (after, limit) =>
+        networkMembersAfter(this.env, this.#repoId(), after, limit, this.git.context.metrics),
+      followAgain: (baseRepoId, after) => this.#forkPulls.askFollowAgain(baseRepoId, after),
+    });
+    this.pullImports = new PullImports({
+      ...this.#importDeps(),
+      policy: () => this.importPolicy,
+      publish: (number, work, row) =>
+        this.pulls.publishRevision(number, row, () => publishStaged(this.git, work.importId)),
+      writable: () => this.#writeRefusal() === undefined && this.events.canEmit(),
+      authorReads: async (row) => {
+        const pull = this.pulls.get(row.number);
+        return pull !== undefined && (await this.#headReadable(row.headRepoId, pull.authorRoot));
+      },
+    });
+    this.mergeability = new RepoMergeability({
+      git: this.git,
+      events: this.events,
+      pulls: this.pulls,
+      memoryBlocks: () => this.#memoryBlocks(),
+      policy: () => this.mergeabilityPolicy,
+      log: () => this.#log(),
+      takesChanges: () => this.#writeRefusal() === undefined,
+      writable: () => this.#writeRefusal() === undefined && this.events.canEmit(),
+      // Who hears of a conflict is decided with the write: from access as it is now.
+      beforeWrite: async () => {
+        await this.feed.prepare();
+        await this.mergeabilityHooks.beforeWrite?.();
+      },
+    });
+    this.hooks = new RepoHooks({
+      git: this.git,
+      events: this.events,
+      repoId: () => this.#repoId(),
+      keys: () => secretKeys(this.env),
+    });
+    this.feed = new RepoFeed({
+      git: this.git,
+      mayRead: (principal) =>
+        this.events.visibility() === "public" || this.acl.lastRoleOf(principal) !== null,
+      roleOf: (principal) => this.acl.lastRoleOf(principal),
+      refreshAccess: () => this.acl.refresh(),
+      resolveHandles: (handles) => this.#feedView.resolveHandles(handles),
+      metrics: this.git.context.metrics,
+    });
+    this.events.routeFeed((type, actor, data, row) => this.feed.blockFor(type, actor, data, row));
+    this.rebases = new RebaseSagas(
+      {
+        writeDeps: () => this.#writeDeps(),
+        pulls: this.pulls,
+        repoId: () => this.#repoId(),
+        standing: (number, pull, method, upToDate) =>
+          this.#discussion.standing(number, pull, method, upToDate),
+        internalCalls: () => currentInvocation()?.tally.internal ?? 0,
+        committed: () => {
+          this.#armOutbox();
+          this.#ensureAuditArchive();
+        },
+        policy: () => this.rebasePolicy,
+        hooks: () => this.rebaseHooks,
+        feedActor: (actor) => this.#merging.feedActor(actor),
+        withFeed: (actor, change) => this.feed.within(actor, change),
+      },
+      this.git,
+    );
+    this.reviews = new RepoReviews({
+      git: this.git,
+      events: this.events,
+      pulls: this.pulls,
+      repoId: () => this.#repoId(),
+    });
+    this.comments = new RepoComments({
+      git: this.git,
+      events: this.events,
+      pulls: this.pulls,
+      repoId: () => this.#repoId(),
+    });
+    this.reviewComments = new RepoReviewComments({
+      git: this.git,
+      events: this.events,
+      pulls: this.pulls,
+      repoId: () => this.#repoId(),
+    });
     this.pullAcl = async (accountId) => {
       this.git.context.metrics.count("do.request", { class: "OrgDO", method: "snapshotFor" });
       return env.ORG.getByName(accountId).snapshotFor(this.#repoId());
@@ -262,14 +420,139 @@ export class RepoDO extends MigratingDO {
       account: () => this.events.account(),
       pull: (accountId) => this.pullAcl(accountId),
     });
+    this.#generation = new TemplateGeneration({
+      git: this.git,
+      env: () => this.env,
+      refusesReads: () => this.#refusesReads(),
+      hasGitStorage: () => this.#hasGitStorage(),
+      checkEpoch: () => this.checkEpoch(),
+      writeDeps: () => this.#writeDeps(),
+      hooks: () => this.generationHooks,
+    });
+    this.#storageCharges = new StorageCharges({
+      git: this.git,
+      env: () => this.env,
+      account: () => this.events.account(),
+      repoId: () => this.#repoId(),
+      log: () => this.#log(),
+    });
+    this.#authority = new RepoAuthority({
+      git: this.git,
+      env: () => this.env,
+      acl: this.acl,
+      rulesets: () => this.rulesetStore,
+      memoryBlocks: () => this.#memoryBlocks(),
+    });
+    this.#admin = new RepoAdministration({
+      git: this.git,
+      acl: this.acl,
+      authority: this.#authority,
+      events: this.events,
+      rulesets: () => this.rulesetStore,
+      details: () => this.details(),
+      checkEpoch: () => this.checkEpoch(),
+      closed: () => this.#closed,
+      writeRefusal: () => this.#writeRefusal(),
+      armOutbox: () => this.#armOutbox(),
+      ensureAuditArchive: () => this.#ensureAuditArchive(),
+    });
+    this.#feedView = new RepoFeedView({
+      git: this.git,
+      env: () => this.env,
+      acl: this.acl,
+      authority: this.#authority,
+      pulls: this.pulls,
+      comments: this.comments,
+      reviewComments: this.reviewComments,
+      isPublic: () => this.events.visibility() === "public",
+      refusesReads: () => this.#refusesReads(),
+      isTransferring: () => this.events.isTransferring(),
+    });
+    this.#discussion = new PullDiscussion({
+      git: this.git,
+      pulls: this.pulls,
+      reviews: this.reviews,
+      reviewComments: this.reviewComments,
+      authority: this.#authority,
+      memoryBlocks: () => this.#memoryBlocks(),
+      viewed: (pull) => this.#viewed(pull),
+      pullChange: (method, actor, change, prepare, texts) =>
+        this.#pullChange(method, actor, change, prepare, texts),
+    });
+    const writes: WriteContext = {
+      git: this.git,
+      env: () => this.env,
+      acl: this.acl,
+      pulls: this.pulls,
+      authority: this.#authority,
+      repoId: () => this.#repoId(),
+      checkEpoch: () => this.checkEpoch(),
+      writeRefusal: () => this.#writeRefusal(),
+      writeDeps: () => this.#writeDeps(),
+      committed: () => {
+        this.#armOutbox();
+        this.#ensureAuditArchive();
+      },
+    };
+    this.#merging = new PullMerging({
+      ...writes,
+      rebases: this.rebases,
+      discussion: this.#discussion,
+      feed: this.feed,
+      mergePolicy: () => this.mergePolicy,
+      rebasePolicy: () => this.rebasePolicy,
+      hooks: () => this.mergeHooks,
+    });
+    this.#headWrites = new HeadBranchWrites({
+      ...writes,
+      reviewComments: this.reviewComments,
+      memoryBlocks: () => this.#memoryBlocks(),
+      mergePolicy: () => this.mergePolicy,
+      suggestionHooks: () => this.suggestionHooks,
+      headMergeHooks: () => this.headMergeHooks,
+    });
+    this.#forkPulls = new ForkPulls({
+      ...writes,
+      pullSource: this.pullSource,
+      pullImports: this.pullImports,
+      importDeps: () => this.#importDeps(),
+      importPolicy: () => this.importPolicy,
+      log: () => this.#log(),
+      headWriteHooks: () => this.headWriteHooks,
+    });
+    this.#opening = new PullOpening({
+      ...writes,
+      feed: this.feed,
+      importDeps: () => this.#importDeps(),
+      importPolicy: () => this.importPolicy,
+      headReadable: (headRepoId, root) => this.#headReadable(headRepoId, root),
+      viewed: (pull) => this.#viewed(pull),
+      forkPullHooks: () => this.forkPullHooks,
+    });
     // The commit point: the initiating principal may still write, under a
     // snapshot within the write window (a commit without one is the
-    // repository's own, such as maintenance). A refusal refuses the commit.
+    // repository's own, such as maintenance); a commit that moves only pull
+    // request refs (opening or reopening one) needs it to read. A refusal
+    // refuses the commit.
     this.git.refStore.authorizeCommit = (context) => {
-      const principal = context.request.actor?.principal;
-      return principal && !this.acl.allows(principal, "write") ? ACCESS_LOST : undefined;
+      const { actor, refUpdates } = context.request;
+      if (!actor) return undefined;
+      // A base's maintainer: the head branch only, while its pull request's author allows it.
+      if (actor.maintainerFor)
+        return this.#forkPulls.maintainerRefusal(actor.maintainerFor, refUpdates);
+      const pullsOnly =
+        refUpdates.length > 0 && refUpdates.every((u) => u.name.startsWith(DERIVED_REF_PREFIX));
+      return this.acl.allows(actor.principal, pullsOnly ? "read" : "write")
+        ? undefined
+        : ACCESS_LOST;
     };
-    this.git.refStore.inCommit = (context) => this.events.onCommit(context);
+    // Open pull requests' refs follow their head branches, in the same commit.
+    this.git.refStore.deriveUpdates = (updates) => this.pulls.derive(updates);
+    this.git.refStore.inCommit = (context) => {
+      this.events.onCommit(context);
+      this.pulls.onCommit(context);
+      this.pullSource.onCommit(context);
+    };
     this.git.refStore.onHeadChanged = () => this.events.onHeadChanged();
     // Every commit (push, import, merge) schedules the maintenance it calls
     // for and records the repository's pack count and storage.
@@ -375,13 +658,7 @@ export class RepoDO extends MigratingDO {
     if (!isNetworkId(networkId)) return { ok: false, error: "not a network id" };
     try {
       // Before the storage exists, so no write is ever admitted ahead of the generation.
-      if (templateId !== undefined)
-        this.ctx.storage.sql.exec(
-          `INSERT INTO generation (id, template_id, started_at) VALUES (1, ?, ?)
-           ON CONFLICT (id) DO NOTHING`,
-          templateId,
-          this.git.context.now(),
-        );
+      if (templateId !== undefined) this.#generation.record(templateId);
       recordNetwork(this.ctx.storage, networkId, this.git.context.now());
       if (identity) this.events.assertIdentity(identity);
       this.git.initialize(networkId, defaultBranch);
@@ -398,13 +675,17 @@ export class RepoDO extends MigratingDO {
   /** The in-memory pack block tier (24 MiB fixed, design), created on first use. */
   #blocks: BlockCache | undefined;
 
+  #memoryBlocks(): BlockCache {
+    this.#blocks ??= createClockBlockCache();
+    return this.#blocks;
+  }
+
   /**
    * The protocol v2 `ls-refs` response for the current refs, pkt-lines and
    * flush. Annotated tags are peeled from the packs when `peel` is asked.
    */
   async lsRefs(args: LsRefsArgs): Promise<Uint8Array> {
-    this.#blocks ??= createClockBlockCache();
-    const memoryBlocks = this.#blocks;
+    const memoryBlocks = this.#memoryBlocks();
     return this.#measured("lsRefs", () => lsRefsResponse({ git: this.git, memoryBlocks }, args));
   }
 
@@ -458,47 +739,7 @@ export class RepoDO extends MigratingDO {
         code: "branch_not_found" | "repo_deleted" | "repo_transferring" | "access_lost";
       }
   > {
-    return this.#measured("updateSettings", async () => {
-      await this.checkEpoch();
-      // The actor administers the repository now: the Worker checked it
-      // before this call; access may have been revoked since. Pulled for a
-      // write, then checked with no await before the change.
-      const principal = input.actor?.principal;
-      // With the owners capping an agent acting (they may have lost access meanwhile too).
-      const ceilings = principal
-        ? await this.#rolesPulled(principal, input.actor?.grantId ?? null)
-        : [];
-      // Its deletion started after the caller found it.
-      if (this.events.isDeleted()) return { ok: false as const, code: "repo_deleted" as const };
-      // The directory refuses a rename while a transfer moves it: no name to record.
-      if (this.events.isTransferring())
-        return { ok: false as const, code: "repo_transferring" as const };
-      if (principal && ![principal, ...ceilings].every((p) => this.acl.allows(p, "admin"))) {
-        // The directory's name is recorded even so: a rename already happened there.
-        if (input.name) this.events.update({ name: input.name, actor: input.actor });
-        this.#armOutbox();
-        this.#ensureAuditArchive();
-        return { ok: false as const, code: "access_lost" as const };
-      }
-      const head =
-        input.defaultBranch === undefined ? undefined : `refs/heads/${input.defaultBranch}`;
-      if (head !== undefined && !this.git.refStore.hasRef(head)) {
-        // The directory's name is recorded even so: it is already in use.
-        if (input.name) this.events.update({ name: input.name, actor: input.actor });
-        this.#armOutbox();
-        this.#ensureAuditArchive();
-        return { ok: false as const, code: "branch_not_found" as const };
-      }
-      this.events.update({
-        ...(input.name && { name: input.name }),
-        ...(input.description !== undefined && { description: input.description }),
-        ...(head !== undefined && { head }),
-        actor: input.actor,
-      });
-      this.#armOutbox();
-      this.#ensureAuditArchive();
-      return { ok: true as const, details: this.details() };
-    });
+    return this.#measured("updateSettings", () => this.#admin.updateSettings(input));
   }
 
   /** The repository's rulesets, created on first use. */
@@ -535,47 +776,470 @@ export class RepoDO extends MigratingDO {
    * Creates, replaces or deletes a ruleset for an administrator (the
    * Worker checked it; checked again here, with no await before the change).
    */
-  changeRuleset(
-    change:
-      | { readonly op: "create"; readonly input: RulesetInput }
-      | { readonly op: "update"; readonly id: number; readonly input: RulesetInput }
-      | { readonly op: "delete"; readonly id: number },
+  changeRuleset(change: RulesetChange, actor: RefActor) {
+    return this.#measured("changeRuleset", () => this.#admin.changeRuleset(change, actor));
+  }
+
+  /** The repository's webhooks (the Worker checked `repository_hooks:read`). */
+  listHooks(): Browsed<HookView[]> {
+    if (this.#refusesReads()) return fail(404, "repo_not_found", REPO_DELETED);
+    return { ok: true, value: this.hooks.list() };
+  }
+
+  getHook(id: number): Browsed<HookView> {
+    if (this.#refusesReads()) return fail(404, "repo_not_found", REPO_DELETED);
+    const hook = this.hooks.get(id);
+    return hook
+      ? { ok: true, value: hook }
+      : fail(404, "hook_not_found", `The repository has no webhook ${id}.`);
+  }
+
+  /**
+   * Adds a webhook for an administrator (the Worker checked
+   * `repository_hooks:write` and the URL; checked again here). Its secret
+   * is in the answer, once.
+   */
+  createHook(
+    input: Parameters<RepoHooks["create"]>[1],
+    actor: RefActor,
+  ): Promise<Browsed<{ hook: HookView; secret: string }>> {
+    return this.#asHookAdmin(
+      "createHook",
+      actor,
+      () => this.hooks.prepareSecret(),
+      (prepared) =>
+        this.#admin.insecureHookUrl(input.url) ?? this.hooks.create(prepared, input, actor),
+    );
+  }
+
+  updateHook(
+    id: number,
+    patch: Parameters<RepoHooks["update"]>[1],
+    actor: RefActor,
+  ): Promise<Browsed<HookView>> {
+    return this.#asHookAdmin(
+      "updateHook",
+      actor,
+      undefined,
+      () => this.#admin.insecureHookUrl(patch.url) ?? this.hooks.update(id, patch, actor),
+    );
+  }
+
+  deleteHook(id: number, actor: RefActor): Promise<Browsed<true>> {
+    return this.#asHookAdmin("deleteHook", actor, undefined, () => this.hooks.delete(id, actor));
+  }
+
+  pingHook(id: number, actor: RefActor): Promise<Browsed<true>> {
+    return this.#asHookAdmin("pingHook", actor, undefined, () => this.hooks.ping(id, actor));
+  }
+
+  /** A new signing secret for the hook (in the answer, once); the previous one signs a week more. */
+  rotateHookSecret(id: number, actor: RefActor): Promise<Browsed<{ secret: string }>> {
+    return this.#asHookAdmin(
+      "rotateHookSecret",
+      actor,
+      () => this.hooks.prepareSecret(id),
+      (prepared) => this.hooks.rotateSecret(prepared, actor),
+    );
+  }
+
+  dropPreviousHookSecret(id: number, actor: RefActor): Promise<Browsed<true>> {
+    return this.#asHookAdmin("dropPreviousHookSecret", actor, undefined, () =>
+      this.hooks.dropPreviousSecret(id, actor),
+    );
+  }
+
+  /** What a delivery attempt needs of the hook now (its open secrets included); `gone` once deleted. */
+  hookForDelivery(id: number): Promise<HookForDelivery> {
+    // Erased (or being erased): gone for good, not unavailable.
+    if (this.#refusesReads()) return Promise.resolve({ kind: "gone" as const });
+    return this.#measured("hookForDelivery", async () => {
+      if (this.#refusesReads()) return { kind: "gone" as const };
+      return this.hooks.forDelivery(id, this.events.visibility() !== "public");
+    });
+  }
+
+  /** Turns the hook off after its receiver answered 410 Gone (unless it changed since). */
+  disableHook(id: number, configVersion: number, reason: string): boolean {
+    // Erased: no hook left to turn off.
+    if (this.#refusesReads()) return false;
+    return this.hooks.disable(id, configVersion, reason);
+  }
+
+  /** Seals again, with the current key, secrets sealed with a retired one (an operator's step). */
+  resealHookSecrets(limit: number) {
+    return this.#measured("resealHookSecrets", () => this.hooks.reseal(limit));
+  }
+
+  /**
+   * Runs `change` for an administrator of a writable repository: what it
+   * needs made first (`prepare`, which may wait), then the checks and the
+   * change with no wait between them.
+   */
+  #asHookAdmin<P, T>(
+    method: string,
+    actor: RefActor,
+    prepare: (() => Promise<Browsed<P>>) | undefined,
+    change: (prepared: P) => Browsed<T>,
+  ): Promise<Browsed<T>> {
+    return this.#measured(method, () => this.#admin.asHookAdmin(actor, prepare, change));
+  }
+
+  /** The repository's pull requests, newest first, below `before` (a number) when given. */
+  listPulls(state: PullRecord["state"] | "all", before: number | undefined, limit: number) {
+    return this.#measured("listPulls", () =>
+      this.#refusesReads()
+        ? null
+        : this.pulls.list(state, before, limit).map((p) => this.#viewed(p)),
+    );
+  }
+
+  /** A pull request with whether it merges, as far as that is known now. */
+  #viewed(pull: PullRecord): PullView {
+    return { ...pull, ...this.mergeability.view(pull) };
+  }
+
+  /** One pull request; undefined when there is none with that number. */
+  getPull(number: number) {
+    return this.#measured("getPull", () => {
+      if (this.#refusesReads()) return null;
+      const pull = this.pulls.get(number);
+      if (!pull) return undefined;
+      const viewed = this.#viewed(pull);
+      // Asked for and not known: worked out (a pull request from before results were kept).
+      if (viewed.mergeable === null) this.mergeability.request(pull);
+      return viewed;
+    });
+  }
+
+  /** Opens a pull request between two of the repository's branches (see `PullOpening.open`). */
+  createPull(input: Omit<OpenPull, "baseSha" | "headSha">, actor: RefActor): Promise<PullOpened> {
+    return this.#measured("createPull", () => this.#opening.open(input, actor));
+  }
+
+  /**
+   * Opens a pull request whose head is a branch of another repository of
+   * the network, its revision imported first (see `PullOpening.openFromFork`).
+   */
+  createForkPull(
+    input: Omit<OpenPull, "baseSha" | "headSha" | "headRefVersion"> & {
+      readonly headRepoId: string;
+    },
+    actor: RefActor,
+  ): Promise<ForkPullOpened> {
+    return this.#measured("createForkPull", () => this.#opening.openFromFork(input, actor));
+  }
+
+  /**
+   * The head's repository `headRepoId` was restored and may have lost what
+   * it was told: its open pull requests here numbered after `after` (a
+   * page) are followed again, as when opened. Answers the number to go on
+   * after, or null when there are no more.
+   */
+  followHeadAgain(headRepoId: string, after: number): number | null {
+    if (this.#refusesReads()) return null;
+    return this.#forkPulls.followAgain(headRepoId, after);
+  }
+
+  /**
+   * A revision of a pull request's head in another repository of the
+   * network, told by that repository's object (see
+   * `ForkPulls.receiveRevision`); `closed` once this one is gone.
+   */
+  receiveRevision(notice: RevisionNotice): Promise<NoticeAnswer> {
+    return this.#measured("receiveRevision", async () =>
+      this.#refusesReads() ? "closed" : this.#forkPulls.receiveRevision(notice),
+    );
+  }
+
+  /**
+   * Changes a pull request as the mutation matrix allows the caller, with
+   * its role and root identity worked out here (no await before the change).
+   */
+  changePull(
+    number: number,
+    patch: PullPatch,
     actor: RefActor,
   ): Promise<
-    | { ok: true; record: RulesetRecord | null }
+    | { ok: true; record: PullView }
+    | { ok: false; code: "already_exists"; number: number }
     | {
         ok: false;
-        code:
-          | "repo_deleted"
-          | "repo_transferring"
-          | "access_lost"
-          | "not_found"
-          | "name_taken"
-          | "too_many";
+        code: Exclude<PullChangeFailure, "already_exists"> | PullChangeRefusal | "busy";
       }
   > {
-    return this.#measured("changeRuleset", async () => {
+    return this.#pullChange(
+      "changePull",
+      actor,
+      (caller) => {
+        const changed = this.pulls.change(number, patch, caller);
+        // Nothing awaits between the read and the commit: a conflict means a
+        // concurrent change no retry here could see past.
+        if (changed.ok) return { ok: true as const, record: this.#viewed(changed.record) };
+        return changed.code === "version-conflict"
+          ? { ok: false as const, code: "busy" as const }
+          : changed;
+      },
+      undefined,
+      [patch.body],
+    );
+  }
+
+  /** Merges a pull request into its base branch (see `PullMerging.merge`). */
+  mergePull(input: MergePullInput, actor: RefActor): Promise<Browsed<MergeMade>> {
+    return this.#measured("mergePull", () => this.#merging.merge(input, actor));
+  }
+
+  /** A page of the files a pull request changes (see `pullFilesListing`). */
+  listPullFiles(number: number, from: ListingCursor | null, limit: number) {
+    return this.#browse("listPullFiles", async (browse) =>
+      this.#refusesReads()
+        ? fail(404, "repo_not_found", REPO_DELETED)
+        : pullFilesListing(browse, this.pulls, this.git.commitGraph, { number, from, limit }),
+    );
+  }
+
+  /** A page of a pull request's commits, oldest first (see `pullCommitsListing`). */
+  listPullCommits(number: number, from: ListingCursor | null, limit: number) {
+    return this.#browse("listPullCommits", async (browse) =>
+      this.#refusesReads()
+        ? fail(404, "repo_not_found", REPO_DELETED)
+        : pullCommitsListing(browse, this.pulls, this.git.commitGraph, { number, from, limit }),
+    );
+  }
+
+  /** A pull request's reviews in the order submitted; null when the repository is gone, undefined without the pull request. */
+  listReviews(number: number, after: number, limit: number) {
+    return this.#measured("listReviews", () => {
+      if (this.#refusesReads()) return null;
+      if (!this.pulls.get(number)) return undefined;
+      return this.reviews.list(number, after, limit);
+    });
+  }
+
+  /** One review of a pull request; null when the repository is gone. */
+  getReview(number: number, id: number) {
+    return this.#measured("getReview", () =>
+      this.#refusesReads() ? null : (this.reviews.get(number, id) ?? undefined),
+    );
+  }
+
+  /** Submits a review as the caller, its role and root identity worked out here. */
+  submitReview(
+    number: number,
+    input: {
+      readonly event: ReviewEvent;
+      readonly body: string | null;
+      readonly commitSha: string;
+    },
+    actor: RefActor,
+  ) {
+    return this.#pullChange(
+      "submitReview",
+      actor,
+      (caller) => this.reviews.submit(number, input, caller),
+      undefined,
+      [input.body],
+    );
+  }
+
+  /** Dismisses a review, keeping why. */
+  dismissReview(number: number, id: number, message: string, actor: RefActor) {
+    return this.#pullChange("dismissReview", actor, (caller) =>
+      this.reviews.dismiss(number, id, message, caller),
+    );
+  }
+
+  /** The principals reviews of a pull request are requested of; undefined without it. */
+  requestedReviewers(number: number) {
+    return this.#measured("requestedReviewers", () => {
+      if (this.#refusesReads()) return null;
+      if (!this.pulls.get(number)) return undefined;
+      return this.reviews.requested(number);
+    });
+  }
+
+  /** A pull request's comments, oldest first; null when the repository is gone, undefined without the pull request. */
+  listComments(number: number, after: number, limit: number) {
+    return this.#measured("listComments", () => {
+      if (this.#refusesReads()) return null;
+      if (!this.pulls.get(number)) return undefined;
+      return this.comments.list(number, after, limit);
+    });
+  }
+
+  /** One comment; null when the repository is gone. */
+  getComment(id: number) {
+    return this.#measured("getComment", () =>
+      this.#refusesReads() ? null : (this.comments.get(id) ?? undefined),
+    );
+  }
+
+  createComment(number: number, body: string, actor: RefActor) {
+    return this.#pullChange(
+      "createComment",
+      actor,
+      (caller) => this.comments.create(number, body, caller),
+      undefined,
+      [body],
+    );
+  }
+
+  editComment(id: number, body: string, actor: RefActor) {
+    return this.#pullChange(
+      "editComment",
+      actor,
+      (caller) => this.comments.edit(id, body, caller),
+      undefined,
+      [body],
+    );
+  }
+
+  deleteComment(id: number, actor: RefActor) {
+    return this.#pullChange("deleteComment", actor, (caller) => this.comments.delete(id, caller));
+  }
+
+  /** Requests reviews of principals, each one's access checked here (see `PullDiscussion`). */
+  requestReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
+    return this.#discussion.requestReviewers(number, reviewerIds, actor);
+  }
+
+  /** Withdraws review requests. */
+  removeRequestedReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
+    return this.#discussion.removeRequestedReviewers(number, reviewerIds, actor);
+  }
+
+  /**
+   * A pull request's diff comments, oldest first, with what its diff
+   * compares now (whether each is outdated); null when the repository is
+   * gone, undefined without the pull request.
+   */
+  listReviewComments(number: number, after: number, limit: number) {
+    return this.#measured("listReviewComments", async () =>
+      this.#refusesReads() ? null : this.#discussion.reviewComments(number, after, limit),
+    );
+  }
+
+  /** One diff comment, with what its pull request's diff compares now; null when the repository is gone. */
+  getReviewComment(id: number) {
+    return this.#measured("getReviewComment", async () =>
+      this.#refusesReads() ? null : this.#discussion.reviewComment(id),
+    );
+  }
+
+  /** A pull request's threads, oldest first, as `listReviewComments`. */
+  listReviewThreads(number: number, after: number, limit: number) {
+    return this.#measured("listReviewThreads", async () =>
+      this.#refusesReads() ? null : this.#discussion.threads(number, after, limit),
+    );
+  }
+
+  /** Starts a thread on a pull request's diff, at an anchor checked against the file it names. */
+  createReviewComment(number: number, input: NewReviewComment, actor: RefActor) {
+    return this.#discussion.createReviewComment(number, input, actor);
+  }
+
+  /** Replies in the thread of comment `to`. */
+  replyReviewComment(number: number, to: number, body: string, actor: RefActor) {
+    return this.#discussion.replyReviewComment(number, to, body, actor);
+  }
+
+  editReviewComment(id: number, body: string, actor: RefActor) {
+    return this.#discussion.editReviewComment(id, body, actor);
+  }
+
+  /** Resolves a thread, or makes it unresolved again. */
+  resolveReviewThread(number: number, threadId: number, resolved: boolean, actor: RefActor) {
+    return this.#discussion.resolveReviewThread(number, threadId, resolved, actor);
+  }
+
+  deleteReviewComment(id: number, actor: RefActor) {
+    return this.#pullChange("deleteReviewComment", actor, (caller) =>
+      this.reviewComments.delete(id, caller),
+    );
+  }
+
+  /** Who wrote the diff comments `ids` (missing ones left out): a suggestion's author is credited. */
+  reviewCommentAuthors(ids: readonly number[]) {
+    return this.#measured("reviewCommentAuthors", () => {
+      if (this.#refusesReads()) return null;
+      return ids.flatMap((id) => {
+        const comment = this.reviewComments.get(id);
+        return comment ? [{ id, authorId: comment.authorId }] : [];
+      });
+    });
+  }
+
+  /** Applies diff comments' suggestions to a pull request's head branch as one commit. */
+  applySuggestions(
+    input: ApplySuggestionsInput,
+    actor: RefActor,
+  ): Promise<Browsed<FileWriteResult & { readonly paths: readonly string[] }>> {
+    return this.#measured("applySuggestions", () =>
+      this.#headWrites.applySuggestions(input, actor),
+    );
+  }
+
+  /** The conflicts of merging an open pull request's base branch into its head. */
+  pullConflicts(number: number): Promise<Browsed<ConflictsView>> {
+    return this.#measured("pullConflicts", async () =>
+      this.#refusesReads()
+        ? fail(404, "repo_not_found", REPO_DELETED)
+        : this.#headWrites.conflicts(number),
+    );
+  }
+
+  /** Resolves an open pull request's conflicts with its base branch, on its head branch. */
+  resolvePullConflicts(
+    input: ResolveConflictsInput,
+    actor: RefActor,
+  ): Promise<Browsed<MergedIntoHead>> {
+    return this.#measured("resolvePullConflicts", () =>
+      this.#headWrites.resolveConflicts(input, actor),
+    );
+  }
+
+  /** Brings an open pull request's head branch up to date with its base branch. */
+  updatePullBranch(input: UpdateBranchInput, actor: RefActor): Promise<Browsed<MergedIntoHead>> {
+    return this.#measured("updatePullBranch", () => this.#headWrites.updateBranch(input, actor));
+  }
+
+  /**
+   * Runs a change of pull requests or reviews for `actor`, as one measured
+   * invocation (a deletion waits for it): its ceilings and root identity
+   * and anything `prepare` reads are worked out first, then, with no await
+   * before `change`, whether the repository takes changes and the caller's
+   * role now.
+   */
+  #pullChange<R, P = undefined>(
+    method: string,
+    actor: RefActor,
+    change: (caller: PullCaller, prepared: P) => R,
+    prepare?: () => Promise<P>,
+    /** Texts the change writes, whose mentions its activity-feed entries name. */
+    texts: readonly (string | null | undefined)[] = [],
+  ): Promise<R | { ok: false; code: PullChangeRefusal }> {
+    return this.#measured(method, async () => {
       await this.checkEpoch();
-      // With the owners capping an agent acting (they may have lost access meanwhile too).
-      const ceilings = await this.#rolesPulled(actor.principal, actor.grantId ?? null);
-      if (this.#closed || this.events.isDeleted())
-        return { ok: false as const, code: "repo_deleted" as const };
-      if (this.events.isTransferring())
-        return { ok: false as const, code: "repo_transferring" as const };
-      if (![actor.principal, ...ceilings].every((p) => this.acl.allows(p, "admin")))
-        return { ok: false as const, code: "access_lost" as const };
-      const store = this.rulesetStore;
-      const done =
-        change.op === "create"
-          ? store.create(change.input, actor)
-          : change.op === "update"
-            ? (store.update(change.id, change.input, actor) ?? ("not_found" as const))
-            : store.delete(change.id, actor)
-              ? null
-              : ("not_found" as const);
-      if (typeof done === "string") return { ok: false as const, code: done };
+      const ceilings = await this.#authority.rolesPulled(actor.principal, actor.grantId ?? null);
+      const root = rootIdentity({
+        principalId: actor.principal,
+        grantId: actor.grantId ?? null,
+        ceilingIds: ceilings,
+      });
+      const prepared = (prepare ? await prepare() : undefined) as P;
+      const mentioned = await this.feed.prepare(texts);
+      const refused = this.#writeRefusal();
+      if (refused)
+        return { ok: false as const, code: refused.code as "repo_not_found" | "repo_transferring" };
+      const role = this.#authority.roleNow(actor.principal, ceilings);
+      if (role === null) return { ok: false as const, code: "access_lost" as const };
+      const result = this.feed.within({ root, role, mentioned }, () =>
+        change({ actor, root, role }, prepared),
+      );
+      this.#armOutbox();
       this.#ensureAuditArchive();
-      return { ok: true as const, record: done };
+      return result;
     });
   }
 
@@ -604,7 +1268,7 @@ export class RepoDO extends MigratingDO {
     return this.#measured("freezeForTransfer", async () => {
       await this.checkEpoch();
       // Not while its generation from a template may still finish or fail (and delete it).
-      if (this.#generatingFrom() !== undefined && !this.events.isTransferring())
+      if (this.#generation.templateId() !== undefined && !this.events.isTransferring())
         return { ok: false as const, code: "generating" as const };
       const frozen = this.events.freezeForTransfer(transfer);
       if (frozen === "frozen" || frozen === "landed") return { ok: true as const };
@@ -663,8 +1327,7 @@ export class RepoDO extends MigratingDO {
    * Refusals and failures are returned as values (an `ERR` message).
    */
   async planFetch(request: FetchPlanRequest): Promise<FetchPlanReply> {
-    this.#blocks ??= createClockBlockCache();
-    const memoryBlocks = this.#blocks;
+    const memoryBlocks = this.#memoryBlocks();
     return this.#measured("planFetch", () =>
       answerFetchPlan({ git: this.git, memoryBlocks }, request),
     );
@@ -677,8 +1340,7 @@ export class RepoDO extends MigratingDO {
    * after the access check, and only then consult a response cache.
    */
   async objectAccess(request: ObjectAccessRequest): Promise<ObjectAccessAnswer> {
-    this.#blocks ??= createClockBlockCache();
-    const memoryBlocks = this.#blocks;
+    const memoryBlocks = this.#memoryBlocks();
     return this.#measured("objectAccess", () =>
       checkObjectAccess({ git: this.git, memoryBlocks }, request),
     );
@@ -686,8 +1348,7 @@ export class RepoDO extends MigratingDO {
 
   /** One browse request, its reader released when it ends. */
   #browse<R>(method: string, use: (browse: RepoBrowse) => R | Promise<R>): Promise<R> {
-    this.#blocks ??= createClockBlockCache();
-    const browse = new RepoBrowse({ git: this.git, memoryBlocks: this.#blocks });
+    const browse = new RepoBrowse({ git: this.git, memoryBlocks: this.#memoryBlocks() });
     return this.#measured(method, async () => {
       try {
         return await use(browse);
@@ -736,7 +1397,8 @@ export class RepoDO extends MigratingDO {
       metrics: this.git.context.metrics,
       writerRole: (principalId) => this.acl.roleOf(principalId, "write"),
       ...(signer && { signer }),
-      precheck: (principal, updates, grantId) => this.#precheckUpdates(principal, updates, grantId),
+      precheck: (principal, updates, grantId) =>
+        this.#authority.precheckUpdates(principal, updates, grantId),
     };
   }
 
@@ -748,7 +1410,11 @@ export class RepoDO extends MigratingDO {
   writeFiles(input: FileWriteInput): Promise<Browsed<FileWriteResult>> {
     const refused = this.#writeRefusal();
     if (refused) return Promise.resolve(fail(refused.status, refused.code, refused.error));
-    return this.#measured("writeFiles", async () => writeFiles(await this.#writeDeps(), input));
+    return this.#measured("writeFiles", async () => {
+      // Its commit needs the restore generation taken (a cold instance has not yet).
+      await this.checkEpoch();
+      return writeFiles(await this.#writeDeps(), input);
+    });
   }
 
   /** The trees and files of the default branch, for a repository generated from this one. */
@@ -767,73 +1433,23 @@ export class RepoDO extends MigratingDO {
   async generateFrom(
     input: TemplateWriteInput,
   ): Promise<Browsed<{ branch: string; commit: string }>> {
-    if (this.#closed || !this.#hasGitStorage() || this.events.isDeleted())
-      return fail(404, "repo_not_found", REPO_DELETED);
-    const templateId = this.#generatingFrom();
-    if (templateId === undefined)
-      return fail(409, "not_generating", "The repository is not being generated from a template.");
-    if (this.#generationAbandoned() !== undefined)
-      return fail(409, "generation_abandoned", GENERATION_ABANDONED);
-    const template = await this.env.REPO.getByName(templateId).templateTree();
+    const template = await this.#generation.template();
     if (!template.ok) return template;
-    await this.generationHooks.beforeWrite?.();
-    return this.#measured("generateFrom", async () => {
-      const made = await writeTemplate(await this.#writeDeps(), input, template.value);
-      if (made.ok) this.ctx.storage.sql.exec("DELETE FROM generation");
-      return made;
-    });
+    return this.#measured("generateFrom", () => this.#generation.write(input, template.value));
   }
 
   /**
-   * Settles a generation its request could not confirm: `committed` when
-   * the repository has refs (its first commit was made: nothing else
-   * writes while it is pending), whether or not its marker was cleared;
-   * `abandoned` while it is pending without them, after which its commit
-   * is refused at the commit point, so the repository can be deleted
-   * without losing a late one; `none` otherwise (no repository here, as
-   * after an erase, or no generation). One synchronous transaction, so it
-   * cannot interleave with that commit.
+   * Settles a generation its request could not confirm (see
+   * `TemplateGeneration.abandon`).
    */
   abandonGeneration(): Promise<"committed" | "abandoned" | "none"> {
-    return this.#measured("abandonGeneration", async () =>
-      this.ctx.storage.transactionSync(() => {
-        const committed = this.#hasGitStorage() && this.git.refStore.readRefsSync().refs.size > 0;
-        if (this.#generatingFrom() === undefined)
-          return committed ? ("committed" as const) : ("none" as const);
-        if (committed) {
-          this.ctx.storage.sql.exec("DELETE FROM generation");
-          return "committed" as const;
-        }
-        this.ctx.storage.sql.exec(
-          "UPDATE generation SET abandoned_at = ? WHERE abandoned_at IS NULL",
-          this.git.context.now(),
-        );
-        return "abandoned" as const;
-      }),
-    );
-  }
-
-  /** Why a commit is refused: the generation it would finish was abandoned. */
-  #generationAbandoned(): string | undefined {
-    return this.ctx.storage.sql
-      .exec<{ abandoned_at: number | null }>("SELECT abandoned_at FROM generation")
-      .toArray()[0]?.abandoned_at != null
-      ? GENERATION_ABANDONED
-      : undefined;
-  }
-
-  /** The template this repository is still being generated from, if it is. */
-  #generatingFrom(): string | undefined {
-    return this.ctx.storage.sql
-      .exec<{ template_id: string }>("SELECT template_id FROM generation")
-      .toArray()[0]?.template_id;
+    return this.#measured("abandonGeneration", async () => this.#generation.abandon());
   }
 
   #archiver: RepoArchives | undefined;
 
   #archives(): RepoArchives {
-    this.#blocks ??= createClockBlockCache();
-    this.#archiver ??= new RepoArchives({ git: this.git, memoryBlocks: this.#blocks });
+    this.#archiver ??= new RepoArchives({ git: this.git, memoryBlocks: this.#memoryBlocks() });
     return this.#archiver;
   }
 
@@ -919,6 +1535,11 @@ export class RepoDO extends MigratingDO {
   /** Hooks into garbage-collection slices. For tests. */
   gcHooks: GcHooks = {};
 
+  /** What garbage collection keeps besides what the refs and the reflog reach. */
+  gcRoots(): Oid[] {
+    return this.pulls.recordedBases();
+  }
+
   #log() {
     return createLogger({
       do: "RepoDO",
@@ -932,150 +1553,17 @@ export class RepoDO extends MigratingDO {
       this.git.context.metrics,
       this.#log(),
       () => this.packCap,
-      () => {
-        this.#blocks ??= createClockBlockCache();
-        return this.#blocks;
-      },
+      () => this.#memoryBlocks(),
     );
     this.#pushes.accessCheck = async (principal) => {
       // Pulls a snapshot past its write window first (fail closed).
       await this.acl.roleOf(principal, "write");
       return this.acl.allows(principal, "write") ? undefined : ACCESS_LOST;
     };
-    this.#pushes.frozen = () => this.events.frozen() ?? this.#generationAbandoned();
-    this.#pushes.rules = {
-      check: async (input) => {
-        // The pusher's effective role pulled fresh; then everything the
-        // check reads, and its stamp, taken together with no await between them.
-        const ceilings = await this.#rolesPulled(input.principal, input.grantId);
-        const { snapshot, stamp } = this.#ruleSnapshot(input.principal, ceilings);
-        const signatures = this.#signatureReader(input.packs);
-        let checked: Awaited<ReturnType<typeof checkPushRules>>;
-        try {
-          checked = await checkPushRules(
-            {
-              git: this.git,
-              signatures: (oids) => signatures.facts(oids),
-              verdicts: (facts) =>
-                verdicts({ env: this.env, metrics: this.git.context.metrics }, facts),
-            },
-            snapshot,
-            { ...input, delegated: input.grantId !== null },
-          );
-        } finally {
-          signatures.release();
-        }
-        this.rulesetStore.recordEvaluated(input.uploadId, input.principal, checked.evaluated);
-        const { refusals } = checked;
-        return {
-          stamp,
-          restamp: () => this.#ruleSnapshot(input.principal, ceilings).stamp,
-          writable:
-            snapshot.role !== null &&
-            REPO_ROLES.indexOf(snapshot.role) >= REPO_ROLES.indexOf("write"),
-          refusals,
-        };
-      },
-    };
-    const account = () => {
-      // A repository from before identities were recorded has no account to charge.
-      const owner = this.events.account();
-      return owner && this.env.ORG.getByName(owner.accountId);
-    };
-    this.#pushes.storage = {
-      charge: async (uploadId, bytes) => {
-        const stub = account();
-        if (!stub) return undefined;
-        try {
-          const fits = await stub.chargeStorage({
-            uploadId,
-            repoId: this.#repoId(),
-            bytes,
-            ttlMs: STORAGE_CHARGE_TTL_MS,
-          });
-          return fits ? undefined : STORAGE_QUOTA_EXCEEDED;
-        } catch (error) {
-          // Fail closed: an account that cannot be asked takes no bytes.
-          this.#log().warn("storage charge failed", { uploadId, error });
-          return STORAGE_QUOTA_UNAVAILABLE;
-        }
-      },
-      owe: (uploadId, bytes) => {
-        if (!account()) return;
-        this.ctx.storage.sql.exec(
-          "INSERT OR IGNORE INTO storage_owed (upload_id, bytes, owed_at) VALUES (?, ?, ?)",
-          uploadId,
-          bytes,
-          this.git.context.now(),
-        );
-        // Told right after the commit; this job tells the account should that fail.
-        this.git.jobs.ensure("storage_confirm", STORAGE_CONFIRM_JOB, {
-          runAt: this.git.context.now() + STORAGE_CONFIRM_RETRY_MS,
-        });
-      },
-      confirm: async (uploadId, bytes) => {
-        await this.#confirmStorage(uploadId, bytes);
-      },
-      release: async (uploadId) => {
-        // Not released, what the upload held lapses on its own.
-        await account()
-          ?.releaseStorage(uploadId)
-          .catch((error: unknown) =>
-            this.#log().warn("storage release failed", { uploadId, error }),
-          );
-      },
-    };
+    this.#pushes.frozen = () => this.events.frozen() ?? this.#generation.abandoned();
+    this.#pushes.rules = this.#authority.pushRules();
+    this.#pushes.storage = this.#storageCharges.quota();
     return this.#pushes;
-  }
-
-  /**
-   * Reads the signature facts of commits from the live packs and a push's
-   * own `packs`: one reader for a whole check, opened on its first use,
-   * within one request's read budget (once it is spent, a commit not read
-   * yet is left out, so refused). The caller releases it.
-   */
-  #signatureReader(packs: readonly PackId[]): {
-    facts: (oids: readonly Oid[]) => Promise<Map<string, SignedFact>>;
-    release: () => void;
-  } {
-    let opened: Promise<Awaited<ReturnType<typeof openLiveReader>>> | undefined;
-    let spent = false;
-    const open = () => {
-      this.#blocks ??= createClockBlockCache();
-      opened ??= openLiveReader(
-        { git: this.git, memoryBlocks: this.#blocks },
-        {
-          deltaBaseCacheBytes: 4 * 1024 * 1024,
-          maxCacheCalls: BROWSE_POLICY.cacheCalls,
-          maxReads: BROWSE_POLICY.maxReads,
-          extraPacks: packs,
-        },
-      );
-      return opened;
-    };
-    return {
-      facts: async (oids) => {
-        const facts = new Map<string, SignedFact>();
-        if (spent) return facts;
-        try {
-          const reader = await open();
-          if (!reader) return facts;
-          await reader.prefetch(oids);
-          for (const oid of oids) {
-            const object = await reader.readObject(oid);
-            if (object?.type === "commit") facts.set(oidToHex(oid), await factOf(object.bytes));
-          }
-        } catch (error) {
-          // Out of reads: what was read counts; the rest is unreadable, so refused.
-          if (!(error instanceof ReadBudgetError)) throw error;
-          spent = true;
-        }
-        return facts;
-      },
-      release: () => {
-        void opened?.then((reader) => reader?.release()).catch(() => {});
-      },
-    };
   }
 
   /** Opens a push: the upload and its pack rows, before any byte is stored. Returns the body's R2 key. */
@@ -1093,132 +1581,11 @@ export class RepoDO extends MigratingDO {
    * are refused again at its commit. A head that does not hold the whole
    * command section is not checked here.
    */
-  async precheckPush(
+  precheckPush(
     uploadId: string,
     head: Uint8Array,
   ): Promise<{ ok: true } | { ok: false; response: Uint8Array }> {
-    const upload = this.git.uploads.get(uploadId);
-    if (!upload) return { ok: true };
-    let plan: ReturnType<typeof planPush>;
-    try {
-      const { request } = await readPushBody(bytesBody(head), { pushOptionsAdvertised: true });
-      plan = planPush(request, this.git.refStore.readRefsSync());
-    } catch {
-      return { ok: true };
-    }
-    const live = liveCommands(plan);
-    const ceilings = await this.#rolesPulled(upload.principal, upload.grantId);
-    const refusals = precheckPushRules(
-      this.#ruleSnapshot(upload.principal, ceilings).snapshot,
-      upload.principal,
-      live.map((cmd) => ({ index: cmd.index, name: cmd.name as string, kind: cmd.kind })),
-      upload.grantId !== null,
-    );
-    const messages: string[] = [];
-    for (const cmd of live) {
-      const refusal = refusals.get(cmd.index);
-      if (refusal === undefined) continue;
-      cmd.error = refusal;
-      messages.push(`error: ${refusal}`);
-    }
-    failAtomically(plan);
-    if (liveCommands(plan).length > 0) return { ok: true };
-    return {
-      ok: false,
-      response: encodePushResponse(
-        { unpackError: undefined, commands: plan.commands },
-        plan.capabilities,
-        messages,
-      ),
-    };
-  }
-
-  /** The strongest role the current ACL snapshot allows (an owner's: admin). */
-  #ruleRoleNow(principal: string): RepoRole | null {
-    for (const role of [...REPO_ROLES].reverse()) if (this.acl.allows(principal, role)) return role;
-    return null;
-  }
-
-  /**
-   * Owners whose roles cap a write's: the agents' owners of its delegation
-   * grant's chain, or an agent's own owner; none for a user's own token.
-   * From the directory's primary (a grant or an owner may change at any time).
-   */
-  async #ceilingsOf(principal: string, grantId: string | null): Promise<string[]> {
-    const db = this.env.DIRECTORY.withSession("first-primary");
-    const metrics = this.git.context.metrics;
-    if (grantId !== null) {
-      metrics.count("d1.query", { db: "directory", op: "token_grants" });
-      return [...new Set((await readGrantLinks(db, grantId)).map((l) => l.owner_id))];
-    }
-    if (principalTypeOf(principal) !== "agent") return [];
-    metrics.count("d1.query", { db: "directory", op: "agent_owner" });
-    const row = await db
-      .prepare("SELECT owner_id FROM principals WHERE id = ?")
-      .bind(principal)
-      .first<{ owner_id: string | null }>();
-    return row?.owner_id ? [row.owner_id] : [];
-  }
-
-  /** A write's ceilings, with the principal's and their roles pulled fresh (one snapshot serves all). */
-  async #rolesPulled(principal: string, grantId: string | null): Promise<string[]> {
-    const ceilings = await this.#ceilingsOf(principal, grantId);
-    for (const id of [principal, ...ceilings]) await this.acl.roleOf(id, "write");
-    return ceilings;
-  }
-
-  /**
-   * What a push's rules read, taken at once: the rulesets (with their
-   * version), HEAD and the pusher's effective role (the weakest of its own
-   * and its `ceilings`', so an agent's bypass is never its owner's above),
-   * and a stamp of them that the commit's transaction compares.
-   */
-  #ruleSnapshot(
-    principal: string,
-    ceilings: readonly string[] = [],
-  ): { snapshot: RuleSnapshot; stamp: string } {
-    const { version, rulesets } = this.rulesetStore.current();
-    const head = this.git.refStore.head();
-    let role = this.#ruleRoleNow(principal);
-    for (const id of ceilings) {
-      const cap = this.#ruleRoleNow(id);
-      if (cap === null || (role !== null && REPO_ROLES.indexOf(cap) < REPO_ROLES.indexOf(role)))
-        role = cap;
-    }
-    return {
-      snapshot: { rulesets: rulesets.map((r) => r.ruleset), head, role },
-      stamp: JSON.stringify([version, head, role]),
-    };
-  }
-
-  /** The rulesets' refusal of ref updates a write or upload session asks for, before anything is stored. */
-  async #precheckUpdates(
-    principal: string,
-    updates: readonly {
-      readonly ref: string;
-      readonly old: string | null;
-      readonly new: string | null;
-    }[],
-    /** The delegation grant the write is made under (an agent acts for `principal`); null for none. */
-    grantId: string | null,
-    /** A default branch the write sets as it commits (an import's). */
-    head?: string,
-  ): Promise<string | undefined> {
-    if (!hasPrecheckRules(this.rulesetStore)) return undefined;
-    const ceilings = await this.#rolesPulled(principal, grantId);
-    const delegated = grantId !== null;
-    const refusals = precheckPushRules(
-      this.#ruleSnapshot(principal, ceilings).snapshot,
-      principal,
-      updates.map((u, index) => ({
-        index,
-        name: u.ref,
-        kind: u.old === null ? "create" : u.new === null ? "delete" : "update",
-      })),
-      delegated,
-      head,
-    );
-    return refusals.size === 0 ? undefined : [...refusals.values()].join("; ");
+    return this.#authority.precheckPush(uploadId, head);
   }
 
   /** The push body is stored: plan it and index for up to `budgetMs`, then the alarm continues. */
@@ -1275,7 +1642,7 @@ export class RepoDO extends MigratingDO {
       const closed = this.#writeRefusal();
       if (closed) return { ok: false, ...closed } as const;
       // A session commits all its updates or none: one refused update refuses it.
-      const refused = await this.#precheckUpdates(
+      const refused = await this.#authority.precheckUpdates(
         input.principal,
         input.updates,
         input.grantId ?? null,
@@ -1357,7 +1724,7 @@ export class RepoDO extends MigratingDO {
       (principalId) => this.acl.roleOf(principalId, "write"),
       () => this.events.account()?.ownerGen,
       (principal, updates, grantId, head) =>
-        this.#precheckUpdates(principal, updates, grantId, head),
+        this.#authority.precheckUpdates(principal, updates, grantId, head),
     );
     return this.#importer;
   }
@@ -1393,6 +1760,11 @@ export class RepoDO extends MigratingDO {
   /** The latest import's progress or outcome. */
   importRecord(): Promise<ImportRecord | undefined> {
     return this.#imports().record();
+  }
+
+  /** Committed uploads the account has not been told of yet. */
+  owedStorage(): { uploadId: string; bytes: number }[] {
+    return this.#storageCharges.owed();
   }
 
   /** Runs due background jobs; the job queue re-arms the alarm for the next one. */
@@ -1473,84 +1845,28 @@ export class RepoDO extends MigratingDO {
     );
   }
 
-  /**
-   * Tells the account a committed upload's bytes are the repository's (it
-   * counts each upload once), then owes it nothing; false when it could
-   * not be told (still owed: the `storage_confirm` job tries again).
-   */
-  async #confirmStorage(uploadId: string, bytes: number): Promise<boolean> {
-    const owner = this.events.account();
-    if (!owner) return true;
-    try {
-      // Not taken while the repository moves between accounts: owed to the next one.
-      const taken = await this.env.ORG.getByName(owner.accountId).confirmStorage({
-        uploadId,
-        repoId: this.#repoId(),
-        bytes,
-      });
-      if (!taken) return false;
-    } catch (error) {
-      this.#log().warn("storage confirm failed", { uploadId, error });
-      return false;
-    }
-    this.ctx.storage.sql.exec("DELETE FROM storage_owed WHERE upload_id = ?", uploadId);
-    return true;
-  }
-
-  /** Committed uploads the account has not been told of yet. */
-  owedStorage(): { uploadId: string; bytes: number }[] {
-    return this.ctx.storage.sql
-      .exec<{ upload_id: string; bytes: number }>(
-        "SELECT upload_id, bytes FROM storage_owed ORDER BY upload_id",
-      )
-      .toArray()
-      .map((r) => ({ uploadId: r.upload_id, bytes: r.bytes }));
-  }
-
-  /** The `storage_confirm` job: tells the account of every upload still owed. */
-  #storageConfirmHandler(): JobHandler {
-    return {
-      runSlice: async () => {
-        const sql = this.ctx.storage.sql;
-        // Owed past the account's memory of confirmations, one told again could count twice:
-        // given up, uncounted.
-        const stale = sql
-          .exec<{ upload_id: string; bytes: number }>(
-            "SELECT upload_id, bytes FROM storage_owed WHERE owed_at < ?",
-            this.git.context.now() - STORAGE_OWED_MAX_AGE_MS,
-          )
-          .toArray();
-        for (const row of stale) {
-          this.#log().error("storage confirmation given up", {
-            uploadId: row.upload_id,
-            bytes: row.bytes,
-          });
-          sql.exec("DELETE FROM storage_owed WHERE upload_id = ?", row.upload_id);
-        }
-        const owed = sql
-          .exec<{ upload_id: string; bytes: number }>(
-            "SELECT upload_id, bytes FROM storage_owed ORDER BY owed_at LIMIT ?",
-            STORAGE_CONFIRM_BATCH,
-          )
-          .toArray();
-        for (const row of owed) {
-          // The account cannot be told now: later, without spending an attempt.
-          if (!(await this.#confirmStorage(row.upload_id, row.bytes)))
-            return { done: false, cursor: null, runAfterMs: STORAGE_CONFIRM_RETRY_MS };
-        }
-        // Done only with nothing owed, judged with no wait before the answer: a push that
-        // owed more meanwhile found this job running and left it to this one.
-        const left = sql.exec<{ n: number }>("SELECT count(*) AS n FROM storage_owed").one().n;
-        return left === 0
-          ? { done: true }
-          : { done: false, cursor: null, runAfterMs: STORAGE_CONFIRM_RETRY_MS };
-      },
-    };
-  }
-
   #jobHandlers() {
     return {
-      storage_confirm: this.#storageConfirmHandler(),
+      storage_confirm: this.#storageCharges.confirmHandler(),
+      mergeability: this.mergeability.handler(),
+      merge_saga: this.rebases.handler("alarm"),
+      pull_notices: this.pullSource.noticesHandler(),
+      revision_import: this.pullImports.handler(),
+      pull_follow: this.#forkPulls.followHandler(),
+      pull_refollow: this.pullSource.refollowHandler(),
+      view_compact: viewCompactionHandler({
+        git: this.git,
+        policy: () => this.maintenance,
+        blocks: () => this.#memoryBlocks(),
+        ownCap: () => this.packCap.cap,
+        record: async (output) => {
+          await this.env.NETWORK.getByName(this.git.networkId()).recordCompaction({
+            networkId: this.git.networkId(),
+            forkRepoId: this.#repoId(),
+            output,
+          });
+        },
+      }),
       reflog_prune: reflogPruneHandler(
         this.git.context,
         REFLOG_PRUNE_BATCH,
@@ -1568,12 +1884,10 @@ export class RepoDO extends MigratingDO {
       ...maintenanceHandlers(this.git, {
         policy: () => this.maintenance,
         log: this.#log(),
-        blocks: () => {
-          this.#blocks ??= createClockBlockCache();
-          return this.#blocks;
-        },
+        blocks: () => this.#memoryBlocks(),
         retire: this.retireOptions,
         gc: this.gcHooks,
+        roots: () => this.gcRoots(),
       }),
     } satisfies Partial<Record<JobKind, JobHandler>>;
   }
@@ -1586,6 +1900,42 @@ export class RepoDO extends MigratingDO {
   /** Hooks into a generation from a template. For tests. */
   generationHooks: { beforeWrite?: () => Promise<void> } = {};
 
+  /** Hooks into opening a pull request from another repository. For tests. */
+  forkPullHooks: { beforePublish?: () => Promise<void> } = {};
+
+  /** Hooks into a merge of a pull request. For tests. */
+  mergeHooks: { beforeFinish?: () => Promise<void> } = {};
+
+  /** Hooks into a merge of the base branch into a pull request's head. For tests. */
+  headMergeHooks: { beforeFinish?: () => Promise<void> } = {};
+
+  /** Hooks into a write of a pull request's head branch here, handed over by its base. For tests. */
+  headWriteHooks: { beforeFinish?: () => Promise<void> } = {};
+
+  /** Hooks into applying suggestions. For tests. */
+  suggestionHooks: { beforeWrite?: () => Promise<void> } = {};
+
+  /** A merge's budgets. Tests may replace them. */
+  mergePolicy: MergePolicy = MERGE_POLICY;
+
+  /** A rebase merge's budgets. Tests may replace them. */
+  rebasePolicy: RebasePolicy = REBASE_POLICY;
+
+  /** Hooks into a rebase merge's commit. For tests. */
+  rebaseHooks: {
+    beforeFinalize?: () => Promise<void>;
+    afterFinalize?: () => Promise<void>;
+  } = {};
+
+  /** A revision import's budgets. Tests may replace them. */
+  importPolicy: ImportPolicy = IMPORT_POLICY;
+
+  /** A mergeability slice's budgets. Tests may replace them. */
+  mergeabilityPolicy: MergePolicy = MERGEABILITY_POLICY;
+
+  /** Hooks into working out mergeability. For tests. */
+  mergeabilityHooks: { beforeWrite?: () => Promise<void> } = {};
+
   #networkOps: RepoNetwork | undefined;
 
   #network(): RepoNetwork {
@@ -1593,10 +1943,7 @@ export class RepoDO extends MigratingDO {
       git: this.git,
       env: this.env,
       repoId: () => this.#repoId(),
-      blocks: () => {
-        this.#blocks ??= createClockBlockCache();
-        return this.#blocks;
-      },
+      blocks: () => this.#memoryBlocks(),
       policy: () => this.maintenance,
       log: () => this.#log(),
       detachHooks: () => this.detachHooks,
@@ -1614,6 +1961,82 @@ export class RepoDO extends MigratingDO {
   /** One page of the commit-graph closure from `frontier` (a fork's graph copy). */
   forkCommitPage(frontier: readonly string[], limit: number): CommitPage {
     return this.#network().commitPage(frontier, limit);
+  }
+
+  /** What an import of a pull request's head works with. */
+  #importDeps(): ImportDeps {
+    return {
+      git: this.git,
+      env: this.env,
+      repoId: () => this.#repoId(),
+      ownCap: () => this.packCap.cap,
+      rewriteObjects: () => this.maintenance.maxRewriteObjects,
+      log: () => this.#log(),
+    };
+  }
+
+  /**
+   * Whether `root` reads `headRepoId` (a repository of the network), asked
+   * of its object; a failure to ask is thrown (tried again later), never a
+   * refusal.
+   */
+  #headReadable(headRepoId: string, root: string): Promise<boolean> {
+    return this.env.REPO.getByName(headRepoId).readableBy(root);
+  }
+
+  /**
+   * For a reader of an activity feed: whether `principal` reads the
+   * repository now, its role, and the excerpts of `members` (see
+   * `RepoFeedView.view`).
+   */
+  feedView(
+    principal: string,
+    grantId: string | null,
+    members: readonly string[],
+  ): Promise<FeedViewAnswer> {
+    return this.#measured("feedView", () => this.#feedView.view(principal, grantId, members));
+  }
+
+  /** Whether `principalId` may read this repository (public, or a role here). */
+  async readableBy(principalId: string): Promise<boolean> {
+    if (this.#refusesReads()) return false;
+    if (this.events.visibility() === "public") return true;
+    const ceilings = await this.#authority.rolesPulled(principalId, null);
+    return this.#authority.roleNow(principalId, ceilings) !== null;
+  }
+
+  /** Where branch `headRef` is, for a pull request's base. */
+  async pullHeadTip(headRef: string): Promise<{ sha: string | null; refVersion: number }> {
+    // Versions are ordered by the restore generation: the directory's is taken first.
+    await this.checkEpoch();
+    return this.pullSource.tip(headRef);
+  }
+
+  /** A pull request of `baseRepoId` follows branch `headRef` here (see `PullSource.register`). */
+  async registerOutgoingPull(input: Parameters<PullSource["register"]>[0]): Promise<{
+    sha: string | null;
+    refVersion: number;
+  }> {
+    await this.checkEpoch();
+    return this.pullSource.register(input);
+  }
+
+  /**
+   * Commits a write a pull request's base made of its head branch here
+   * (see `ForkPulls.receiveHeadWrite`).
+   */
+  pullHeadWrite(input: PullHeadWrite): Promise<Browsed<{ sha: string }>> {
+    return this.#measured("pullHeadWrite", () => this.#forkPulls.receiveHeadWrite(input));
+  }
+
+  /** A pull request of `baseRepoId` no longer follows a branch here (as of `generation`). */
+  unregisterOutgoingPull(baseRepoId: string, number: number, generation: number): void {
+    this.pullSource.unregister(baseRepoId, number, generation);
+  }
+
+  /** A revision a pull request's base imports: the live packs, leased, if `sha` is a commit here. */
+  exportRevision(input: { readonly sha: string; readonly holder: string; readonly ttlMs: number }) {
+    return this.pullSource.exportRevision(input);
   }
 
   /** A new fork's storage: its network, HEAD and borrowed packs. */
@@ -1648,57 +2071,9 @@ export class RepoDO extends MigratingDO {
    * commit; a restore runbook calls it to take the new epoch at once.
    */
   async checkEpoch(): Promise<void> {
-    await this.events.checkEpoch(async (recorded) => {
-      const metrics = this.git.context.metrics;
-      const primary = this.env.DIRECTORY.withSession("first-primary");
-      metrics.count("d1.query", { db: "directory", op: "epoch_read" });
-      const epoch = await primary
-        .prepare("SELECT epoch_gen FROM source_epochs WHERE source_id = ?")
-        .bind(this.#repoId())
-        .first<{ epoch_gen: number }>();
-      const epochGen = epoch?.epoch_gen ?? null;
-      if (epochGen === null || epochGen <= recorded) return { epochGen };
-      // Restored: the object may predate a transfer or a rename. What the directory and the
-      // read model's fence say now.
-      metrics.count("d1.query", { db: "directory", op: "epoch_owner" });
-      const row = await primary
-        .prepare(
-          `SELECT r.owner_id, r.name, r.name_gen, r.org_shard,
-             t.transfer_id, t.from_owner, t.to_owner
-           FROM repos r LEFT JOIN repo_transfers t
-             ON t.repo_id = r.id AND t.step NOT IN ('done', 'failed')
-           WHERE r.id = ?`,
-        )
-        .bind(this.#repoId())
-        .first<{
-          owner_id: string;
-          name: string;
-          name_gen: number;
-          org_shard: string;
-          transfer_id: string | null;
-          from_owner: string | null;
-          to_owner: string | null;
-        }>();
-      if (!row) return { epochGen };
-      metrics.count("d1.query", { db: "org", op: "owner_fence" });
-      const fence = await readModelFor(this.env, row.org_shard)
-        .prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
-        .bind(this.#repoId())
-        .first<{ owner_gen: number }>();
-      return {
-        epochGen,
-        owner: {
-          ownerId: row.owner_id,
-          name: row.name,
-          nameGen: row.name_gen,
-          ownerFence: fence?.owner_gen ?? 0,
-          transfer:
-            row.transfer_id && row.from_owner && row.to_owner
-              ? { id: row.transfer_id, from: row.from_owner, to: row.to_owner }
-              : null,
-        },
-      };
-    });
+    await this.events.checkEpoch((recorded) =>
+      readDirectoryEpoch(this.env, this.git.context.metrics, this.#repoId(), recorded),
+    );
     // A new epoch's snapshot goes out even if nothing else is written.
     this.#armOutbox();
   }
@@ -1797,12 +2172,12 @@ export class RepoDO extends MigratingDO {
    * gone or going (or still being generated from a template), 409 while a
    * transfer moves it.
    */
-  #writeRefusal(): { status: 404 | 409; code: string; error: string } | undefined {
+  #writeRefusal(): WriteRefusal | undefined {
     if (this.#closed || !this.#hasGitStorage() || this.events.isDeleted())
       return { status: 404, code: "repo_not_found", error: REPO_DELETED };
     if (this.events.isTransferring())
       return { status: 409, code: "repo_transferring", error: REPO_TRANSFERRING };
-    if (this.#generatingFrom() !== undefined)
+    if (this.#generation.templateId() !== undefined)
       return { status: 404, code: "repo_not_found", error: REPO_DELETED };
     return undefined;
   }

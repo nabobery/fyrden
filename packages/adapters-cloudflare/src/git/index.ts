@@ -32,7 +32,12 @@ export {
   type LockHandle,
   RepoLocks,
 } from "./locks.js";
-export { type PackSwap, type PackSwapResult, swapPacks } from "./maintenance-swap.js";
+export {
+  type PackSwap,
+  type PackSwapResult,
+  replaceUploadDependencies,
+  swapPacks,
+} from "./maintenance-swap.js";
 export {
   createDoMemoryBudget,
   DO_MEMORY,
@@ -79,6 +84,9 @@ export type { GitSqlStorage, GitStorageContext } from "./sql.js";
 export { promotePendingCommits, SqliteCommitGraph } from "./sqlite-commit-graph.js";
 export {
   type CommitContext,
+  DERIVED_REF_PREFIX,
+  type DerivedRefUpdate,
+  type MaintainerFor,
   type RefActor,
   type RepoCommitRequest,
   type RepoCommitResult,

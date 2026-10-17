@@ -1,6 +1,14 @@
 import { atLeast, type RepoRole } from "../authz/roles.js";
 import type { PrincipalType } from "../principals/principal.js";
-import { PRECHECK_RULES, type Rule, type Ruleset, refPatternMatches } from "./ruleset.js";
+import { type ApprovalInput, evaluateApprovals } from "../pulls/approvals.js";
+import {
+  type MergeMethod,
+  PRECHECK_RULES,
+  pullRequestParameters,
+  type Rule,
+  type Ruleset,
+  refPatternMatches,
+} from "./ruleset.js";
 
 /** Who is pushing: their principal type and their role on the repository. */
 export interface RuleActor {
@@ -16,6 +24,24 @@ export interface RefChange {
   readonly fastForward?: boolean;
   /** Known at the commit point: a new commit whose signature is not verified, if any. */
   readonly unverifiedCommit?: { readonly sha: string; readonly reason: string };
+  /**
+   * The pull request this update merges, built by the server from its own
+   * records (never from request input). Without it, a `pull_request` rule
+   * refuses the update.
+   */
+  readonly pullRequest?: MergeContext;
+}
+
+/** What a merge's rules read about the pull request being merged. */
+export interface MergeContext {
+  readonly number: number;
+  readonly method: MergeMethod;
+  /** Its reviews, author and last push; each rule applies its own settings. */
+  readonly approvals: ApprovalInput;
+  /** Review threads still unresolved. */
+  readonly unresolvedThreads: number;
+  /** Whether the head contains the base branch's current tip. */
+  readonly upToDate: boolean;
 }
 
 export interface RuleViolation {
@@ -116,7 +142,11 @@ function breaks(rule: Rule, change: RefChange): string | undefined {
     case "deletion":
       return change.kind === "delete" ? "cannot delete this ref" : undefined;
     case "pull_request":
-      return "changes must be made through a pull request";
+      return pullRequestRefusal(rule, change.pullRequest);
+    case "require_up_to_date":
+      return change.pullRequest && !change.pullRequest.upToDate
+        ? `pull request #${change.pullRequest.number} must include the latest commit of the branch it merges into`
+        : undefined;
     case "non_fast_forward":
       return change.kind === "update" && change.fastForward === false
         ? "cannot force-push to this ref"
@@ -126,4 +156,23 @@ function breaks(rule: Rule, change: RefChange): string | undefined {
         ? `commits must have verified signatures (${change.unverifiedCommit.sha.slice(0, 12)} is ${change.unverifiedCommit.reason})`
         : undefined;
   }
+}
+
+function pullRequestRefusal(rule: Rule, merge: MergeContext | undefined): string | undefined {
+  if (!merge) return "changes must be made through a pull request";
+  const parameters = pullRequestParameters(rule);
+  if (!parameters.allowed_merge_methods.includes(merge.method))
+    return `pull request #${merge.number} cannot be merged by ${merge.method} (allowed: ${parameters.allowed_merge_methods.join(", ")})`;
+  const outcome = evaluateApprovals(merge.approvals, {
+    required: parameters.required_approving_review_count,
+    dismissStale: parameters.dismiss_stale_reviews_on_push,
+    requireLastPushApproval: parameters.require_last_push_approval,
+    allowAgentApprovals: parameters.allow_agent_approvals,
+  });
+  const reasons = [...outcome.reasons];
+  if (parameters.required_review_thread_resolution && merge.unresolvedThreads > 0)
+    reasons.push(
+      `${merge.unresolvedThreads} review thread${merge.unresolvedThreads === 1 ? " is" : "s are"} unresolved`,
+    );
+  return reasons.length === 0 ? undefined : `pull request #${merge.number}: ${reasons.join("; ")}`;
 }

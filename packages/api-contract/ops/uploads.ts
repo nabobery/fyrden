@@ -1,4 +1,4 @@
-import { HANDLE_PATTERN } from "@fyrden/domain";
+import { HANDLE_SHAPE, MAX_HANDLE_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
@@ -11,7 +11,12 @@ import { REPO_NAME_PATTERN } from "./repos.js";
  * required), next to the repository's git endpoints.
  */
 
-const Owner = z.string().regex(HANDLE_PATTERN).describe("The owner's handle.");
+const Owner = z
+  .string()
+  .min(1)
+  .max(MAX_HANDLE_LENGTH)
+  .regex(HANDLE_SHAPE)
+  .describe("The owner's handle.");
 const Repo = z.string().regex(REPO_NAME_PATTERN).describe("The repository name.");
 const UploadId = z
   .string()

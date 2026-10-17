@@ -1,4 +1,4 @@
-import { createLogger } from "@fyrden/adapters-cloudflare/obs";
+import { createLogger, createMetrics } from "@fyrden/adapters-cloudflare/obs";
 import {
   atLeast,
   type OrgRole,
@@ -8,6 +8,7 @@ import {
   strongestRole,
 } from "@fyrden/domain";
 import { MigratingDO } from "./base/MigratingDO.js";
+import { Outbox } from "./base/outbox.js";
 import {
   AccountQuotas,
   CONFIRMED_KEEP_MS,
@@ -111,6 +112,9 @@ type Meta = {
   epoch_gen: number;
 };
 
+/** Repositories one `access.revoked` event names at most (a removal can name thousands). */
+const REVOKED_REPOS = 100;
+
 /** Audit rows one delivery sends at most. */
 const AUDIT_BATCH = 50;
 /** Wait before the alarm retries a delivery that failed. Proposed. */
@@ -129,6 +133,80 @@ export class OrgDO extends MigratingDO {
 
   #now(): number {
     return Date.now();
+  }
+
+  #outboxOf: Outbox | undefined;
+  get #outbox(): Outbox {
+    this.#outboxOf ??= new Outbox(this.ctx.storage, {
+      now: () => this.#now(),
+      send: async (envelope) => {
+        await this.env.EVENTS.send(envelope, { contentType: "json" });
+      },
+      metrics: createMetrics(this.env.METRICS),
+      doClass: "OrgDO",
+    });
+    return this.#outboxOf;
+  }
+
+  /**
+   * In a change's transaction: `principals` no longer read `repos` of the
+   * account, as of ACL `version`. Events say so, for their activity feeds,
+   * each naming at most `REVOKED_REPOS` repositories.
+   */
+  #revoked(
+    actor: ChangeActor | null,
+    principals: readonly string[],
+    repos: readonly string[],
+    version: number,
+  ): void {
+    if (principals.length === 0) return;
+    for (let at = 0; at < repos.length; at += REVOKED_REPOS) {
+      const meta = this.ctx.storage.sql
+        .exec<{ account_id: string; epoch_gen: number; source_seq: number }>(
+          `UPDATE org_meta SET source_seq = source_seq + 1 WHERE id = 1
+           RETURNING account_id, epoch_gen, source_seq`,
+        )
+        .one();
+      this.#outbox.append(
+        { sourceId: meta.account_id, epochGen: meta.epoch_gen, sourceSeq: meta.source_seq },
+        {
+          type: "access.revoked",
+          at: this.#now(),
+          actor: actor?.principalId ?? null,
+          actChain: [],
+          ownerGen: 1,
+          entity: null,
+          data: {
+            principals: [...principals],
+            repos: repos.slice(at, at + REVOKED_REPOS),
+            acl_version: version,
+          },
+        },
+      );
+    }
+  }
+
+  /**
+   * The data of an event too large for its queue message, as the JSON
+   * `{ row, data }`, by event key; null once its retention has passed.
+   */
+  eventPayload(key: string): string | null {
+    const stored = this.ctx.storage.sql
+      .exec<{ payload: string }>("SELECT payload FROM event_payloads WHERE event_key = ?", key)
+      .toArray()[0];
+    return stored?.payload ?? null;
+  }
+
+  /** Arms the alarm for the outbox's next drain or prune, unless it is due sooner. */
+  async #armOutbox(): Promise<void> {
+    const due = this.#outbox.dueAt();
+    if (due !== null) await this.#armBy(due);
+  }
+
+  /** The alarm goes off by `at` at the latest (an earlier one stands). */
+  async #armBy(at: number): Promise<void> {
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || current > at) await this.ctx.storage.setAlarm(at);
   }
 
   #meta(): Meta | undefined {
@@ -361,8 +439,25 @@ export class OrgDO extends MigratingDO {
     });
   }
 
-  /** Removes a member, if `actor` is an owner now; the last owner cannot leave. Gone already, it bumps nothing. */
-  async removeMember(actor: ChangeActor, memberId: string): Promise<AclChange> {
+  /**
+   * Removes a member, if `actor` is an owner now; the last owner cannot
+   * leave. Gone already, it bumps nothing. `held`: the repositories the
+   * account holds, as the caller read them from the directory just before
+   * (see `heldRepos`); the member's feed forgets them all but those it is a
+   * collaborator of, and those it released since (their release's own
+   * notice, which named the member, came first, with an earlier time). One
+   * transferred away after the release here is named all the same (the
+   * member lost it anyway). One that arrived between the read and the
+   * removal (created, or transferred in) is not named: the member's feed
+   * forgets it when next read, as it finds the member cannot read it; if
+   * the member can read it again by then, its older items stay, which
+   * shows the member nothing it may not read.
+   */
+  async removeMember(
+    actor: ChangeActor,
+    memberId: string,
+    held: readonly string[],
+  ): Promise<AclChange> {
     return this.#change(actor, { owner: true }, (meta) => {
       const current = this.accountRole(memberId);
       if (current === null) return this.#unchanged(meta);
@@ -370,7 +465,15 @@ export class OrgDO extends MigratingDO {
       this.ctx.storage.sql.exec("DELETE FROM members WHERE principal_id = ?", memberId);
       // Teams are the organization's: leaving it leaves them.
       this.ctx.storage.sql.exec("DELETE FROM team_members WHERE principal_id = ?", memberId);
-      return this.#changed(actor, "org.member.remove", { user: memberId });
+      const changed = this.#changed(actor, "org.member.remove", { user: memberId });
+      const kept = new Set(this.collaboratorRepos(memberId, "read"));
+      this.#revoked(
+        actor,
+        [memberId],
+        held.filter((id) => !kept.has(id) && !this.#notHere(id)),
+        (changed as { version: number }).version,
+      );
+      return changed;
     });
   }
 
@@ -419,9 +522,15 @@ export class OrgDO extends MigratingDO {
         userId,
       ).rowsWritten;
       if (removed === 0) return this.#unchanged(meta, [repoId]);
-      return this.#changed(actor, "repo.collaborator.remove", { repo: repoId, user: userId }, [
-        repoId,
-      ]);
+      const changed = this.#changed(
+        actor,
+        "repo.collaborator.remove",
+        { repo: repoId, user: userId },
+        [repoId],
+      );
+      if (this.#roleOn(repoId, userId, meta) === null)
+        this.#revoked(actor, [userId], [repoId], (changed as { version: number }).version);
+      return changed;
     });
   }
 
@@ -598,13 +707,17 @@ export class OrgDO extends MigratingDO {
    * charge or confirmation of it is taken here. It is not forgotten (it
    * lives on). Done once per transfer: again, it answers the same.
    */
-  releaseRepo(
+  async releaseRepo(
     transferId: string,
     repoId: string,
-  ): ReturnType<OrgDO["repoForTransfer"]> & {
-    acl: { epochGen: number; version: number } | undefined;
-  } {
-    return this.ctx.storage.transactionSync(() => {
+  ): Promise<
+    ReturnType<OrgDO["repoForTransfer"]> & {
+      acl: { epochGen: number; version: number } | undefined;
+    }
+  > {
+    // The event it writes takes the directory's restore generation (also first after a restore).
+    await this.#checkEpoch();
+    const released = this.ctx.storage.transactionSync(() => {
       const meta = this.#meta();
       const acl = meta && { epochGen: meta.epoch_gen, version: meta.acl_version };
       const done = this.ctx.storage.sql
@@ -622,6 +735,15 @@ export class OrgDO extends MigratingDO {
         JSON.stringify(handedOver),
         this.#now(),
       );
+      // Who read it here and does not go with it (its collaborators do) no longer reads it:
+      // their activity feeds forget it (one who reads it again where it lands hears anew).
+      const moving = new Set(handedOver.collaborators.map((c) => c.principalId));
+      let readers: string[] = [];
+      try {
+        if (meta) readers = [...this.#rolesFor(repoId, meta).keys()].filter((p) => !moving.has(p));
+      } catch {
+        // Past the snapshot's limit: feeds check access when read, so the release goes on.
+      }
       this.ctx.storage.sql.exec("DELETE FROM collaborators WHERE repo_id = ?", repoId);
       this.ctx.storage.sql.exec("DELETE FROM team_repos WHERE repo_id = ?", repoId);
       this.#quotas().forgetRepo(repoId);
@@ -633,11 +755,13 @@ export class OrgDO extends MigratingDO {
         transferId,
         this.#now(),
       );
-      return {
-        ...handedOver,
-        acl: meta && { epochGen: meta.epoch_gen, version: this.#bump() },
-      };
+      const bumped = meta && { epochGen: meta.epoch_gen, version: this.#bump() };
+      if (bumped) this.#revoked(null, readers, [repoId], bumped.version);
+      return { ...handedOver, acl: bumped };
     });
+    // An access.revoked it wrote goes out with the alarm.
+    void this.#armOutbox();
+    return released;
   }
 
   /**
@@ -903,7 +1027,15 @@ export class OrgDO extends MigratingDO {
       ).rowsWritten;
       const repos = this.#teamRepos(teamId);
       if (removed === 0) return this.#unchanged(meta, repos);
-      return this.#changed(actor, "org.team.member.remove", { team: slug, user: userId }, repos);
+      const changed = this.#changed(
+        actor,
+        "org.team.member.remove",
+        { team: slug, user: userId },
+        repos,
+      );
+      const lost = repos.filter((repoId) => this.#roleOn(repoId, userId, meta) === null);
+      this.#revoked(actor, [userId], lost, (changed as { version: number }).version);
+      return changed;
     });
   }
 
@@ -951,7 +1083,19 @@ export class OrgDO extends MigratingDO {
         repoId,
       ).rowsWritten;
       if (removed === 0) return this.#unchanged(meta, [repoId]);
-      return this.#changed(actor, "org.team.repo.remove", { team: slug, repo: repoId }, [repoId]);
+      const changed = this.#changed(actor, "org.team.repo.remove", { team: slug, repo: repoId }, [
+        repoId,
+      ]);
+      const lost = this.ctx.storage.sql
+        .exec<{ principal_id: string }>(
+          "SELECT principal_id FROM team_members WHERE team_id = ?",
+          teamId,
+        )
+        .toArray()
+        .map((m) => m.principal_id)
+        .filter((principal) => this.#roleOn(repoId, principal, meta) === null);
+      this.#revoked(actor, lost, [repoId], (changed as { version: number }).version);
+      return changed;
     });
   }
 
@@ -986,6 +1130,7 @@ export class OrgDO extends MigratingDO {
       throw error;
     }
     this.#scheduleDelivery(change);
+    await this.#armOutbox();
     return change;
   }
 
@@ -1086,13 +1231,37 @@ export class OrgDO extends MigratingDO {
   }
 
   override async alarm(): Promise<void> {
+    // Events first (a failure backs off and never stops the audit delivery).
+    try {
+      const outbox = this.#outbox;
+      const now = this.#now();
+      const sendAt = outbox.sendDueAt();
+      const accountId = this.#meta()?.account_id;
+      if (accountId && sendAt !== null && sendAt <= now) {
+        const sent = await outbox.drain(accountId);
+        if (!sent.ok)
+          createLogger({ op: "org.outbox", doClass: "OrgDO" }).warn("sending events failed", {
+            error: sent.error,
+          });
+      } else {
+        // Nothing to send: stored payloads past their retention go.
+        const due = outbox.dueAt();
+        if (due !== null && due <= now) outbox.prunePayloads();
+      }
+      await this.#armOutbox();
+    } catch (error) {
+      createLogger({ op: "org.outbox", doClass: "OrgDO" }).warn("draining the outbox failed", {
+        error,
+      });
+    }
     try {
       await this.deliverAudit();
     } catch (error) {
       createLogger({ op: "org.audit", doClass: "OrgDO" }).warn("delivering audit rows failed", {
         error,
       });
-      await this.ctx.storage.setAlarm(this.#now() + AUDIT_RETRY_MS);
+      // Tried again later, unless the outbox needs the alarm sooner.
+      await this.#armBy(this.#now() + AUDIT_RETRY_MS);
     }
   }
 

@@ -1,7 +1,26 @@
-import type { CommitContext, RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
-import { REPO_ENTITY, type RepoRow } from "@fyrden/domain";
+import {
+  type CommitContext,
+  DERIVED_REF_PREFIX,
+  type RefActor,
+  type RepoGitStorage,
+} from "@fyrden/adapters-cloudflare/git";
+import { type EntitySnapshot, type FeedBlock, REPO_ENTITY, type RepoRow } from "@fyrden/domain";
 import { oidToHex } from "@fyrden/git-core";
 import type { NewEvent, Outbox } from "../base/outbox.js";
+
+/** The webhooks an event goes to: each hook's id and configuration version. */
+export type HookRouter = (
+  type: string,
+  data: Record<string, unknown> | null,
+) => readonly { readonly id: number; readonly v: number }[];
+
+/** What an event means for activity feeds (in its transaction), or undefined for nothing. */
+export type FeedRouter = (
+  type: string,
+  actor: string | null,
+  data: Record<string, unknown> | null,
+  row: Record<string, unknown> | null,
+) => FeedBlock | undefined;
 
 /** A repository's snapshot as a read-model rebuild takes it. */
 export interface RepoExport {
@@ -144,14 +163,37 @@ export class RepoEvents {
   /** An update is moving HEAD: its own snapshot carries the new default branch. */
   #updating = false;
 
+  /** The webhooks an event of `type` goes to (see `routeHooks`). */
+  #hooksFor: HookRouter = () => [];
+
+  /** What an event means for activity feeds (see `routeFeed`). */
+  #feedFor: FeedRouter = () => undefined;
+
   constructor(
     private readonly git: RepoGitStorage,
     private readonly outbox: Outbox,
     private readonly repoId: () => string,
+    /** In the transaction taking a new restore generation: recovers what the restore may have lost. */
+    private readonly restored: () => void = () => {},
   ) {}
 
   get #storage() {
     return this.git.context.storage;
+  }
+
+  /** Names the webhooks each event goes to, at their configuration versions. */
+  routeHooks(router: HookRouter): void {
+    this.#hooksFor = router;
+  }
+
+  /** The restore generation this object has taken (0 before it has an identity). */
+  epochGen(): number {
+    return this.#meta()?.epoch_gen ?? 0;
+  }
+
+  /** Says, with each event, what it means for principals' activity feeds. */
+  routeFeed(router: FeedRouter): void {
+    this.#feedFor = router;
   }
 
   #meta(): MetaRow | undefined {
@@ -248,7 +290,8 @@ export class RepoEvents {
    * transfer or a rename: it takes the owner and name the directory names
    * now (`owner`), the owner in a generation past the read model's fence,
    * so a former owner's account no longer answers for it. Emits a snapshot
-   * under the new epoch. Once per instance; a repository without an
+   * under the new epoch, and runs `restored` in the same transaction.
+   * Once per instance; a repository without an
    * identity has nothing to check.
    */
   checkEpoch(read: (recorded: number) => Promise<EpochCheck>): Promise<void> {
@@ -301,6 +344,7 @@ export class RepoEvents {
           );
         }
         this.#emit("repo.updated", { actor: null, actChain: [], data: null }, true);
+        this.restored();
       }
     });
     this.#epochChecked = true;
@@ -373,6 +417,11 @@ export class RepoEvents {
   #assertWritable(meta: MetaRow | undefined): void {
     const reason = frozenReason(meta);
     if (reason) throw new Error(reason);
+  }
+
+  /** The repository's visibility; null before its identity is recorded. */
+  visibility(): RepoRow["visibility"] | null {
+    return (this.#meta()?.visibility as RepoRow["visibility"] | undefined) ?? null;
   }
 
   /** Why nothing may change the repository now, if anything stops it. */
@@ -515,15 +564,23 @@ export class RepoEvents {
     );
   }
 
-  /** In a commit's transaction: the new snapshot, the ref updates and the audit row. */
+  /**
+   * In a commit's transaction: the new snapshot, the ref updates and the
+   * audit row. Pull request refs are the server's: their moves are told as
+   * pull request events, not as ref updates.
+   */
   onCommit(context: CommitContext): void {
-    const { refUpdates, actor } = context.request;
-    if (refUpdates.length === 0) return;
+    const { actor } = context.request;
+    if (context.request.refUpdates.length === 0) return;
     const current = this.#meta();
     this.#assertWritable(current);
     if (!current) return;
     if (!this.#epochChecked)
       throw new Error("the repository's epoch must be checked before it commits");
+    const refUpdates = context.request.refUpdates.filter(
+      (u) => !u.name.startsWith(DERIVED_REF_PREFIX),
+    );
+    if (refUpdates.length === 0) return;
     this.#exec("events.pushed_at", "UPDATE repo_meta SET pushed_at = ? WHERE id = 1", context.now);
     const who = { actor: actor?.principal ?? null, actChain: [...(actor?.actChain ?? [])] };
     this.#emit("repo.updated", { ...who, data: null }, true);
@@ -603,6 +660,56 @@ export class RepoEvents {
   }
 
   /**
+   * In the caller's transaction: an event about another of the
+   * repository's entities (a pull request), carrying its snapshot. The
+   * repository must be writable, with its epoch checked.
+   */
+  emitEntity(
+    type: string,
+    actor: RefActor | null,
+    entity: Omit<EntitySnapshot, "deleted">,
+    data: Record<string, unknown> | null = null,
+    /** The entity is gone: its snapshot carries no row. */
+    deleted = false,
+  ): void {
+    this.#assertCanEmit();
+    this.#emit(
+      type,
+      { actor: actor?.principal ?? null, actChain: [...(actor?.actChain ?? [])], data },
+      { ...entity, deleted, row: deleted ? null : entity.row },
+    );
+  }
+
+  /**
+   * In the caller's transaction: an activity event with no entity (a review
+   * requested of someone). The repository must be writable, with its epoch
+   * checked.
+   */
+  emitActivity(type: string, actor: RefActor | null, data: Record<string, unknown>): void {
+    this.#assertCanEmit();
+    this.#emit(type, {
+      actor: actor?.principal ?? null,
+      actChain: [...(actor?.actChain ?? [])],
+      data,
+    });
+  }
+
+  /** Whether an event about the repository's entities may be emitted now (see `#assertCanEmit`). */
+  canEmit(): boolean {
+    const meta = this.#meta();
+    return meta !== undefined && frozenReason(meta) === undefined && this.#epochChecked;
+  }
+
+  /** An event about the repository's entities needs it writable, with an identity and its epoch checked. */
+  #assertCanEmit(): void {
+    const meta = this.#meta();
+    this.#assertWritable(meta);
+    if (!meta) throw new Error("the repository has no identity yet");
+    if (!this.#epochChecked)
+      throw new Error("the repository's epoch must be checked before it changes");
+  }
+
+  /**
    * Audits a change of the repository's own settings (rulesets) in the
    * caller's transaction; nothing before the identity is recorded.
    */
@@ -654,18 +761,19 @@ export class RepoEvents {
 
   /**
    * Appends one event, taking the next sequence number; with `snapshot`,
-   * also bumps the entity version and carries the full row. Returns the
-   * metadata after the allocation.
+   * also bumps the repository's version and carries its full row; with
+   * another entity's snapshot, carries that one. Returns the metadata after
+   * the allocation.
    */
   #emit(
     type: string,
     event: Pick<NewEvent, "actor" | "actChain" | "data">,
-    snapshot = false,
+    snapshot: boolean | EntitySnapshot = false,
   ): MetaRow {
     const cursor = this.#storage.sql.exec<MetaRow & { source_seq: number }>(
       `UPDATE repo_meta SET source_seq = source_seq + 1, version = version + ?
        WHERE id = 1 RETURNING source_seq, ${META_COLUMNS}`,
-      snapshot ? 1 : 0,
+      snapshot === true ? 1 : 0,
     );
     const meta = cursor.one();
     this.git.context.metrics.count(
@@ -673,22 +781,48 @@ export class RepoEvents {
       { class: this.git.context.doClass, op: "events.sequence" },
       cursor.rowsWritten,
     );
+    const hooks =
+      meta.owner_id !== null && meta.name !== null ? this.#hooksFor(type, event.data) : [];
+    const feed =
+      meta.owner_id === null
+        ? undefined
+        : this.#feedFor(
+            type,
+            event.actor,
+            event.data,
+            typeof snapshot === "object" ? (snapshot.row as Record<string, unknown> | null) : null,
+          );
     this.outbox.append(
       { sourceId: meta.repo_id, epochGen: meta.epoch_gen, sourceSeq: meta.source_seq },
       {
         ...event,
+        // What a delivery says of the repository is what it was now.
+        ...(hooks.length > 0 && {
+          webhooks: {
+            hooks: [...hooks],
+            repo: {
+              name: meta.name as string,
+              ownerId: meta.owner_id as string,
+              private: meta.visibility !== "public",
+            },
+          },
+        }),
+        ...(feed && { feed }),
         type,
         at: this.git.context.now(),
         ownerGen: meta.owner_gen,
-        entity: snapshot
-          ? {
-              type: REPO_ENTITY,
-              id: meta.repo_id,
-              version: meta.version,
-              deleted: meta.deleting_at !== null,
-              row: meta.deleting_at === null ? this.#row(meta) : null,
-            }
-          : null,
+        entity:
+          typeof snapshot === "object"
+            ? snapshot
+            : snapshot
+              ? {
+                  type: REPO_ENTITY,
+                  id: meta.repo_id,
+                  version: meta.version,
+                  deleted: meta.deleting_at !== null,
+                  row: meta.deleting_at === null ? this.#row(meta) : null,
+                }
+              : null,
       },
     );
     return meta;

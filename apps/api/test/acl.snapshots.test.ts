@@ -119,6 +119,7 @@ describe("ACL snapshots", () => {
     const removed = await env.ORG.getByName(orgId).removeMember(
       { principalId: owner.principalId },
       second.principalId,
+      [],
     );
     expect(removed).toMatchObject({ ok: true });
     // Within the 60 s window the cached snapshot still allows the write.
@@ -134,6 +135,7 @@ describe("ACL snapshots", () => {
     const removed = await env.ORG.getByName(orgId).removeMember(
       { principalId: owner.principalId },
       second.principalId,
+      [],
     );
     if (!removed.ok) throw new Error(removed.error);
     await stub.invalidateAcl(orgId, removed.epochGen, removed.version);
@@ -159,6 +161,7 @@ describe("ACL snapshots", () => {
     const removed = await env.ORG.getByName(orgId).removeMember(
       { principalId: owner.principalId },
       second.principalId,
+      [],
     );
     if (!removed.ok) throw new Error(removed.error);
     await stub.invalidateAcl(orgId, removed.epochGen, removed.version);
@@ -217,6 +220,7 @@ describe("ACL snapshots", () => {
     const removed = await env.ORG.getByName(orgId).removeMember(
       { principalId: owner.principalId },
       second.principalId,
+      [],
     );
     if (!removed.ok) throw new Error(removed.error);
     await stub.invalidateAcl(orgId, removed.epochGen, removed.version);

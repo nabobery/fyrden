@@ -7,6 +7,7 @@ import {
   type OperationDef,
   type Output,
   type Problem,
+  type ProblemInit,
 } from "@fyrden/api-contract";
 import { checkOperation } from "@fyrden/domain";
 import type { AuthState } from "../middleware/auth.js";
@@ -52,9 +53,11 @@ export type OpResult =
 export class OperationError extends Error {
   override name = "OperationError";
   constructor(
-    readonly status: 400 | 401 | 403 | 404 | 409 | 422,
+    readonly status: 400 | 401 | 403 | 404 | 405 | 409 | 410 | 422,
     readonly code: string,
     detail: string,
+    /** Where the client starts over (for an expired cursor). */
+    readonly resync?: string,
   ) {
     super(detail);
   }
@@ -65,17 +68,11 @@ function fail(
   status: number,
   code: string,
   detail: string,
-  missingPermission?: string,
+  extra: Pick<ProblemInit, "missingPermission" | "resync"> = {},
 ): OpResult {
   return {
     ok: false,
-    problem: makeProblem({
-      status,
-      code,
-      detail,
-      requestId: ctx.requestId,
-      ...(missingPermission !== undefined && { missingPermission }),
-    }),
+    problem: makeProblem({ status, code, detail, requestId: ctx.requestId, ...extra }),
   };
 }
 
@@ -148,13 +145,9 @@ export async function executeOperation(
   }
 
   if (!hasPermission(op.permission, auth)) {
-    return fail(
-      ctx,
-      403,
-      "missing_permission",
-      `${op.id} needs the ${op.permission} permission.`,
-      op.permission,
-    );
+    return fail(ctx, 403, "missing_permission", `${op.id} needs the ${op.permission} permission.`, {
+      missingPermission: op.permission,
+    });
   }
 
   const input = op.input.safeParse(rawInput);
@@ -200,7 +193,9 @@ export async function executeOperation(
         await finishIdempotent(ctx.env, claim, { kind: "unknown" }, ctx.metrics).catch(() => {});
       throw error;
     }
-    result = fail(ctx, error.status, error.code, error.message);
+    result = fail(ctx, error.status, error.code, error.message, {
+      ...(error.resync !== undefined && { resync: error.resync }),
+    });
   }
   if (claim) await finishIdempotent(ctx.env, claim, outcomeOf(op, result), ctx.metrics);
   return result;

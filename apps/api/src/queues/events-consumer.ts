@@ -11,9 +11,18 @@ import {
   type RepoRow,
 } from "@fyrden/domain";
 import { dispatchEffects } from "../effects/dispatcher.js";
-import { type EffectSink, effectStatements } from "../effects/journal.js";
+import {
+  type EffectSink,
+  effectCalls,
+  effectId,
+  effectStatements,
+  INLINE_BATCH_EFFECTS,
+  INLINE_EFFECTS,
+  SINGLE_EFFECT_CALLS,
+} from "../effects/journal.js";
 import { EFFECT_SINKS } from "../effects/sinks.js";
-import { readModelFor } from "../events/read-model.js";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
+import { feedSink } from "../feed/sink.js";
 
 /** The queue repository outboxes send to. */
 export const EVENTS_QUEUE = "fyrden-events";
@@ -57,13 +66,64 @@ function isWaiting(body: unknown): body is WaitingMessage {
 export const RETRY_DELAY_SECONDS = 10;
 
 /** `unlisted`: the directory does not list the repository (yet). */
-export type ApplyOutcome = "applied" | "dropped" | "unlisted";
+/** `deferred`: the invocation's D1 queries are spent; the message waits for a later one. */
+export type ApplyOutcome = "applied" | "dropped" | "unlisted" | "deferred";
+
+/**
+ * D1 queries one consumer invocation spends on its messages (Free allows
+ * 50; some are left for the rest). Proposed.
+ */
+export const INVOCATION_QUERIES = 45;
+/** D1 queries one inline effect delivery costs at most (its claim, its work, its outcome). */
+const QUERIES_PER_EFFECT = 6;
+/**
+ * D1 queries a message's inline effects of batch sinks cost at most (a
+ * claim, the sink's own lookup, a mark, a retry).
+ */
+const QUERIES_PER_BATCH = 4;
+
+/**
+ * Calls to internal services (D1, Durable Objects, R2, queues) one
+ * consumer invocation makes at most: Free allows 1,000 an invocation
+ * (measured, see docs/operations/limits.md); some are left for the rest.
+ * Proposed.
+ */
+export const INVOCATION_CALLS = 900;
+/** Calls applying a message costs besides reading its stored events (its lookup, its batch, a send back). */
+const CALLS_PER_MESSAGE = 3;
+/** Calls a message's inline effects of batch sinks cost besides their deliveries (as their queries). */
+const CALLS_PER_BATCH = QUERIES_PER_BATCH;
+
+/** The calls applying a message's envelope costs, its deliveries aside. */
+function messageCalls(body: unknown): number {
+  const events = (body as { events?: unknown } | null)?.events;
+  if (!Array.isArray(events)) return CALLS_PER_MESSAGE;
+  return (
+    CALLS_PER_MESSAGE + events.filter((e) => (e as { stored?: unknown })?.stored === true).length
+  );
+}
 
 export interface ConsumerOptions {
   readonly now?: () => number;
   readonly metrics?: Metrics;
   /** The effect sinks (default: the deployment's). */
   readonly sinks?: readonly EffectSink[];
+  /**
+   * Effects the invocation may still deliver itself, shared by its
+   * messages (default: its own): of sinks that deliver one at a time, and
+   * of sinks that deliver in batches.
+   */
+  readonly inline?: { left: number; batched: number };
+  /**
+   * D1 queries the invocation may still spend, shared by its messages, and
+   * whether one was applied (a message alone is applied whatever it costs).
+   */
+  readonly queries?: { left: number; applied: boolean };
+  /**
+   * Calls the invocation may still make, shared by its messages, and how
+   * many of them applying the messages after this one needs.
+   */
+  readonly calls?: { left: number; reserved: number };
 }
 
 /**
@@ -79,12 +139,30 @@ export async function consumeEvents(
   options: ConsumerOptions = {},
 ): Promise<void> {
   const log = createLogger({ op: "events.consume" });
-  for (const message of batch.messages) {
+  // One share of inline deliveries and of D1 queries for the whole invocation, however many
+  // messages it has.
+  options = {
+    ...options,
+    inline: options.inline ?? { left: INLINE_EFFECTS, batched: INLINE_BATCH_EFFECTS },
+    queries: options.queries ?? { left: INVOCATION_QUERIES, applied: false },
+    calls: options.calls ?? { left: INVOCATION_CALLS, reserved: 0 },
+  };
+  const envelopes = batch.messages.map((message) =>
+    isWaiting(message.body) ? message.body.envelope : message.body,
+  );
+  // What applying each message needs, kept for it while the ones before it deliver.
+  const needs = envelopes.map(messageCalls);
+  for (const [i, message] of batch.messages.entries()) {
     try {
       const waiting = isWaiting(message.body) ? message.body : undefined;
-      const envelope = waiting ? waiting.envelope : message.body;
+      const envelope = envelopes[i];
+      if (options.calls) options.calls.reserved = needs.slice(i + 1).reduce((a, b) => a + b, 0);
       const outcome = await applyEnvelope(env, envelope, options);
-      if (outcome === "unlisted") {
+      if (outcome === "deferred") {
+        // A new message, not a retry: waiting for budget is no failure.
+        await env.EVENTS.send(message.body, { contentType: "json", delaySeconds: 1 });
+        options.metrics?.count("queue.send", { queue: "events" });
+      } else if (outcome === "unlisted") {
         const now = options.now?.() ?? Date.now();
         const since = Math.min(waiting?.waitingSince ?? now, now);
         const waited = now - since;
@@ -120,7 +198,9 @@ export async function consumeEvents(
 /**
  * Applies one envelope to its source's read model. Snapshots are applied
  * with a version guard, so duplicates and any delivery order converge on
- * the newest snapshot of each entity. Throws on a malformed envelope or row.
+ * the newest snapshot of each entity. An account's events (what its access
+ * changes mean for activity feeds) project nothing and go to the feed sink
+ * only. Throws on a malformed envelope or row.
  */
 export async function applyEnvelope(
   env: Env,
@@ -131,25 +211,39 @@ export async function applyEnvelope(
   if (!parsed.ok) throw new Error(`malformed event envelope: ${parsed.error}`);
   const { sourceId, events } = parsed.envelope;
   const now = options.now?.() ?? Date.now();
-  // Only repositories produce events so far.
-  if (!isId(sourceId, "rep")) return "dropped";
+  const account = isId(sourceId, "org") || isId(sourceId, "usr");
+  if (!account && !isId(sourceId, "rep")) return "dropped";
+  const queries = options.queries ?? { left: INVOCATION_QUERIES, applied: false };
+  if (queries.applied && queries.left < 3) return "deferred";
+  const calls = options.calls ?? { left: INVOCATION_CALLS, reserved: 0 };
+  const applying = messageCalls(parsed.envelope);
+  if (queries.applied && applying > calls.left - calls.reserved) return "deferred";
+  calls.left -= applying;
 
-  options.metrics?.count("d1.query", { db: "directory", op: "events_route" });
-  const listed = await env.DIRECTORY.prepare("SELECT state, org_shard FROM repos WHERE id = ?")
-    .bind(sourceId)
-    .first<{ state: string; org_shard: string }>();
-  if (!listed) return "unlisted";
-  // Events of a repository being deleted are dropped (purging its rows
-  // comes with deletion).
-  if (listed.state !== "active") return "dropped";
+  // An account's read model is the deployment's (one organization for now).
+  let shard = DEFAULT_ORG_SHARD;
+  if (!account) {
+    queries.left -= 1;
+    options.metrics?.count("d1.query", { db: "directory", op: "events_route" });
+    const listed = await env.DIRECTORY.prepare("SELECT state, org_shard FROM repos WHERE id = ?")
+      .bind(sourceId)
+      .first<{ state: string; org_shard: string }>();
+    if (!listed) return "unlisted";
+    // Events of a repository being deleted are dropped (purging its rows
+    // comes with deletion).
+    if (listed.state !== "active") return "dropped";
+    shard = listed.org_shard;
+  }
 
   const payloads = storedPayloads(env, sourceId);
-  const snapshots = await resolveStored(payloads, newestSnapshots(events));
-  const db = readModelFor(env, listed.org_shard);
+  const snapshots = account ? [] : await resolveStored(payloads, newestSnapshots(events));
+  const db = readModelFor(env, shard);
   // The newest epoch any event shows, projected or not: from then on, older
   // epochs are refused.
   const epochGen = Math.max(...events.map((e) => e.id.epochGen));
-  const sinks = options.sinks ?? EFFECT_SINKS;
+  const sinks = (options.sinks ?? EFFECT_SINKS).filter(
+    (sink) => !account || sink.name === feedSink.name,
+  );
   // Sinks see every event whole (stored ones with their row and data).
   const planned = sinks.length > 0 ? await hydrate(payloads, events) : events;
   const effects = effectStatements(db, sinks, sourceId, planned, now);
@@ -158,13 +252,48 @@ export async function applyEnvelope(
     ...snapshots.map((event) => repoStatement(db, sourceId, event, now)),
     ...effects,
   ];
+  // Past what is left of the invocation's queries: a later invocation applies it (one alone always).
+  if (queries.applied && statements.length > queries.left) return "deferred";
+  queries.left -= statements.length;
+  queries.applied = true;
   options.metrics?.count("d1.query", { db: "org", op: "events_apply" }, statements.length);
-  const results = await db.batch<{ effect_id: string }>(statements);
+  const results = await db.batch<{ effect_id: string; sink: string }>(statements);
   // Only the effects this batch inserted: one already journaled keeps its own schedule.
   const inserted = results
     .slice(statements.length - effects.length)
-    .flatMap((result) => result.results.map((row) => row.effect_id));
+    .flatMap((result) => result.results);
   // Journaled with the projection; what cannot be delivered now, the sweeper retries.
+  const inline = options.inline ?? { left: INLINE_EFFECTS, batched: INLINE_BATCH_EFFECTS };
+  const batching = new Set(sinks.filter((s) => s.deliverBatch).map((s) => s.name));
+  const single = inserted.filter((row) => !batching.has(row.sink)).map((row) => row.effect_id);
+  const batched = inserted.filter((row) => batching.has(row.sink)).map((row) => row.effect_id);
+  // What the invocation's calls allow now, the later messages' application kept aside.
+  const spare = () => Math.max(0, calls.left - calls.reserved);
+  const take = Math.min(
+    inline.left,
+    single.length,
+    Math.max(0, Math.floor(queries.left / QUERIES_PER_EFFECT)),
+    Math.floor(spare() / SINGLE_EFFECT_CALLS),
+  );
+  inline.left -= take;
+  queries.left -= take * QUERIES_PER_EFFECT;
+  calls.left -= take * SINGLE_EFFECT_CALLS;
+  // A batch sink's effects go together: a few queries however many, and the calls each makes.
+  const costs = batchCalls(sinks, planned);
+  let takeBatched = 0;
+  let batchCost = CALLS_PER_BATCH;
+  if (queries.left >= QUERIES_PER_BATCH)
+    for (const id of batched.slice(0, inline.batched)) {
+      const cost = costs.get(id) ?? 1;
+      if (batchCost + cost > spare()) break;
+      batchCost += cost;
+      takeBatched++;
+    }
+  if (takeBatched > 0) {
+    inline.batched -= takeBatched;
+    queries.left -= QUERIES_PER_BATCH;
+    calls.left -= batchCost;
+  }
   try {
     await dispatchEffects(
       {
@@ -175,12 +304,28 @@ export async function applyEnvelope(
         log: createLogger({ op: "effects.dispatch" }),
         ...(options.metrics && { metrics: options.metrics }),
       },
-      inserted,
+      // The invocation's bounded share now: the effects cron takes the rest (every five minutes).
+      [...single.slice(0, take), ...batched.slice(0, takeBatched)],
     );
   } catch (error) {
     createLogger({ op: "effects.dispatch" }).warn("dispatching effects failed", { error });
   }
   return "applied";
+}
+
+/** The calls each effect of a batch sink the events plan makes at most, by effect id. */
+function batchCalls(
+  sinks: readonly EffectSink[],
+  events: readonly DomainEvent[],
+): Map<string, number> {
+  const costs = new Map<string, number>();
+  for (const sink of sinks) {
+    if (!sink.deliverBatch) continue;
+    for (const event of events)
+      for (const planned of sink.plan(event))
+        costs.set(effectId(event, sink.name, planned.target), effectCalls(sink, planned));
+  }
+  return costs;
 }
 
 export type Snapshot = DomainEvent & { entity: EntitySnapshot };
@@ -222,11 +367,12 @@ type Payloads = (event: DomainEvent) => Promise<{ row?: unknown; data?: unknown 
 
 function storedPayloads(env: Env, sourceId: string): Payloads {
   const fetched = new Map<string, Promise<{ row?: unknown; data?: unknown } | null>>();
+  const source = isId(sourceId, "rep") ? env.REPO.getByName(sourceId) : env.ORG.getByName(sourceId);
   return (event) => {
     const key = eventKey(event.id);
     let payload = fetched.get(key);
     if (!payload) {
-      payload = env.REPO.getByName(sourceId)
+      payload = source
         .eventPayload(key)
         .then((json) =>
           json === null ? null : (JSON.parse(json) as { row?: unknown; data?: unknown }),

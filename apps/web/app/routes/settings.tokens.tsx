@@ -101,16 +101,21 @@ export default function Tokens({ loaderData }: Route.ComponentProps) {
           </select>
           <fieldset>
             <legend>Limited to (none: all your rights)</legend>
-            {["contents:read", "contents:write", "metadata:read", "administration:write"].map(
-              (s) => (
-                <div key={s}>
-                  <input id={`scope-${s}`} type="checkbox" name="scopes" value={s} />{" "}
-                  <label htmlFor={`scope-${s}`} style={{ display: "inline", fontWeight: "normal" }}>
-                    <code>{s}</code>
-                  </label>
-                </div>
-              ),
-            )}
+            {[
+              "contents:read",
+              "contents:write",
+              "metadata:read",
+              "pull_requests:read",
+              "pull_requests:write",
+              "administration:write",
+            ].map((s) => (
+              <div key={s}>
+                <input id={`scope-${s}`} type="checkbox" name="scopes" value={s} />{" "}
+                <label htmlFor={`scope-${s}`} style={{ display: "inline", fontWeight: "normal" }}>
+                  <code>{s}</code>
+                </label>
+              </div>
+            ))}
           </fieldset>
           <label htmlFor="days">Expires in (days)</label>
           <input id="days" name="days" type="number" min={1} max={365} defaultValue={30} />

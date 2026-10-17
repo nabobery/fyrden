@@ -39,6 +39,8 @@ export class FyrdenError extends Error {
     readonly requestId: string | undefined,
     /** The permission the token lacked, for `missing_permission`. */
     readonly missingPermission: string | undefined,
+    /** Where to start over, for `cursor_expired` (a REST path). */
+    readonly resync?: string,
   ) {
     super(`${code}: ${detail}`);
   }
@@ -141,6 +143,7 @@ export class FyrdenClient {
           : `${response.status} ${response.statusText}`.trim(),
         typeof problem.request_id === "string" ? problem.request_id : undefined,
         typeof problem.missing_permission === "string" ? problem.missing_permission : undefined,
+        typeof problem.resync === "string" ? problem.resync : undefined,
       );
     }
     return (text ? JSON.parse(text) : {}) as OutputOf<K>;

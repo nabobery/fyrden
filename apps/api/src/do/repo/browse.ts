@@ -83,7 +83,7 @@ export const BROWSE_POLICY: BrowsePolicy = {
 
 export type BrowseFailure = {
   readonly ok: false;
-  readonly status: 403 | 404 | 409 | 422;
+  readonly status: 403 | 404 | 405 | 409 | 422;
   readonly code: string;
   readonly error: string;
 };
@@ -154,7 +154,11 @@ export interface BrowseDeps {
 
 const utf8 = new TextDecoder("utf-8");
 
-export function fail(status: 403 | 404 | 409 | 422, code: string, error: string): BrowseFailure {
+export function fail(
+  status: 403 | 404 | 405 | 409 | 422,
+  code: string,
+  error: string,
+): BrowseFailure {
   return { ok: false, status, code, error };
 }
 
@@ -373,6 +377,11 @@ export class RepoBrowse {
   /** Runs `use` with this request's reader (see `#withReader`). */
   reading<T>(use: (reader: ObjectReader) => Promise<Browsed<T>>): Promise<Browsed<T>> {
     return this.#withReader(use);
+  }
+
+  /** Views of commits `oids`, in order: as many as the read and response budgets allow (at least one, or it throws). */
+  async commitViews(oids: readonly Oid[]): Promise<CommitView[]> {
+    return this.#views(await this.reader(), oids);
   }
 
   /** R2 reads this request has made. */

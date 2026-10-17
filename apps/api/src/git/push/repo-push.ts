@@ -2,11 +2,13 @@ import {
   indexJobId,
   type JobHandler,
   LOCK_REF_COMMIT,
+  type RefActor,
   type RepoGitStorage,
   UPLOAD_TTL_MS,
   type UploadRecord,
 } from "@fyrden/adapters-cloudflare/git";
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
+import type { MergeContext } from "@fyrden/domain";
 import {
   type BlockCache,
   type CheckedCommand,
@@ -51,6 +53,13 @@ import {
   packKey,
   r2StoredBody,
 } from "./scratch.js";
+
+/** The answer for a push whose upload is gone (expired, or reaped). */
+export const PUSH_EXPIRED = "this push has expired; push again";
+/** The answer for a push whose upload was cancelled before its commit. */
+export const PUSH_CANCELLED = "this push was cancelled; push again";
+/** The answer for a push whose commit could not take the repository's commit lock. */
+export const PUSH_BUSY = "the repository is busy; try the push again";
 
 /*
  * The Durable Object side of a push (the Worker side is ../receive-pack.ts):
@@ -144,6 +153,32 @@ export interface PushLogMeta {
    * default branch there): what it writes commits with the refs, or not at all.
    */
   readonly inCommit?: () => void;
+  /**
+   * The pull request this upload merges, built by the repository from its
+   * own records: the rulesets judge the update as that merge.
+   */
+  readonly merge?: MergeContext;
+  /** A last refusal of the caller's, checked in the commit's transaction after the push's own. */
+  readonly fence?: () => string | undefined;
+  /** How the change is made, for the reflog (a pull request's merge: `merge`). */
+  readonly via?: RefActor["via"];
+  /**
+   * A base's maintainer writing a pull request's head here: recorded on
+   * the commit's actor, where the repository checks the author's consent.
+   */
+  readonly maintainerFor?: RefActor["maintainerFor"];
+  /**
+   * In place of the pusher's own write access (the access check and the
+   * rulesets' writable flag): the caller's own authority for this push,
+   * a refusal or undefined. The rulesets still judge the pusher's own role.
+   */
+  readonly authority?: () => string | undefined;
+  /**
+   * Whether an upload this finalization did not commit is no longer the
+   * caller's to discard (another run of the caller's took it over): it is
+   * then left as it is, for that run.
+   */
+  readonly yields?: () => boolean;
 }
 
 export class RepoPush {
@@ -177,6 +212,8 @@ export class RepoPush {
           readonly commands: readonly CheckedCommand[];
           /** An atomic push: one refused update fails them all. */
           readonly atomic: boolean;
+          /** The pull request the upload merges, when it is a merge. */
+          readonly merge?: MergeContext;
         }) => Promise<{
           stamp: string;
           restamp: () => string;
@@ -262,7 +299,7 @@ export class RepoPush {
     if (!upload)
       return {
         state: "done",
-        response: encodeFatalError("this push has expired; push again", false),
+        response: encodeFatalError(PUSH_EXPIRED, false),
         discardBody: true,
       };
     if (upload.state === "open") {
@@ -273,10 +310,14 @@ export class RepoPush {
     return this.status(uploadId, budgetMs);
   }
 
-  /** Where the push stands; indexing that is due runs here for up to `budgetMs`. */
-  async status(uploadId: string, budgetMs: number): Promise<PushProgress> {
+  /**
+   * Where the push stands; indexing that is due runs here for up to
+   * `budgetMs`. A push that cannot go on is discarded, unless `yields` says
+   * it is no longer the caller's (see `PushLogMeta.yields`).
+   */
+  async status(uploadId: string, budgetMs: number, yields?: () => boolean): Promise<PushProgress> {
     const upload = this.git.uploads.get(uploadId);
-    if (!upload) return fatal("this push has expired; push again", false);
+    if (!upload) return fatal(PUSH_EXPIRED, false);
     const record = readRecord(this.git, uploadId);
     switch (upload.state) {
       case "open":
@@ -289,13 +330,13 @@ export class RepoPush {
       }
       case "rejected":
       case "expired":
-        return fatal("this push was cancelled; push again", record?.planned?.sideband ?? false);
+        return fatal(PUSH_CANCELLED, record?.planned?.sideband ?? false);
       case "indexed":
         return { state: "ready", sideband: record?.planned?.sideband ?? false };
     }
     if (!record) return fatal("this push has no record; push again", false);
     try {
-      const planned = record.planned ?? (await this.#plan(upload, record));
+      const planned = record.planned ?? (await this.#plan(upload, record, yields));
       if ("state" in planned) return planned;
       if (!planned.indexing) return { state: "ready", sideband: planned.sideband };
       const job = this.git.jobs.get(indexJobId(uploadId));
@@ -304,7 +345,7 @@ export class RepoPush {
       if (job?.state === "done") return { state: "ready", sideband: planned.sideband };
       if (job?.state === "failed") {
         this.log.error("push indexing failed", { uploadId, attempts: job.attempts });
-        await this.#discard(uploadId);
+        if (!yields?.()) await this.#discard(uploadId);
         return fatal("the server could not index the pushed objects; try again", planned.sideband);
       }
       const ran = await this.git.jobs.runJob(
@@ -316,7 +357,7 @@ export class RepoPush {
       return { state: ran.state === "done" ? "ready" : "indexing", sideband: planned.sideband };
     } catch (error) {
       this.log.error("push could not be prepared", { uploadId, error });
-      await this.#discard(uploadId);
+      if (!yields?.()) await this.#discard(uploadId);
       return fatal(
         "the server could not read the push; try again",
         record.planned?.sideband ?? false,
@@ -329,7 +370,11 @@ export class RepoPush {
    * records the plan and starts the index job. A malformed request ends
    * the push with git's error.
    */
-  async #plan(upload: UploadRecord, stored: PushRecord): Promise<Planned | PushProgress> {
+  async #plan(
+    upload: UploadRecord,
+    stored: PushRecord,
+    yields?: () => boolean,
+  ): Promise<Planned | PushProgress> {
     const { bodyBytes } = stored;
     const body = this.#body(upload.uploadId, stored);
     let parsed: Awaited<ReturnType<typeof readPushBody>>;
@@ -338,23 +383,39 @@ export class RepoPush {
     } catch (error) {
       if (!(error instanceof ProtocolError)) throw error;
       const sideband = await requestedSideband(body);
-      await this.#discard(upload.uploadId);
+      if (!yields?.()) await this.#discard(upload.uploadId);
       return fatal(error.message, sideband);
     }
     const plan = planPush(parsed.request, this.git.refStore.readRefsSync());
     const record = planRecord(bodyBytes, parsed.packOffset, plan, stored.body);
     const planned = record.planned as Planned;
+    // Planned by another status check while this one read the body, or no longer the caller's:
+    // nothing of this plan is published (it would undo the other's indexing).
+    const unplanned = () =>
+      readRecord(this.git, upload.uploadId)?.planned === undefined && !yields?.();
+    const elsewhere = (): Planned | PushProgress =>
+      (readRecord(this.git, upload.uploadId)?.planned as Planned | undefined) ?? {
+        state: "indexing",
+        sideband: planned.sideband,
+      };
     if (planned.indexing) {
-      await this.#cursors.save(
+      const published = await this.#cursors.save(
         upload.uploadId,
         PushIndexer.start({
           uploadId: upload.uploadId,
           packOffset: parsed.packOffset,
           plan,
         }).checkpoint(),
+        unplanned,
+        () => {
+          this.git.uploads.recordCommands(upload.uploadId, record);
+          this.git.jobs.ensure("index", indexJobId(upload.uploadId));
+        },
       );
-      this.git.jobs.ensure("index", indexJobId(upload.uploadId));
-    } else if (upload.packId) {
+      return published ? planned : elsewhere();
+    }
+    if (!unplanned()) return elsewhere();
+    if (upload.packId) {
       // Nothing to index: the preallocated pack is never written.
       this.git.registry.transition(upload.packId, ["pending"], "discarded");
       this.git.uploads.markIndexed(upload.uploadId, { deps: [] });
@@ -439,7 +500,7 @@ export class RepoPush {
     decision: PushDecision,
     meta: PushLogMeta = {},
   ): Promise<Uint8Array> {
-    const progress = await this.status(uploadId, 0);
+    const progress = await this.status(uploadId, 0, meta.yields);
     if (progress.state === "done") return progress.response;
     const sideband = progress.sideband;
     if (progress.state !== "ready")
@@ -473,7 +534,7 @@ export class RepoPush {
           // own access check for the pusher.
           reauthorize: async () =>
             decision.refusal ??
-            (await this.accessCheck?.(upload.principal)) ??
+            (meta.authority ? meta.authority() : await this.accessCheck?.(upload.principal)) ??
             (await this.storage?.charge(uploadId, record.bodyBytes)),
           ...(rules && {
             checkCommands: async (commands: readonly CheckedCommand[]) => {
@@ -485,6 +546,7 @@ export class RepoPush {
                 head: meta.head,
                 commands,
                 atomic: plan.capabilities.atomic,
+                ...(meta.merge && { merge: meta.merge }),
               });
               rulesStamp = checked;
               return checked.refusals;
@@ -503,25 +565,28 @@ export class RepoPush {
               this.frozen?.() ??
               (rulesStamp === undefined
                 ? undefined
-                : !rulesStamp.writable
-                  ? ACCESS_LOST
+                : !(meta.authority ? meta.authority() === undefined : rulesStamp.writable)
+                  ? (meta.authority?.() ?? ACCESS_LOST)
                   : rulesStamp.restamp() !== rulesStamp.stamp
                     ? RULESETS_CHANGED
-                    : undefined),
+                    : undefined) ??
+              meta.fence?.(),
             // In the commit's transaction: the account is owed its confirmation (told after,
             // or later should that fail), and the caller's own writes.
             () => {
               this.storage?.owe(uploadId, record.bodyBytes);
               meta.inCommit?.();
             },
+            meta.via,
+            meta.maintainerFor,
           ),
         });
         return { plan, indexed, result };
       },
     );
     if (!outcome.ok) {
-      await this.#discard(uploadId);
-      return encodeFatalError("the repository is busy; try the push again", sideband);
+      if (!meta.yields?.()) await this.#discard(uploadId);
+      return encodeFatalError(PUSH_BUSY, sideband);
     }
     const { plan, indexed, result } = outcome.value;
     const response = encodePushResponse(result.report, plan.capabilities, result.messages);
@@ -535,7 +600,7 @@ export class RepoPush {
         uploadId,
         cursorObject ? [cursorObject] : [],
       ).catch(() => {});
-    } else {
+    } else if (!meta.yields?.()) {
       await this.#discard(uploadId);
     }
     this.#report(meta, uploadId, record.bodyBytes, decision, indexed, result, committed, merged);

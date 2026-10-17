@@ -23,6 +23,20 @@ describe("redactString", () => {
     expect(out).not.toContain(b64(token).slice(0, 40));
   });
 
+  it("removes a webhook secret, plain, percent-encoded or in base64", () => {
+    const whsec = `whsec_${b64("0123456789abcdef0123456789abcdef")}`;
+    for (const input of [
+      `secret ${whsec} here`,
+      `q=${encodeURIComponent(whsec)}`,
+      `blob ${b64(`x ${whsec} y`)}`,
+      new Error(`failed with ${whsec}`).message,
+    ]) {
+      const out = redactString(input);
+      expect(out).not.toContain(whsec.slice(6, 30));
+      expect(out).not.toContain(b64(whsec).slice(0, 30));
+    }
+  });
+
   it("keeps the token type so logs stay useful", () => {
     expect(redactString(`t=${token}`)).toBe(`t=fyrden_pat_${REDACTED}`);
   });

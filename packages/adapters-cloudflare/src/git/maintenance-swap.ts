@@ -176,6 +176,24 @@ function flagged(git: RepoGitStorage, packId: PackId): boolean {
   );
 }
 
+/**
+ * In the caller's transaction: packs `removed` are replaced by `outputs` in
+ * the dependencies of uploads not yet committed (a swap made outside
+ * `swapPacks`, such as a view compaction's).
+ */
+export function replaceUploadDependencies(
+  git: RepoGitStorage,
+  removed: readonly PackId[],
+  outputs: readonly PackId[],
+): number {
+  return rewriteDependencies(git, {
+    remove: removed,
+    live: outputs,
+    respectLeases: false,
+    waitForIndexing: false,
+  });
+}
+
 /** Replaces removed packs in the dependencies of uploads not yet committed. */
 function rewriteDependencies(git: RepoGitStorage, swap: PackSwap): number {
   if (swap.remove.length === 0) return 0;

@@ -51,6 +51,7 @@ import {
   listUserTokensOperation,
   revokeUserTokenOperation,
 } from "../accounts/tokens.js";
+import { ackFeedItemOperation, getFeedOperation, syncFeedOperation } from "../feed/operations.js";
 import {
   abortUploadSession,
   completeUploadSession,
@@ -72,6 +73,13 @@ import {
   listCommitsOperation,
   listTagsOperation,
 } from "../repos/browse.js";
+import {
+  createCommentOperation,
+  deleteCommentOperation,
+  getCommentOperation,
+  listCommentsOperation,
+  updateCommentOperation,
+} from "../repos/comments.js";
 import { createOwnRepoOperation } from "../repos/create.js";
 import { deleteRepoOperation, deleteReposOperation } from "../repos/delete.js";
 import { authorize, defaultBranchOf, ownListable, resolveRepo } from "../repos/directory.js";
@@ -81,8 +89,54 @@ import {
   putContentsOperation,
 } from "../repos/file-writes.js";
 import { generateRepoOperation } from "../repos/generate.js";
+import {
+  createHookOperation,
+  deleteHookOperation,
+  dropPreviousHookSecretOperation,
+  getHookDeliveryOperation,
+  getHookOperation,
+  listHookDeliveriesOperation,
+  listHooksOperation,
+  pingHookOperation,
+  redeliverHookDeliveryOperation,
+  resealHookSecretsOperation,
+  rotateHookSecretOperation,
+  updateHookOperation,
+} from "../repos/hooks.js";
 import { listAccountRepos } from "../repos/listing.js";
 import { networkSource, repoOutput, starCounts, visibleParents } from "../repos/output.js";
+import {
+  createPullOperation,
+  getPullConflictsOperation,
+  getPullOperation,
+  listPullCommitsOperation,
+  listPullFilesOperation,
+  listPullsOperation,
+  mergePullOperation,
+  resolvePullConflictsOperation,
+  updatePullBranchOperation,
+  updatePullOperation,
+} from "../repos/pulls.js";
+import {
+  applySuggestionsOperation,
+  createReviewCommentOperation,
+  deleteReviewCommentOperation,
+  getReviewCommentOperation,
+  listReviewCommentsOperation,
+  listReviewThreadsOperation,
+  resolveReviewThreadOperation,
+  unresolveReviewThreadOperation,
+  updateReviewCommentOperation,
+} from "../repos/review-comments.js";
+import {
+  createReviewOperation,
+  dismissReviewOperation,
+  getReviewOperation,
+  listRequestedReviewersOperation,
+  listReviewsOperation,
+  removeRequestedReviewersOperation,
+  requestReviewersOperation,
+} from "../repos/reviews.js";
 import {
   createRulesetOperation,
   deleteRulesetOperation,
@@ -292,10 +346,60 @@ export const handlers: Handlers = {
   "repos.rulesets.update": updateRulesetOperation,
   "repos.rulesets.delete": deleteRulesetOperation,
 
+  // Pull requests live in the repository's object (repos/pulls).
+  "pulls.list": listPullsOperation,
+  "pulls.create": createPullOperation,
+  "pulls.get": getPullOperation,
+  "pulls.update": updatePullOperation,
+  "repos.hooks.list": listHooksOperation,
+  "repos.hooks.get": getHookOperation,
+  "repos.hooks.create": createHookOperation,
+  "repos.hooks.update": updateHookOperation,
+  "repos.hooks.delete": deleteHookOperation,
+  "repos.hooks.pings.create": pingHookOperation,
+  "repos.hooks.secret.rotate": rotateHookSecretOperation,
+  "repos.hooks.secret.drop": dropPreviousHookSecretOperation,
+  "repos.hooks.deliveries.list": listHookDeliveriesOperation,
+  "repos.hooks.deliveries.get": getHookDeliveryOperation,
+  "repos.hooks.deliveries.redeliver": redeliverHookDeliveryOperation,
+  "admin.webhooks.reseal": resealHookSecretsOperation,
+  "pulls.merge": mergePullOperation,
+  "pulls.conflicts.get": getPullConflictsOperation,
+  "pulls.conflicts.resolve": resolvePullConflictsOperation,
+  "pulls.branch.update": updatePullBranchOperation,
+  "pulls.comments.list": listReviewCommentsOperation,
+  "pulls.comments.create": createReviewCommentOperation,
+  "pulls.comments.get": getReviewCommentOperation,
+  "pulls.comments.update": updateReviewCommentOperation,
+  "pulls.comments.delete": deleteReviewCommentOperation,
+  "pulls.threads.list": listReviewThreadsOperation,
+  "pulls.threads.resolve": resolveReviewThreadOperation,
+  "pulls.threads.unresolve": unresolveReviewThreadOperation,
+  "pulls.suggestions.apply": applySuggestionsOperation,
+  "pulls.files.list": listPullFilesOperation,
+  "pulls.commits.list": listPullCommitsOperation,
+  "pulls.reviews.list": listReviewsOperation,
+  "pulls.reviews.get": getReviewOperation,
+  "pulls.reviews.create": createReviewOperation,
+  "pulls.reviews.dismiss": dismissReviewOperation,
+  "pulls.requested_reviewers.list": listRequestedReviewersOperation,
+  "pulls.requested_reviewers.add": requestReviewersOperation,
+  "pulls.requested_reviewers.remove": removeRequestedReviewersOperation,
+  "issues.comments.list": listCommentsOperation,
+  "issues.comments.create": createCommentOperation,
+  "issues.comments.get": getCommentOperation,
+  "issues.comments.update": updateCommentOperation,
+  "issues.comments.delete": deleteCommentOperation,
+
   // Stars are the caller's own, of repositories it can read (repos/stars).
   "stars.put": starRepoOperation,
   "stars.delete": unstarRepoOperation,
   "stars.list": listStarredOperation,
+
+  // The caller's activity feed (feed/operations).
+  "feed.list": getFeedOperation,
+  "feed.sync": syncFeedOperation,
+  "feed.ack": ackFeedItemOperation,
 
   // Quotas live in each account's object (accounts/quotas).
   "quotas.user.get": getUserQuotaOperation,

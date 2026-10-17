@@ -81,6 +81,18 @@ describe("fyrden deploy", () => {
     await expect(stat(file)).rejects.toThrow();
   });
 
+  it("makes the webhook secrets' key once, never shown, and keeps it", async () => {
+    const fake = fakeWrangler();
+    const { d, lines } = deps(fake.runner);
+    await deploy(d);
+    const key = fake.state.secrets.get("WEBHOOKS_KEY") as string;
+    expect(Buffer.from(key, "base64")).toHaveLength(32);
+    expect(key).not.toBe(fake.state.secrets.get("SIGNING_KEY"));
+    expect(lines.join("\n")).not.toContain(key);
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.secrets.get("WEBHOOKS_KEY")).toBe(key);
+  });
+
   it("makes a commit signing key once, never shown, and keeps it", async () => {
     const fake = fakeWrangler();
     const { d, lines } = deps(fake.runner);

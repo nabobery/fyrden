@@ -189,6 +189,24 @@ export async function listOwnedForks(
 }
 
 /** The active repositories among `ids` (of enabled owners), in one query, from the D1 primary. */
+/**
+ * The repositories an account holds now, in one read: those it owns (but
+ * deleted ones) and those a transfer has moved away from it in the
+ * directory that it has not let go of yet (the `grants` step).
+ */
+export const HELD_REPOS = `SELECT id FROM repos WHERE owner_id = ?1 AND state <> 'deleted'
+  UNION SELECT repo_id FROM repo_transfers WHERE from_owner = ?1 AND step = 'grants'`;
+
+/** `HELD_REPOS` of `ownerId`, from the D1 primary. */
+export async function heldRepos(env: Env, ownerId: string, metrics?: Metrics): Promise<string[]> {
+  metrics?.count("d1.query", { db: "directory", op: "held_repos" });
+  const { results } = await env.DIRECTORY.withSession("first-primary")
+    .prepare(HELD_REPOS)
+    .bind(ownerId)
+    .all<{ id: string }>();
+  return results.map((row) => row.id);
+}
+
 export async function findReposById(
   env: Env,
   ids: readonly string[],
@@ -204,6 +222,37 @@ export async function findReposById(
          AND p.disabled_at IS NULL`,
     )
     .bind(JSON.stringify(ids))
+    .all<RepoRow>();
+  return results.map(entryOf);
+}
+
+/** The repositories of one owner in a fork network a pull request's head is looked for among. Proposed. */
+export const MAX_HEAD_CANDIDATES = 10;
+
+/**
+ * The active repositories of fork network `networkId` that the principal
+ * with `handle` owns (a pull request's head is a branch of one), named
+ * `name` when given; the first `MAX_HEAD_CANDIDATES` by name. From the D1
+ * primary, so a fork made a moment ago is found.
+ */
+export async function networkReposOf(
+  env: Env,
+  networkId: string,
+  handle: string,
+  name: string | undefined,
+  metrics?: Metrics,
+): Promise<RepoEntry[]> {
+  if (!isValidHandle(handle) || (name !== undefined && !isValidRepoName(name))) return [];
+  metrics?.count("d1.query", { db: "directory", op: "network_repos" });
+  const { results } = await env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT ${REPO_COLUMNS}
+       FROM repos r JOIN principals p ON p.id = r.owner_id
+       WHERE r.network_id = ? AND p.handle = ? COLLATE NOCASE AND r.state = 'active'
+         AND p.disabled_at IS NULL AND (?3 IS NULL OR r.name = ?3 COLLATE NOCASE)
+       ORDER BY r.name LIMIT ?4`,
+    )
+    .bind(networkId, handle, name ?? null, MAX_HEAD_CANDIDATES)
     .all<RepoRow>();
   return results.map(entryOf);
 }

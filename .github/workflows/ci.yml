@@ -193,6 +193,8 @@ jobs:
             receive-pack,
             push-fsck,
             upload-pack,
+            diff,
+            merge,
           ]
         # A scope whose code is part of another directory (stryker.config.mjs).
         include:

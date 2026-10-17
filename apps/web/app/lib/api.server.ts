@@ -63,6 +63,39 @@ export async function apiDownload(
   return new Response(res.ok ? res.body : null, { status: res.status, headers });
 }
 
+/**
+ * The largest JSON request body fyrden-api reads (its `MAX_JSON_BODY_BYTES`,
+ * apps/api/src/http/body.ts; a test checks the two agree): a larger one is
+ * refused before it is parsed, so a page measures what it sends first.
+ */
+export const API_MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Sends `method path` (under `/api`) with an optional JSON body, already
+ * serialized: the API's response, its body unread (for a caller that tells
+ * a failure to send from an answer it cannot read).
+ */
+export function apiFetch(
+  context: Readonly<RouterContextProvider>,
+  request: Request,
+  method: string,
+  path: string,
+  json?: string,
+): Promise<Response> {
+  const headers = forwarded(request);
+  if (method !== "GET") {
+    headers.set("Content-Type", "application/json");
+    headers.set("Idempotency-Key", crypto.randomUUID());
+  }
+  return binding(context).fetch(
+    new Request(`${new URL(request.url).origin}/api${path}`, {
+      method,
+      headers,
+      ...(json !== undefined && { body: json }),
+    }),
+  );
+}
+
 /** Calls `method path` (under `/api`) with an optional JSON body. */
 export async function apiCall<T>(
   context: Readonly<RouterContextProvider>,
@@ -71,18 +104,24 @@ export async function apiCall<T>(
   path: string,
   body?: unknown,
 ): Promise<ApiResult<T>> {
-  const headers = forwarded(request);
-  if (method !== "GET") {
-    headers.set("Content-Type", "application/json");
-    headers.set("Idempotency-Key", crypto.randomUUID());
-  }
-  const res = await binding(context).fetch(
-    new Request(`${new URL(request.url).origin}/api${path}`, {
-      method,
-      headers,
-      ...(body !== undefined && { body: JSON.stringify(body) }),
-    }),
+  return apiCallJson<T>(
+    context,
+    request,
+    method,
+    path,
+    body === undefined ? undefined : JSON.stringify(body),
   );
+}
+
+/** `apiCall` with its body already serialized (to measure it before sending). */
+export async function apiCallJson<T>(
+  context: Readonly<RouterContextProvider>,
+  request: Request,
+  method: string,
+  path: string,
+  json?: string,
+): Promise<ApiResult<T>> {
+  const res = await apiFetch(context, request, method, path, json);
   const text = await res.text();
   return { status: res.status, body: (text ? JSON.parse(text) : null) as T };
 }
@@ -115,20 +154,62 @@ export interface SessionUser {
   readonly handle: string;
 }
 
+/** Asks the API who the session cookie `cookie` is. */
+function fetchSession(
+  context: Readonly<RouterContextProvider>,
+  request: Request,
+  cookie: string,
+): Promise<Response> {
+  return binding(context).fetch(
+    new Request(`${new URL(request.url).origin}/auth/session`, { headers: { Cookie: cookie } }),
+  );
+}
+
 /** The signed-in user, if any. */
 export async function signedInUser(
   context: Readonly<RouterContextProvider>,
   request: Request,
 ): Promise<SessionUser | null> {
-  const headers = new Headers();
   const cookie = request.headers.get("Cookie");
   if (!cookie) return null;
-  headers.set("Cookie", cookie);
-  const res = await binding(context).fetch(
-    new Request(`${new URL(request.url).origin}/auth/session`, { headers }),
-  );
+  const res = await fetchSession(context, request, cookie);
   if (!res.ok) return null;
   return ((await res.json()) as { user: SessionUser }).user;
+}
+
+/** Who the session is: a user, no one (as the API says), or not known (the check failed). */
+export type SessionCheck =
+  | { state: "signed-in"; user: SessionUser }
+  | { state: "signed-out" }
+  | { state: "unknown" };
+
+/**
+ * The session, never throwing: for an action that answers on its page when
+ * the check fails, and sends to sign in only a browser known to be signed out.
+ */
+export async function checkSession(
+  context: Readonly<RouterContextProvider>,
+  request: Request,
+): Promise<SessionCheck> {
+  const cookie = request.headers.get("Cookie");
+  if (!cookie) return { state: "signed-out" };
+  let res: Response;
+  try {
+    res = await fetchSession(context, request, cookie);
+  } catch {
+    return { state: "unknown" };
+  }
+  if (res.status === 401) return { state: "signed-out" };
+  const body: unknown = res.ok ? await res.json().catch(() => null) : null;
+  const user = typeof body === "object" && body !== null && "user" in body ? body.user : null;
+  return typeof user === "object" &&
+    user !== null &&
+    "id" in user &&
+    typeof user.id === "string" &&
+    "handle" in user &&
+    typeof user.handle === "string"
+    ? { state: "signed-in", user: { id: user.id, handle: user.handle } }
+    : { state: "unknown" };
 }
 
 /**

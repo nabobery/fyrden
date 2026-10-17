@@ -1,11 +1,13 @@
-import { HANDLE_PATTERN } from "@fyrden/domain";
+import { HANDLE_SHAPE, MAX_HANDLE_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation, INSTANCE_ADMIN } from "../src/op.js";
 import { NewHandle } from "./admin.js";
 
 const Handle = z
   .string()
-  .regex(HANDLE_PATTERN)
+  .min(1)
+  .max(MAX_HANDLE_LENGTH)
+  .regex(HANDLE_SHAPE)
   .describe("1-39 letters, digits and single inner hyphens; unique, ignoring case.");
 
 const OrgParam = Handle.describe("The organization's handle.");

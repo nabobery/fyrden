@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isId } from "../ids.js";
+import { FeedBlockSchema } from "./feed.js";
 
 /**
  * Domain events. A source (a repository or organization object) gives every
@@ -14,7 +15,10 @@ import { isId } from "../ids.js";
 const position = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
 /** Ids, names and actors are short; only `row` and `data` may be large. */
 const short = z.string().max(256);
-const sourceId = z.string().refine((s) => isId(s, "rep") || isId(s, "org"), "not a source id");
+// Repositories, and accounts (organizations, users' own) for their access changes.
+const sourceId = z
+  .string()
+  .refine((s) => isId(s, "rep") || isId(s, "org") || isId(s, "usr"), "not a source id");
 
 export const EventIdSchema = z.strictObject({
   sourceId,
@@ -62,6 +66,34 @@ export const DomainEventSchema = z
      * them by event id, and the consumer fetches them.
      */
     stored: z.boolean(),
+    /**
+     * The repository's webhooks the event goes to (each at the configuration
+     * version it had then), and what a delivery says of the repository, as
+     * it was when the event happened. Absent when no hook takes the event.
+     */
+    webhooks: z
+      .strictObject({
+        hooks: z
+          .array(
+            z.strictObject({
+              id: z.number().int().positive(),
+              v: z.number().int().positive(),
+            }),
+          )
+          .min(1)
+          .max(20),
+        repo: z.strictObject({
+          name: short,
+          ownerId: short,
+          private: z.boolean(),
+        }),
+      })
+      .optional(),
+    /**
+     * What the event means for principals' activity feeds (see `feed.ts`),
+     * decided with the change. Absent when it means nothing for any feed.
+     */
+    feed: FeedBlockSchema.optional(),
   })
   .superRefine((event, ctx) => {
     const { entity, stored } = event;

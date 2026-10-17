@@ -3,7 +3,7 @@ import { Listing } from "../components/listing.js";
 import { Markdown } from "../components/markdown.js";
 import { RepoHeader } from "../components/repo-header.js";
 import { apiCall, apiGet } from "../lib/api.server.js";
-import { dirOf, renderMarkdown } from "../lib/markdown.js";
+import { dirOf } from "../lib/markdown-place.js";
 import { type Contents, decodeText, type Repo } from "../lib/types.js";
 import type { Route } from "./+types/repo";
 
@@ -38,11 +38,13 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
         ? null
         : {
             name: readme.body.type === "file" ? readme.body.name : "README",
-            html: renderMarkdown(readmeText, {
+            source: readmeText,
+            // Rendered in the browser (see components/markdown.tsx), its links into the repository.
+            at: {
               base: `/${params.owner}/${params.repo}`,
               ref,
               dir: readme.body.type === "file" ? dirOf(readme.body.path) : "",
-            }),
+            },
           },
   };
 }
@@ -92,7 +94,7 @@ export default function RepoHome({ loaderData }: Route.ComponentProps) {
       {readme && (
         <section className="panel" aria-labelledby="readme">
           <h2 id="readme">{readme.name}</h2>
-          <Markdown html={readme.html} />
+          <Markdown source={readme.source} at={readme.at} />
         </section>
       )}
     </main>

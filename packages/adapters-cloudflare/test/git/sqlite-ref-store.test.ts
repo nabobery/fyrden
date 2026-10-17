@@ -334,3 +334,137 @@ describe("SqliteRefStore bookkeeping", () => {
     expect(counted[0]?.value).toBeGreaterThanOrEqual(3);
   });
 });
+
+describe("SqliteRefStore deriveUpdates", () => {
+  const followMain = (git: RepoGitStorage) => {
+    git.refStore.deriveUpdates = (updates) =>
+      updates
+        .filter((u) => u.name === "refs/heads/main" && u.newOid !== null)
+        .map((u) => ({ name: "refs/pull/1/head", newOid: u.newOid as Oid, follows: u.name }));
+  };
+  const commit = (
+    git: RepoGitStorage,
+    updates: { name: string; oldOid: Oid | null; newOid: Oid | null }[],
+    extra: Record<string, unknown> = {},
+  ) =>
+    git.refStore.commitSync({
+      addPacks: [],
+      removePacks: [],
+      refUpdates: updates,
+      expectedVersion: git.refStore.state().version,
+      ...extra,
+    });
+
+  it("moves a derived ref with the request's own, in the same version, with its reflog row", async () => {
+    const { stub } = await newProbe();
+    const result = await inProbe(stub, ({ git }) => {
+      followMain(git);
+      const seen: string[][] = [];
+      git.refStore.inCommit = (context) =>
+        seen.push(context.derived.map((u) => `${u.name} ${u.oldOid?.[0] ?? "-"}>${u.newOid?.[0]}`));
+      commit(git, [{ name: "refs/heads/main", oldOid: null, newOid: oid(1) }], {
+        actor: { principal: "usr_A", via: "push" },
+      });
+      commit(git, [{ name: "refs/heads/main", oldOid: oid(1), newOid: oid(2) }]);
+      const reflog = git.context.storage.sql
+        .exec<{ ref: string; version: number; actor: string | null; via: string | null }>(
+          "SELECT ref, version, actor, via FROM reflog ORDER BY seq",
+        )
+        .toArray();
+      return { refs: git.refStore.readRefsSync(), reflog, seen };
+    });
+    expect(result.refs.version).toBe(2);
+    expect(result.refs.refs.get("refs/pull/1/head")).toEqual(oid(2));
+    expect(result.seen).toEqual([["refs/pull/1/head ->1"], ["refs/pull/1/head 1>2"]]);
+    expect(result.reflog).toEqual([
+      { ref: "refs/heads/main", version: 1, actor: "usr_A", via: "push" },
+      { ref: "refs/pull/1/head", version: 1, actor: "usr_A", via: "push" },
+      { ref: "refs/heads/main", version: 2, actor: null, via: null },
+      { ref: "refs/pull/1/head", version: 2, actor: null, via: null },
+    ]);
+  });
+
+  it("writes nothing when the request's own compare-and-set fails", async () => {
+    const { stub } = await newProbe();
+    const result = await inProbe(stub, ({ git }) => {
+      followMain(git);
+      const conflict = commit(git, [{ name: "refs/heads/main", oldOid: oid(9), newOid: oid(1) }]);
+      return { conflict, refs: git.refStore.readRefsSync() };
+    });
+    expect(result.conflict).toEqual({ ok: false, reason: "ref-conflict", ref: "refs/heads/main" });
+    expect(result.refs.refs.size).toBe(0);
+  });
+
+  it("rolls the commit back when the deriver throws", async () => {
+    const { stub } = await newProbe();
+    const result = await inProbe(stub, ({ git }) => {
+      git.refStore.deriveUpdates = () => {
+        throw new Error("pull request rows unreadable");
+      };
+      let threw = false;
+      try {
+        commit(git, [{ name: "refs/heads/main", oldOid: null, newOid: oid(1) }]);
+      } catch {
+        threw = true;
+      }
+      const reflog = git.context.storage.sql.exec("SELECT count(*) AS n FROM reflog").one().n;
+      return { threw, refs: git.refStore.readRefsSync(), reflog };
+    });
+    expect(result.threw).toBe(true);
+    expect(result.refs.version).toBe(0);
+    expect(result.reflog).toBe(0);
+  });
+
+  it("refuses a request that names a ref the deriver moves, and derives only under refs/pull/", async () => {
+    const { stub } = await newProbe();
+    const result = await inProbe(stub, ({ git }) => {
+      followMain(git);
+      const named = commit(git, [
+        { name: "refs/heads/main", oldOid: null, newOid: oid(1) },
+        { name: "refs/pull/1/head", oldOid: null, newOid: oid(1) },
+      ]);
+      git.refStore.deriveUpdates = (updates) =>
+        updates.map((u) => ({ name: "refs/heads/other", newOid: oid(5), follows: u.name }));
+      let outside = "";
+      try {
+        commit(git, [{ name: "refs/heads/main", oldOid: null, newOid: oid(1) }]);
+      } catch (error) {
+        outside = (error as Error).message;
+      }
+      return { named, outside, refs: git.refStore.readRefsSync() };
+    });
+    expect(result.named).toMatchObject({ ok: false, reason: "refused" });
+    expect(result.outside).toMatch(/refs\/pull\//);
+    expect(result.refs.refs.size).toBe(0);
+  });
+
+  it("skips a derived ref already at its value, and counts a derived move as fast-forward only with what it follows", async () => {
+    const { stub } = await newProbe();
+    const result = await inProbe(stub, ({ git }) => {
+      commit(git, [{ name: "refs/pull/1/head", oldOid: null, newOid: oid(7) }]);
+      followMain(git);
+      const ff = new Set(["refs/heads/main"]);
+      const states: number[] = [];
+      // main is created at 7: the pull ref already points there, so nothing moves it.
+      commit(git, [{ name: "refs/heads/main", oldOid: null, newOid: oid(7) }]);
+      states.push(
+        git.context.storage.sql.exec("SELECT count(*) AS n FROM reflog").one().n as number,
+      );
+      // A fast-forward of main from 7 moves the pull ref from 7 too: still fast-forward.
+      commit(git, [{ name: "refs/heads/main", oldOid: oid(7), newOid: oid(8) }], {
+        fastForward: ff,
+      });
+      states.push(git.refStore.state().nonffVersion);
+      // The pull ref is moved elsewhere; a fast-forward of main no longer is one for it.
+      commit(git, [{ name: "refs/pull/1/head", oldOid: oid(8), newOid: oid(3) }], {
+        fastForward: new Set(["refs/pull/1/head"]),
+      });
+      commit(git, [{ name: "refs/heads/main", oldOid: oid(8), newOid: oid(9) }], {
+        fastForward: ff,
+      });
+      states.push(git.refStore.state().nonffVersion);
+      return states;
+    });
+    expect(result).toEqual([2, 0, 1]);
+  });
+});

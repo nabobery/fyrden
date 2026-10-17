@@ -103,6 +103,58 @@ export class RepoAcl {
   }
 
   /**
+   * Pulls a snapshot unless one within the read TTL is stored, so that
+   * `lastRoleOf` answers from it (a failed pull leaves the stored one).
+   */
+  async refresh(): Promise<void> {
+    const account = this.deps.account();
+    if (account) await this.#snapshot(account, "read");
+  }
+
+  /**
+   * `principalId`'s role from the snapshot as last pulled, however long
+   * ago (never one below the floor), or null: for what may be a little
+   * stale without harm (who a feed tells, which feeds check again when
+   * read). Pulls nothing.
+   */
+  lastRoleOf(principalId: string): RepoRole | null {
+    const account = this.deps.account();
+    if (!account) return null;
+    if (principalId === account.accountId || ownsUserAccount(principalId, account.ownerId))
+      return "admin";
+    const row = this.#usable(account.accountId, Number.POSITIVE_INFINITY);
+    return row ? (this.#roles(row).get(principalId) ?? null) : null;
+  }
+
+  /**
+   * What decisions made now (as `allows` makes them) rest on: the snapshot
+   * within the write window, its account, `(epochGen, version)` and when it
+   * was pulled; `unknown` when there is none to use (a pull failed: a
+   * denial then is no answer); `none` for an object without an account,
+   * whose decisions rest on no snapshot.
+   */
+  basis():
+    | {
+        readonly accountId: string;
+        readonly epochGen: number;
+        readonly version: number;
+        readonly pulledAt: number;
+      }
+    | "unknown"
+    | "none" {
+    const account = this.deps.account();
+    if (!account) return "none";
+    const row = this.#usable(account.accountId, ACL_POLICY.writeWindowMs);
+    if (!row) return "unknown";
+    return {
+      accountId: row.account_id,
+      epochGen: row.epoch_gen,
+      version: row.version,
+      pulledAt: row.pulled_at,
+    };
+  }
+
+  /**
    * The repository moved to another account: the old account's snapshot
    * and version floor mean nothing there; the next decision pulls afresh.
    */

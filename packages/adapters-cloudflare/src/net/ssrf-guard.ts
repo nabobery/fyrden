@@ -114,12 +114,16 @@ interface DohAnswer {
   data: string;
 }
 
-/** Resolves A and AAAA records over DNS-over-HTTPS (JSON API). */
-export function dohResolver(endpoint = DOH_ENDPOINT): Resolver {
+/**
+ * Resolves A and AAAA records over DNS-over-HTTPS (JSON API); `signal`
+ * bounds the lookups (a caller's deadline for the whole request).
+ */
+export function dohResolver(endpoint = DOH_ENDPOINT, signal?: AbortSignal): Resolver {
   const query = async (name: string, type: "A" | "AAAA") => {
     countSubrequests("external");
     const res = await fetch(`${endpoint}?name=${encodeURIComponent(name)}&type=${type}`, {
       headers: { Accept: "application/dns-json" },
+      ...(signal && { signal }),
     });
     if (!res.ok) throw new Error(`DoH ${type} lookup failed: ${res.status}`);
     const body = await res.json<{ Status: number; Answer?: DohAnswer[] }>();

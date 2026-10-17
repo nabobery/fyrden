@@ -1,9 +1,10 @@
 import type { NetworkPackRef, NetworkRetire } from "@fyrden/adapters-cloudflare/git";
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 
 /*
  * How a repository object reaches its fork network's object: for retiring
  * packs the network shares, for the orphan sweep's gate, and to report a
- * finished detach.
+ * finished detach; and the network's other members, from the directory.
  */
 
 function byNetwork(packs: readonly NetworkPackRef[]): Map<string, string[]> {
@@ -36,6 +37,29 @@ export function networkRetire(env: Env, repoId: () => string): NetworkRetire {
 /** Whether `repoId` may sweep its network's pack prefix alone (the network object answers from its membership). */
 export function soleNetworkMember(env: Env, networkId: string, repoId: string): Promise<boolean> {
   return env.NETWORK.getByName(networkId).isSoleMember(repoId);
+}
+
+/**
+ * The ids of the other active repositories of `repoId`'s fork network (as
+ * the directory has it now), after `after`, at most `limit`, in id order.
+ */
+export async function networkMembersAfter(
+  env: Env,
+  repoId: string,
+  after: string,
+  limit: number,
+  metrics?: Metrics,
+): Promise<string[]> {
+  metrics?.count("d1.query", { db: "directory", op: "network_members" });
+  const { results } = await env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT r.id FROM repos r JOIN repos me ON me.id = ?1
+       WHERE r.network_id = me.network_id AND r.id <> ?1 AND r.state = 'active' AND r.id > ?2
+       ORDER BY r.id LIMIT ?3`,
+    )
+    .bind(repoId, after, limit)
+    .all<{ id: string }>();
+  return results.map((r) => r.id);
 }
 
 /** After a detach swapped: the old network records it, the new one takes it as root, the directory follows. */

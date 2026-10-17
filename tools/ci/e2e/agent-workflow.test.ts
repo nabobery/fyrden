@@ -8,7 +8,7 @@
 // agent acting for that user under a grant: a scratch repository that
 // expires, a ruleset that holds the agent to pull requests but not its
 // user, and a revoked grant that stops its git token.
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -23,7 +23,7 @@ import {
   exchangeToken,
 } from "@fyrden/sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startWranglerDev } from "./wrangler-dev.js";
+import { startWranglerDev, type WranglerDev } from "./wrangler-dev.js";
 
 const root = resolve(import.meta.dirname, "../../..");
 const apiConfig = join(root, "apps/api/wrangler.jsonc");
@@ -40,8 +40,7 @@ const REDIRECT = "http://127.0.0.1:8765/callback";
 const PROTOCOL = "2026-07-28";
 
 let scratch = "";
-let dev: ChildProcess | undefined;
-let closed: Promise<void> = Promise.resolve();
+let server: WranglerDev | undefined;
 let output = "";
 let handle = "";
 let pat = "";
@@ -288,7 +287,7 @@ beforeAll(async () => {
     );
     expect(migrate.code, migrate.stdout + migrate.stderr).toBe(0);
   }
-  const server = await startWranglerDev({
+  server = await startWranglerDev({
     args: [
       "-c",
       apiConfig,
@@ -304,8 +303,6 @@ beforeAll(async () => {
       output += text;
     },
   });
-  dev = server.child;
-  closed = server.closed;
   port = server.port;
   origin = `http://127.0.0.1:${port}`;
   handle = `e2eagent${Date.now().toString(36)}`;
@@ -320,15 +317,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   try {
-    if (dev && dev.exitCode === null && dev.signalCode === null) dev.kill("SIGTERM");
-    const ended = await Promise.race([
-      closed.then(() => true),
-      new Promise<boolean>((give) => setTimeout(() => give(false), 10_000)),
-    ]);
-    if (!ended) {
-      dev?.kill("SIGKILL");
-      await closed;
-    }
+    await server?.stop();
     // Neither the Worker nor wrangler's access log may print a token.
     expect(output.split("\n").filter(mentionsToken)).toEqual([]);
   } finally {

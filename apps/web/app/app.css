@@ -184,3 +184,136 @@ button.danger {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+label.inline {
+  display: inline;
+}
+textarea.short {
+  min-height: 8rem;
+}
+nav [aria-current="page"] {
+  font-weight: 700;
+  text-decoration: none;
+  color: var(--fg);
+}
+nav.tabs {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+  margin-bottom: 1rem;
+}
+.pull-list,
+.timeline {
+  list-style: none;
+  padding: 0;
+}
+.pull-list li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.pull-title {
+  overflow-wrap: anywhere;
+}
+code.branch {
+  overflow-wrap: anywhere;
+}
+.badge.status-open {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.badge.status-merged {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.badge.status-closed {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.review-approved {
+  border-color: var(--ok);
+}
+.review-changes_requested {
+  border-color: var(--danger);
+}
+.timeline-event {
+  padding: 0.25rem 1rem;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+main.wide {
+  max-width: 90rem;
+}
+.file-name {
+  font-size: 1rem;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.file-header {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.5rem;
+}
+.file-nav {
+  margin-left: auto;
+}
+.file-list {
+  margin: 0;
+  padding-left: 1.5rem;
+  overflow-wrap: anywhere;
+}
+.added {
+  color: var(--ok);
+}
+.removed {
+  color: var(--danger);
+}
+.diff-body {
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+.diff-body:focus-visible {
+  outline-offset: 0;
+}
+.patch-text {
+  max-height: 40rem;
+  overflow: auto;
+}
+.thread {
+  margin: 0.5rem;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  white-space: normal;
+}
+.thread.resolved {
+  border-style: dashed;
+}
+.thread-comments {
+  list-style: none;
+  padding: 0;
+}
+.thread-anchor .badge {
+  margin-left: 0.25rem;
+}
+.threads h4 {
+  margin: 1rem 0 0.25rem;
+}
+.ok-text {
+  color: var(--ok);
+}
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 0.5rem 0;
+}
+fieldset p {
+  margin: 0.25rem 0;
+}
+.conflict-file textarea {
+  min-height: 24rem;
+}
+.file-name-inline {
+  overflow-wrap: anywhere;
+}
+.conflict-tools legend {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}

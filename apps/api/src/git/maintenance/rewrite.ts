@@ -185,8 +185,13 @@ export async function rewriteSlice(
         );
       counter.calls++;
       git.context.metrics.count("r2.class_a", { bucket: BUCKET, op: "put_idx" });
+      // Beside the pack, under the network it was written in (a detach may have begun since).
       await git.bucket.put(
-        packObjectKey(git.networkId(), upload.packId, "idx"),
+        packObjectKey(
+          git.registry.get(upload.packId)?.networkId ?? git.networkId(),
+          upload.packId,
+          "idx",
+        ),
         finished.idx.bytes,
       );
       git.registry.transition(upload.packId, ["indexing"], "indexing", {

@@ -1,0 +1,294 @@
+import { describe, expect, it } from "vitest";
+import { MergeBudget, mergeTrees } from "../../src/merge/merge-trees.js";
+import type { Oid } from "../../src/object/oid.js";
+import { kinds, listed, stopped, store } from "./support.js";
+
+describe("mergeTrees, budget", () => {
+  const files = (s: ReturnType<typeof store>, a: string, b: string) =>
+    s.tree({ a: { oid: s.blob(a) }, b: { oid: s.blob(b) } });
+
+  it("reads exactly as many trees as its budget allows, and stops past it naming the limit", async () => {
+    const s = store();
+    const [base, ours, theirs] = [
+      files(s, "a\n", "b\n"),
+      files(s, "A\n", "b\n"),
+      files(s, "a\n", "B\n"),
+    ];
+    // Three trees: the base and the two sides.
+    const exact = await mergeTrees(s.source, base, ours, theirs, { budget: new MergeBudget(3) });
+    expect(exact.kind).toBe("clean");
+    expect(
+      await stopped(mergeTrees(s.source, base, ours, theirs, { budget: new MergeBudget(2) })),
+    ).toEqual({
+      name: "MergeLimitError",
+      limit: "trees",
+      message: "the merge needs more trees than it may use",
+    });
+  });
+
+  it("merges exactly as many files line by line as its budget allows, and stops past it naming the limit", async () => {
+    const s = store();
+    const [base, ours, theirs] = [
+      files(s, "1\n2\n3\n", "b\n"),
+      files(s, "X\n2\n3\n", "b\n"),
+      files(s, "1\n2\nY\n", "b\n"),
+    ];
+    const exact = await mergeTrees(s.source, base, ours, theirs, {
+      budget: new MergeBudget(2_000, 1),
+    });
+    expect(exact.kind).toBe("clean");
+    expect(
+      await stopped(
+        mergeTrees(s.source, base, ours, theirs, { budget: new MergeBudget(2_000, 0) }),
+      ),
+    ).toEqual({
+      name: "MergeLimitError",
+      limit: "files",
+      message: "the merge needs more files than it may use",
+    });
+  });
+
+  it("spends its output budget once per new object, content made twice counting once", async () => {
+    const s = store();
+    const base = files(s, "1\n2\n3\n", "1\n2\n3\n");
+    const ours = files(s, "X\n2\n3\n", "X\n2\n3\n");
+    const theirs = files(s, "1\n2\nY\n", "1\n2\nY\n");
+    const merged = await mergeTrees(s.source, base, ours, theirs);
+    if (merged.kind !== "clean") return expect.fail(JSON.stringify(kinds(merged)));
+    // One blob of 6 bytes and a tree of two 29-byte entries.
+    expect(merged.objects.reduce((n, o) => n + o.bytes.length, 0)).toBe(64);
+    const exact = await mergeTrees(s.source, base, ours, theirs, {
+      budget: new MergeBudget(2_000, 1_000, 64),
+    });
+    expect(exact.kind).toBe("clean");
+    expect(
+      await stopped(
+        mergeTrees(s.source, base, ours, theirs, { budget: new MergeBudget(2_000, 1_000, 63) }),
+      ),
+    ).toEqual({
+      name: "MergeLimitError",
+      limit: "output",
+      message: "the merge needs more output than it may use",
+    });
+  });
+
+  /** Sides that each change `file` (its path's directories by name) differently, as a symlink: a conflict without a file merge. */
+  const deep = (s: ReturnType<typeof store>, dirs: readonly string[], file: string) => {
+    const side = (target: string) =>
+      dirs.reduceRight(
+        (inner, dir) => s.tree({ [dir]: { mode: 0o40000, oid: inner } }),
+        s.tree({ [file]: { mode: 0o120000, oid: s.blob(target) } }),
+      );
+    return [side("base"), side("ours"), side("theirs")] as const;
+  };
+
+  it("follows a path of exactly 4,096 bytes, and stops at a longer one naming the limit", async () => {
+    const s = store();
+    // Fifteen 255-byte directories with their slashes: 3,840 bytes.
+    const dirs = Array.from({ length: 15 }, (_, i) => String(i % 10).repeat(255));
+    const exact = await mergeTrees(s.source, ...deep(s, dirs, "f".repeat(256)));
+    if (exact.kind !== "conflicts") return expect.fail("clean");
+    expect(exact.conflicts.map((c) => [c.pathBytes.length, c.kind])).toEqual([[4_096, "symlink"]]);
+    expect(await stopped(mergeTrees(s.source, ...deep(s, dirs, "f".repeat(257))))).toEqual({
+      name: "MergeLimitError",
+      limit: "path",
+      message: "a path is longer than the merge may follow",
+    });
+  });
+
+  it("walks into no directory whose path and slash are past the limit", async () => {
+    const s = store();
+    const dirs = Array.from({ length: 15 }, (_, i) => String(i % 10).repeat(255));
+    // A last directory of 254 bytes and its slash: 4,095 bytes, and a one-byte name fits.
+    const fits = await mergeTrees(s.source, ...deep(s, [...dirs, "x".repeat(254)], "f"));
+    expect(kinds(fits)).toEqual([[`${[...dirs, "x".repeat(254)].join("/")}/f`, "symlink"]]);
+    const reads = (last: number) => {
+      const counted = { trees: 0 };
+      const source = {
+        ...s.source,
+        readTree: (oid: Oid) => {
+          counted.trees++;
+          return s.source.readTree(oid);
+        },
+      };
+      const merge = mergeTrees(source, ...deep(s, [...dirs, "x".repeat(last)], "f"));
+      return stopped(merge).then((error) => ({ limit: error.limit, trees: counted.trees }));
+    };
+    // 4,096 bytes with its slash: walked into, and the name under it is one too many.
+    expect(await reads(255)).toEqual({ limit: "path", trees: 3 * 17 });
+    // 4,097: not read at all (the roots and fifteen directories on three sides).
+    expect(await reads(256)).toEqual({ limit: "path", trees: 3 * 16 });
+  });
+
+  describe("a path some side changed, whether or not the merge joins it", () => {
+    // Fifteen 255-byte directories and a 254-byte one, with their slashes:
+    // 4,095 bytes. A one-byte name under them is 4,096 bytes, a two-byte one 4,097.
+    const dirs = [
+      ...Array.from({ length: 15 }, (_, i) => String(i % 10).repeat(255)),
+      "x".repeat(254),
+    ];
+    /** A side: `files` (name to content) in the deepest directory. */
+    const side = (s: ReturnType<typeof store>, files: Record<string, string>) =>
+      dirs.reduceRight(
+        (inner, dir) => s.tree({ [dir]: { mode: 0o40000, oid: inner } }),
+        s.tree(Object.fromEntries(Object.entries(files).map(([n, t]) => [n, { oid: s.blob(t) }]))),
+      );
+    /** Both sides change `a` and `b` apart, so the merge walks into the deepest directory. */
+    const merge = (
+      s: ReturnType<typeof store>,
+      base: Record<string, string>,
+      ours: Record<string, string>,
+      theirs: Record<string, string>,
+    ) =>
+      mergeTrees(
+        s.source,
+        side(s, { a: "a\n", b: "b\n", ...base }),
+        side(s, { a: "A\n", b: "b\n", ...ours }),
+        side(s, { a: "a\n", b: "B\n", ...theirs }),
+      );
+    type Files = Record<string, string>;
+    const lines = { base: "a\nb\nc\n", ours: "A\nb\nc\n", theirs: "a\nb\nC\n" };
+
+    /** A file `n`'s base, ours and theirs, each as the files it adds to a side. */
+    type Sides = (n: string) => readonly [Files, Files, Files];
+    const cases: readonly (readonly [string, Sides])[] = [
+      [
+        "merged line by line",
+        (n) => [{ [n]: lines.base }, { [n]: lines.ours }, { [n]: lines.theirs }],
+      ],
+      ["changed on one side", (n) => [{ [n]: "1\n" }, { [n]: "2\n" }, { [n]: "1\n" }]],
+      ["added on one side", (n) => [{}, { [n]: "new\n" }, {}]],
+      ["deleted on one side", (n) => [{ [n]: "1\n" }, { [n]: "1\n" }, {}]],
+    ];
+    for (const [what, files] of cases)
+      it(`fits at 4,096 bytes and stops the merge at 4,097 for a file ${what}`, async () => {
+        const s = store();
+        const [b, o, t] = files("f");
+        expect((await merge(s, b, o, t)).kind).toBe("clean");
+        const [lb, lo, lt] = files("ff");
+        expect(await stopped(merge(s, lb, lo, lt))).toMatchObject({ limit: "path" });
+      });
+
+    it("leaves alone a path past the limit that no side changed, as a tree diff lists no unchanged path", async () => {
+      const s = store();
+      const untouched = { ff: "same\n" };
+      expect((await merge(s, untouched, untouched, untouched)).kind).toBe("clean");
+    });
+
+    // Reading what one side alone changed would cost as much as diffing it
+    // (a whole added or deleted directory read through), where git takes it
+    // unread: the limit holds for the paths of the directories the merge walks.
+    describe("in a directory only one side changed, taken whole and unread", () => {
+      const [outer, ...inner] = dirs as [string, ...string[]];
+      /** The outermost of the directories over `files`, or none for null. */
+      const top = (s: ReturnType<typeof store>, files: Files | null) =>
+        files &&
+        inner.reduceRight(
+          (oid, dir) => s.tree({ [dir]: { mode: 0o40000, oid } }),
+          s.tree(
+            Object.fromEntries(Object.entries(files).map(([n, t]) => [n, { oid: s.blob(t) }])),
+          ),
+        );
+      /** A root of directory `d` (unless null) and a file `r`. */
+      const root = (s: ReturnType<typeof store>, d: Oid | null, r: string) =>
+        s.tree({ ...(d && { [outer]: { mode: 0o40000, oid: d } }), r: { oid: s.blob(r) } });
+      /** Ours changes the directories as given (null: none of them), theirs only `r`. */
+      const cases: readonly (readonly [string, Files | null, Files | null])[] = [
+        ["changed", { ff: "1\n" }, { ff: "2\n" }],
+        ["added", { g: "1\n" }, { g: "1\n", ff: "new\n" }],
+        ["deleted", { g: "1\n", ff: "1\n" }, { g: "1\n" }],
+        ["added with its directories", null, { ff: "new\n" }],
+        ["deleted with its directories", { ff: "1\n" }, null],
+      ];
+      for (const [what, base, ours] of cases)
+        it(`merges a 4,097-byte path ${what}, reading only the roots`, async () => {
+          const s = store();
+          let trees = 0;
+          const source = {
+            ...s.source,
+            readTree: (oid: Oid) => {
+              trees++;
+              return s.source.readTree(oid);
+            },
+          };
+          const [b, o] = [top(s, base), top(s, ours)];
+          const merged = await mergeTrees(
+            source,
+            root(s, b, "r\n"),
+            root(s, o, "r\n"),
+            root(s, b, "R\n"),
+          );
+          if (merged.kind !== "clean") return expect.fail(JSON.stringify(kinds(merged)));
+          expect(trees).toBe(3);
+          // Ours' directories, as they are, and theirs' `r`.
+          expect(await listed(s, merged.tree, merged.objects)).toEqual(
+            await listed(s, root(s, o, "R\n"), []),
+          );
+        });
+    });
+  });
+
+  /** Sides that change each of `names` differently, as a symlink: conflicts without file merges. */
+  const links = (s: ReturnType<typeof store>, names: readonly string[]) => {
+    const side = (target: string) =>
+      s.tree(
+        Object.fromEntries(
+          names.map((n) => [n, { mode: 0o120000, oid: s.blob(`${target}-${n}`) }]),
+        ),
+      );
+    return [side("base"), side("ours"), side("theirs")] as const;
+  };
+
+  it("reports exactly as many conflicts as its budget allows, and stops past it naming the limit", async () => {
+    const s = store();
+    const exact = await mergeTrees(s.source, ...links(s, ["a", "b"]), {
+      budget: new MergeBudget(2_000, 1_000, 1024, 2),
+    });
+    expect(kinds(exact)).toEqual([
+      ["a", "symlink"],
+      ["b", "symlink"],
+    ]);
+    expect(
+      await stopped(
+        mergeTrees(s.source, ...links(s, ["a", "b", "c"]), {
+          budget: new MergeBudget(2_000, 1_000, 1024, 2),
+        }),
+      ),
+    ).toEqual({
+      name: "MergeLimitError",
+      limit: "conflicts",
+      message: "the merge has more conflicts than it may report",
+    });
+  });
+
+  it("reports conflicts with exactly as many path bytes as its budget allows, and stops past it", async () => {
+    const s = store();
+    const budget = () => new MergeBudget(2_000, 1_000, 1024, 1_000, 5);
+    const exact = await mergeTrees(s.source, ...links(s, ["ab", "cd", "e"]), {
+      budget: budget(),
+    });
+    expect(kinds(exact)).toEqual([
+      ["ab", "symlink"],
+      ["cd", "symlink"],
+      ["e", "symlink"],
+    ]);
+    expect(
+      await stopped(mergeTrees(s.source, ...links(s, ["ab", "cd", "ef"]), { budget: budget() })),
+    ).toMatchObject({ limit: "conflicts" });
+  });
+
+  it("charges each conflict once whatever its kind, a file and a directory clash included", async () => {
+    const s = store();
+    const dir = s.tree({ y: { oid: s.blob("y\n") } });
+    const base = s.tree({ m: { oid: s.blob("m\n") } });
+    const ours = s.tree({ m: { oid: s.blob("M\n") }, x: { oid: s.blob("x\n") } });
+    const theirs = s.tree({ x: { mode: 0o40000, oid: dir } });
+    const budget = new MergeBudget();
+    const merged = await mergeTrees(s.source, base, ours, theirs, { budget });
+    expect(kinds(merged)).toEqual([
+      ["m", "modify_delete"],
+      ["x", "file_directory"],
+    ]);
+    expect([budget.conflicts, budget.conflictBytes]).toEqual([2, 2]);
+  });
+});

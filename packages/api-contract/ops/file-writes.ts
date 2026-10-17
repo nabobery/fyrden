@@ -1,10 +1,15 @@
-import { HANDLE_PATTERN } from "@fyrden/domain";
+import { HANDLE_SHAPE, MAX_HANDLE_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { CommitObject } from "./browse.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 
-const Owner = z.string().regex(HANDLE_PATTERN).describe("The owner's handle.");
+const Owner = z
+  .string()
+  .min(1)
+  .max(MAX_HANDLE_LENGTH)
+  .regex(HANDLE_SHAPE)
+  .describe("The owner's handle.");
 const Repo = z.string().regex(REPO_NAME_PATTERN).describe("The repository's name.");
 const Path = z
   .string()
@@ -28,7 +33,9 @@ const Person = z
     email: z.string().min(1).max(256),
   })
   .optional()
-  .describe("The commit's author; the authenticated principal when absent (always the committer).");
+  .describe(
+    "The commit's author; when absent, the agent acting for you, or you. The committer is always the platform, which signs the commit; an agent acting for a user adds a Co-authored-by trailer naming the user.",
+  );
 
 const WrittenFile = z.object({
   type: z.literal("file"),

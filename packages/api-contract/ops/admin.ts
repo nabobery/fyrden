@@ -1,11 +1,18 @@
-import { HANDLE_PATTERN, isReservedHandle, PERMISSION_NAMES } from "@fyrden/domain";
+import {
+  HANDLE_SHAPE,
+  isReservedHandle,
+  MAX_HANDLE_LENGTH,
+  PERMISSION_NAMES,
+} from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation, INSTANCE_ADMIN } from "../src/op.js";
 
 /** A new user's, organization's or agent's handle: valid, and not one the web origin's paths take. */
 export const NewHandle = z
   .string()
-  .regex(HANDLE_PATTERN)
+  .min(1)
+  .max(MAX_HANDLE_LENGTH)
+  .regex(HANDLE_SHAPE)
   .refine((handle) => !isReservedHandle(handle), "is reserved");
 
 /** Longest lifetime an administrator can give a token. */

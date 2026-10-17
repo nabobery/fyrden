@@ -2,7 +2,7 @@ import { Form, Link, redirect, useActionData } from "react-router";
 import { Pager } from "../components/pager.js";
 import { apiCall, apiGet, assertSameOrigin, readForm, signedInUser } from "../lib/api.server.js";
 import { pageLinks, pageQuery } from "../lib/pages.js";
-import type { Repo } from "../lib/types.js";
+import type { Repo, ReposPage } from "../lib/types.js";
 import type { Route } from "./+types/_index";
 
 export function meta(): Route.MetaDescriptors {
@@ -13,11 +13,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   const user = await signedInUser(context, request);
   const url = new URL(request.url);
   if (!user) return { user: null, repos: [], pages: pageLinks(url, "cursor", null) };
-  const page = await apiGet<{ repos: Repo[]; next_cursor: string | null }>(
-    context,
-    request,
-    `/user/repos?${pageQuery(url, "cursor")}`,
-  );
+  const page = await apiGet<ReposPage>(context, request, `/user/repos?${pageQuery(url, "cursor")}`);
   return { user, repos: page.repos, pages: pageLinks(url, "cursor", page.next_cursor) };
 }
 

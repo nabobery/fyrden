@@ -8,7 +8,7 @@
 | Workerd integration | `apps/api`, `packages/adapters-cloudflare` | workerd via `@cloudflare/vitest-plugin`, with local D1, R2, KV, Queues and Durable Objects | `pnpm turbo run test` |
 | Shuffle guard | workerd suites | the same, in random file and test order with several seeds | `pnpm turbo run test:shuffle` |
 | Dry-run deploy | both Workers | wrangler bundling | `pnpm turbo run deploy:dry-run` |
-| Local end to end | both Workers under one `wrangler dev`, with the real service binding; the web UI in Chromium through Playwright, every page checked with axe (WCAG 2.x A and AA); hostile Markdown and Mermaid stay inert, no form takes a post from another origin, a file named `*.data` opens and the pages' data is never cached; and, with fyrden-api alone, an agent's whole workflow: an MCP client signs its user in with OAuth 2.1 (PKCE, a resource indicator, a DPoP-bound token), creates a repository, gets a git token, pushes with stock git, browses, reads a file as a resource at a commit, commits a verified change, downloads an archive, forks, and sets an expiry the reaper deletes it after; then an agent acting for that user under a grant (its own token exchanged for a DPoP-bound one) makes a scratch repository that expires, is refused a direct push by a pull-request ruleset its user is not, and is stopped by revoking the grant | Node driving workerd and the browser (Playwright's Chromium must be installed: `pnpm --filter @fyrden/ci-tools exec playwright install chromium`) | `pnpm turbo run test:e2e` |
+| Local end to end | both Workers under one `wrangler dev`, with the real service binding; the web UI in Chromium through Playwright, every page checked with axe (WCAG 2.x A and AA); hostile Markdown and Mermaid stay inert; a pull request opened from a pushed branch, discussed, its files drawn by the diff renderer (hostile file names and lines inert), commented on from the keyboard, replied to, resolved and a suggestion applied, reviewed, brought up to date with its base and squash-merged, another's conflict resolved in the web editor from the keyboard (a resolution refused after the base moved, its edit kept apart from the conflicts read again), and a long file drawn a window of lines at a time; no form takes a post from another origin, a file named `*.data` opens and the pages' data is never cached; and, with fyrden-api alone, an agent's whole workflow: an MCP client signs its user in with OAuth 2.1 (PKCE, a resource indicator, a DPoP-bound token), creates a repository, gets a git token, pushes with stock git, browses, reads a file as a resource at a commit, commits a verified change, downloads an archive, forks, and sets an expiry the reaper deletes it after; then an agent acting for that user under a grant (its own token exchanged for a DPoP-bound one) makes a scratch repository that expires, is refused a direct push by a pull-request ruleset its user is not, and is stopped by revoking the grant; and pull requests, checked with stock git: merged by merge, squash and rebase, within one repository and from a fork (opened by an agent through MCP); a fork's branch updated by the base's maintainers only while its author allows it; approvals gone stale after a push to the base and to the fork, the merge refused until the exact head is approved; conflicts resolved through REST and MCP as a merge commit on the head branch; and an agent following its user's activity feed (each item once in its latest state, forged cursors refused with 410, a removed collaborator's items purged). Webhook redelivery (`webhook-redelivery.test.ts`) needs a public https URL that forwards to the test's receiver, since the server posts only to public https addresses: it runs when `FYRDEN_E2E_WEBHOOK_URL` and `FYRDEN_E2E_WEBHOOK_PORT` (the local port the URL forwards to) are set, and is skipped otherwise | Node driving workerd and the browser (Playwright's Chromium must be installed: `pnpm --filter @fyrden/ci-tools exec playwright install chromium`) | `pnpm turbo run test:e2e` |
 | Smoke | a deployed instance | Node | `node tools/ci/src/smoke.ts <api-url> <web-url>` |
 | Git interoperability | `tools/ci/interop`: real git (and JGit) against `fyrden-api` under `wrangler dev` | Node driving git and workerd | `pnpm --filter @fyrden/ci-tools test:interop` |
 | MCP conformance | `tools/ci/conformance`: the MCP conformance suite (pinned version, the 2026-07-28 requirement set) against `fyrden-api` under `wrangler dev`, with a per-check baseline of known failures, and the authorization server metadata scenario | Node driving the suite (needs network for `npx`) | `pnpm --filter @fyrden/ci-tools test:conformance` |
@@ -67,9 +67,23 @@ a machine short of memory add `--concurrency=1` to heavy runs (`test`,
   lint errors in test files (`biome.json`); a deliberate exception (a test of a
   timeout itself, a yield whose length does not change the outcome) carries a
   `biome-ignore` saying why.
+- Never assert on elapsed time. A cost bound is asserted as work done: rows
+  read or written, commits walked (a walk's `maxCommits`), steps a function
+  reports. A benchmark prints times only when `FYRDEN_BENCH=1` and asserts
+  nothing on them; `performance` is a lint error in test files, so its one
+  clock carries a `biome-ignore` saying so.
 - End-to-end tests start `wrangler dev` only through `startWranglerDev`
   (`tools/ci/e2e/wrangler-dev.ts`): ports the OS reports free, taken right
-  before the start, and a fresh pair if one was taken meanwhile.
+  before the start, and a fresh pair if one was taken meanwhile. Its `stop()`
+  is the only teardown. wrangler runs in a process group of its own (its
+  `bin` script is a launcher that cannot pass SIGKILL on to the CLI and
+  workerd under it), and `stop()` signals the whole group: SIGTERM, SIGKILL
+  after a 10 s grace, resolving only once every process is gone and the
+  output pipes have closed. A test run that ends first (it exits, or SIGINT,
+  SIGTERM or SIGHUP ends it) kills the groups it still owns. A suite removes
+  the state directory after it, never before. The e2e `hookTimeout` (60 s,
+  `tools/ci/vitest.e2e.config.ts`) leaves a teardown room for the browser's
+  close, the grace and the cleanup.
 - Run `pnpm turbo run test:shuffle` before review on any change to alarms, the
   outbox, jobs or a test's setup: it runs the workerd suites in random orders.
 
@@ -128,6 +142,8 @@ assertion or a local variable does). They are listed below.
 | `src/receive-pack` without the push object checks † | 61.5% | 57.6% | 1,778 | | 61 | 2026-10-12 |
 | `push-fsck` †: `fsck.ts`, `gitmodules.ts`, `special-names.ts`, `git-config.ts` in `src/receive-pack` | 69.7% | 66.2% | 1,631 | | 69 | 2026-10-12 |
 | `src/upload-pack` | 56.0% | 55.6% | 932 | `commits.ts`, `reach.ts`, `shallow.ts` | 56 | 2026-10-11 |
+| `src/diff` (its git-oracle tests left out: too slow per mutant) | 82.1% | 80.0% | 987 | | 80 | 2026-10-15 |
+| `src/merge` (its git-oracle tests left out: too slow per mutant) | 79.7% | 77.2% | 518 | | 77 | 2026-10-15 |
 
 The baseline counts timed-out mutants as detected, as Stryker does.
 \* Measured on a busy machine with Stryker's default timeout, under which

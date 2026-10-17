@@ -1,6 +1,7 @@
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import {
   applicableRules,
+  type MergeContext,
   PRECHECK_RULES,
   principalTypeOf,
   type RepoRole,
@@ -136,6 +137,8 @@ export function precheckPushRules(
   }[],
   delegated = false,
   head?: string,
+  /** The pull request the commands merge (one update), for its `pull_request` rules. */
+  merge?: MergeContext,
 ): Map<number, string> {
   const refusals = new Map<number, string>();
   const rulesets = snapshot.rulesets.filter((r) => r.enforcement === "active");
@@ -145,7 +148,7 @@ export function precheckPushRules(
   for (const cmd of commands) {
     const found = blocking(
       rulesets,
-      { ref: cmd.name, kind: cmd.kind },
+      { ref: cmd.name, kind: cmd.kind, ...(merge && { pullRequest: merge }) },
       actor,
       branches,
       "precheck",
@@ -186,6 +189,8 @@ export async function checkPushRules(
     readonly commands: readonly CheckedCommand[];
     /** An atomic push: one refused update fails them all. */
     readonly atomic?: boolean;
+    /** The pull request the upload merges (its one update), built from the repository's records. */
+    readonly merge?: MergeContext;
   },
 ): Promise<{ refusals: Map<number, string>; evaluated: EvaluatedUpdate[] }> {
   const refusals = new Map<number, string>();
@@ -221,6 +226,7 @@ export async function checkPushRules(
         kind: cmd.kind,
         fastForward: cmd.fastForward,
         ...(unverifiedCommit && { unverifiedCommit }),
+        ...(input.merge && { pullRequest: input.merge }),
       },
       actor,
       branches,

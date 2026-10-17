@@ -21,6 +21,8 @@ export default defineConfig(async () => {
             BOOTSTRAP_SECRET: "test-bootstrap-secret",
             // A fixed platform signing key (an Ed25519 seed), so server-made commits are signed.
             SIGNING_KEY: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+            // A fixed key webhook secrets are sealed with (32 bytes).
+            WEBHOOKS_KEY: "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
           },
         },
       }),

@@ -1,9 +1,14 @@
-import { HANDLE_PATTERN } from "@fyrden/domain";
+import { HANDLE_SHAPE, MAX_HANDLE_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 
-const Owner = z.string().regex(HANDLE_PATTERN).describe("The owner's handle.");
+const Owner = z
+  .string()
+  .min(1)
+  .max(MAX_HANDLE_LENGTH)
+  .regex(HANDLE_SHAPE)
+  .describe("The owner's handle.");
 const Repo = z.string().regex(REPO_NAME_PATTERN).describe("The repository's name.");
 const Page = {
   per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),

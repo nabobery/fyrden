@@ -166,6 +166,61 @@ export class NetworkDO extends MigratingDO {
     return { ok: true, export: exported };
   }
 
+  /**
+   * A pull request's base comes to read packs of its head's repository
+   * (behind the collection's fence, as a fork's start): packs the network
+   * does not share yet become shared, written by that repository, which
+   * claims them; the base claims every one. Both must be active members.
+   * Answers the packs it could not claim (deleted, being deleted, or of
+   * another network): the base reads none of them.
+   */
+  async sharePacks(input: {
+    networkId: string;
+    writerRepoId: string;
+    claimantRepoId: string;
+    packs: readonly ViewPack[];
+  }): Promise<{ ok: true; gone: string[] } | NetworkFailure> {
+    const bad = this.#ensure(input.networkId);
+    if (bad) return bad;
+    if (!(await this.#passFence()))
+      return {
+        ok: false,
+        code: "network_busy",
+        error: "The fork network is being collected; try again shortly.",
+      };
+    const { registry } = this;
+    return this.context.storage.transactionSync(() => {
+      for (const id of [input.writerRepoId, input.claimantRepoId])
+        if (registry.member(id)?.state !== "active")
+          return {
+            ok: false as const,
+            code: "not_member" as const,
+            error: "The repositories are not both in this network.",
+          };
+      const gone: string[] = [];
+      const known = registry.known(input.packs.map((p) => p.packId));
+      for (const pack of input.packs) {
+        if (
+          pack.networkId !== input.networkId ||
+          registry.packState(pack.packId) === "deleted" ||
+          registry.deleting(pack.packId)
+        ) {
+          gone.push(pack.packId);
+          continue;
+        }
+        if (known.has(pack.packId)) {
+          if (registry.packState(pack.packId) === "condemned") registry.reprieve(pack.packId);
+          registry.claim([input.claimantRepoId], [pack.packId]);
+        } else
+          registry.share([pack], () => input.writerRepoId, [
+            input.writerRepoId,
+            input.claimantRepoId,
+          ]);
+      }
+      return { ok: true as const, gone };
+    });
+  }
+
   /** Records a pack the fork wrote to keep its view under the cap (shared base packs compacted), claimed by the fork. */
   recordCompaction(input: { networkId: string; forkRepoId: string; output: ViewPack }): void {
     this.registry.ensure(input.networkId);

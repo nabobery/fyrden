@@ -28,6 +28,18 @@ export interface Principal {
 /** GitHub-style handle: 1-39 chars, alphanumerics and single inner hyphens. */
 export const HANDLE_PATTERN = /^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$/;
 
+/** The longest handle. */
+export const MAX_HANDLE_LENGTH = 39;
+
+/**
+ * A handle's shape apart from its length: alphanumerics and single inner
+ * hyphens. With the length bounded on its own (1 to `MAX_HANDLE_LENGTH`),
+ * it accepts exactly the handles `HANDLE_PATTERN` does; it is written
+ * without lookaheads, which schema-driven generators (API fuzzers) cannot
+ * follow, so API schemas use it.
+ */
+export const HANDLE_SHAPE = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/;
+
 export function isValidHandle(handle: string): boolean {
   return HANDLE_PATTERN.test(handle);
 }

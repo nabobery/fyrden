@@ -11,6 +11,8 @@ import { advanceDeletions } from "./repos/deletion.js";
 import { settleStaleGenerations } from "./repos/generate.js";
 import { advanceTransfers } from "./repos/transfer.js";
 import { reapIdempotencyKeys } from "./rest/idempotency.js";
+import { consumeWebhooks, reconcileWebhooks, WEBHOOKS_QUEUE } from "./webhooks/deliver.js";
+import type { DeliveryMessage } from "./webhooks/sink.js";
 
 export { NetworkDO } from "./do/NetworkDO.js";
 export { OrgDO } from "./do/OrgDO.js";
@@ -18,6 +20,9 @@ export { RepoDO } from "./do/RepoDO.js";
 export { RunDO } from "./do/RunDO.js";
 export { UserDO } from "./do/UserDO.js";
 export { ApiRpc } from "./rpc.js";
+
+/** The cron trigger that retries effects and webhook deliveries (wrangler.jsonc). */
+const EFFECTS_CRON = "2-59/5 * * * *";
 
 export default {
   fetch: app.fetch,
@@ -28,12 +33,32 @@ export default {
         consumeEvents(batch, env, { metrics }),
       );
     }
+    if (batch.queue === WEBHOOKS_QUEUE) {
+      const metrics = createMetrics(env.METRICS);
+      return measureInvocation(metrics, { where: "worker", op: "queue webhooks" }, () =>
+        consumeWebhooks(batch as MessageBatch<DeliveryMessage>, env, { metrics }),
+      );
+    }
     // Nothing produces to the other queues yet; retrying keeps a message
     // that arrives early instead of dropping it.
     batch.retryAll();
   },
-  async scheduled(_controller, env) {
+  async scheduled(controller, env) {
     const metrics = createMetrics(env.METRICS);
+    // Effects and webhook deliveries: an invocation of their own, its D1 queries their budget.
+    if (controller.cron === EFFECTS_CRON)
+      return measureInvocation(metrics, { where: "worker", op: "cron effects" }, async () => {
+        const db = readModelFor(env, DEFAULT_ORG_SHARD);
+        await sweepEffects({
+          db,
+          env,
+          sinks: EFFECT_SINKS,
+          now: () => Date.now(),
+          log: createLogger({ op: "cron.effects" }),
+          metrics,
+        });
+        await reconcileWebhooks({ env, db, now: () => Date.now(), metrics });
+      });
     await measureInvocation(metrics, { where: "worker", op: "cron" }, async () => {
       // Each task on its own: one failing does not stop the other.
       const results = await Promise.allSettled([
@@ -57,14 +82,6 @@ export default {
         reapIdempotencyKeys(env, { now: Date.now(), metrics }),
         advanceTransfers(env, { metrics }),
         reapOAuth(env, { now: Date.now(), metrics }),
-        sweepEffects({
-          db: readModelFor(env, DEFAULT_ORG_SHARD),
-          env,
-          sinks: EFFECT_SINKS,
-          now: () => Date.now(),
-          log: createLogger({ op: "cron.effects" }),
-          metrics,
-        }),
       ]);
       const failed = results.filter((r) => r.status === "rejected");
       for (const failure of failed)

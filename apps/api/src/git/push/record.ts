@@ -126,13 +126,15 @@ export class PushCursorStore {
 
   /**
    * Saves the indexing cursor, publishing it only if `fence` still holds
-   * when the row is written (checked in that write's transaction). False
-   * when the fence refused it; nothing it wrote is left published then.
+   * when the row is written (checked in that write's transaction, where
+   * `withIt` then writes what must be published with it). False when the
+   * fence refused it; nothing it wrote is left published then.
    */
   async save(
     uploadId: string,
     cursor: Uint8Array,
     fence: () => boolean = () => true,
+    withIt?: () => void,
   ): Promise<boolean> {
     let stored: Uint8Array;
     let written: string | undefined;
@@ -150,6 +152,7 @@ export class PushCursorStore {
       if (!fence()) return false;
       replaced = this.objectKey(uploadId);
       this.git.uploads.saveCursor(uploadId, stored);
+      withIt?.();
       return true;
     });
     // The object no longer published, or never published, goes; the reaper takes what fails.

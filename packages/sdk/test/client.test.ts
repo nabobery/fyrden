@@ -107,6 +107,24 @@ describe("FyrdenClient", () => {
     });
   });
 
+  it("keeps where to start over when a cursor expired", async () => {
+    const { fetchFn } = fake([
+      {
+        status: 410,
+        body: {
+          type: "about:blank",
+          status: 410,
+          code: "cursor_expired",
+          detail: "start over",
+          resync: "/api/feed/sync",
+        },
+      },
+    ]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test/api", fetch: fetchFn });
+    const error = await client.call("feed.list", { since: "c" }).catch((e: unknown) => e);
+    expect(error).toMatchObject({ status: 410, code: "cursor_expired", resync: "/api/feed/sync" });
+  });
+
   it("iterates every item of a paginated operation, following next_cursor", async () => {
     const { sent, fetchFn } = fake([
       { body: { repos: [{ name: "a" }, { name: "b" }], next_cursor: "c1" } },

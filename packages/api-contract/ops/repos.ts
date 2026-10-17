@@ -1,4 +1,4 @@
-import { HANDLE_PATTERN, MAX_DESCRIPTION_LENGTH } from "@fyrden/domain";
+import { HANDLE_SHAPE, MAX_DESCRIPTION_LENGTH, MAX_HANDLE_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 
@@ -114,7 +114,12 @@ export const getRepo = defineOperation({
   description:
     "Returns a repository the caller can see. A repository that does not exist and one the caller cannot see both answer 404.",
   input: z.object({
-    owner: z.string().regex(HANDLE_PATTERN).describe("The owner's handle."),
+    owner: z
+      .string()
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
+      .describe("The owner's handle."),
     repo: RepoName,
   }),
   output: Repo,
@@ -139,7 +144,12 @@ export const updateRepo = defineOperation({
     "Renames a repository, changes its description or default branch, marks it as a template, or sets or clears its expiry; fields left out are kept. After a rename the old name keeps working for clone, fetch, push and this API, until a repository takes that name again.",
   input: z
     .object({
-      owner: z.string().regex(HANDLE_PATTERN).describe("The owner's handle."),
+      owner: z
+        .string()
+        .min(1)
+        .max(MAX_HANDLE_LENGTH)
+        .regex(HANDLE_SHAPE)
+        .describe("The owner's handle."),
       repo: RepoName.describe("The repository's name (or a name it had before a rename)."),
       name: RepoName.optional().describe("A new name."),
       description: z
@@ -205,7 +215,12 @@ export const deleteRepo = defineOperation({
   description:
     "Deletes a repository: from now on it cannot be pushed or changed, and within about 30 seconds it can no longer be found or read under any name; its data, events and storage are then removed, and its audit records kept. Forks keep their own data. The name is free again once `state` is `deleted`.",
   input: z.object({
-    owner: z.string().regex(HANDLE_PATTERN).describe("The owner's handle."),
+    owner: z
+      .string()
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
+      .describe("The owner's handle."),
     repo: RepoName,
   }),
   output: RepoDeletion,
@@ -267,7 +282,12 @@ export const listForks = defineOperation({
   description:
     "Lists the forks of a repository that the caller owns, oldest first. Forks owned by other accounts are not listed.",
   input: z.object({
-    owner: z.string().regex(HANDLE_PATTERN).describe("The repository's owner handle."),
+    owner: z
+      .string()
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
+      .describe("The repository's owner handle."),
     repo: RepoName.describe("The repository's name."),
     per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
     cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
@@ -293,7 +313,12 @@ export const forkRepo = defineOperation({
   description:
     "Creates a fork of a repository the caller can read, owned by the caller, in the same fork network: it starts with the parent's branches, tags and default branch, and shares the parent's stored objects, so no data is copied. The fork can be cloned as soon as this returns. An agent forks as it creates repositories (acting for a user under a grant, expiring unless `expires_at` says otherwise, within its own limit). Answers 409 `network_busy` while the network's storage is being collected; retry after a few seconds.",
   input: z.object({
-    owner: z.string().regex(HANDLE_PATTERN).describe("The parent's owner handle."),
+    owner: z
+      .string()
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
+      .describe("The parent's owner handle."),
     repo: RepoName.describe("The parent repository's name."),
     name: RepoName.optional().describe("The fork's name. Default: the parent's name."),
     expires_at: ExpiresAt.optional(),
@@ -321,11 +346,18 @@ export const generateRepo = defineOperation({
   description:
     "Creates a private repository whose first commit (on `main`) holds the files of the template's default branch, with their modes, symlinks and submodule links (at most 2,000 files and directories, 8 MiB in all). Unlike a fork it starts its own history and shares nothing with the template. The template must be marked `is_template` and readable by the caller; `owner` may be the caller or an organization it may create repositories in, where it can write. The token needs `contents:write` as well, without a repository list. Answers 422 `not_a_template`, or 422 `template_too_large` past the bounds; on a failure no repository is left.",
   input: z.object({
-    template_owner: z.string().regex(HANDLE_PATTERN).describe("The template's owner handle."),
+    template_owner: z
+      .string()
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
+      .describe("The template's owner handle."),
     template_repo: RepoName.describe("The template's name."),
     owner: z
       .string()
-      .regex(HANDLE_PATTERN)
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
       .optional()
       .describe("Who owns the new repository: the caller (default) or an organization."),
     name: RepoName.describe("The new repository's name."),
@@ -354,9 +386,19 @@ export const transferRepo = defineOperation({
   description:
     "Moves a repository you administer to another account: yourself or an organization you may create repositories in, under its name or `new_name`. Its collaborators, rulesets, stars and history go with it; the old account's team grants stay behind. The old path keeps working as a redirect. While it moves (usually under a second), it takes no push or change. Answers 409 `name_taken` or 403 `quota_exceeded` when the new account cannot take it.",
   input: z.object({
-    owner: z.string().regex(HANDLE_PATTERN).describe("The owner's handle."),
+    owner: z
+      .string()
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
+      .describe("The owner's handle."),
     repo: RepoName.describe("The repository's name."),
-    new_owner: z.string().regex(HANDLE_PATTERN).describe("The account it moves to."),
+    new_owner: z
+      .string()
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
+      .describe("The account it moves to."),
     new_name: RepoName.optional().describe("Its name there. Default: its current name."),
   }),
   output: z.object({
@@ -385,7 +427,12 @@ export const createOrgRepo = defineOperation({
   description:
     "Creates an empty private repository owned by an organization. Members may create them; owners administer every repository of the organization, and members can read them.",
   input: z.object({
-    org: z.string().regex(HANDLE_PATTERN).describe("The organization's handle."),
+    org: z
+      .string()
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
+      .describe("The organization's handle."),
     name: RepoName,
     expires_at: ExpiresAt.optional(),
   }),
@@ -411,7 +458,12 @@ export const listOrgRepos = defineOperation({
   description:
     "Lists an organization's repositories, by name (ignoring case), for its members. A repository created a moment ago is listed; its `default_branch` can lag behind a change by a few seconds.",
   input: z.object({
-    org: z.string().regex(HANDLE_PATTERN).describe("The organization's handle."),
+    org: z
+      .string()
+      .min(1)
+      .max(MAX_HANDLE_LENGTH)
+      .regex(HANDLE_SHAPE)
+      .describe("The organization's handle."),
     per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
     cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
   }),

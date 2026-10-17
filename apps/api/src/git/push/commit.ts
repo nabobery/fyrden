@@ -1,4 +1,9 @@
-import type { LockHandle, RepoGitStorage, UploadRecord } from "@fyrden/adapters-cloudflare/git";
+import type {
+  LockHandle,
+  RefActor,
+  RepoGitStorage,
+  UploadRecord,
+} from "@fyrden/adapters-cloudflare/git";
 import type { PackId, PushCommitRequest, PushCommitResult, RefUpdate } from "@fyrden/git-core";
 import { anyLeased, type TailMerge, type TailMergeOutcome } from "../maintenance/tail-merge.js";
 
@@ -92,6 +97,10 @@ export function pushCommitter(
   fence?: () => string | undefined,
   /** Runs in the transaction that commits the upload, after its refs. */
   inCommit?: () => void,
+  /** How the change is made, for the reflog: a merge of a pull request is `merge`. */
+  via: RefActor["via"] = "push",
+  /** A base's maintainer writing a pull request's head here (see `RefActor.maintainerFor`). */
+  maintainerFor?: RefActor["maintainerFor"],
 ): (request: PushCommitRequest) => Promise<PushCommitResult> {
   const authorize = ({ now }: { now: number }, removing: readonly PackId[]): string | undefined => {
     if (!git.locks.isHeld(lock)) return "the push lost its turn to commit; try the push again";
@@ -143,7 +152,8 @@ export function pushCommitter(
           tokenId: upload.tokenId,
           actChain: decision.actChain ?? [],
           requestId: decision.requestId ?? null,
-          via: "push",
+          via,
+          ...(maintainerFor && { maintainerFor }),
         },
         fastForward: request.fastForward,
         authorize: (context) => authorize(context, removePacks),
@@ -155,6 +165,8 @@ export function pushCommitter(
       if (result.ok) return { ok: true };
       switch (result.reason) {
         case "version-conflict":
+          // Another push (to any branch) committed first: counted, to tell when that is common.
+          git.context.metrics.count("push.version_retry", { class: git.context.doClass });
           continue;
         case "ref-conflict":
           return { ok: false, reason: "ref-conflict", ref: result.ref };

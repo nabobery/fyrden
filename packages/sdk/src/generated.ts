@@ -152,7 +152,7 @@ export type UsersTokensListOutput = {
 export type UsersTokensCreateInput = {
   type?: "pat" | "git";
   /** Permissions it is limited to (and what they imply). Empty: your token's. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -217,7 +217,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -334,7 +334,7 @@ export type AgentsTokensCreateInput = {
   agent: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -402,7 +402,7 @@ export type GrantsCreateInput = {
   /** The agent's handle. */
   agent: string;
   /** Permissions the agent may use for you (and what they imply). */
-  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "administration:write")[];
+  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
   repositories?: string[];
   expires_in_days?: number;
@@ -920,8 +920,26 @@ export type ReposRulesetsListOutput = {
       };
     };
     rules: ({
-      /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests). */
-      type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request";
+      /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+      type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+      /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
+      parameters?: {
+        /** Approving reviews a merge needs, from people with write access other than the author. */
+        required_approving_review_count: number;
+        /** A push makes earlier reviews stop counting. */
+        dismiss_stale_reviews_on_push: boolean;
+        /** Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count). */
+        require_last_push_approval: boolean;
+        /** Every review thread must be resolved. */
+        required_review_thread_resolution: boolean;
+        /** Code owners are not supported yet: must be false. */
+        require_code_owner_review: false;
+        allowed_merge_methods: ("merge" | "squash" | "rebase")[];
+        /** Reviews required from specific teams are not supported yet: empty or left out. */
+        required_reviewers?: unknown[];
+        /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
+        allow_agent_approvals: boolean;
+      };
     })[];
     bypass_actors: ({
       actor_type: "RepositoryRole";
@@ -1007,8 +1025,26 @@ export type ReposRulesetsGetOutput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
+    parameters?: {
+      /** Approving reviews a merge needs, from people with write access other than the author. */
+      required_approving_review_count: number;
+      /** A push makes earlier reviews stop counting. */
+      dismiss_stale_reviews_on_push: boolean;
+      /** Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count). */
+      require_last_push_approval: boolean;
+      /** Every review thread must be resolved. */
+      required_review_thread_resolution: boolean;
+      /** Code owners are not supported yet: must be false. */
+      require_code_owner_review: false;
+      allowed_merge_methods: ("merge" | "squash" | "rebase")[];
+      /** Reviews required from specific teams are not supported yet: empty or left out. */
+      required_reviewers?: unknown[];
+      /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
+      allow_agent_approvals: boolean;
+    };
   })[];
   bypass_actors: ({
     actor_type: "RepositoryRole";
@@ -1041,8 +1077,26 @@ export type ReposRulesetsCreateInput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
+    parameters?: {
+      /** Approving reviews a merge needs, from people with write access other than the author. */
+      required_approving_review_count?: number;
+      /** A push makes earlier reviews stop counting. */
+      dismiss_stale_reviews_on_push?: boolean;
+      /** Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count). */
+      require_last_push_approval?: boolean;
+      /** Every review thread must be resolved. */
+      required_review_thread_resolution?: boolean;
+      /** Code owners are not supported yet: must be false. */
+      require_code_owner_review?: false;
+      allowed_merge_methods?: ("merge" | "squash" | "rebase")[];
+      /** Reviews required from specific teams are not supported yet: empty or left out. */
+      required_reviewers?: unknown[];
+      /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
+      allow_agent_approvals?: boolean;
+    };
   })[];
   bypass_actors?: ({
     actor_type: "RepositoryRole";
@@ -1069,8 +1123,26 @@ export type ReposRulesetsCreateOutput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
+    parameters?: {
+      /** Approving reviews a merge needs, from people with write access other than the author. */
+      required_approving_review_count: number;
+      /** A push makes earlier reviews stop counting. */
+      dismiss_stale_reviews_on_push: boolean;
+      /** Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count). */
+      require_last_push_approval: boolean;
+      /** Every review thread must be resolved. */
+      required_review_thread_resolution: boolean;
+      /** Code owners are not supported yet: must be false. */
+      require_code_owner_review: false;
+      allowed_merge_methods: ("merge" | "squash" | "rebase")[];
+      /** Reviews required from specific teams are not supported yet: empty or left out. */
+      required_reviewers?: unknown[];
+      /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
+      allow_agent_approvals: boolean;
+    };
   })[];
   bypass_actors: ({
     actor_type: "RepositoryRole";
@@ -1105,8 +1177,26 @@ export type ReposRulesetsUpdateInput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
+    parameters?: {
+      /** Approving reviews a merge needs, from people with write access other than the author. */
+      required_approving_review_count?: number;
+      /** A push makes earlier reviews stop counting. */
+      dismiss_stale_reviews_on_push?: boolean;
+      /** Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count). */
+      require_last_push_approval?: boolean;
+      /** Every review thread must be resolved. */
+      required_review_thread_resolution?: boolean;
+      /** Code owners are not supported yet: must be false. */
+      require_code_owner_review?: false;
+      allowed_merge_methods?: ("merge" | "squash" | "rebase")[];
+      /** Reviews required from specific teams are not supported yet: empty or left out. */
+      required_reviewers?: unknown[];
+      /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
+      allow_agent_approvals?: boolean;
+    };
   })[];
   bypass_actors?: ({
     actor_type: "RepositoryRole";
@@ -1133,8 +1223,26 @@ export type ReposRulesetsUpdateOutput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
+    parameters?: {
+      /** Approving reviews a merge needs, from people with write access other than the author. */
+      required_approving_review_count: number;
+      /** A push makes earlier reviews stop counting. */
+      dismiss_stale_reviews_on_push: boolean;
+      /** Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count). */
+      require_last_push_approval: boolean;
+      /** Every review thread must be resolved. */
+      required_review_thread_resolution: boolean;
+      /** Code owners are not supported yet: must be false. */
+      require_code_owner_review: false;
+      allowed_merge_methods: ("merge" | "squash" | "rebase")[];
+      /** Reviews required from specific teams are not supported yet: empty or left out. */
+      required_reviewers?: unknown[];
+      /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
+      allow_agent_approvals: boolean;
+    };
   })[];
   bypass_actors: ({
     actor_type: "RepositoryRole";
@@ -1161,6 +1269,1649 @@ export type ReposRulesetsDeleteInput = {
 
 /** Output of `repos.rulesets.delete`. */
 export type ReposRulesetsDeleteOutput = {
+  id: number;
+  state: "deleted";
+};
+
+/** Input of `repos.hooks.list`: List repository webhooks. */
+export type ReposHooksListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+};
+
+/** Output of `repos.hooks.list`. */
+export type ReposHooksListOutput = ({
+  id: number;
+  name: "web";
+  active: boolean;
+  events: string[];
+  config: {
+    url: string;
+    content_type: "json";
+  };
+  created_at: string;
+  updated_at: string;
+  last_response: {
+    code: number | null;
+    status: string;
+    message: string | null;
+  };
+  /** Fyrden: why the server turned the hook off (its receiver answered 410 Gone). */
+  disabled_reason: string | null;
+  /** Fyrden: secrets that sign its deliveries (two while one is being replaced). */
+  secrets: number;
+})[];
+
+/** Input of `repos.hooks.create`: Create a repository webhook. */
+export type ReposHooksCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  name?: "web";
+  config: {
+    /** Where deliveries are posted: https (http only for a public repository), never this server or a private address. */
+    url: string;
+    content_type?: "json";
+  };
+  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
+  active?: boolean;
+};
+
+/** Output of `repos.hooks.create`. */
+export type ReposHooksCreateOutput = {
+  id: number;
+  name: "web";
+  active: boolean;
+  events: string[];
+  config: {
+    url: string;
+    content_type: "json";
+  };
+  created_at: string;
+  updated_at: string;
+  last_response: {
+    code: number | null;
+    status: string;
+    message: string | null;
+  };
+  /** Fyrden: why the server turned the hook off (its receiver answered 410 Gone). */
+  disabled_reason: string | null;
+  /** Fyrden: secrets that sign its deliveries (two while one is being replaced). */
+  secrets: number;
+  /** The signing secret (`whsec_…`, Standard Webhooks): shown this once; verify deliveries' `webhook-signature` with it. */
+  secret: string;
+};
+
+/** Input of `repos.hooks.get`: Get a repository webhook. */
+export type ReposHooksGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+};
+
+/** Output of `repos.hooks.get`. */
+export type ReposHooksGetOutput = {
+  id: number;
+  name: "web";
+  active: boolean;
+  events: string[];
+  config: {
+    url: string;
+    content_type: "json";
+  };
+  created_at: string;
+  updated_at: string;
+  last_response: {
+    code: number | null;
+    status: string;
+    message: string | null;
+  };
+  /** Fyrden: why the server turned the hook off (its receiver answered 410 Gone). */
+  disabled_reason: string | null;
+  /** Fyrden: secrets that sign its deliveries (two while one is being replaced). */
+  secrets: number;
+};
+
+/** Input of `repos.hooks.update`: Update a repository webhook. */
+export type ReposHooksUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+  config?: {
+    /** Where deliveries are posted: https (http only for a public repository), never this server or a private address. */
+    url?: string;
+    content_type?: "json";
+  };
+  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
+  add_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
+  remove_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
+  active?: boolean;
+};
+
+/** Output of `repos.hooks.update`. */
+export type ReposHooksUpdateOutput = {
+  id: number;
+  name: "web";
+  active: boolean;
+  events: string[];
+  config: {
+    url: string;
+    content_type: "json";
+  };
+  created_at: string;
+  updated_at: string;
+  last_response: {
+    code: number | null;
+    status: string;
+    message: string | null;
+  };
+  /** Fyrden: why the server turned the hook off (its receiver answered 410 Gone). */
+  disabled_reason: string | null;
+  /** Fyrden: secrets that sign its deliveries (two while one is being replaced). */
+  secrets: number;
+};
+
+/** Input of `repos.hooks.delete`: Delete a repository webhook. */
+export type ReposHooksDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+};
+
+/** Output of `repos.hooks.delete`. */
+export type ReposHooksDeleteOutput = {
+  id: number;
+  state: "deleted";
+};
+
+/** Input of `repos.hooks.pings.create`: Ping a repository webhook. */
+export type ReposHooksPingsCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+};
+
+/** Output of `repos.hooks.pings.create`. */
+export type ReposHooksPingsCreateOutput = {
+  id: number;
+  state: "pinged";
+};
+
+/** Input of `repos.hooks.secret.rotate`: Rotate a webhook's secret. */
+export type ReposHooksSecretRotateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+};
+
+/** Output of `repos.hooks.secret.rotate`. */
+export type ReposHooksSecretRotateOutput = {
+  id: number;
+  /** The signing secret (`whsec_…`, Standard Webhooks): shown this once; verify deliveries' `webhook-signature` with it. */
+  secret: string;
+};
+
+/** Input of `repos.hooks.secret.drop`: Drop a webhook's previous secret. */
+export type ReposHooksSecretDropInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+};
+
+/** Output of `repos.hooks.secret.drop`. */
+export type ReposHooksSecretDropOutput = {
+  id: number;
+  secrets: number;
+};
+
+/** Input of `repos.hooks.deliveries.list`: List deliveries for a repository webhook. */
+export type ReposHooksDeliveriesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `repos.hooks.deliveries.list`. */
+export type ReposHooksDeliveriesListOutput = {
+  deliveries: ({
+    /** The delivery's `webhook-id` (the same on every attempt). */
+    id: string;
+    event: string;
+    action: string | null;
+    state: "pending" | "done" | "failed" | "cancelled" | "dropped";
+    /** Why it failed, was cancelled or dropped. */
+    reason: string | null;
+    /** The last attempt's response status. */
+    status_code: number | null;
+    attempts: number;
+    delivered_at: string;
+    next_attempt_at: string | null;
+  })[];
+  next_cursor: string | null;
+};
+
+/** Input of `repos.hooks.deliveries.get`: Get a delivery for a repository webhook. */
+export type ReposHooksDeliveriesGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+  delivery_id: string;
+  /** Attempts a page, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`: the attempts before it. */
+  cursor?: string;
+};
+
+/** Output of `repos.hooks.deliveries.get`. */
+export type ReposHooksDeliveriesGetOutput = {
+  /** The delivery's `webhook-id` (the same on every attempt). */
+  id: string;
+  event: string;
+  action: string | null;
+  state: "pending" | "done" | "failed" | "cancelled" | "dropped";
+  /** Why it failed, was cancelled or dropped. */
+  reason: string | null;
+  /** The last attempt's response status. */
+  status_code: number | null;
+  attempts: number;
+  delivered_at: string;
+  next_attempt_at: string | null;
+  request: {
+    payload: Record<string, unknown> | null;
+  };
+  /** Pass as `cursor` for older attempts; null on the last page. */
+  next_cursor: string | null;
+  attempts_made: ({
+    n: number;
+    at: string;
+    url: string | null;
+    status_code: number | null;
+    duration_ms: number | null;
+    response: string | null;
+    error: string | null;
+  })[];
+};
+
+/** Input of `repos.hooks.deliveries.redeliver`: Redeliver a delivery for a repository webhook. */
+export type ReposHooksDeliveriesRedeliverInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The webhook's id. */
+  hook_id: number;
+  delivery_id: string;
+};
+
+/** Output of `repos.hooks.deliveries.redeliver`. */
+export type ReposHooksDeliveriesRedeliverOutput = {
+  /** The delivery's `webhook-id` (the same on every attempt). */
+  id: string;
+  event: string;
+  action: string | null;
+  state: "pending" | "done" | "failed" | "cancelled" | "dropped";
+  /** Why it failed, was cancelled or dropped. */
+  reason: string | null;
+  /** The last attempt's response status. */
+  status_code: number | null;
+  attempts: number;
+  delivered_at: string;
+  next_attempt_at: string | null;
+};
+
+/** Input of `admin.webhooks.reseal`: Seal webhook secrets with the current key. */
+export type AdminWebhooksResealInput = {
+  cursor?: string;
+};
+
+/** Output of `admin.webhooks.reseal`. */
+export type AdminWebhooksResealOutput = {
+  resealed: number;
+  remaining: number;
+  unreadable: number;
+  next_cursor: string | null;
+};
+
+/** Input of `pulls.list`: List pull requests. */
+export type PullsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  state?: "open" | "closed" | "all";
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.list`. */
+export type PullsListOutput = {
+  pull_requests: ({
+    number: number;
+    state: "open" | "closed";
+    merged: boolean;
+    /** Fyrden: the repository the head branch is in (a fork in the same network); null for this one. */
+    head_repo_id: string | null;
+    /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
+    mergeable: boolean | null;
+    /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+    mergeable_state: "clean" | "dirty" | "draft" | "unknown";
+    draft: boolean;
+    /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
+    maintainer_can_modify: boolean;
+    title: string;
+    body: string | null;
+    /** Who opened it (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    /** The branch with the changes. `refs/pull/{number}/head` points at `head.sha` and can be fetched. */
+    head: {
+      /** The branch, without refs/heads/. */
+      ref: string;
+      /** Its commit when last recorded. */
+      sha: string;
+    };
+    /** The branch the changes are for. */
+    base: {
+      /** The branch, without refs/heads/. */
+      ref: string;
+      /** Its commit when last recorded. */
+      sha: string;
+    };
+    /** Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again. */
+    head_ref_deleted: boolean;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Unix time in milliseconds. */
+    merged_at: number | null;
+    /** Once merged, the commit the base branch moved to. */
+    merge_commit_sha: string | null;
+    /** Who merged it (the user, when agents acted for one). */
+    merged_by: {
+      id: string;
+    } | null;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `pulls.create`: Create a pull request. */
+export type PullsCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  title: string;
+  body?: string;
+  /** The branch with the changes, without refs/heads/; `owner:branch` for a branch of that owner's repository in the base's fork network (a fork), which the caller must be able to read. */
+  head: string;
+  /** With `owner:branch`, the repository's name, when the owner has several in the network. */
+  head_repo?: string;
+  /** The branch to merge into, without refs/heads/. */
+  base: string;
+  /** Open it as a draft. */
+  draft?: boolean;
+  /** With a head in a fork: let those with write access to the base change the head branch. */
+  maintainer_can_modify?: boolean;
+};
+
+/** Output of `pulls.create`. */
+export type PullsCreateOutput = {
+  number: number;
+  state: "open" | "closed";
+  merged: boolean;
+  /** Fyrden: the repository the head branch is in (a fork in the same network); null for this one. */
+  head_repo_id: string | null;
+  /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
+  mergeable: boolean | null;
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  mergeable_state: "clean" | "dirty" | "draft" | "unknown";
+  draft: boolean;
+  /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
+  maintainer_can_modify: boolean;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  /** The branch with the changes. `refs/pull/{number}/head` points at `head.sha` and can be fetched. */
+  head: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** The branch the changes are for. */
+  base: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again. */
+  head_ref_deleted: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  /** Unix time in milliseconds. */
+  merged_at: number | null;
+  /** Once merged, the commit the base branch moved to. */
+  merge_commit_sha: string | null;
+  /** Who merged it (the user, when agents acted for one). */
+  merged_by: {
+    id: string;
+  } | null;
+};
+
+/** Input of `pulls.get`: Get a pull request. */
+export type PullsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+};
+
+/** Output of `pulls.get`. */
+export type PullsGetOutput = {
+  number: number;
+  state: "open" | "closed";
+  merged: boolean;
+  /** Fyrden: the repository the head branch is in (a fork in the same network); null for this one. */
+  head_repo_id: string | null;
+  /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
+  mergeable: boolean | null;
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  mergeable_state: "clean" | "dirty" | "draft" | "unknown";
+  draft: boolean;
+  /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
+  maintainer_can_modify: boolean;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  /** The branch with the changes. `refs/pull/{number}/head` points at `head.sha` and can be fetched. */
+  head: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** The branch the changes are for. */
+  base: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again. */
+  head_ref_deleted: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  /** Unix time in milliseconds. */
+  merged_at: number | null;
+  /** Once merged, the commit the base branch moved to. */
+  merge_commit_sha: string | null;
+  /** Who merged it (the user, when agents acted for one). */
+  merged_by: {
+    id: string;
+  } | null;
+};
+
+/** Input of `pulls.update`: Update a pull request. */
+export type PullsUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  title?: string;
+  /** Null clears it. */
+  body?: string | null;
+  state?: "open" | "closed";
+  /** A new base branch, without refs/heads/. */
+  base?: string;
+  /** Fyrden: mark it a draft, or ready for review. */
+  draft?: boolean;
+  /** The author only: let the base's maintainers change a head branch in a fork. */
+  maintainer_can_modify?: boolean;
+};
+
+/** Output of `pulls.update`. */
+export type PullsUpdateOutput = {
+  number: number;
+  state: "open" | "closed";
+  merged: boolean;
+  /** Fyrden: the repository the head branch is in (a fork in the same network); null for this one. */
+  head_repo_id: string | null;
+  /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
+  mergeable: boolean | null;
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  mergeable_state: "clean" | "dirty" | "draft" | "unknown";
+  draft: boolean;
+  /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
+  maintainer_can_modify: boolean;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  /** The branch with the changes. `refs/pull/{number}/head` points at `head.sha` and can be fetched. */
+  head: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** The branch the changes are for. */
+  base: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again. */
+  head_ref_deleted: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  /** Unix time in milliseconds. */
+  merged_at: number | null;
+  /** Once merged, the commit the base branch moved to. */
+  merge_commit_sha: string | null;
+  /** Who merged it (the user, when agents acted for one). */
+  merged_by: {
+    id: string;
+  } | null;
+};
+
+/** Input of `pulls.merge`: Merge a pull request. */
+export type PullsMergeInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The commit's first line; GitHub's default for the method when left out (`Merge pull request #n from owner/branch`, or the title and number). */
+  commit_title?: string;
+  /** The commit's message after its title; by default the pull request's title (merge) or body (squash). */
+  commit_message?: string;
+  /** The head the pull request must be at: the merge is refused otherwise. */
+  sha?: string;
+  merge_method?: "merge" | "squash" | "rebase";
+};
+
+/** Output of `pulls.merge`. */
+export type PullsMergeOutput = {
+  /** The commit the base branch now points at. */
+  sha: string;
+  merged: boolean;
+  message: string;
+};
+
+/** Input of `pulls.conflicts.get`: Get a pull request's conflicts. */
+export type PullsConflictsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+};
+
+/** Output of `pulls.conflicts.get`. */
+export type PullsConflictsGetOutput = {
+  base_sha: string;
+  head_sha: string;
+  /** Names this base tip and head, for the resolution. */
+  conflict_snapshot: string;
+  files: ({
+    path: string;
+    kind: "content" | "add_add" | "modify_delete" | "file_directory" | "mode" | "symlink" | "submodule" | "binary" | "too_large";
+    editable: boolean;
+    /** An editable file merged, with conflict markers; null otherwise. */
+    content: string | null;
+    /** Conflicts marked in `content`. */
+    conflicts: number;
+  })[];
+};
+
+/** Input of `pulls.conflicts.resolve`: Resolve a pull request's conflicts. */
+export type PullsConflictsResolveInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** From reading the conflicts. */
+  conflict_snapshot: string;
+  /** The resolved content of each file whose lines conflict. */
+  files: {
+    path: string;
+    /** The file's resolved content (UTF-8). */
+    content: string;
+  }[];
+  /** By default `Merge branch '<base>' into <head>`. */
+  commit_message?: string;
+};
+
+/** Output of `pulls.conflicts.resolve`. */
+export type PullsConflictsResolveOutput = {
+  /** The merge commit the head branch now points at. */
+  sha: string;
+  /** Resolved files that still contain conflict markers (accepted as given). */
+  markers: string[];
+};
+
+/** Input of `pulls.branch.update`: Update a pull request branch. */
+export type PullsBranchUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The head the pull request must be at. */
+  expected_head_sha?: string;
+};
+
+/** Output of `pulls.branch.update`. */
+export type PullsBranchUpdateOutput = {
+  message: string;
+  url: string;
+  /** Fyrden: the merge commit the head branch now points at. */
+  sha: string;
+};
+
+/** Input of `pulls.files.list`: List pull request files. */
+export type PullsFilesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.files.list`. */
+export type PullsFilesListOutput = {
+  files: ({
+    /** The file's blob on the head side (the removed blob for a removal). */
+    sha: string;
+    filename: string;
+    /** For a renamed file, where it was. */
+    previous_filename?: string;
+    /** `changed` is a change of mode or kind only. */
+    status: "added" | "removed" | "modified" | "renamed" | "changed";
+    additions: number;
+    deletions: number;
+    changes: number;
+    /** The file's hunks as unified diff text; left out when `patch_omitted` says why. */
+    patch?: string;
+    /** Fyrden: why there is no patch: a binary file, a side over 1 MiB (or too many lines), a patch over 64 KiB, a submodule, or this page's read budget (ask for a smaller page). */
+    patch_omitted?: "binary" | "too_large" | "patch_too_large" | "submodule" | "budget";
+    /** Fyrden: true when the hunks are right but not the shortest (comparing cost too much). */
+    approximate?: boolean;
+  })[];
+  merge_base_sha: string;
+  head_sha: string;
+  /** More than 3,000 files changed: the listing stops there. */
+  truncated: boolean;
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `pulls.commits.list`: List pull request commits. */
+export type PullsCommitsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.commits.list`. */
+export type PullsCommitsListOutput = {
+  commits: ({
+    /** A full commit SHA (40 hex digits). */
+    sha: string;
+    commit: {
+      message: string;
+      author: {
+        name: string;
+        email: string;
+        /** ISO 8601, UTC. */
+        date: string;
+      };
+      committer: {
+        name: string;
+        email: string;
+        /** ISO 8601, UTC. */
+        date: string;
+      };
+      tree: {
+        sha: string;
+      };
+      /** Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address. */
+      verification: {
+        verified: boolean;
+        /** `valid` (signed by a known key), `unsigned`, `unknown_key`, `bad_email` (a user's key, on a commit whose committer is not that user), `invalid`, `malformed_signature` or `unknown_signature_type`, as GitHub names them. */
+        reason: string;
+        /** The armored signature. */
+        signature: string | null;
+        /** What the signature covers: the commit without it. */
+        payload: string | null;
+        verified_at: string | null;
+      };
+    };
+    parents: {
+      /** A full commit SHA (40 hex digits). */
+      sha: string;
+    }[];
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `pulls.comments.list`: List review comments. */
+export type PullsCommentsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.comments.list`. */
+export type PullsCommentsListOutput = {
+  comments: ({
+    id: number;
+    /** Always null: comments are not part of a review yet. */
+    pull_request_review_id: number | null;
+    /** The comment this one answers. */
+    in_reply_to_id?: number;
+    /** Fyrden: the thread it is in. */
+    thread_id: number;
+    /** Who wrote it (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    body: string;
+    /** The head the thread was started on. */
+    commit_id: string;
+    original_commit_id: string;
+    path: string;
+    /** `RIGHT`: the head's file; `LEFT`: the merge base's. */
+    side: "LEFT" | "RIGHT";
+    /** The line commented on; null once `outdated`. */
+    line: number | null;
+    original_line: number;
+    /** The first line, for a range. */
+    start_line: number | null;
+    start_side: "LEFT" | "RIGHT" | null;
+    /** Fyrden: the diff moved on since: the head moved, or for `LEFT` the merge base (the base branch can move it with the head unchanged); the lines are those of `commit_id` (for `LEFT`, of the merge base then). */
+    outdated: boolean;
+    /** Fyrden: its thread is resolved. */
+    resolved: boolean;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `pulls.comments.create`: Create a review comment. */
+export type PullsCommentsCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  body: string;
+  /** A comment to reply to. */
+  in_reply_to?: number;
+  /** The head the lines are of; needed unless replying. */
+  commit_id?: string;
+  /** The file; needed unless replying. */
+  path?: string;
+  /** The (last) line; needed unless replying. */
+  line?: number;
+  side?: "LEFT" | "RIGHT";
+  /** The first line, for a range. */
+  start_line?: number;
+  /** As `side`; a range stays on one side. */
+  start_side?: "LEFT" | "RIGHT";
+};
+
+/** Output of `pulls.comments.create`. */
+export type PullsCommentsCreateOutput = {
+  id: number;
+  /** Always null: comments are not part of a review yet. */
+  pull_request_review_id: number | null;
+  /** The comment this one answers. */
+  in_reply_to_id?: number;
+  /** Fyrden: the thread it is in. */
+  thread_id: number;
+  /** Who wrote it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  body: string;
+  /** The head the thread was started on. */
+  commit_id: string;
+  original_commit_id: string;
+  path: string;
+  /** `RIGHT`: the head's file; `LEFT`: the merge base's. */
+  side: "LEFT" | "RIGHT";
+  /** The line commented on; null once `outdated`. */
+  line: number | null;
+  original_line: number;
+  /** The first line, for a range. */
+  start_line: number | null;
+  start_side: "LEFT" | "RIGHT" | null;
+  /** Fyrden: the diff moved on since: the head moved, or for `LEFT` the merge base (the base branch can move it with the head unchanged); the lines are those of `commit_id` (for `LEFT`, of the merge base then). */
+  outdated: boolean;
+  /** Fyrden: its thread is resolved. */
+  resolved: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+};
+
+/** Input of `pulls.comments.get`: Get a review comment. */
+export type PullsCommentsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+};
+
+/** Output of `pulls.comments.get`. */
+export type PullsCommentsGetOutput = {
+  id: number;
+  /** Always null: comments are not part of a review yet. */
+  pull_request_review_id: number | null;
+  /** The comment this one answers. */
+  in_reply_to_id?: number;
+  /** Fyrden: the thread it is in. */
+  thread_id: number;
+  /** Who wrote it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  body: string;
+  /** The head the thread was started on. */
+  commit_id: string;
+  original_commit_id: string;
+  path: string;
+  /** `RIGHT`: the head's file; `LEFT`: the merge base's. */
+  side: "LEFT" | "RIGHT";
+  /** The line commented on; null once `outdated`. */
+  line: number | null;
+  original_line: number;
+  /** The first line, for a range. */
+  start_line: number | null;
+  start_side: "LEFT" | "RIGHT" | null;
+  /** Fyrden: the diff moved on since: the head moved, or for `LEFT` the merge base (the base branch can move it with the head unchanged); the lines are those of `commit_id` (for `LEFT`, of the merge base then). */
+  outdated: boolean;
+  /** Fyrden: its thread is resolved. */
+  resolved: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+};
+
+/** Input of `pulls.comments.update`: Update a review comment. */
+export type PullsCommentsUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  body: string;
+};
+
+/** Output of `pulls.comments.update`. */
+export type PullsCommentsUpdateOutput = {
+  id: number;
+  /** Always null: comments are not part of a review yet. */
+  pull_request_review_id: number | null;
+  /** The comment this one answers. */
+  in_reply_to_id?: number;
+  /** Fyrden: the thread it is in. */
+  thread_id: number;
+  /** Who wrote it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  body: string;
+  /** The head the thread was started on. */
+  commit_id: string;
+  original_commit_id: string;
+  path: string;
+  /** `RIGHT`: the head's file; `LEFT`: the merge base's. */
+  side: "LEFT" | "RIGHT";
+  /** The line commented on; null once `outdated`. */
+  line: number | null;
+  original_line: number;
+  /** The first line, for a range. */
+  start_line: number | null;
+  start_side: "LEFT" | "RIGHT" | null;
+  /** Fyrden: the diff moved on since: the head moved, or for `LEFT` the merge base (the base branch can move it with the head unchanged); the lines are those of `commit_id` (for `LEFT`, of the merge base then). */
+  outdated: boolean;
+  /** Fyrden: its thread is resolved. */
+  resolved: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+};
+
+/** Input of `pulls.comments.delete`: Delete a review comment. */
+export type PullsCommentsDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+};
+
+/** Output of `pulls.comments.delete`. */
+export type PullsCommentsDeleteOutput = {
+  id: number;
+  state: "deleted";
+};
+
+/** Input of `pulls.threads.list`: List review threads. */
+export type PullsThreadsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.threads.list`. */
+export type PullsThreadsListOutput = {
+  threads: ({
+    id: number;
+    path: string;
+    side: "LEFT" | "RIGHT";
+    line: number;
+    start_line: number | null;
+    commit_id: string;
+    outdated: boolean;
+    resolved: boolean;
+    resolved_by: {
+      id: string;
+    } | null;
+    /** Its comments now. */
+    comments: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `pulls.threads.resolve`: Resolve a review thread. */
+export type PullsThreadsResolveInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The thread's id. */
+  thread_id: number;
+};
+
+/** Output of `pulls.threads.resolve`. */
+export type PullsThreadsResolveOutput = {
+  id: number;
+  path: string;
+  side: "LEFT" | "RIGHT";
+  line: number;
+  start_line: number | null;
+  commit_id: string;
+  outdated: boolean;
+  resolved: boolean;
+  resolved_by: {
+    id: string;
+  } | null;
+  /** Its comments now. */
+  comments: number;
+};
+
+/** Input of `pulls.threads.unresolve`: Unresolve a review thread. */
+export type PullsThreadsUnresolveInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The thread's id. */
+  thread_id: number;
+};
+
+/** Output of `pulls.threads.unresolve`. */
+export type PullsThreadsUnresolveOutput = {
+  id: number;
+  path: string;
+  side: "LEFT" | "RIGHT";
+  line: number;
+  start_line: number | null;
+  commit_id: string;
+  outdated: boolean;
+  resolved: boolean;
+  resolved_by: {
+    id: string;
+  } | null;
+  /** Its comments now. */
+  comments: number;
+};
+
+/** Input of `pulls.suggestions.apply`: Apply suggestions. */
+export type PullsSuggestionsApplyInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The comments whose suggestions to apply, 1-50. */
+  comment_ids: number[];
+  /** By default `Apply suggestions from code review`. */
+  commit_message?: string;
+};
+
+/** Output of `pulls.suggestions.apply`. */
+export type PullsSuggestionsApplyOutput = {
+  branch: string;
+  commit: {
+    /** A full commit SHA (40 hex digits). */
+    sha: string;
+    commit: {
+      message: string;
+      author: {
+        name: string;
+        email: string;
+        /** ISO 8601, UTC. */
+        date: string;
+      };
+      committer: {
+        name: string;
+        email: string;
+        /** ISO 8601, UTC. */
+        date: string;
+      };
+      tree: {
+        sha: string;
+      };
+      /** Whether the commit is signed with a key Fyrden knows: the platform's key for commits it made (file writes, generated repositories), or a key a user added for commits whose committer is that user's no-reply address. */
+      verification: {
+        verified: boolean;
+        /** `valid` (signed by a known key), `unsigned`, `unknown_key`, `bad_email` (a user's key, on a commit whose committer is not that user), `invalid`, `malformed_signature` or `unknown_signature_type`, as GitHub names them. */
+        reason: string;
+        /** The armored signature. */
+        signature: string | null;
+        /** What the signature covers: the commit without it. */
+        payload: string | null;
+        verified_at: string | null;
+      };
+    };
+    parents: {
+      /** A full commit SHA (40 hex digits). */
+      sha: string;
+    }[];
+  };
+  files: ({
+    path: string;
+    sha: string | null;
+  })[];
+};
+
+/** Input of `pulls.reviews.list`: List reviews. */
+export type PullsReviewsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.reviews.list`. */
+export type PullsReviewsListOutput = {
+  reviews: ({
+    id: number;
+    /** Who submitted it (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that submitted it for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+    body: string | null;
+    /** The head commit it reviewed: it counts for that commit only. */
+    commit_id: string;
+    /** Unix time in milliseconds. */
+    submitted_at: number;
+    /** Fyrden: who dismissed it, why and when; null unless `state` is DISMISSED. */
+    dismissal: {
+      by: string;
+      message: string;
+      /** Unix time in milliseconds. */
+      at: number;
+    } | null;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `pulls.reviews.get`: Get a review. */
+export type PullsReviewsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The review's id. */
+  review_id: number;
+};
+
+/** Output of `pulls.reviews.get`. */
+export type PullsReviewsGetOutput = {
+  id: number;
+  /** Who submitted it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that submitted it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+  body: string | null;
+  /** The head commit it reviewed: it counts for that commit only. */
+  commit_id: string;
+  /** Unix time in milliseconds. */
+  submitted_at: number;
+  /** Fyrden: who dismissed it, why and when; null unless `state` is DISMISSED. */
+  dismissal: {
+    by: string;
+    message: string;
+    /** Unix time in milliseconds. */
+    at: number;
+  } | null;
+};
+
+/** Input of `pulls.reviews.create`: Submit a review. */
+export type PullsReviewsCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The head commit reviewed: the pull request's `head.sha` when you read it. */
+  commit_id: string;
+  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+  body?: string;
+};
+
+/** Output of `pulls.reviews.create`. */
+export type PullsReviewsCreateOutput = {
+  id: number;
+  /** Who submitted it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that submitted it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+  body: string | null;
+  /** The head commit it reviewed: it counts for that commit only. */
+  commit_id: string;
+  /** Unix time in milliseconds. */
+  submitted_at: number;
+  /** Fyrden: who dismissed it, why and when; null unless `state` is DISMISSED. */
+  dismissal: {
+    by: string;
+    message: string;
+    /** Unix time in milliseconds. */
+    at: number;
+  } | null;
+};
+
+/** Input of `pulls.reviews.dismiss`: Dismiss a review. */
+export type PullsReviewsDismissInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The review's id. */
+  review_id: number;
+  /** Why. */
+  message: string;
+  event?: "DISMISS";
+};
+
+/** Output of `pulls.reviews.dismiss`. */
+export type PullsReviewsDismissOutput = {
+  id: number;
+  /** Who submitted it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that submitted it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+  body: string | null;
+  /** The head commit it reviewed: it counts for that commit only. */
+  commit_id: string;
+  /** Unix time in milliseconds. */
+  submitted_at: number;
+  /** Fyrden: who dismissed it, why and when; null unless `state` is DISMISSED. */
+  dismissal: {
+    by: string;
+    message: string;
+    /** Unix time in milliseconds. */
+    at: number;
+  } | null;
+};
+
+/** Input of `pulls.requested_reviewers.list`: List requested reviewers. */
+export type PullsRequestedReviewersListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+};
+
+/** Output of `pulls.requested_reviewers.list`. */
+export type PullsRequestedReviewersListOutput = {
+  users: {
+    id: string;
+    login: string;
+  }[];
+  teams: unknown[];
+};
+
+/** Input of `pulls.requested_reviewers.add`: Request reviewers. */
+export type PullsRequestedReviewersAddInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Handles of users and agents who can read the repository. */
+  reviewers: string[];
+  /** Team reviewers are not supported yet: empty or left out. */
+  team_reviewers?: unknown[];
+};
+
+/** Output of `pulls.requested_reviewers.add`. */
+export type PullsRequestedReviewersAddOutput = {
+  number: number;
+  state: "open" | "closed";
+  merged: boolean;
+  /** Fyrden: the repository the head branch is in (a fork in the same network); null for this one. */
+  head_repo_id: string | null;
+  /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
+  mergeable: boolean | null;
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  mergeable_state: "clean" | "dirty" | "draft" | "unknown";
+  draft: boolean;
+  /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
+  maintainer_can_modify: boolean;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  /** The branch with the changes. `refs/pull/{number}/head` points at `head.sha` and can be fetched. */
+  head: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** The branch the changes are for. */
+  base: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again. */
+  head_ref_deleted: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  /** Unix time in milliseconds. */
+  merged_at: number | null;
+  /** Once merged, the commit the base branch moved to. */
+  merge_commit_sha: string | null;
+  /** Who merged it (the user, when agents acted for one). */
+  merged_by: {
+    id: string;
+  } | null;
+};
+
+/** Input of `pulls.requested_reviewers.remove`: Remove requested reviewers. */
+export type PullsRequestedReviewersRemoveInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Handles of users and agents who can read the repository. */
+  reviewers: string[];
+  /** Team reviewers are not supported yet: empty or left out. */
+  team_reviewers?: unknown[];
+};
+
+/** Output of `pulls.requested_reviewers.remove`. */
+export type PullsRequestedReviewersRemoveOutput = {
+  number: number;
+  state: "open" | "closed";
+  merged: boolean;
+  /** Fyrden: the repository the head branch is in (a fork in the same network); null for this one. */
+  head_repo_id: string | null;
+  /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
+  mergeable: boolean | null;
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not worked out yet, or too large to work out here. */
+  mergeable_state: "clean" | "dirty" | "draft" | "unknown";
+  draft: boolean;
+  /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
+  maintainer_can_modify: boolean;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  /** The branch with the changes. `refs/pull/{number}/head` points at `head.sha` and can be fetched. */
+  head: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** The branch the changes are for. */
+  base: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again. */
+  head_ref_deleted: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  /** Unix time in milliseconds. */
+  merged_at: number | null;
+  /** Once merged, the commit the base branch moved to. */
+  merge_commit_sha: string | null;
+  /** Who merged it (the user, when agents acted for one). */
+  merged_by: {
+    id: string;
+  } | null;
+};
+
+/** Input of `issues.comments.list`: List comments. */
+export type IssuesCommentsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number (issues share these comments once they exist). */
+  issue_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `issues.comments.list`. */
+export type IssuesCommentsListOutput = {
+  comments: {
+    id: number;
+    /** The pull request it is on. */
+    issue_number: number;
+    /** Who wrote it (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    body: string;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+  }[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `issues.comments.create`: Create a comment. */
+export type IssuesCommentsCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number (issues share these comments once they exist). */
+  issue_number: number;
+  body: string;
+};
+
+/** Output of `issues.comments.create`. */
+export type IssuesCommentsCreateOutput = {
+  id: number;
+  /** The pull request it is on. */
+  issue_number: number;
+  /** Who wrote it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  body: string;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+};
+
+/** Input of `issues.comments.get`: Get a comment. */
+export type IssuesCommentsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+};
+
+/** Output of `issues.comments.get`. */
+export type IssuesCommentsGetOutput = {
+  id: number;
+  /** The pull request it is on. */
+  issue_number: number;
+  /** Who wrote it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  body: string;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+};
+
+/** Input of `issues.comments.update`: Update a comment. */
+export type IssuesCommentsUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  body: string;
+};
+
+/** Output of `issues.comments.update`. */
+export type IssuesCommentsUpdateOutput = {
+  id: number;
+  /** The pull request it is on. */
+  issue_number: number;
+  /** Who wrote it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that wrote it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  body: string;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+};
+
+/** Input of `issues.comments.delete`: Delete a comment. */
+export type IssuesCommentsDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+};
+
+/** Output of `issues.comments.delete`. */
+export type IssuesCommentsDeleteOutput = {
   id: number;
   state: "deleted";
 };
@@ -1235,6 +2986,150 @@ export type StarsListOutput = {
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
+};
+
+/** Input of `feed.list`: Get the activity feed. */
+export type FeedListInput = {
+  /** A previous answer's `next_cursor`; from the start without. */
+  since?: string;
+  /** Page size, 1-100. */
+  limit?: number;
+  /** Only items of this priority. */
+  priority?: "P0" | "P1";
+  /** Only items of this kind. */
+  kind?: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
+};
+
+/** Output of `feed.list`. */
+export type FeedListOutput = {
+  items: ({
+    /** The item's key: `<repository id>:<thread>:<kind>`. */
+    item_key: string;
+    repo: {
+      id: string;
+      /** owner/name */
+      full_name: string;
+    };
+    /** The thread within the repository, e.g. `pull/12`. */
+    thread_key: string;
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
+    subject: {
+      kind: "pull";
+      number: number;
+      title: string;
+    };
+    /** The repository's restore generation `version` counts in: a newer generation's versions are newer, whatever their numbers. */
+    epoch: number;
+    /** The thread's feed version the item is at; acknowledge with it and `epoch`. */
+    version: number;
+    /** `resolved`: nothing to act on any more. */
+    state: "open" | "resolved";
+    /** P0: act on this; P1: a thread you take part in. */
+    priority: "P0" | "P1";
+    /** Why it is in the feed: author, reviewer, mentioned, ... */
+    reasons: string[];
+    /** The last change was the owner's own action (or its agents'): no notification. */
+    silent: boolean;
+    /** What happened last: `comment`, `review_requested`, `merged`, ... */
+    action: string;
+    actor: string | null;
+    /** The actor's access to the repository when it acted. */
+    actor_trust: "write" | "read" | "none";
+    /** What the member the item displays says now (plain text, at most 280 characters), read from the repository; null when there is none or it is gone. */
+    excerpt: string | null;
+    /** For `activity`: the ids it gathers (comments, reviews), the greatest 100. */
+    members: string[];
+    /** Some members were left out. */
+    members_truncated: boolean;
+    /** When the last change happened, Unix time in milliseconds. */
+    event_at: number;
+    /** The epoch of the version last acknowledged; 0 for none. */
+    acked_epoch: number;
+    /** The version last acknowledged; 0 for none. */
+    acked_version: number;
+  })[];
+  /** Pass as `since` next: after the last item shown (where the answer started when none was). */
+  next_cursor: string;
+  /** The latest change the answer found that the caller may see; the same as `next_cursor` unless more pages follow. */
+  head_cursor: string;
+  /** Wait at least this long (milliseconds) before polling `GET /feed` again with `next_cursor` (a sync's `head_cursor`): 0 after a full page, as more may follow; else 30 seconds after an answer that showed something, or a sync, doubling with each answer in a row that showed nothing (the cursor counts them), up to 30 minutes. */
+  poll_after_ms: number;
+};
+
+/** Input of `feed.sync`: Sync the activity feed. */
+export type FeedSyncInput = Record<string, never>;
+
+/** Output of `feed.sync`. */
+export type FeedSyncOutput = {
+  items: ({
+    /** The item's key: `<repository id>:<thread>:<kind>`. */
+    item_key: string;
+    repo: {
+      id: string;
+      /** owner/name */
+      full_name: string;
+    };
+    /** The thread within the repository, e.g. `pull/12`. */
+    thread_key: string;
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
+    subject: {
+      kind: "pull";
+      number: number;
+      title: string;
+    };
+    /** The repository's restore generation `version` counts in: a newer generation's versions are newer, whatever their numbers. */
+    epoch: number;
+    /** The thread's feed version the item is at; acknowledge with it and `epoch`. */
+    version: number;
+    /** `resolved`: nothing to act on any more. */
+    state: "open" | "resolved";
+    /** P0: act on this; P1: a thread you take part in. */
+    priority: "P0" | "P1";
+    /** Why it is in the feed: author, reviewer, mentioned, ... */
+    reasons: string[];
+    /** The last change was the owner's own action (or its agents'): no notification. */
+    silent: boolean;
+    /** What happened last: `comment`, `review_requested`, `merged`, ... */
+    action: string;
+    actor: string | null;
+    /** The actor's access to the repository when it acted. */
+    actor_trust: "write" | "read" | "none";
+    /** What the member the item displays says now (plain text, at most 280 characters), read from the repository; null when there is none or it is gone. */
+    excerpt: string | null;
+    /** For `activity`: the ids it gathers (comments, reviews), the greatest 100. */
+    members: string[];
+    /** Some members were left out. */
+    members_truncated: boolean;
+    /** When the last change happened, Unix time in milliseconds. */
+    event_at: number;
+    /** The epoch of the version last acknowledged; 0 for none. */
+    acked_epoch: number;
+    /** The version last acknowledged; 0 for none. */
+    acked_version: number;
+  })[];
+  complete: boolean;
+  /** Pass as `since` to `GET /feed` for what changes next. */
+  head_cursor: string;
+  /** Wait at least this long (milliseconds) before polling `GET /feed` again with `next_cursor` (a sync's `head_cursor`): 0 after a full page, as more may follow; else 30 seconds after an answer that showed something, or a sync, doubling with each answer in a row that showed nothing (the cursor counts them), up to 30 minutes. */
+  poll_after_ms: number;
+};
+
+/** Input of `feed.ack`: Acknowledge a feed item. */
+export type FeedAckInput = {
+  item_key: string;
+  epoch: number;
+  version: number;
+};
+
+/** Output of `feed.ack`. */
+export type FeedAckOutput = {
+  item_key: string;
+  /** The item's current epoch. */
+  epoch: number;
+  /** The item's current version. */
+  version: number;
+  acked_epoch: number;
+  acked_version: number;
 };
 
 /** Input of `quotas.user.get`: Get your quota. */
@@ -1901,7 +3796,7 @@ export type ReposContentsPutInput = {
   sha?: string;
   /** The branch to commit to; the default branch when absent. */
   branch?: string;
-  /** The commit's author; the authenticated principal when absent (always the committer). */
+  /** The commit's author; when absent, the agent acting for you, or you. The committer is always the platform, which signs the commit; an agent acting for a user adds a Co-authored-by trailer naming the user. */
   author?: {
     name: string;
     email: string;
@@ -1971,7 +3866,7 @@ export type ReposContentsDeleteInput = {
   sha: string;
   /** The branch to commit to; the default branch when absent. */
   branch?: string;
-  /** The commit's author; the authenticated principal when absent (always the committer). */
+  /** The commit's author; when absent, the agent acting for you, or you. The committer is always the platform, which signs the commit; an agent acting for a user adds a Co-authored-by trailer naming the user. */
   author?: {
     name: string;
     email: string;
@@ -2032,7 +3927,7 @@ export type ReposFileCommitsCreateInput = {
   expected_head?: string;
   /** The commit message. */
   message: string;
-  /** The commit's author; the authenticated principal when absent (always the committer). */
+  /** The commit's author; when absent, the agent acting for you, or you. The committer is always the platform, which signs the commit; an agent acting for a user adds a Co-authored-by trailer naming the user. */
   author?: {
     name: string;
     email: string;
@@ -2656,9 +4551,55 @@ export const OPERATIONS = {
   "repos.rulesets.create": { method: "POST", path: "/repos/{owner}/{repo}/rulesets", pathParams: ["owner","repo"], idempotent: true },
   "repos.rulesets.update": { method: "PUT", path: "/repos/{owner}/{repo}/rulesets/{ruleset_id}", pathParams: ["owner","repo","ruleset_id"], idempotent: true },
   "repos.rulesets.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/rulesets/{ruleset_id}", pathParams: ["owner","repo","ruleset_id"], idempotent: true },
+  "repos.hooks.list": { method: "GET", path: "/repos/{owner}/{repo}/hooks", pathParams: ["owner","repo"], idempotent: false },
+  "repos.hooks.create": { method: "POST", path: "/repos/{owner}/{repo}/hooks", pathParams: ["owner","repo"], idempotent: true },
+  "repos.hooks.get": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}", pathParams: ["owner","repo","hook_id"], idempotent: false },
+  "repos.hooks.update": { method: "PATCH", path: "/repos/{owner}/{repo}/hooks/{hook_id}", pathParams: ["owner","repo","hook_id"], idempotent: true },
+  "repos.hooks.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/hooks/{hook_id}", pathParams: ["owner","repo","hook_id"], idempotent: true },
+  "repos.hooks.pings.create": { method: "POST", path: "/repos/{owner}/{repo}/hooks/{hook_id}/pings", pathParams: ["owner","repo","hook_id"], idempotent: true },
+  "repos.hooks.secret.rotate": { method: "POST", path: "/repos/{owner}/{repo}/hooks/{hook_id}/secret", pathParams: ["owner","repo","hook_id"], idempotent: true },
+  "repos.hooks.secret.drop": { method: "DELETE", path: "/repos/{owner}/{repo}/hooks/{hook_id}/secret/previous", pathParams: ["owner","repo","hook_id"], idempotent: true },
+  "repos.hooks.deliveries.list": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries", pathParams: ["owner","repo","hook_id"], idempotent: false, items: "deliveries" },
+  "repos.hooks.deliveries.get": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: false, items: "attempts_made" },
+  "repos.hooks.deliveries.redeliver": { method: "POST", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: true },
+  "admin.webhooks.reseal": { method: "POST", path: "/admin/webhooks/reseal", pathParams: [], idempotent: true },
+  "pulls.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: false, items: "pull_requests" },
+  "pulls.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: true },
+  "pulls.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: false },
+  "pulls.update": { method: "PATCH", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.merge": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/merge", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.conflicts.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/conflicts", pathParams: ["owner","repo","pull_number"], idempotent: false },
+  "pulls.conflicts.resolve": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/conflicts", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.branch.update": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/update-branch", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.files.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/files", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "files" },
+  "pulls.commits.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/commits", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "commits" },
+  "pulls.comments.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/comments", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "comments" },
+  "pulls.comments.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/comments", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.comments.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: false },
+  "pulls.comments.update": { method: "PATCH", path: "/repos/{owner}/{repo}/pulls/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: true },
+  "pulls.comments.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: true },
+  "pulls.threads.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/threads", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "threads" },
+  "pulls.threads.resolve": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/threads/{thread_id}/resolution", pathParams: ["owner","repo","pull_number","thread_id"], idempotent: true },
+  "pulls.threads.unresolve": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/{pull_number}/threads/{thread_id}/resolution", pathParams: ["owner","repo","pull_number","thread_id"], idempotent: true },
+  "pulls.suggestions.apply": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/suggestions/apply", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.reviews.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "reviews" },
+  "pulls.reviews.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}", pathParams: ["owner","repo","pull_number","review_id"], idempotent: false },
+  "pulls.reviews.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.reviews.dismiss": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals", pathParams: ["owner","repo","pull_number","review_id"], idempotent: true },
+  "pulls.requested_reviewers.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: false },
+  "pulls.requested_reviewers.add": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.requested_reviewers.remove": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "issues.comments.list": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}/comments", pathParams: ["owner","repo","issue_number"], idempotent: false, items: "comments" },
+  "issues.comments.create": { method: "POST", path: "/repos/{owner}/{repo}/issues/{issue_number}/comments", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.comments.get": { method: "GET", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: false },
+  "issues.comments.update": { method: "PATCH", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: true },
+  "issues.comments.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: true },
   "stars.put": { method: "PUT", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.delete": { method: "DELETE", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.list": { method: "GET", path: "/user/starred", pathParams: [], idempotent: false, items: "repos" },
+  "feed.list": { method: "GET", path: "/feed", pathParams: [], idempotent: false },
+  "feed.sync": { method: "GET", path: "/feed/sync", pathParams: [], idempotent: false },
+  "feed.ack": { method: "POST", path: "/feed/ack", pathParams: [], idempotent: true },
   "quotas.user.get": { method: "GET", path: "/user/quota", pathParams: [], idempotent: false },
   "quotas.org.get": { method: "GET", path: "/orgs/{org}/quota", pathParams: ["org"], idempotent: false },
   "admin.quotas.set": { method: "PUT", path: "/admin/accounts/{account}/quota", pathParams: ["account"], idempotent: true },
@@ -2780,12 +4721,104 @@ export interface Operations {
   "repos.rulesets.update": { input: ReposRulesetsUpdateInput; output: ReposRulesetsUpdateOutput };
   /** Delete a ruleset. Removes a ruleset. Administrators only. */
   "repos.rulesets.delete": { input: ReposRulesetsDeleteInput; output: ReposRulesetsDeleteOutput };
+  /** List repository webhooks. The repository's webhooks. Administrators only. */
+  "repos.hooks.list": { input: ReposHooksListInput; output: ReposHooksListOutput };
+  /** Create a repository webhook. Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, or `*`. Administrators only. */
+  "repos.hooks.create": { input: ReposHooksCreateInput; output: ReposHooksCreateOutput };
+  /** Get a repository webhook. One webhook. Administrators only. */
+  "repos.hooks.get": { input: ReposHooksGetInput; output: ReposHooksGetOutput };
+  /** Update a repository webhook. Changes a webhook's URL, events or state (turning it on clears why the server turned it off). Deliveries waiting for an attempt go to the new URL. Administrators only. */
+  "repos.hooks.update": { input: ReposHooksUpdateInput; output: ReposHooksUpdateOutput };
+  /** Delete a repository webhook. Removes a webhook; its waiting deliveries are cancelled. Administrators only. */
+  "repos.hooks.delete": { input: ReposHooksDeleteInput; output: ReposHooksDeleteOutput };
+  /** Ping a repository webhook. Sends the webhook a `ping` delivery. Administrators only. */
+  "repos.hooks.pings.create": { input: ReposHooksPingsCreateInput; output: ReposHooksPingsCreateOutput };
+  /** Rotate a webhook's secret. Fyrden: a new signing secret (in this answer only). Deliveries are signed with both the new and the previous secret for a week, or until the previous one is dropped. Administrators only. */
+  "repos.hooks.secret.rotate": { input: ReposHooksSecretRotateInput; output: ReposHooksSecretRotateOutput };
+  /** Drop a webhook's previous secret. Fyrden: stops signing deliveries with the secret a rotation replaced. Administrators only. */
+  "repos.hooks.secret.drop": { input: ReposHooksSecretDropInput; output: ReposHooksSecretDropOutput };
+  /** List deliveries for a repository webhook. The webhook's deliveries of the last 30 days, newest first. Administrators only. */
+  "repos.hooks.deliveries.list": { input: ReposHooksDeliveriesListInput; output: ReposHooksDeliveriesListOutput };
+  /** Get a delivery for a repository webhook. One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only. */
+  "repos.hooks.deliveries.get": { input: ReposHooksDeliveriesGetInput; output: ReposHooksDeliveriesGetOutput };
+  /** Redeliver a delivery for a repository webhook. Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), once it has made 50 attempts (422 `too_many_attempts`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only. */
+  "repos.hooks.deliveries.redeliver": { input: ReposHooksDeliveriesRedeliverInput; output: ReposHooksDeliveriesRedeliverOutput };
+  /** Seal webhook secrets with the current key. Fyrden: seals again, with `WEBHOOKS_KEY`, webhook secrets sealed with a retired key, a batch of repositories at a time (call again with `cursor` until `next_cursor` is null and `remaining` is 0); `unreadable` counts secrets whose key is gone (rotate those hooks' secrets). Instance administrators only. */
+  "admin.webhooks.reseal": { input: AdminWebhooksResealInput; output: AdminWebhooksResealOutput };
+  /** List pull requests. The repository's pull requests, newest first. */
+  "pulls.list": { input: PullsListInput; output: PullsListOutput };
+  /** Create a pull request. Proposes merging one branch of the repository into another. Anyone who can read the repository may open one. Refused when the head has no commits the base lacks, or when a pull request between the two branches is already open. While open, `refs/pull/{number}/head` follows the head branch. The head may be a branch of a fork in the same network (`owner:branch`): its revision is imported first, and later pushes to it reach the pull request shortly after. */
+  "pulls.create": { input: PullsCreateInput; output: PullsCreateOutput };
+  /** Get a pull request. One pull request. */
+  "pulls.get": { input: PullsGetInput; output: PullsGetOutput };
+  /** Update a pull request. Changes the title or body, retargets it onto another base branch, marks it a draft or ready, closes or reopens it, or lets the base's maintainers change a head branch in a fork; fields left out are kept, and all of it happens or none. The author may do any of it to its own pull request; on anyone else's, triage closes and reopens and write does the rest, except `maintainer_can_modify`, which only the author sets. Reopening needs the head branch to exist. */
+  "pulls.update": { input: PullsUpdateInput; output: PullsUpdateOutput };
+  /** Merge a pull request. Merges an open pull request that is not a draft into its base branch: `merge` makes a merge commit of the base branch's tip and the head, `squash` one commit on the base branch with the head's changes (by the pull request's author). The commit is made and signed by the server; the base branch's rulesets apply, with the pull request's reviews and last push. Refused (405) on conflicts, or when the base branch moved while merging; refused (409) when `sha` is not the head. `rebase` replays the pull request's commits (at most 250, none a merge commit) one by one onto the base branch's tip and moves the branch to the last: their authors, author dates and messages are kept, the server is their committer and signs each. Empty commits follow `git rebase`: a commit empty from the start is kept, one whose changes are already in the base is dropped; a commit the base changed further, or a rename in the base of a file the pull request edits, is a conflict. A rebase too long for one request answers 409 `merge_in_progress` and goes on in the background: send the request again (a finished rebase answers its merge) or watch the pull request. */
+  "pulls.merge": { input: PullsMergeInput; output: PullsMergeOutput };
+  /** Get a pull request's conflicts. Fyrden: the conflicts of merging the base branch's tip into an open pull request's head (none when they merge cleanly). Files whose lines conflict in text (`content`, `add_add`) are `editable`: their merged content is given with git's conflict markers, the head's side first, each side labelled with its branch (`<<<<<<< <head branch>`, `=======`, `>>>>>>> <base branch>`), up to 50 files and 4 MiB in all. Any other conflict (a file deleted on one side, a mode, a symlink, a submodule, a binary or too large file, a file and a directory; renames are not followed) is listed but needs a merge made by hand. Resolve them with `conflict_snapshot`, which names the base tip and head they were read at. A head in a fork is read as the base last imported it. */
+  "pulls.conflicts.get": { input: PullsConflictsGetInput; output: PullsConflictsGetOutput };
+  /** Resolve a pull request's conflicts. Fyrden: merges the base branch's tip into the head branch with the given contents for every file whose lines conflict, as one merge commit (parents: the head, then the base tip) made and signed by the server. Write access; the head branch's rulesets apply. A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's `maintainer_can_modify` (the author still writing the fork); that repository's rulesets apply. Refused when either branch moved since the conflicts were read (409 `head_moved`, `base_moved`), when a conflict cannot be resolved here (422 `not_editable`), when a conflicted file is missing (422 `unresolved`), or when a given file has no conflict (422 `not_conflicted`). Contents that still hold conflict markers are accepted and named in `markers`. */
+  "pulls.conflicts.resolve": { input: PullsConflictsResolveInput; output: PullsConflictsResolveOutput };
+  /** Update a pull request branch. Merges the base branch's tip into an open pull request's head branch (a merge commit made and signed by the server; parents: the head, then the base tip). Write access; the head branch's rulesets apply. A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's `maintainer_can_modify` (the author still writing the fork); that repository's rulesets apply. Refused (422) when it conflicts (resolve the conflicts instead) or when the head already contains the base tip; refused (409) when `expected_head_sha` is not the head. Done before the answer, which is GitHub's 202. */
+  "pulls.branch.update": { input: PullsBranchUpdateInput; output: PullsBranchUpdateOutput };
+  /** List pull request files. The files a pull request changes, compared from the merge base of its base branch and head to its head (as GitHub's three-dot comparison), in path order, with each file's patch. At most 3,000 files are listed; renames with unchanged content are found. A closed or merged pull request is compared from its base branch as it was when it closed or merged (`base.sha`), whatever the branch does after. Pages keep the comparison they started with: the cursor carries `merge_base_sha` and `head_sha`. */
+  "pulls.files.list": { input: PullsFilesListInput; output: PullsFilesListOutput };
+  /** List pull request commits. The commits a pull request's head has that its base branch does not, oldest first; at most 250 (GitHub's limit). A closed or merged pull request is compared from its base branch as it was when it closed or merged (`base.sha`). */
+  "pulls.commits.list": { input: PullsCommitsListInput; output: PullsCommitsListOutput };
+  /** List review comments. The comments on a pull request's diff, oldest first. */
+  "pulls.comments.list": { input: PullsCommentsListInput; output: PullsCommentsListOutput };
+  /** Create a review comment. Comments on lines of a file in a pull request's diff, starting a thread; with `in_reply_to`, replies in that comment's thread instead (no anchor then). `commit_id` must be a head the pull request has had; `side` RIGHT comments on that commit's file, LEFT on the merge base's; the file must have the lines (whether they are part of the diff is not checked). Anyone who can read the repository may comment. */
+  "pulls.comments.create": { input: PullsCommentsCreateInput; output: PullsCommentsCreateOutput };
+  /** Get a review comment. One comment on a pull request's diff. */
+  "pulls.comments.get": { input: PullsCommentsGetInput; output: PullsCommentsGetOutput };
+  /** Update a review comment. Replaces a diff comment's body. Its author may edit its own; write access and above, anyone's. */
+  "pulls.comments.update": { input: PullsCommentsUpdateInput; output: PullsCommentsUpdateOutput };
+  /** Delete a review comment. Deletes a diff comment; its thread goes with its last comment. Its author may delete its own; write access and above, anyone's. */
+  "pulls.comments.delete": { input: PullsCommentsDeleteInput; output: PullsCommentsDeleteOutput };
+  /** List review threads. Fyrden: a pull request's review threads, oldest first, resolved or not. */
+  "pulls.threads.list": { input: PullsThreadsListInput; output: PullsThreadsListOutput };
+  /** Resolve a review thread. Fyrden: marks a review thread resolved (nothing changes when it already is). The pull request's author, or write access and above. A ruleset may require every thread resolved before a merge. */
+  "pulls.threads.resolve": { input: PullsThreadsResolveInput; output: PullsThreadsResolveOutput };
+  /** Unresolve a review thread. Fyrden: marks a review thread unresolved (nothing changes when it already is). The pull request's author, or write access and above. A ruleset may require every thread resolved before a merge. */
+  "pulls.threads.unresolve": { input: PullsThreadsUnresolveInput; output: PullsThreadsUnresolveOutput };
+  /** Apply suggestions. Fyrden: applies the suggested changes of diff comments (a ```suggestion block each) to the pull request's head branch as one commit, made and signed by the server, with the suggestions' authors as co-authors; their threads are resolved. Each comment must be on the head side at the current head; suggestions to one file must not overlap; files of 1 MiB at most. Write access; the branch's rulesets apply, and it moves only from the head the comments are on (409 `head_moved`). A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's `maintainer_can_modify` (the author still writing the fork); that repository's rulesets apply. */
+  "pulls.suggestions.apply": { input: PullsSuggestionsApplyInput; output: PullsSuggestionsApplyOutput };
+  /** List reviews. A pull request's reviews, in the order submitted. */
+  "pulls.reviews.list": { input: PullsReviewsListInput; output: PullsReviewsListOutput };
+  /** Get a review. One review of a pull request. */
+  "pulls.reviews.get": { input: PullsReviewsGetInput; output: PullsReviewsGetOutput };
+  /** Submit a review. Approves, requests changes or comments on a pull request at `commit_id`, a head it has had: the review counts for that commit only. Anyone who can read the repository may review an open pull request; whether a review counts toward a merge (write access or above, not the author, people only unless the ruleset allows agents) is decided when merging. The author may only comment. Requesting changes or commenting needs a body. */
+  "pulls.reviews.create": { input: PullsReviewsCreateInput; output: PullsReviewsCreateOutput };
+  /** Dismiss a review. Dismisses an approval or a request for changes, with a reason: it no longer counts toward or blocks a merge. Needs write access. */
+  "pulls.reviews.dismiss": { input: PullsReviewsDismissInput; output: PullsReviewsDismissOutput };
+  /** List requested reviewers. Who a review of the pull request is requested of and has not reviewed yet. */
+  "pulls.requested_reviewers.list": { input: PullsRequestedReviewersListInput; output: PullsRequestedReviewersListOutput };
+  /** Request reviewers. Requests a review of users or agents who can read the repository (not the author). The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once; a request ends when that reviewer submits a review. */
+  "pulls.requested_reviewers.add": { input: PullsRequestedReviewersAddInput; output: PullsRequestedReviewersAddOutput };
+  /** Remove requested reviewers. Withdraws review requests; reviewers not requested are ignored. */
+  "pulls.requested_reviewers.remove": { input: PullsRequestedReviewersRemoveInput; output: PullsRequestedReviewersRemoveOutput };
+  /** List comments. A pull request's conversation comments, oldest first. */
+  "issues.comments.list": { input: IssuesCommentsListInput; output: IssuesCommentsListOutput };
+  /** Create a comment. Adds a comment to a pull request's conversation, open or closed. Anyone who can read the repository may comment. */
+  "issues.comments.create": { input: IssuesCommentsCreateInput; output: IssuesCommentsCreateOutput };
+  /** Get a comment. One conversation comment. */
+  "issues.comments.get": { input: IssuesCommentsGetInput; output: IssuesCommentsGetOutput };
+  /** Update a comment. Replaces a comment's body. Its author may edit its own; write access and above, anyone's. */
+  "issues.comments.update": { input: IssuesCommentsUpdateInput; output: IssuesCommentsUpdateOutput };
+  /** Delete a comment. Deletes a comment. Its author may delete its own; write access and above, anyone's. */
+  "issues.comments.delete": { input: IssuesCommentsDeleteInput; output: IssuesCommentsDeleteOutput };
   /** Star a repository. Stars a repository the caller can read. Starring one already starred changes nothing. The token also needs `metadata:read` for the repository. */
   "stars.put": { input: StarsPutInput; output: StarsPutOutput };
   /** Unstar a repository. Takes the caller's star off a repository it can read. Unstarring one not starred changes nothing. */
   "stars.delete": { input: StarsDeleteInput; output: StarsDeleteOutput };
   /** List starred repositories. Lists the repositories the caller starred, most recently starred first. Repositories the caller or its token can no longer read are left out, so a page can hold fewer than `per_page`; keep following `next_cursor` until it is null. */
   "stars.list": { input: StarsListInput; output: StarsListOutput };
+  /** Get the activity feed. The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's `next_cursor` as `since` for what changed after it; a changed item comes again, so keep the latest copy by `item_key`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short, and cursors name only items the caller was shown. An answer checks at most 100 repositories and reads at most 1,000 items, so a page can end early, even empty; the items of repositories the feed's owner itself cannot read now are then forgotten, so a later answer gets past them. Poll by `poll_after_ms`: while nothing changes the wait grows to 30 minutes, and an answer that shows something brings it back to 30 seconds. A cursor older than the retention (7 days, 5,000 items) or of another epoch is refused with 410 `cursor_expired`: start over from `GET /feed/sync`. The answer carries an ETag; with `If-None-Match` an unchanged one is 304. */
+  "feed.list": { input: FeedListInput; output: FeedListOutput };
+  /** Sync the activity feed. The feed's current state, to start from or start over: open P0 items, then P1 items of the last 7 days, newest first (500 at most), and the cursor to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. `complete` is false when more were left out, or when not every repository could be checked (at most 100 an answer): `head_cursor` is then the feed's start. */
+  "feed.sync": { input: FeedSyncInput; output: FeedSyncOutput };
+  /** Acknowledge a feed item. Records that the feed's owner has seen an item at a version, its `epoch` and `version` (every reader of the feed shares it, and the item comes again in `GET /feed`). Versions order by epoch, then version. A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing. */
+  "feed.ack": { input: FeedAckInput; output: FeedAckOutput };
   /** Get your quota. The authenticated user's quota: how many repositories it may have and how many bytes their pushes may store, and how much of each is used. A deleted repository's bytes are free again once its deletion finishes. */
   "quotas.user.get": { input: QuotasUserGetInput; output: QuotasUserGetOutput };
   /** Get an organization's quota. An organization's quota and its use, for its members. */

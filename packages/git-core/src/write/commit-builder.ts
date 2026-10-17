@@ -177,7 +177,7 @@ export async function buildCommit(input: BuildCommitInput): Promise<BuiltCommit>
       else entries.set(key, { mode: FILE_MODES.tree, name, oid: tree });
     }
     if (entries.size === 0) return null;
-    return store("tree", encodeTree([...entries.values()].map(canonical)));
+    return store("tree", encodeTree([...entries.values()].map(canonicalEntry)));
   };
 
   const tree = (await apply(root, input.baseTree, [])) ?? (await store("tree", encodeTree([])));
@@ -207,7 +207,7 @@ export async function buildCommit(input: BuildCommitInput): Promise<BuiltCommit>
  * file is 100755 when executable by its owner, else 100644, so a legacy
  * mode such as 100664 in an untouched sibling is rewritten as git would.
  */
-function canonical(entry: TreeEntry): TreeEntry {
+export function canonicalEntry(entry: TreeEntry): TreeEntry {
   if ((entry.mode & 0o170000) !== 0o100000) return entry;
   const mode = entry.mode & 0o100 ? FILE_MODES.executable : FILE_MODES.file;
   return mode === entry.mode ? entry : { ...entry, mode };

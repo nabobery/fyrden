@@ -13,6 +13,43 @@ export {
   withoutTrailingSlashes,
 } from "./client/fetch-client.js";
 export type { ClientRequest, ClientResponse, HttpTransport } from "./client/transport.js";
+export { diffFile, type FileDiff } from "./diff/file-diff.js";
+export { DEFAULT_CONTEXT_LINES, type Hunk, type HunkLine, hunksOf } from "./diff/hunks.js";
+export {
+  DEFAULT_MAX_DIFF_COST,
+  diffSequences,
+  type Edit,
+  type EditKind,
+  type LineDiff,
+} from "./diff/line-diff.js";
+export {
+  type FileHeader,
+  type FileStatus,
+  formatFileHeader,
+  formatHunks,
+  patchText,
+  quotePath,
+} from "./diff/patch.js";
+export { type DiffEntry, findExactRenames } from "./diff/rename.js";
+export {
+  BINARY_SNIFF_BYTES,
+  DEFAULT_MAX_LINES,
+  internLines,
+  isBinary,
+  type Lines,
+  latin1,
+  lineAt,
+  splitLines,
+} from "./diff/text.js";
+export {
+  DEFAULT_MAX_PATH_BYTES,
+  DEFAULT_MAX_TREES,
+  diffTrees,
+  type TreeChange,
+  type TreeChangeStatus,
+  TreeDiffLimitError,
+  type TreeDiffOptions,
+} from "./diff/tree-diff.js";
 export { BitSet } from "./graph/bitset.js";
 export { addPendingCommits } from "./graph/commit-graph.js";
 export type { WalkOptions } from "./graph/commit-walk.js";
@@ -47,6 +84,32 @@ export {
   Sha1CollisionError,
   type Sha1Options,
 } from "./hash/sha1.js";
+export { type MergeChunk, type MergeResult, merge3 } from "./merge/diff3.js";
+export {
+  type ConflictRegion,
+  type FileMerge,
+  mergeFiles,
+  withConflictMarkers,
+} from "./merge/file-merge.js";
+export {
+  type ConflictKind,
+  type LinesConflict,
+  MergeBudget,
+  type MergeConflict,
+  MergeLimitError,
+  mergeTrees,
+  type NewObject,
+  type ObjectSource,
+  type Side,
+  type TreeMerge,
+  type TreeMergeOptions,
+} from "./merge/merge-trees.js";
+export {
+  type BaseTree,
+  baseTreeOf,
+  type History,
+  MAX_VIRTUAL_DEPTH,
+} from "./merge/virtual-base.js";
 export { type Commit, encodeCommit, parseCommit } from "./object/commit.js";
 export {
   FSCK_SEVERITY,
@@ -78,7 +141,9 @@ export {
   parseOidHex,
   zeroOid,
 } from "./object/oid.js";
+export { type Replay, replayCommit } from "./object/replay.js";
 export { encodeTag, parseTag, type Tag } from "./object/tag.js";
+export { appendTrailers } from "./object/trailers.js";
 export {
   compareTreeEntries,
   encodeTree,

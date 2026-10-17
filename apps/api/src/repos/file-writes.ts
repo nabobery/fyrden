@@ -6,6 +6,15 @@ import type {
   Output,
   putContents,
 } from "@fyrden/api-contract";
+import {
+  type CommitIdentity,
+  type CommitParty,
+  coAuthorTrailers,
+  type GitPerson,
+  noReplyPerson,
+  serverCommitIdentity,
+} from "@fyrden/domain";
+import { appendTrailers } from "@fyrden/git-core";
 import type { Browsed } from "../do/repo/browse.js";
 import {
   FILE_WRITE_POLICY,
@@ -78,12 +87,71 @@ class ContentBudget {
   }
 }
 
-/** The committer: the caller, with a no-reply address on this host (as GitHub's). */
-export function committerOf(ctx: OpContext) {
-  return {
-    name: ctx.auth.principalHandle ?? ctx.auth.principalId,
-    email: `${ctx.auth.principalId}@users.noreply.${ctx.requestHost}`,
-  };
+/**
+ * Who a commit the caller has the server make is by: the platform commits
+ * (it signs), the acting agent or else the caller authors, and a person an
+ * agent acts for is named as co-author.
+ */
+export async function commitIdentityOf(ctx: OpContext): Promise<CommitIdentity> {
+  const [agentId] = ctx.auth.act;
+  let actingAgent: CommitParty | null = null;
+  if (agentId !== undefined) {
+    ctx.metrics.count("d1.query", { db: "directory", op: "principal_handle" });
+    const row = await ctx.env.DIRECTORY.prepare("SELECT handle FROM principals WHERE id = ?")
+      .bind(agentId)
+      .first<{ handle: string | null }>();
+    actingAgent = { id: agentId, handle: row?.handle ?? null };
+  }
+  return serverCommitIdentity({
+    host: ctx.requestHost,
+    principal: { id: ctx.auth.principalId, handle: ctx.auth.principalHandle },
+    actingAgent,
+  });
+}
+
+/** The no-reply identities of `ids` (as co-authors), in one directory query. */
+export async function noReplyPeople(ctx: OpContext, ids: readonly string[]): Promise<GitPerson[]> {
+  if (ids.length === 0) return [];
+  ctx.metrics.count("d1.query", { db: "directory", op: "principal_handle" });
+  const { results } = await ctx.env.DIRECTORY.prepare(
+    `SELECT id, handle FROM principals WHERE id IN (${ids.map(() => "?").join(", ")})`,
+  )
+    .bind(...ids)
+    .all<{ id: string; handle: string | null }>();
+  return ids.map((id) =>
+    noReplyPerson(
+      { id, handle: results.find((r) => r.id === id)?.handle ?? null },
+      ctx.requestHost,
+    ),
+  );
+}
+
+/**
+ * The identity of a commit the server makes for someone other than the
+ * caller (a squashed pull request is its author's): `principalId`, with
+ * `agentId` acting for it under a delegation (null for none).
+ */
+export async function commitIdentityFor(
+  ctx: OpContext,
+  principalId: string,
+  agentId: string | null,
+): Promise<CommitIdentity> {
+  const ids = agentId === null ? [principalId] : [principalId, agentId];
+  ctx.metrics.count("d1.query", { db: "directory", op: "principal_handle" });
+  const { results } = await ctx.env.DIRECTORY.prepare(
+    `SELECT id, handle FROM principals WHERE id IN (${ids.map(() => "?").join(", ")})`,
+  )
+    .bind(...ids)
+    .all<{ id: string; handle: string | null }>();
+  const party = (id: string): CommitParty => ({
+    id,
+    handle: results.find((r) => r.id === id)?.handle ?? null,
+  });
+  return serverCommitIdentity({
+    host: ctx.requestHost,
+    principal: party(principalId),
+    actingAgent: agentId === null ? null : party(agentId),
+  });
 }
 
 async function write(
@@ -92,7 +160,14 @@ async function write(
   repo: string,
   input: Omit<FileWriteInput, "principal" | "tokenId" | "repoId" | "committer">,
 ): Promise<FileWriteResult> {
+  // Checked before a trailer is added: a trailer alone is no message.
+  if (input.message.trim() === "")
+    throw new OperationError(422, "invalid_input", "A commit needs a message.");
+  // git stops reading a message at a NUL (and fsck warns of one).
+  if (input.message.includes("\0"))
+    throw new OperationError(422, "invalid_input", "A commit message must not contain NUL.");
   const entry = await repoFor(ctx, owner, repo, "contents:write");
+  const identity = await commitIdentityOf(ctx);
   ctx.metrics.count("do.request", { class: "RepoDO", method: "writeFiles" });
   return written(
     await ctx.env.REPO.getByName(entry.id).writeFiles({
@@ -101,7 +176,9 @@ async function write(
       tokenId: ctx.auth.id,
       grantId: ctx.auth.grantId,
       repoId: entry.id,
-      committer: committerOf(ctx),
+      committer: identity.committer,
+      author: input.author ?? identity.author,
+      message: appendTrailers(input.message, coAuthorTrailers(input.message, identity.coAuthors)),
       requestId: ctx.requestId ?? null,
     }),
   );

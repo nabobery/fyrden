@@ -1,7 +1,7 @@
 import { Link, redirect } from "react-router";
 import { Markdown } from "../components/markdown.js";
 import { apiGet } from "../lib/api.server.js";
-import { dirOf, renderMarkdown } from "../lib/markdown.js";
+import { dirOf } from "../lib/markdown-place.js";
 import { refAndPath } from "../lib/target.js";
 import { type Contents, decodeText, encodePath } from "../lib/types.js";
 import type { Route } from "./+types/repo.blob";
@@ -36,19 +36,20 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     size: contents.type === "file" ? contents.size : null,
     target: contents.type === "symlink" ? contents.target : null,
     text: text ?? null,
-    html:
+    // Rendered in the browser (see components/markdown.tsx), with its links into the repository.
+    markdownAt:
       text !== undefined && /\.(md|markdown)$/i.test(path)
-        ? renderMarkdown(text, {
+        ? {
             base: `/${params.owner}/${params.repo}`,
             ref: encodeURIComponent(ref),
             dir: dirOf(path),
-          })
+          }
         : null,
   };
 }
 
 export default function Blob({ loaderData }: Route.ComponentProps) {
-  const { owner, repo, ref, path, kind, size, target, text, html } = loaderData;
+  const { owner, repo, ref, path, kind, size, target, text, markdownAt } = loaderData;
   const base = `/${owner}/${repo}`;
   const at = `${encodeURIComponent(ref)}/${encodePath(path)}`;
   return (
@@ -78,9 +79,9 @@ export default function Blob({ loaderData }: Route.ComponentProps) {
         <p>
           A symbolic link to <code>{target}</code>
         </p>
-      ) : html !== null ? (
+      ) : text !== null && markdownAt !== null ? (
         <div className="panel">
-          <Markdown html={html} />
+          <Markdown source={text} at={markdownAt} />
         </div>
       ) : text !== null ? (
         <pre>
