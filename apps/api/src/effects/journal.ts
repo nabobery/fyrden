@@ -79,6 +79,16 @@ export interface EffectPolicy {
   readonly sweepPage: number;
   /** Calls to other services one sweep makes at most, its claims and marks included (see `effectCalls`). */
   readonly sweepCalls: number;
+  /**
+   * Effects one sweep delivers at most, whatever its calls allow: what a
+   * run delivers costs CPU time as well as calls (see `EFFECT_POLICY`).
+   */
+  readonly sweepLimit: number;
+  /**
+   * Payload bytes one sweep claims at most (a run's first effect goes
+   * whatever its size): reading and parsing payloads costs CPU time too.
+   */
+  readonly sweepBytes: number;
 }
 
 /**
@@ -110,8 +120,15 @@ export const EFFECT_POLICY: EffectPolicy = {
   // A webhook effect's payload holds its body (up to 192 KiB): a page reads under 5 MiB.
   sweepPage: 25,
   // Free allows 1,000 calls an invocation (measured, docs/operations/limits.md): less the
-  // cron's other work, and a margin. About 100 effects of sinks delivering one at a time.
+  // cron's other work, and a margin.
   sweepCalls: 900 - CRON_CALLS,
+  // CPU time, not calls, bounds a run: Free allows about 10 ms an invocation (verified,
+  // docs/operations/limits.md), and delivering a webhook effect took 0.26 ms of CPU with a
+  // small body and 0.5 ms with a 180 KB one (measured locally, 2026-10-17: the dispatcher and
+  // the webhook sink with their I/O stubbed). 20 small effects take about 5 ms; the bytes let
+  // at most 5 of the largest bodies (192 KiB) through, about 2.5 ms. To be confirmed on Free.
+  sweepLimit: 20,
+  sweepBytes: 1024 * 1024,
 };
 
 /**
@@ -120,10 +137,14 @@ export const EFFECT_POLICY: EffectPolicy = {
  * for the sweeper. Each message fewer leaves room for as many more (see
  * `inlineEffects`). Proposed.
  */
-export const INLINE_EFFECTS = 2;
+export const INLINE_EFFECTS = 1;
 
-/** The same for an invocation of one message. Proposed. */
-export const INLINE_EFFECTS_ALONE = 10;
+/**
+ * The same for an invocation of one message: within a few ms of CPU time,
+ * as the sweep's `sweepLimit`, and its payloads within `sweepBytes` (5 of
+ * the largest webhook bodies, 192 KiB). Proposed, to be confirmed on Free.
+ */
+export const INLINE_EFFECTS_ALONE = 5;
 
 /**
  * Effects of sinks that deliver one at a time an invocation of `messages`

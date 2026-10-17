@@ -12,6 +12,7 @@ import {
   secureRandomBytes,
 } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
+import { runEffectsCron } from "../src/cron/effects.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { dispatchEffects, sweepEffects } from "../src/effects/dispatcher.js";
 import {
@@ -411,27 +412,111 @@ describe("effects journal", () => {
   });
 });
 
-/** Journals `n` effects of `repoId` for the recording sink, due at `at`. */
-async function dueEffects(repoId: string, n: number, at: number): Promise<void> {
+/** Journals `n` effects of `repoId` for the recording sink, due at `at`, each with `payload`. */
+async function dueEffects(repoId: string, n: number, at: number, payload = "{}"): Promise<void> {
   await env.ORG_READ.prepare(
     `WITH RECURSIVE e(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM e WHERE i < ?2)
      INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
-     SELECT ?1 || ':1:' || i || ':test_hook:hook_1', 'test_hook', 'hook_1', '{}', ?3, ?3 FROM e`,
+     SELECT ?1 || ':1:' || i || ':test_hook:hook_1', 'test_hook', 'hook_1', ?4, ?3, ?3 FROM e`,
   )
-    .bind(repoId, n, at)
+    .bind(repoId, n, at, payload)
     .run();
 }
 
+/** How many of `repoId`'s effects are left, each checked untouched: never tried, unclaimed. */
+async function untouched(repoId: string): Promise<number> {
+  const { results } = await env.ORG_READ.prepare(
+    `SELECT attempts, lease_token FROM effects WHERE effect_id LIKE ? AND state != 'done'`,
+  )
+    .bind(`${repoId}:%`)
+    .all<{ attempts: number; lease_token: string | null }>();
+  expect(results.every((r) => r.attempts === 0 && r.lease_token === null)).toBe(true);
+  return results.length;
+}
+
 describe("effects throughput", () => {
-  it("drains a burst in one sweep when its calls allow", async () => {
+  it("delivers a bounded number of effects a run, and the next runs go on from there", async () => {
     const at = T0 + 1;
     await settleOthersDue(at);
     const repoId = await listedRepo();
     const { sink, received } = recordingSink(repoId);
     // A push moving 60 pull requests' heads leaves about this many webhook effects.
     await dueEffects(repoId, 60, T0);
-    expect(await sweep([sink], at)).toBe(60);
-    expect(received.size).toBe(60);
+    expect(EFFECT_POLICY.sweepLimit).toBe(20);
+    expect(await sweep([sink], at)).toBe(20);
+    expect(received.size).toBe(20);
+    expect(await untouched(repoId)).toBe(40);
+    expect(await sweep([sink], at)).toBe(20);
+    expect(await sweep([sink], at)).toBe(20);
+    expect((await effectRows(repoId)).every((row) => row.state === "done")).toBe(true);
+  });
+
+  it("claims a bounded number of payload bytes a run, and the next run goes on from there", async () => {
+    const at = T0 + 3;
+    await settleOthersDue(at);
+    const repoId = await listedRepo();
+    const { sink, received } = recordingSink(repoId);
+    // Webhook effects of large bodies: five of them fit a run's bytes, a sixth would not.
+    const payload = JSON.stringify({ body: "x".repeat(200 * 1024) });
+    expect(EFFECT_POLICY.sweepBytes).toBe(1024 * 1024);
+    expect(5 * payload.length).toBeLessThanOrEqual(EFFECT_POLICY.sweepBytes);
+    expect(6 * payload.length).toBeGreaterThan(EFFECT_POLICY.sweepBytes);
+    await dueEffects(repoId, 8, T0, payload);
+    expect(await sweep([sink], at)).toBe(5);
+    expect(received.size).toBe(5);
+    expect(await untouched(repoId)).toBe(3);
+    expect(await sweep([sink], at)).toBe(3);
+    expect(received.size).toBe(8);
+  });
+
+  it("delivers a run's first effect even when it alone is past the run's bytes", async () => {
+    const at = T0 + 4;
+    await settleOthersDue(at);
+    const repoId = await listedRepo();
+    const { sink, received } = recordingSink(repoId);
+    await dueEffects(repoId, 2, T0, JSON.stringify({ body: "x".repeat(100) }));
+    const policy = { ...EFFECT_POLICY, sweepBytes: 10 };
+    const run = () => sweepEffects({ db: env.ORG_READ, env, sinks: [sink], now: () => at, policy });
+    expect(await run()).toBe(1);
+    expect(await untouched(repoId)).toBe(1);
+    expect(await run()).toBe(1);
+    expect(received.size).toBe(2);
+  });
+
+  it("gives each page a claim from when it is taken, so a slow sweep's later page is not taken over", async () => {
+    const at = T0 + 5;
+    const later = at + EFFECT_POLICY.leaseMs + 1;
+    await settleOthersDue(later);
+    const repoId = await listedRepo();
+    await dueEffects(repoId, 4, T0);
+    // The first page of two takes longer than a claim lasts to deliver; a sweep starting then
+    // overlaps the second page.
+    let clock = at;
+    const calls: string[] = [];
+    let overlapping: Promise<number> | undefined;
+    const policy = { ...EFFECT_POLICY, sweepPage: 2 };
+    const sink: EffectSink = {
+      name: "test_hook",
+      plan: () => [],
+      deliver: async (effect) => {
+        if (!effect.id.startsWith(`${repoId}:`)) return;
+        calls.push(effect.id);
+        if (calls.length === 2) clock = later;
+        if (calls.length === 3) {
+          overlapping = sweepEffects({
+            db: env.ORG_READ,
+            env,
+            sinks: [sink],
+            now: () => clock,
+            policy,
+          });
+          await overlapping;
+        }
+      },
+    };
+    await sweepEffects({ db: env.ORG_READ, env, sinks: [sink], now: () => clock, policy });
+    expect(await overlapping).toBe(0);
+    expect([...calls].sort()).toEqual([1, 2, 3, 4].map((i) => `${repoId}:1:${i}:test_hook:hook_1`));
     expect((await effectRows(repoId)).every((row) => row.state === "done")).toBe(true);
   });
 
@@ -477,7 +562,7 @@ describe("effects throughput", () => {
       explicitAcks: ["alone"],
     });
     expect(single.received.size).toBe(INLINE_EFFECTS_ALONE);
-    expect(INLINE_EFFECTS_ALONE).toBe(10);
+    expect(INLINE_EFFECTS_ALONE).toBe(5);
 
     // A full batch of five messages shares the least.
     const repos = await Promise.all(Array.from({ length: 5 }, () => listedRepo()));
@@ -503,5 +588,39 @@ describe("effects throughput", () => {
     );
     await consumeEvents(full, env, { sinks: [sink], now: () => T0 });
     expect(delivered).toHaveLength(INLINE_EFFECTS);
+  });
+});
+
+describe("the effects cron", () => {
+  it("reconciles webhook deliveries before its sweep, so a run cut short has reconciled", async () => {
+    const at = T0 + 6;
+    await settleOthersDue(at);
+    const repoId = await listedRepo();
+    await dueEffects(repoId, 1, T0);
+    // A delivery past retention whose body was never stored: reconciling deletes it.
+    const delivery = `${repoId}-delivery`;
+    await env.ORG_READ.prepare(
+      `INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, action, private,
+         payload_key, state, reason, attempts, next_attempt_at, created_at, updated_at, expires_at)
+       VALUES (?, ?, 1, 'push', NULL, 1, ?, 'dropped', 'payload_too_large', 0, 0, 0, 0, 1)`,
+    )
+      .bind(delivery, repoId, `webhooks/${delivery}.json`)
+      .run();
+    // What the invocation had done when the sweep began delivering, had it been stopped there.
+    let reconciledFirst: boolean | undefined;
+    const sink: EffectSink = {
+      name: "test_hook",
+      plan: () => [],
+      deliver: async (effect) => {
+        if (!effect.id.startsWith(`${repoId}:`)) return;
+        reconciledFirst =
+          (await env.ORG_READ.prepare("SELECT 1 FROM webhook_deliveries WHERE delivery_id = ?")
+            .bind(delivery)
+            .first()) === null;
+      },
+    };
+    await runEffectsCron(env, { metrics: { count: () => {} }, now: () => at, sinks: [sink] });
+    expect(reconciledFirst).toBe(true);
+    expect(await effectRows(repoId)).toMatchObject([{ state: "done" }]);
   });
 });

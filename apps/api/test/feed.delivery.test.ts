@@ -304,7 +304,7 @@ describe("the feed sink", () => {
         [1, 2, 3].map((seq) => commentEvent(repoId, seq, block(seq, [`usr_r${repoId}`]))),
       ),
       // Not T0: the effect left pending must not fall due in the global sweep below. The share
-      // of a full batch's invocation, so one effect is left.
+      // of a full batch's invocation, so two effects are left.
       {
         sinks: [oneByOne, feedSink],
         inline: { left: INLINE_EFFECTS, batched: INLINE_BATCH_EFFECTS },
@@ -314,12 +314,13 @@ describe("the feed sink", () => {
     expect(calls.map((call) => call.entries.length)).toEqual([3]);
     // A lookup, the batch, the claim, a mark per effect delivered alone, one for the feed's.
     expect(count.queries).toBe(1 + 1 + 1 + INLINE_EFFECTS + 1);
+    expect(INLINE_EFFECTS).toBe(1);
     expect((await effectRows(repoId)).map((row) => row.state).sort()).toEqual([
       "done",
       "done",
       "done",
       "done",
-      "done",
+      "pending",
       "pending",
     ]);
   });

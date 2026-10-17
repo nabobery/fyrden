@@ -66,21 +66,26 @@ export async function dispatchEffects(deps: DispatchDeps, ids: readonly string[]
 
 /**
  * Retries due effects (the consumer could not deliver them, or their claim
- * expired), oldest first, a page at a time while the sweep's calls last,
- * and deletes delivered ones past retention. Returns the effects delivered.
+ * expired), oldest first, a page at a time while the sweep's calls,
+ * effects and payload bytes last, and deletes delivered ones past
+ * retention. What a run leaves waits for the next. Returns the effects
+ * delivered.
  */
 export async function sweepEffects(deps: DispatchDeps): Promise<number> {
   const policy = deps.policy ?? EFFECT_POLICY;
+  // Due as of the sweep's start; each page's claim lasts from when it is taken (see `claimDue`).
   const now = deps.now();
   let left = policy.sweepCalls;
+  let effects = policy.sweepLimit;
+  let bytes = policy.sweepBytes;
   let delivered = 0;
   for (let first = true; ; first = false) {
     left -= SWEEP_ROUND_CALLS;
-    const page = Math.min(policy.sweepPage, Math.floor(left / SINGLE_EFFECT_CALLS));
+    const page = Math.min(policy.sweepPage, effects, Math.floor(left / SINGLE_EFFECT_CALLS));
     // The run's first effect goes whatever it costs, so none waits for ever.
     if (page < 1 && !first) break;
     const token = crypto.randomUUID();
-    const rows = await claimDue(deps, policy, token, now, Math.max(page, 1));
+    const rows = await claimDue(deps, policy, token, now, Math.max(page, 1), bytes, first);
     // As many as the calls left allow; the others go back.
     let taken = 0;
     for (const row of rows) {
@@ -90,13 +95,15 @@ export async function sweepEffects(deps: DispatchDeps): Promise<number> {
       );
       if (cost > left && !(first && taken === 0)) break;
       left -= cost;
+      effects--;
+      bytes -= row.bytes;
       taken++;
     }
     const back = rows.slice(taken);
     if (back.length > 0) await release(deps, back, token);
     delivered += await deliverAll(deps, rows.slice(0, taken), token);
-    // Nothing more is due, or the calls are spent. An effect that failed now backs off past
-    // `now` and a delivered one is done, so a later page never meets either again.
+    // Nothing more is due, or the calls, effects or bytes are spent. An effect that failed now
+    // backs off past `now` and a delivered one is done, so a later page never meets either again.
     if (rows.length < page || back.length > 0) break;
   }
   deps.metrics?.count("d1.query", { db: "org", op: "effects_prune" });
@@ -111,27 +118,41 @@ export async function sweepEffects(deps: DispatchDeps): Promise<number> {
   return delivered;
 }
 
-/** Claims up to `limit` due effects, oldest first. */
+/**
+ * Claims up to `limit` effects due by `due`, oldest first, while their
+ * payloads come to at most `bytes` (the first one whatever its size when
+ * `first`), so a sweep reads no more than it may deliver. The claim lasts
+ * from now, not from `due`: a page taken late in a slow sweep holds its
+ * effects as long as the first page did, and an overlapping run cannot
+ * take them over at once.
+ */
 async function claimDue(
   deps: DispatchDeps,
   policy: EffectPolicy,
   token: string,
-  now: number,
+  due: number,
   limit: number,
-): Promise<Row[]> {
+  bytes: number,
+  first: boolean,
+): Promise<(Row & { bytes: number })[]> {
   deps.metrics?.count("d1.query", { db: "org", op: "effects_claim" });
   const { results } = await deps.db
     .prepare(
       `UPDATE effects SET lease_token = ?1, lease_until = ?2
        WHERE effect_id IN (
-         SELECT effect_id FROM effects
-         WHERE state = 'pending' AND next_attempt_at <= ?3
-           AND (lease_until IS NULL OR lease_until <= ?3)
-         ORDER BY next_attempt_at LIMIT ?4)
-       ${RETURNING}`,
+         SELECT effect_id FROM (
+           SELECT effect_id, row_number() OVER oldest AS n,
+             sum(length(CAST(payload AS BLOB))) OVER oldest AS upto
+           FROM effects
+           WHERE state = 'pending' AND next_attempt_at <= ?3
+             AND (lease_until IS NULL OR lease_until <= ?3)
+           WINDOW oldest AS (ORDER BY next_attempt_at, effect_id ROWS UNBOUNDED PRECEDING)
+           ORDER BY next_attempt_at, effect_id LIMIT ?4)
+         WHERE upto <= ?5 OR (n = 1 AND ?6))
+       ${RETURNING}, length(CAST(payload AS BLOB)) AS bytes`,
     )
-    .bind(token, now + policy.leaseMs, now, limit)
-    .all<Row>();
+    .bind(token, deps.now() + policy.leaseMs, due, limit, bytes, first ? 1 : 0)
+    .all<Row & { bytes: number }>();
   return results;
 }
 
