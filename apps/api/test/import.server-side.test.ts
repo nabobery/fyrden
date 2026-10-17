@@ -759,6 +759,27 @@ describe("a slow or stalled source", () => {
     });
   });
 
+  it("fails with the timeout when the upload's completion errors after the watch tripped", async () => {
+    const target = await pushTarget();
+    const advance = await useClock(target);
+    await start(target, cx.largeSource.exchanges, (_n, body) => asRecorded(body), {
+      GIT_UPLOAD_PART_BYTES: String(5 * 1024 * 1024),
+    });
+    const original = MultipartPackSink.prototype.finish;
+    const spy = vi.spyOn(MultipartPackSink.prototype, "finish").mockImplementation(async function (
+      this: MultipartPackSink,
+    ) {
+      await original.call(this);
+      advance(CHUNKED_TUNING_DEFAULTS.maxImportMs);
+      throw new Error("the bucket refused the completion");
+    });
+    try {
+      expect(await failedAtOnce(target)).toBe("the source took too long");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it.each([
     ["its answer", false],
     ["its answer's body", true],

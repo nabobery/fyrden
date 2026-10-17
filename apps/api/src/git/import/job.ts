@@ -263,6 +263,9 @@ export class RepoImports {
     const watch = new TransferWatch(paceOf(record.limits), this.clock());
     try {
       return await this.#fetchWatched(record, watch);
+    } catch (error) {
+      // Work outside the watch (the upload's completion) failing after a trip is the trip's doing.
+      throw watch.signal.reason instanceof SourceTooSlowError ? watch.signal.reason : error;
     } finally {
       watch.stop();
     }
