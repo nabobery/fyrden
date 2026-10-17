@@ -11,6 +11,7 @@ import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { allocateEpoch } from "../src/events/epochs.js";
+import { REVISION_IMPORT_JOB } from "../src/network/pull-import.js";
 import { PULL_NOTICES_JOB, PULL_REFOLLOW_JOB } from "../src/network/pull-source.js";
 import {
   runUnderWay,
@@ -1206,6 +1207,142 @@ describe("the base's view", () => {
       expect((await open(contributor, `${contributor.handle}:${next}`)).status).toBe(201);
       expect(await borrowedCounts(stub)).toEqual([later, newest]);
     });
+  });
+
+  it("never takes back a pack whose claim its retire job released, though it stopped there", async () => {
+    const stub = env.REPO.getByName(base.id);
+    expect((await open(contributor, `${contributor.handle}:main`)).status).toBe(201);
+    const [borrowed] = await borrowedCounts(stub);
+    if (!borrowed) throw new Error("the base borrows nothing");
+    const networkId = await inRepo(stub, (r: RepoDO) => r.git.networkId());
+    const network = env.NETWORK.getByName(networkId);
+    // Once, right before the next import publishes: the fork repacked the pack away and gave up
+    // its claim; the base's collection dropped it, and its retire job released the base's claim
+    // and stopped there (the object was reset); then every member acknowledged its deletion.
+    let dropped = false;
+    await inRepo(stub, (r: RepoDO) => {
+      r.forkPullHooks.beforePublish = async () => {
+        if (dropped) return;
+        dropped = true;
+        // Stubs of its own: the test's stubs belong to another object. The fork's repack does not
+        // wait for the import's lease on the pack.
+        const forkStub = env.REPO.getByName(fork.id);
+        await inRepo(forkStub, (f: RepoDO) => {
+          f.maintenance = { ...f.maintenance, leaseWaitMs: 0 };
+        });
+        await runJob(forkStub, "repack");
+        const ownNetwork = env.NETWORK.getByName(networkId);
+        await ownNetwork.releaseClaims({ networkId, repoId: fork.id, packIds: [borrowed.pack_id] });
+        const now = r.git.context.now();
+        r.git.context.storage.sql.exec(
+          `UPDATE packs SET state = 'condemned', condemned_at = ?, last_touched_at = ?
+           WHERE pack_id = ?`,
+          now,
+          now,
+          borrowed.pack_id,
+        );
+        const options = r.retireOptions;
+        const { network: retire } = options;
+        if (!retire) throw new Error("the base retires no shared pack");
+        r.retireOptions = {
+          ...options,
+          network: {
+            shared: (packs) => retire.shared(packs),
+            release: async (packs) => {
+              await retire.release(packs);
+              throw new Error("reset after the release");
+            },
+          },
+        };
+        await runJob(env.REPO.getByName(base.id), "retire-packs", { max: 1 });
+        r.retireOptions = options;
+        await runNetworkJob(networkId, "delete");
+      };
+    });
+    const topic = await forkBranch("topic", "d.txt");
+    // Its row went before its claim: not taken back, the import starts again.
+    expect(await open(contributor, `${contributor.handle}:${topic}`)).toMatchObject({
+      status: 409,
+      body: { code: "busy" },
+    });
+    const acked = (await network.status()).deletions.find((d) => d.packId === borrowed.pack_id);
+    expect(acked?.acksPending).toEqual([]);
+    // From the fork's packs as they are now.
+    expect(await open(contributor, `${contributor.handle}:${topic}`)).toMatchObject({
+      status: 201,
+    });
+    // The network deletes the pack: the view reads none of it, and the pull request reads well.
+    await advanceNetwork(networkId, 31 * DAY);
+    await runNetworkJob(networkId, "delete");
+    expect((await network.status()).packs).toContainEqual({
+      packId: borrowed.pack_id,
+      state: "deleted",
+      claims: [],
+    });
+    expect((await packStates(stub)).map((p) => p.pack_id)).not.toContain(borrowed.pack_id);
+    const files = await json<{ files: { filename: string }[] }>(
+      api("GET", `${base.path}/pulls/2/files`, owner.token),
+    );
+    expect(files.body.files.map((f) => f.filename)).toEqual(["b.txt", "d.txt"]);
+  });
+
+  it("claims a pack again that its retire job released between sharing it and adopting it", async () => {
+    const stub = env.REPO.getByName(base.id);
+    const forkStub = env.REPO.getByName(fork.id);
+    expect((await open(contributor, `${contributor.handle}:main`)).status).toBe(201);
+    const [borrowed] = await borrowedCounts(stub);
+    if (!borrowed) throw new Error("the base borrows nothing");
+    const networkId = await inRepo(stub, (r: RepoDO) => r.git.networkId());
+    const network = env.NETWORK.getByName(networkId);
+    // The fork follows the branch; a push to it the base imports in the background, a step a slice.
+    await runJobs(base.id);
+    const next = await commitOn(contributor, fork.path, "main", [
+      { path: "c.txt", content: "c\n" },
+    ]);
+    await runJobs(fork.id);
+    const step = () =>
+      inRepo(stub, async (r: RepoDO) => {
+        await r.git.jobs.runJob(REVISION_IMPORT_JOB, r.pullImports.handler(), r.git.memory, 0);
+        return r.pullImports.get(1)?.step;
+      });
+    for (let i = 0; i < 5 && (await step()) !== "adopt"; i++);
+    expect(await inRepo(stub, (r: RepoDO) => r.pullImports.get(1)?.step)).toBe("adopt");
+    // Shared, not adopted yet: the fork repacks the pack away and gives up its claim, the base's
+    // collection drops it and its retire job releases it, and every member acknowledges.
+    await inRepo(forkStub, (f: RepoDO) => {
+      f.maintenance = { ...f.maintenance, leaseWaitMs: 0 };
+    });
+    await runJob(forkStub, "repack");
+    await network.releaseClaims({ networkId, repoId: fork.id, packIds: [borrowed.pack_id] });
+    await inRepo(stub, (r: RepoDO) => {
+      const now = r.git.context.now();
+      r.git.context.storage.sql.exec(
+        `UPDATE packs SET state = 'condemned', condemned_at = ?, last_touched_at = ?
+         WHERE pack_id = ?`,
+        now,
+        now,
+        borrowed.pack_id,
+      );
+    });
+    await runJob(stub, "retire-packs");
+    await runNetworkJob(networkId, "delete");
+    const acked = (await network.status()).deletions.find((d) => d.packId === borrowed.pack_id);
+    expect(acked?.acksPending).toEqual([]);
+    // The import shares it again before it adopts it, and publishes.
+    for (let i = 0; i < 10 && (await pull()).head.sha !== next; i++) await step();
+    expect((await pull()).head.sha).toBe(next);
+    // Claimed again, the pack outlives the deletion the members had acknowledged.
+    await advanceNetwork(networkId, 31 * DAY);
+    await runNetworkJob(networkId, "delete");
+    expect((await network.status()).packs).toContainEqual({
+      packId: borrowed.pack_id,
+      state: "shared",
+      claims: [base.id],
+    });
+    const files = await json<{ files: { filename: string }[] }>(
+      api("GET", `${base.path}/pulls/1/files`, owner.token),
+    );
+    expect(files.body.files.map((f) => f.filename)).toEqual(["b.txt", "c.txt"]);
   });
 
   it("leaves a compaction that cannot bring the view within its cap failing, not done", async () => {

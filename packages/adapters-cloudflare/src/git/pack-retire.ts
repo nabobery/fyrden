@@ -24,8 +24,8 @@ import { countRowsWritten, first, type GitStorageContext, rows, run } from "./sq
  *
  * In a fork network, a pack the network shares (a borrowed pack, or an own
  * pack another member borrows) is the network object's to delete: once
- * condemned here and unleased, this repository releases its claim on it
- * and drops its row, and never deletes its bytes (see `NetworkRetire`).
+ * condemned here and unleased, this repository drops its row and releases
+ * its claim on it, and never deletes its bytes (see `NetworkRetire`).
  *
  * Every step is safe to redo: rows change state in a transaction that
  * re-checks leases, R2 deletes come before the row deletes that record
@@ -296,17 +296,21 @@ class PackRetire {
   }
 
   /**
-   * Releases this repository's claim on a condemned pack its network
-   * shares, then drops the row; the bytes stay for the network to delete.
-   * Returns 1 when the row is gone, 0 when the pack was skipped (leased).
+   * Drops the row of a condemned pack its network shares, then releases
+   * this repository's claim on it; the bytes stay for the network to
+   * delete. In that order, a row here always comes with its claim: the
+   * pack may be taken back from it (a pull request's import does) and is
+   * still claimed. A release that fails leaves a claim no view holds, which
+   * the network's next collection drops. Returns 1 when the row is gone, 0
+   * when the pack was skipped (leased).
    */
   async #release(pack: RawPack): Promise<number> {
     const network = this.config.network as NetworkRetire;
+    // Checked condemned and unleased, and the row deleted, with nothing awaited in between.
     if (!this.#condemnIfUnleased(pack)) return 0;
-    // Condemned and unleased: no new lease can be granted from here on.
-    await network.release([{ packId: pack.pack_id as PackId, networkId: pack.network_id }]);
     const written = this.#deleteRow(pack.pack_id, ["condemned"]);
     countRowsWritten(this.#context, "retire.release", written);
+    await network.release([{ packId: pack.pack_id as PackId, networkId: pack.network_id }]);
     this.#countMetric("released", 1);
     return 1;
   }

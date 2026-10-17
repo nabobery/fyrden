@@ -23,7 +23,9 @@ import {
  * 2. share: the network records them as shared, claimed by the base.
  * 3. adopt: they join the base's view as borrowed packs (one the base's
  *    collection dropped is taken back); a view over its cap gets a
- *    compaction of its oldest borrowed packs, on its own job.
+ *    compaction of its oldest borrowed packs, on its own job. One the base
+ *    retired since the share (its claim released after it) is shared again
+ *    first.
  * 4. graph: the head's verified commit rows the base lacks are copied page
  *    by page, kept apart under the revision's own key until it publishes:
  *    the base's commit graph only ever holds whole histories, so a page
@@ -68,6 +70,12 @@ export interface ImportState {
   readonly leaseUntil?: number;
   /** The base's network when it began: a detach since leaves the head's packs behind. */
   readonly networkId?: string;
+  /**
+   * Of its packs, those the base's registry had a row of when they were
+   * shared: one gone by adoption was retired meanwhile, its claim released
+   * maybe after the share.
+   */
+  readonly held?: readonly string[];
   readonly frontier?: readonly string[];
   readonly staged?: number;
 }
@@ -161,12 +169,15 @@ export async function runImportStep(
       // retired packs since, so they are leased again from the start.
       if ((work.state.leaseUntil ?? 0) <= git.context.now())
         return { ...work, step: "snapshot", leaseId: null, state: {} };
+      const packs = work.state.packs ?? [];
+      // The base's rows of them now: one gone by adoption was retired after this share.
+      const held = [...packStates(git, packs).keys()];
       budget.used++;
       const shared = await env.NETWORK.getByName(git.networkId()).sharePacks({
         networkId: git.networkId(),
         writerRepoId: work.headRepoId,
         claimantRepoId: deps.repoId(),
-        packs: work.state.packs ?? [],
+        packs,
       });
       if (!shared.ok) {
         if (shared.code === "network_busy") throw new ImportBusy(shared.error);
@@ -174,7 +185,7 @@ export async function runImportStep(
       }
       if (shared.gone.length > 0)
         throw new ImportFailed("packs_gone", "packs of the head were deleted meanwhile");
-      return { ...work, step: "adopt" };
+      return { ...work, step: "adopt", state: { ...work.state, held } };
     }
     case "adopt": {
       if (leftNetwork(git, work))
@@ -187,7 +198,8 @@ export async function runImportStep(
       const current = borrowedLive(git);
       // Packs it reads already add nothing: a view over its cap all the same takes them.
       if (adopted.length > current.length) admit(deps, adopted, current);
-      adoptPacks(git, packs);
+      // Retired since the share: its claim may be gone, so it is claimed again first.
+      if (!adoptPacks(git, packs, work.state.held ?? [])) return { ...work, step: "share" };
       // Over the cap: compacted on the view's own job; the import goes on meanwhile.
       if (adopted.length > compactionLimits(deps.ownCap(), deps.rewriteObjects()).limit)
         scheduleViewCompaction(git);
@@ -293,6 +305,17 @@ function hasCommit(git: RepoGitStorage, hex: string): boolean {
   return git.commitGraph.readSync([oidFromHex(hex)], "verified")[0] !== undefined;
 }
 
+/** The registry states of those of `packs` the base has a row of. */
+function packStates(git: RepoGitStorage, packs: readonly ViewPack[]): Map<string, string> {
+  const rows = git.context.storage.sql
+    .exec<{ pack_id: string; state: string }>(
+      "SELECT pack_id, state FROM packs WHERE pack_id IN (SELECT value FROM json_each(?))",
+      JSON.stringify(packs.map((p) => p.packId)),
+    )
+    .toArray();
+  return new Map(rows.map((r) => [r.pack_id, r.state]));
+}
+
 /** The live borrowed packs of the base's view, oldest first. */
 function borrowedLive(git: RepoGitStorage): ViewPack[] {
   return liveViewPacks(git).filter((p) => p.origin === "borrowed");
@@ -373,10 +396,11 @@ export function waitOn(git: RepoGitStorage, error: unknown): void {
 const SETTLING = new Set(["pending", "indexing", "indexed"]);
 /**
  * Registry states of a pack the base no longer reads but still holds:
- * taken back live. Its bytes stay while the network shares it (a shared
- * pack is deleted only once every member's view refuses it no more, and a
- * live row refuses), and a retire that released the base's claim meanwhile
- * is undone by the network's next collection, which claims what views hold.
+ * taken back live. While the row is here, so is the base's claim on the
+ * network (the retire job deletes the row before it releases the claim),
+ * so the network deletes nothing taken back. A pack whose row is gone has
+ * its claim released maybe: it is claimed again (shared) before it is
+ * borrowed.
  */
 const HELD = ["garbage", "superseded", "condemned"] as const;
 
@@ -387,15 +411,24 @@ const HELD = ["garbage", "superseded", "condemned"] as const;
  * back, one it is done with (deleted, discarded) is registered again; one
  * not finished yet is waited for. One the view compaction merged into a
  * pack the view reads is read there; one merged into a pack gone from the
- * view is borrowed again. Safe to repeat.
+ * view is borrowed again. False, adopting none, when one `held` when
+ * shared is gone: retired since, its claim may have been released after
+ * the share, so it is to be shared again. Safe to repeat.
  */
-function adoptPacks(git: RepoGitStorage, packs: readonly ViewPack[]): void {
+function adoptPacks(
+  git: RepoGitStorage,
+  packs: readonly ViewPack[],
+  held: readonly string[],
+): boolean {
   const { storage } = git.context;
   const now = git.context.now();
-  storage.transactionSync(() => {
+  return storage.transactionSync((): boolean => {
+    const covered = readThroughMerge(git, packs);
+    const rows = packStates(git, packs);
+    const retired = (id: string) => !rows.has(id) && held.includes(id);
+    if (packs.some((p) => !covered.has(p.packId) && retired(p.packId))) return false;
     // With the packs: their collection, should the import never end (an interrupted opening).
     if (packs.length > 0) collectLater(git);
-    const covered = readThroughMerge(git, packs);
     for (const pack of packs) {
       if (covered.has(pack.packId)) continue;
       // Read through no merge any more: its own row stands for it.
@@ -426,6 +459,7 @@ function adoptPacks(git: RepoGitStorage, packs: readonly ViewPack[]): void {
         now,
       );
     }
+    return true;
   });
 }
 
