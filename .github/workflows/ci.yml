@@ -37,6 +37,27 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: node tools/ci/src/check-dco.ts "$BASE..$HEAD"
 
+  # D1 records a migration as applied by file name only: a database that ran
+  # a migration never runs its changed text, so a change is a new migration.
+  migrations:
+    name: Released migrations unchanged
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: No pull request modifies, deletes or renames a migration on its base branch
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node tools/ci/src/check-migrations.ts "$BASE" "$HEAD"
+
   check:
     name: Lint, typecheck, test, dry-run
     runs-on: ubuntu-latest
