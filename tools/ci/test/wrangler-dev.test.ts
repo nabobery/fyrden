@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import { type AddressInfo, createServer, type Socket } from "node:net";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { spawnOwned } from "../e2e/wrangler-dev.ts";
+import { groupRunning, spawnOwned } from "../e2e/wrangler-dev.ts";
 
 /** A Node process running `script`, owned as wrangler dev is, once it has printed `ready`. */
 async function started(script: string, graceMs?: number) {
@@ -67,14 +67,10 @@ describe("stopping wrangler dev", () => {
   });
 
   it("kills a launched child that ignores SIGTERM and holds the output pipes", async () => {
-    const { child, stop, ready } = await started(
-      launcher(`${IGNORE_SIGTERM}; ${KEEP_RUNNING}`),
-      50,
-    );
-    const pid = Number(ready.split(" ")[1]);
+    const { child, stop } = await started(launcher(`${IGNORE_SIGTERM}; ${KEEP_RUNNING}`), 50);
     await stop();
     expect(child.signalCode).toBe("SIGKILL");
-    expect(alive(pid)).toBe(false);
+    expect(groupRunning(child.pid as number)).toBe(false);
   });
 
   it("ends what a launcher left running after it exited", async () => {
@@ -83,7 +79,7 @@ describe("stopping wrangler dev", () => {
     await once(child, "exit");
     expect(alive(pid)).toBe(true);
     await stop();
-    expect(alive(pid)).toBe(false);
+    expect(groupRunning(child.pid as number)).toBe(false);
   });
 
   it("is safe to call again, and after the process has already exited", async () => {
@@ -97,24 +93,48 @@ describe("stopping wrangler dev", () => {
     expect(child.signalCode).toBeNull();
   });
 
-  it("waits out a group the system refuses to signal while its last processes are reaped", async () => {
+  it("takes a group the system refuses to signal as ended", async () => {
     const { child, stop } = await started(`console.log("ready"); ${KEEP_RUNNING}`);
     const pid = child.pid as number;
-    // As macOS answers for a group left with processes not reaped yet.
+    // As macOS answers for a group whose processes have all exited but are not reaped yet.
     const real = process.kill.bind(process);
-    let refusals = 3;
     const kill = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
-      if (target === -pid && signal === 0 && refusals > 0) {
-        refusals--;
+      if (target === -pid && signal === 0) {
         throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
       }
       return real(target, signal);
     });
     onTestFinished(() => kill.mockRestore());
     await stop();
-    expect(refusals).toBe(0);
-    expect(child.signalCode).not.toBeNull();
+    expect(child.signalCode).toBe("SIGTERM");
   });
+
+  it.runIf(process.platform === "linux")(
+    "does not wait for an ended process no one reaps",
+    async () => {
+      // The controller adopts orphans (a subreaper, as a CI runner may be) and never reaps them:
+      // the process the launcher leaves behind ends, killed, but is never reaped.
+      const script = `import { once } from "node:events";
+        import { spawnOwned } from ${JSON.stringify(new URL("../e2e/wrangler-dev.ts", import.meta.url).href)};
+        const { child, stop } = spawnOwned(process.execPath, ["-e", ${JSON.stringify(launcher(KEEP_RUNNING, true))}], {});
+        await Promise.all([once(child.stdout, "data"), once(child, "exit")]);
+        await stop();
+        console.log("stopped");
+        process.exit(0);`;
+      const subreaper =
+        "import ctypes, os, sys; ctypes.CDLL(None).prctl(36, 1); os.execv(sys.argv[1], sys.argv[1:])";
+      const controller = spawn(
+        "python3",
+        ["-c", subreaper, process.execPath, "--input-type=module", "-e", script],
+        { stdio: ["ignore", "pipe", "inherit"] },
+      );
+      onTestFinished(() => {
+        controller.kill("SIGKILL");
+      });
+      const [line] = (await once(controller.stdout as NodeJS.ReadableStream, "data")) as [Buffer];
+      expect(String(line).trim()).toBe("stopped");
+    },
+  );
 
   it.each(["SIGINT", "SIGTERM"] as const)(
     "ends what it owns when %s ends the process that owns it",

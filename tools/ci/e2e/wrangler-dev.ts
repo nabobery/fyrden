@@ -3,6 +3,7 @@
 // one binds them; a start that fails on a port already in use is tried
 // again on fresh ports.
 import { type ChildProcess, spawn } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer, type Server } from "node:net";
 import { dirname, join } from "node:path";
@@ -77,6 +78,40 @@ function unwatch(): void {
 }
 
 /**
+ * Whether a process of group `pgid` still runs. One that has exited but is
+ * not reaped yet (a zombie) does not: it holds nothing and cannot be ended,
+ * and whoever adopted it (init, or a subreaper such as a CI runner) may
+ * reap it late or never. Linux lists each process's state and group in
+ * `/proc`; elsewhere the group runs while it can be signalled (macOS
+ * refuses to signal one whose processes have all exited).
+ */
+export function groupRunning(pgid: number): boolean {
+  if (process.platform === "linux") {
+    for (const entry of readdirSync("/proc")) {
+      if (!/^\d+$/.test(entry)) continue;
+      let stat: string;
+      try {
+        stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+      } catch {
+        continue; // Gone meanwhile.
+      }
+      // "pid (comm) state ppid pgrp ...": the command may hold spaces and parentheses.
+      const [state, , pgrp] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      if (Number(pgrp) === pgid && state !== "Z" && state !== "X") return true;
+    }
+    return false;
+  }
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    const { code } = error as NodeJS.ErrnoException;
+    if (code === "ESRCH" || code === "EPERM") return false;
+    throw error;
+  }
+}
+
+/**
  * Spawns `command` as the leader of a process group of its own, with a
  * `stop` (see `WranglerDev.stop`) that signals the whole group, every call
  * answered by the same promise. A group, because wrangler's `bin` script is
@@ -93,18 +128,17 @@ export function spawnOwned(
   const child = spawn(command, args, { ...options, detached: true });
   // On `close`, not `exit`: output can still arrive between the two.
   const closed = new Promise<void>((done) => child.once("close", () => done()));
-  /** Sends `signal` to the group: false once none of it is left. */
-  const signal = (sig: NodeJS.Signals | 0): boolean => {
+  /** Sends `signal` to the group: false once none of it is left to end. */
+  const signal = (sig: NodeJS.Signals): boolean => {
     if (child.pid === undefined) return false;
     try {
       process.kill(-child.pid, sig);
       return true;
     } catch (error) {
       const { code } = error as NodeJS.ErrnoException;
-      if (code === "ESRCH") return false;
-      // macOS refuses to signal a group whose last processes have exited but
-      // are not reaped yet: still there, nothing left to end.
-      if (code === "EPERM") return true;
+      // macOS refuses to signal a group whose processes have all exited but
+      // are not reaped yet: nothing left to end.
+      if (code === "ESRCH" || code === "EPERM") return false;
       throw error;
     }
   };
@@ -117,7 +151,9 @@ export function spawnOwned(
   const gone = async () => {
     await closed;
     // A process can outlive the pipes, the launcher's exit or its SIGKILL's delivery.
-    while (signal(0)) await new Promise((r) => setTimeout(r, GONE_POLL_MS));
+    while (pid !== undefined && groupRunning(pid)) {
+      await new Promise((r) => setTimeout(r, GONE_POLL_MS));
+    }
   };
   const stop = async () => {
     if (signal("SIGTERM")) {
