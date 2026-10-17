@@ -398,12 +398,12 @@ function adoptPacks(git: RepoGitStorage, packs: readonly ViewPack[]): void {
     const covered = readThroughMerge(git, packs);
     for (const pack of packs) {
       if (covered.has(pack.packId)) continue;
+      // Read through no merge any more: its own row stands for it.
+      storage.sql.exec("DELETE FROM view_merged WHERE pack_id = ?", pack.packId);
       const state = storage.sql
         .exec<{ state: string }>("SELECT state FROM packs WHERE pack_id = ?", pack.packId)
         .toArray()[0]?.state;
       if (state === "live") continue;
-      // Read through no merge any more: its own row stands for it.
-      storage.sql.exec("DELETE FROM view_merged WHERE pack_id = ?", pack.packId);
       if (state !== undefined && (HELD as readonly string[]).includes(state)) {
         git.registry.transition(pack.packId as never, HELD, "live");
         continue;
@@ -468,10 +468,10 @@ function stage(git: RepoGitStorage, importId: string, rows: readonly CommitRowDa
 
 /**
  * In the publishing transaction: whether the import may publish, taking
- * back borrowed packs the base's collection dropped meanwhile (for a pack
- * its view compaction merged, the pack it went into). False when a
- * pack is gone from the view or the copied history is not whole (the head's
- * graph changed under the copy): the import starts again.
+ * back borrowed packs the base's collection dropped meanwhile. False when a
+ * pack is gone from the view, one its view compaction merged is not read
+ * through a live pack any more, or the copied history is not whole (the
+ * head's graph changed under the copy): the import starts again.
  */
 export function readyToPublish(deps: ViewDeps, work: ImportWork): boolean {
   const { git } = deps;
@@ -486,21 +486,21 @@ export function readyToPublish(deps: ViewDeps, work: ImportWork): boolean {
   );
   let tookBack: "none" | "own" | "borrowed" = "none";
   for (const pack of packs) {
-    // Merged by the view compaction meanwhile (or before): the pack it went into stands for it,
-    // while the view reads it or still holds it.
+    // Merged by the view compaction: read through the pack it went into while the view reads that
+    // one. Dropped from the view, that pack (and this one, which the import did not adopt) may
+    // have had its claim released and its deletion acknowledged meanwhile: neither is taken back
+    // unclaimed, the import starts again and shares and adopts this one anew.
     const into = merged.get(pack.packId);
-    const id =
-      into && (into.state === "live" || (HELD as readonly string[]).includes(into.state))
-        ? into.packId
-        : pack.packId;
+    if (into?.state === "live") continue;
+    if (into) return false;
     const row = sql
       .exec<{ state: string; origin: string }>(
         "SELECT state, origin FROM packs WHERE pack_id = ?",
-        id,
+        pack.packId,
       )
       .toArray()[0];
     if (row && (HELD as readonly string[]).includes(row.state)) {
-      git.registry.transition(id as never, HELD, "live");
+      git.registry.transition(pack.packId as never, HELD, "live");
       if (tookBack !== "borrowed") tookBack = row.origin === "borrowed" ? "borrowed" : "own";
     } else if (row?.state !== "live") return false;
   }

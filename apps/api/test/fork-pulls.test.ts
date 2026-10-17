@@ -19,7 +19,9 @@ import {
   viewCompactionHandler,
 } from "../src/network/view-cap.js";
 import { api, json, user, type Who } from "./helpers/api.js";
+import { DAY } from "./helpers/gc.js";
 import { packStates, runJob } from "./helpers/maintenance.js";
+import { advanceNetwork, runNetworkJob } from "./helpers/network.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
@@ -1128,23 +1130,60 @@ describe("the base's view", () => {
       expect(await borrowedCounts(stub)).toEqual([...sources, added]);
     });
 
-    it("takes the output back at publication, not them, when the collection dropped it meanwhile", async () => {
+    it("borrows them again, not the output, once its deletion was acknowledged before publication", async () => {
       const stub = env.REPO.getByName(base.id);
-      const { output } = await borrowAndCompact(stub);
+      const { sources, output } = await borrowAndCompact(stub);
+      const networkId = await inRepo(stub, (r: RepoDO) => r.git.networkId());
+      const network = env.NETWORK.getByName(networkId);
+      // Once, right before publication: the collection dropped the output, the retire job
+      // released its claim and stopped before deleting its row, and every member acknowledged
+      // its deletion (the base's row is condemned).
+      let dropped = false;
       await inRepo(stub, (r: RepoDO) => {
         r.forkPullHooks.beforePublish = async () => {
+          if (dropped) return;
+          dropped = true;
+          const now = r.git.context.now();
           r.git.context.storage.sql.exec(
-            "UPDATE packs SET state = 'garbage' WHERE pack_id = ?",
+            `UPDATE packs SET state = 'condemned', condemned_at = ?, last_touched_at = ?
+             WHERE pack_id = ?`,
+            now,
+            now,
             output.pack_id,
           );
+          // A stub of its own: the test's stub belongs to another object.
+          await env.NETWORK.getByName(networkId).releaseClaims({
+            networkId,
+            repoId: base.id,
+            packIds: [output.pack_id],
+          });
+          await runNetworkJob(networkId, "delete");
         };
       });
       const topic = await forkBranch("topic", "d.txt");
       const added = await newestForkPack();
+      // Not taken back unclaimed: the import starts again, sharing and borrowing them anew.
+      expect(await open(contributor, `${contributor.handle}:${topic}`)).toMatchObject({
+        status: 409,
+        body: { code: "busy" },
+      });
+      const acked = (await network.status()).deletions.find((d) => d.packId === output.pack_id);
+      expect(acked?.acksPending).toEqual([]);
       expect(await open(contributor, `${contributor.handle}:${topic}`)).toMatchObject({
         status: 201,
       });
-      expect(await borrowedCounts(stub)).toEqual([output, added]);
+      expect(await borrowedCounts(stub)).toEqual([...sources, added]);
+      // The network deletes the output: the view reads none of it.
+      await advanceNetwork(networkId, 31 * DAY);
+      expect(await runNetworkJob(networkId, "delete")).toBe("done");
+      expect((await network.status()).packs).toContainEqual({
+        packId: output.pack_id,
+        state: "deleted",
+        claims: [],
+      });
+      expect((await packStates(stub)).find((p) => p.pack_id === output.pack_id)?.state).toBe(
+        "condemned",
+      );
     });
 
     it("reads them through a later output that merged the first", async () => {
