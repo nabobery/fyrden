@@ -132,7 +132,13 @@ that claimed the pack again since, even one made after the network's object
 was restored to an earlier point in time (claims are ordered by the
 object's clock as well as by what it stored). An import whose repository gave up any
 claim between sharing its packs and adopting them shares them again first;
-more than 3 times within one request, it answers 409 `busy`.
+more than 3 times within one request, it answers 409 `busy`. A repository
+restored to an earlier point in time claims again every pack its restored
+registry holds (`reclaimNetworkPacks` on its object, a restore step before
+it serves again), and no release it recorded after that point removes
+those claims. Likewise a release recorded before a member says its view
+holds a pack (to a collection, or refusing a deletion) leaves the claim
+the network makes again for it.
 
 ### Push policy
 

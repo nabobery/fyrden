@@ -798,7 +798,7 @@ export const repoSchema: readonly DoMigration[] = [
     // has been told, with the latest claim sequence the repository had
     // learnt of that network then (the network drops a claim made at it or
     // before, never one made again since); for each network, that latest
-    // sequence (`claim_seq`, from its answers to shares) and how many
+    // sequence (`claim_seq`, from the network's claims) and how many
     // claims the retire job has given up (`released`: an import whose
     // share saw another count shares again before it adopts).
     name: "view_merged",

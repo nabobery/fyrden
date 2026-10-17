@@ -258,7 +258,11 @@ export class NetworkRegistry {
     );
   }
 
-  /** Claims `packIds` for every repository in `repoIds`, at sequence 0 (a claim already made stays as it is). */
+  /**
+   * Claims `packIds` for every repository in `repoIds`, at sequence 0 (a
+   * claim already made stays as it is): only claims no release of the
+   * repository's can name yet (see claim-releases.ts).
+   */
   claim(repoIds: readonly string[], packIds: readonly string[]): void {
     const now = this.context.now();
     for (const repoId of repoIds)
@@ -290,43 +294,47 @@ export class NetworkRegistry {
 
   /**
    * Claims `packIds` for `repoId` (a pull request's base sharing its head's
-   * packs) at the network's next claim sequence, which a claim already made
-   * takes too; returns it. A release the repository recorded before it
-   * learnt this sequence names an earlier one, so it leaves these claims
-   * (see `releaseUpTo`).
+   * packs, a restored member claiming its packs again) at the network's
+   * next claim sequence; returns it. A release the repository recorded
+   * before it learnt this sequence names an earlier one, so it leaves these
+   * claims (see `releaseUpTo`).
    */
   renewClaims(repoId: string, packIds: readonly string[]): number {
-    const now = this.context.now();
     const seq = this.nextClaimSeq();
-    for (const packId of packIds)
-      exec(
-        this.#sql,
-        `INSERT INTO pack_claims (pack_id, repo_id, claimed_at, seq) VALUES (?, ?, ?, ?)
-         ON CONFLICT (pack_id, repo_id) DO UPDATE SET seq = excluded.seq,
-           claimed_at = max(claimed_at, excluded.claimed_at)`,
-        packId,
-        repoId,
-        now,
-        seq,
-      );
+    this.claimAt(repoId, packIds, seq);
     return seq;
   }
 
   /**
-   * Claims `packIds` for `repoId` as held at `since` (a collection's start)
-   * or later: new claims, and older ones renewed (see `releaseUnrenewed`).
+   * Claims `packIds` for `repoId` at sequence `seq` (from `nextClaimSeq`),
+   * made at `at`: a claim already made keeps the later of each.
    */
-  hold(repoId: string, packIds: readonly string[], since: number): void {
-    const at = Math.max(this.context.now(), since);
+  claimAt(
+    repoId: string,
+    packIds: readonly string[],
+    seq: number,
+    at: number = this.context.now(),
+  ): void {
     for (const packId of packIds)
       exec(
         this.#sql,
-        `INSERT INTO pack_claims (pack_id, repo_id, claimed_at) VALUES (?, ?, ?)
-         ON CONFLICT (pack_id, repo_id) DO UPDATE SET claimed_at = max(claimed_at, excluded.claimed_at)`,
+        `INSERT INTO pack_claims (pack_id, repo_id, claimed_at, seq) VALUES (?, ?, ?, ?)
+         ON CONFLICT (pack_id, repo_id) DO UPDATE SET seq = max(seq, excluded.seq),
+           claimed_at = max(claimed_at, excluded.claimed_at)`,
         packId,
         repoId,
         at,
+        seq,
       );
+  }
+
+  /**
+   * Claims `packIds` for `repoId` as held at `since` (a collection's start)
+   * or later, at `seq` (the sequence the member learnt as it reported its
+   * view): new claims, and older ones renewed (see `releaseUnrenewed`).
+   */
+  hold(repoId: string, packIds: readonly string[], since: number, seq: number): void {
+    this.claimAt(repoId, packIds, seq, Math.max(this.context.now(), since));
   }
 
   /**

@@ -171,16 +171,18 @@ async function gcSlice(
       if (context.now() >= deadline || !calls.fits(MEMBER_CALLS)) return paused();
       const { repoId } = member;
       await runtime.hooks.onMarkMember?.(cursor.epoch, repoId);
+      // Its claims are made at a sequence it learns as it reports its view (see claim-releases.ts).
+      const seq = registry.nextClaimSeq();
       // A member deleted meanwhile holds nothing (its storage may be gone).
       const view: MemberPack[] = registry.member(repoId)
         ? await askMember<MemberPack[]>(runtime, calls, repoId, "networkSnapshot", [], (stub) =>
-            stub.networkSnapshot(networkId),
+            stub.networkSnapshot(networkId, seq),
           )
         : [];
       const { startedAt } = cursor;
       context.storage.transactionSync(() => {
         if (registry.member(repoId))
-          registry.hold(repoId, holdings(runtime, repoId, view), startedAt);
+          registry.hold(repoId, holdings(runtime, repoId, view), startedAt, seq);
       });
       cursor = { ...cursor, marked: [member.joinedAt, repoId] };
     }

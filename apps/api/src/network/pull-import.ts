@@ -407,8 +407,9 @@ const SETTLING = new Set(["pending", "indexing", "indexed"]);
  * taken back live. While the row is here, so is the base's claim on the
  * network (the retire job deletes the row in the transaction that records
  * the claim's release, which it tells the network after, and no release
- * recorded before the row came removes the claim it relies on: see
- * claim-releases.ts), so the network deletes nothing taken back. A pack
+ * recorded before the row came, or came back with a restore, removes the
+ * claim it relies on: see claim-releases.ts), so the network deletes
+ * nothing taken back. A pack
  * whose row is gone has its claim released maybe, or about to be: it is
  * claimed again (shared) before it is borrowed.
  */

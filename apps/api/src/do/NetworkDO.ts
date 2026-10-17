@@ -301,25 +301,40 @@ export class NetworkDO extends MigratingDO {
   }
 
   /**
-   * `repoId`'s view holds `packIds` (a restored member re-claiming its
-   * packs): pending deletions of them are dropped. Returns the
-   * ones that are gone: deleted, or being deleted (past the deletion fence;
-   * those are not claimed).
+   * `repoId`'s registry holds `packIds` (a restored member claiming its
+   * packs again, see `reclaimHeld`): pending deletions of them are dropped,
+   * and those the network knows are claimed at its next claim sequence
+   * (`seq`, which the member learns), newer than the bound of any release
+   * the member recorded before its restore. Answers the ones that are gone:
+   * deleted, or being deleted (past the deletion fence; those are not
+   * claimed).
    */
-  claim(input: { networkId: string; repoId: string; packIds: readonly string[] }): string[] {
-    if (this.#ensure(input.networkId)) return [];
+  claim(input: {
+    networkId: string;
+    repoId: string;
+    packIds: readonly string[];
+  }): { ok: true; gone: string[]; seq: number } | NetworkFailure {
+    // A network never forked has nothing to claim.
+    if (this.registry.networkId() === undefined) return { ok: true, gone: [], seq: 0 };
+    const bad = this.#ensure(input.networkId);
+    if (bad) return bad;
+    const { registry } = this;
     return this.context.storage.transactionSync(() => {
+      const known = registry.known(input.packIds);
       const gone: string[] = [];
+      const claimed: string[] = [];
       for (const packId of input.packIds) {
-        const state = this.registry.packState(packId);
-        if (state === "deleted" || this.registry.deleting(packId)) gone.push(packId);
-        else if (state === "condemned") this.registry.reprieve(packId);
+        if (!known.has(packId)) continue;
+        const state = registry.packState(packId);
+        if (state === "deleted" || registry.deleting(packId)) {
+          gone.push(packId);
+          continue;
+        }
+        if (state === "condemned") registry.reprieve(packId);
+        claimed.push(packId);
       }
-      this.registry.claim(
-        [input.repoId],
-        input.packIds.filter((id) => !gone.includes(id)),
-      );
-      return gone;
+      const seq = registry.renewClaims(input.repoId, claimed);
+      return { ok: true as const, gone, seq };
     });
   }
 

@@ -12,7 +12,8 @@ import { type NetworkRuntime, SliceCalls } from "./runtime.js";
  *    pack end. A member that cannot be reached, or does not answer, stays
  *    pending and blocks the deletion; it is asked again later. A member
  *    whose view still holds the pack refuses: the claims were out of date,
- *    so the pack is claimed again and the deletion dropped.
+ *    so the pack is claimed again (at a sequence the member learns as it
+ *    refuses, see claim-releases.ts) and the deletion dropped.
  * 2. Once every member has acknowledged, every lease they reported has
  *    ended and the retention has passed, the claims are checked again (a
  *    restore may have claimed the pack meanwhile) and, in the same
@@ -91,9 +92,11 @@ async function deletionSlice(
       if (context.now() >= deadline || !calls.fits(1)) return paused();
       calls.count("do.request", { class: "RepoDO", method: "condemnShared" });
       let answer: Awaited<ReturnType<DurableObjectStub<RepoDO>["condemnShared"]>>;
+      // A refusal's claim is made at this sequence, which the member learns as it refuses.
+      const seq = registry.nextClaimSeq();
       try {
         await hooks.beforeAck?.(repoId, [packId]);
-        answer = await env.REPO.getByName(repoId).condemnShared([packId]);
+        answer = await env.REPO.getByName(repoId).condemnShared([packId], { networkId, seq });
       } catch (error) {
         runtime.log.warn("a member did not acknowledge a condemned pack", {
           repoId,
@@ -106,7 +109,7 @@ async function deletionSlice(
       asked = repoId;
       if (!answer.ok) {
         // Still in that member's view: it claims the pack after all.
-        registry.claim([repoId], [packId]);
+        registry.claimAt(repoId, [packId], seq);
         registry.reprieve(packId);
         count(runtime, "reprieved");
         break;

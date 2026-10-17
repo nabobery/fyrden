@@ -2227,17 +2227,37 @@ export class RepoDO extends MigratingDO {
     return this.#network().swapCompacted(output, sources);
   }
 
-  /** The registry rows of packs under `networkId` (the network collection's snapshot). */
-  networkSnapshot(networkId: string): MemberPack[] {
+  /**
+   * The registry rows of packs under `networkId` (the network collection's
+   * snapshot), which it claims at `claimSeq`.
+   */
+  networkSnapshot(networkId: string, claimSeq: number): MemberPack[] {
     // An erased object restarted with empty storage holds nothing: it says
     // so by failing, and the network checks the directory.
     if (!this.#hasGitStorage()) throw new Error("git storage is not initialized");
-    return this.#network().networkSnapshot(networkId);
+    return this.#network().networkSnapshot(networkId, claimSeq);
   }
 
-  /** Acknowledges shared packs the network condemns (no new leases), with when leases on them end. */
-  condemnShared(packIds: readonly string[]): CondemnAnswer {
-    return this.#network().condemnShared(packIds);
+  /**
+   * Acknowledges shared packs the network condemns (no new leases), with
+   * when leases on them end; refuses for packs its view holds, which the
+   * network then claims again at `claim.seq`.
+   */
+  condemnShared(
+    packIds: readonly string[],
+    claim: { readonly networkId: string; readonly seq: number },
+  ): CondemnAnswer {
+    return this.#network().condemnShared(packIds, claim);
+  }
+
+  /**
+   * A restore runbook's step once the repository is restored and has taken
+   * its new restore generation, before it serves again: claims again in its
+   * fork networks every pack its registry holds (see `reclaimHeld`).
+   * Answers the packs whose bytes the network has deleted or is deleting.
+   */
+  reclaimNetworkPacks(): Promise<string[]> {
+    return this.#network().reclaim();
   }
 
   /** Of `packIds`, those this registry names (the network's orphan sweep asks every member). */
