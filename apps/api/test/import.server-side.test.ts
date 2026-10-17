@@ -12,7 +12,15 @@ import {
 import { env } from "cloudflare:workers";
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import { checkOutboundUrl, type Resolver } from "@fyrden/adapters-cloudflare/net";
-import { type ClientResponse, type HttpTransport, oidToHex } from "@fyrden/git-core";
+import {
+  type ClientResponse,
+  encodePktLine,
+  encodeSideband,
+  type HttpTransport,
+  oidToHex,
+  SIDEBAND_DATA,
+  SIDEBAND_PROGRESS,
+} from "@fyrden/git-core";
 import { afterEach, describe, expect, inject, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { CHUNKED_TUNING_DEFAULTS } from "../src/git/chunked/tuning.js";
@@ -637,6 +645,30 @@ describe("a slow or stalled source", () => {
     expect(await failedAtOnce(target)).toBe("the source took too long");
   });
 
+  it.each([
+    ["progress", encodeSideband(SIDEBAND_PROGRESS, "x".repeat(20 * 1024))],
+    ["empty pack frames", repeated(encodeSideband(SIDEBAND_DATA, ""), 4 * 1024)],
+  ])("fails a source that sends only %s once the floor's grace is over", async (_what, frames) => {
+    const target = await pushTarget();
+    const advance = await useClock(target);
+    // About 20 KiB a second, none of it pack: above the floor counted in
+    // bytes received, far below it counted in pack bytes.
+    expect(frames.length).toBeGreaterThan(minImportBytesPerSecond);
+    await start(target, cx.source.exchanges, (n, body) => {
+      if (n !== FETCH) return asRecorded(body);
+      return (async function* () {
+        yield encodePktLine("packfile\n");
+        for (;;) {
+          advance(1000);
+          yield frames;
+        }
+      })();
+    });
+    expect(await failedAtOnce(target)).toBe(
+      `the source took too long: it sent less than ${minImportBytesPerSecond / 1024} KiB/s for a minute`,
+    );
+  });
+
   it("releases the source's responses once the fetch is over, though they stay open after git's flush", async () => {
     const target = await pushTarget();
     const signals = new Set<AbortSignal>();
@@ -655,3 +687,10 @@ describe("a slow or stalled source", () => {
     expect((await untilImported(target)).state).toBe("committed");
   });
 });
+
+/** `bytes`, `times` times over. */
+function repeated(bytes: Uint8Array, times: number): Uint8Array {
+  const out = new Uint8Array(bytes.length * times);
+  for (let i = 0; i < times; i++) out.set(bytes, i * bytes.length);
+  return out;
+}

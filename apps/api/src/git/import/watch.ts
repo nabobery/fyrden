@@ -1,4 +1,4 @@
-import type { HttpTransport } from "@fyrden/git-core";
+import type { FetchPackSink, HttpTransport } from "@fyrden/git-core";
 
 /*
  * How long an import waits on its source. The fetch runs in the repository
@@ -8,10 +8,13 @@ import type { HttpTransport } from "@fyrden/git-core";
  * a source that stalls or trickles is stopped long before the overall limit:
  *
  *   discovery  connecting and listing the refs must finish in `discoveryMs`
- *   transfer   the pack must bring a byte at least every `idleMs` and, once
- *              its first `GRACE_MS` are over, at least `minBytesPerSecond`
- *              over every `WINDOW_MS`: a pack of B bytes holds the object
- *              for about GRACE_MS + WINDOW_MS + B / minBytesPerSecond at most
+ *   transfer   the source must send something at least every `idleMs` (any
+ *              bytes: git's keepalives while it prepares the pack count) and,
+ *              once the transfer's first `GRACE_MS` are over, the pack must
+ *              bring at least `minBytesPerSecond` over every `WINDOW_MS`
+ *              (pack bytes only, not progress or empty frames): a pack of B
+ *              bytes holds the object for about
+ *              GRACE_MS + WINDOW_MS + B / minBytesPerSecond at most
  *   overall    the whole fetch must finish in `maxMs`
  *
  * The watch checks every `TICK_MS`. A source too slow has its requests
@@ -64,9 +67,11 @@ export class TransferWatch {
   readonly #started: number;
   readonly #stop: () => void;
   #phase: { readonly kind: Phase; readonly since: number } | undefined;
-  #bytes = 0;
+  /** Pack bytes handed to the sink. */
+  #packBytes = 0;
+  /** When the source last sent anything. */
   #lastByteAt = 0;
-  /** Byte counts at each tick of the transfer, the oldest the last one at least a window back. */
+  /** Pack byte counts at each tick of the transfer, the oldest the last one at least a window back. */
   #samples: { readonly at: number; readonly bytes: number }[] = [];
 
   constructor(
@@ -85,7 +90,7 @@ export class TransferWatch {
     return this.#controller.signal;
   }
 
-  /** `inner`, its response bodies counted, and stopped once the watch trips. */
+  /** `inner`, noting when its responses last brought bytes, and stopped once the watch trips. */
   transport(inner: HttpTransport): HttpTransport {
     return async (request) => {
       const response = await inner(request);
@@ -96,7 +101,6 @@ export class TransferWatch {
           async *[Symbol.asyncIterator]() {
             for await (const chunk of response.body) {
               watch.signal.throwIfAborted();
-              watch.#bytes += chunk.length;
               watch.#lastByteAt = watch.clock.now();
               yield chunk;
             }
@@ -106,13 +110,23 @@ export class TransferWatch {
     };
   }
 
+  /** `inner`, the pack bytes it is given counted. */
+  sink(inner: FetchPackSink): FetchPackSink {
+    return {
+      write: async (chunk) => {
+        this.#packBytes += chunk.length;
+        await inner.write(chunk);
+      },
+    };
+  }
+
   /** Runs one phase of the fetch; a failure once the watch has tripped is the trip's. */
   async run<T>(phase: Phase, work: () => Promise<T>): Promise<T> {
     this.signal.throwIfAborted();
     const now = this.clock.now();
     this.#phase = { kind: phase, since: now };
     this.#lastByteAt = now;
-    this.#samples = [{ at: now, bytes: this.#bytes }];
+    this.#samples = [{ at: now, bytes: this.#packBytes }];
     try {
       return await work();
     } catch (error) {
@@ -150,8 +164,8 @@ export class TransferWatch {
         : undefined;
     if (now - this.#lastByteAt >= pace.idleMs)
       return `: it sent nothing for ${seconds(pace.idleMs)} s`;
-    // The floor: the bytes since the latest sample at least a window old.
-    this.#samples.push({ at: now, bytes: this.#bytes });
+    // The floor: the pack bytes since the latest sample at least a window old.
+    this.#samples.push({ at: now, bytes: this.#packBytes });
     while ((this.#samples[1]?.at ?? now) <= now - WINDOW_MS) this.#samples.shift();
     const since = this.#samples[0];
     if (
@@ -159,7 +173,7 @@ export class TransferWatch {
       since !== undefined &&
       now - phase.since >= GRACE_MS &&
       since.at <= now - WINDOW_MS &&
-      this.#bytes - since.bytes < (pace.minBytesPerSecond * (now - since.at)) / 1000
+      this.#packBytes - since.bytes < (pace.minBytesPerSecond * (now - since.at)) / 1000
     )
       return `: it sent less than ${kib(pace.minBytesPerSecond)} KiB/s for a minute`;
     return undefined;

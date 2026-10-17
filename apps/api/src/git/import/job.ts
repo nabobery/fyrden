@@ -324,7 +324,7 @@ export class RepoImports {
         return saving;
       },
     });
-    await watch.run("transfer", () => client.fetchPack(selection.wants, sink));
+    await watch.run("transfer", () => client.fetchPack(selection.wants, watch.sink(sink)));
     const size = await sink.finish();
     this.git.uploads.clearMultipart(uploadId);
     if (size !== sink.bytes) throw new ImportError("the stored pack has the wrong length");
