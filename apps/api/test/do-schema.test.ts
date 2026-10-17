@@ -17,7 +17,11 @@ import repoV29 from "./fixtures/do-schemas/RepoDO/v29.sql?raw";
 import repoV30 from "./fixtures/do-schemas/RepoDO/v30.sql?raw";
 
 // One fixture per released schema version: an object last migrated by any
-// released build must reach the same schema as a fresh one.
+// released build must reach the same schema as a fresh one. The latest
+// version has one too, written with its migration: expected.sql follows the
+// code (`vitest -u` rewrites it), so only that frozen fixture catches an edit
+// to a migration that may already have run somewhere. A new migration adds
+// the fixture of its own version and keeps the one before.
 const fixtures: Record<
   string,
   { schema: readonly DoMigration[]; versions: Record<number, string> }
@@ -33,6 +37,11 @@ describe("RepoDO schema", () => {
     const stub = env.REPO.getByName(uniqueId("repo"));
     const schema = await runInDurableObject(stub, (_, state) => dumpSchema(state.storage));
     await expect(schema).toMatchFileSnapshot("./fixtures/do-schemas/RepoDO/expected.sql");
+  });
+
+  it("has a frozen fixture of the latest version", () => {
+    const versions = Object.keys(fixtures.RepoDO?.versions ?? {}).map(Number);
+    expect(Math.max(...versions)).toBe(repoSchema.length);
   });
 
   for (const [version, sql] of Object.entries(fixtures.RepoDO?.versions ?? {})) {
