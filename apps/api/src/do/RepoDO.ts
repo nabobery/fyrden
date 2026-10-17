@@ -691,7 +691,7 @@ export class RepoDO extends MigratingDO {
     }
   }
 
-  /** The in-memory pack block tier (24 MiB fixed, design), created on first use. */
+  /** The in-memory pack block tier (16 MiB fixed, design), created on first use. */
   #blocks: BlockCache | undefined;
 
   #memoryBlocks(): BlockCache {

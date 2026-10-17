@@ -5,6 +5,7 @@ import { assertNetworkId } from "./keys.js";
 import { PackLeases } from "./leases.js";
 import { RepoLocks } from "./locks.js";
 import { createDoMemoryBudget, DO_MEMORY, type DoMemoryBudget } from "./memory-budget.js";
+import { PackIndexCache } from "./pack-index-cache.js";
 import { PackRegistry } from "./pack-registry.js";
 import { PACK_RETIRE_DEFAULTS, schedulePackRetire } from "./pack-retire.js";
 import { R2PackStore } from "./r2-pack-store.js";
@@ -42,7 +43,7 @@ export interface RepoGitStorageOptions {
 /**
  * The git storage of one repository Durable Object, wired together: refs,
  * the pack registry, packs in R2, the commit graph, uploads, leases, locks,
- * jobs and the memory pool. Construction does no I/O.
+ * jobs, the memory pool and the pack index cache. Construction does no I/O.
  */
 export class RepoGitStorage {
   readonly context: GitStorageContext;
@@ -55,6 +56,8 @@ export class RepoGitStorage {
   readonly locks: RepoLocks;
   readonly jobs: JobQueue;
   readonly memory: DoMemoryBudget;
+  /** The packs' `.idx` data kept in memory across requests. */
+  readonly packIndexes = new PackIndexCache();
   /** Regenerated packs and framed copies that fetch plans write. */
   readonly fetchObjects: FetchObjectStore;
   /** The git bucket (pack and index objects). */

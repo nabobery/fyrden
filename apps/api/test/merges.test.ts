@@ -542,9 +542,11 @@ describe("merged pull requests", () => {
 });
 
 describe("a merge past its budget", () => {
+  // The packs' indexes leave memory too, so the merge has R2 reads to make.
   const withPolicy = (policy: Partial<MergePolicy>) =>
     inRepo(env.REPO.getByName(repo.id), (r: RepoDO) => {
       r.mergePolicy = { ...MERGE_POLICY, ...policy };
+      r.git.packIndexes.retain(new Set());
     });
 
   it("is refused as too expensive, not failed, whichever limit it meets", async () => {

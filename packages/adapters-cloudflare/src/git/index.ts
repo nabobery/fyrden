@@ -46,6 +46,7 @@ export {
   MemoryWaitTimeoutError,
   withReservation,
 } from "./memory-budget.js";
+export { type HeldPackIndex, PackIndexCache } from "./pack-index-cache.js";
 export { type PackKind, PackRegistry, type PackRow, type PackState } from "./pack-registry.js";
 export {
   type DeletionFence,

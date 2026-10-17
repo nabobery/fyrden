@@ -6,14 +6,16 @@ const MiB = 1024 * 1024;
  * Memory budgets for one Durable Object. Workers memory is 128 MB per
  * isolate (verified: https://developers.cloudflare.com/workers/platform/limits/),
  * shared by every request the object serves, so heavy work reserves bytes
- * before it starts. All three numbers are Proposed defaults, tuned from the
+ * before it starts. All four sizes are Proposed defaults, tuned from the
  * memory measurements under real packs.
  */
 export const DO_MEMORY = {
   /** Usable per object; the rest is headroom for the runtime and requests. */
   usableBytes: 96 * MiB,
-  /** Fixed block cache, allocated once. */
-  blockCacheBytes: 24 * MiB,
+  /** Fixed pack block cache, allocated as it fills. */
+  blockCacheBytes: 16 * MiB,
+  /** Fixed pack index cache (`PackIndexCache`), allocated as it fills. */
+  indexCacheBytes: 8 * MiB,
   /** Reserved from by indexing, delta resolution, fetch regeneration, merges and archives. */
   operationPoolBytes: 72 * MiB,
   /**

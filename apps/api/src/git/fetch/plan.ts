@@ -181,7 +181,7 @@ const changedMessage =
  */
 async function fetchView(
   git: RepoGitStorage,
-  live: readonly (PackRow & { objectCount: number | null; allReachable: boolean })[],
+  live: readonly (PackRow & { allReachable: boolean })[],
   calls: Counters,
   reservations: MemoryReservation[],
 ): Promise<{ view: ViewPack[]; candidates: VerbatimCandidate[] }> {
