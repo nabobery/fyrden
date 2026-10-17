@@ -28,11 +28,16 @@ node packages/cli/src/index.ts doctor
 ```
 
 A drifted database prints a `FAIL` line naming each object that is missing,
-differs, or is not in the repository, and doctor exits 1. Comments, spacing,
-the letter case of keywords and names, and how a name is quoted are ignored:
-SQLite stores a renamed table as `CREATE TABLE "name" (...)`, which matches
-`CREATE TABLE name (...)`. String literals and numbers must match exactly. To
-see the deployed definitions:
+differs, or is not in the repository, and doctor exits 1. SQLite stores each
+definition as the migration wrote it, so the check compares the tokens SQLite
+reads, as written: comments and the spacing between tokens are ignored, but
+letter case is not (`DEFAULT Alpha` and `DEFAULT alpha` are different
+strings), and spacing that splits a token is not either (`x'41'` is a blob,
+`x '41'` the column `x` aliased as `'41'`). The one other difference ignored is
+the quoting SQLite adds on a rename: a rebuilt table is stored as
+`CREATE TABLE "name" (...)`, and an index created before the rename as
+`... ON "name" (...)`, which match `CREATE TABLE name` and `ON name`. To see
+the deployed definitions:
 
 ```sh
 cd apps/api

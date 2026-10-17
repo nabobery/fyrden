@@ -54,44 +54,28 @@ export function parseExpectedSchema(text: string): SchemaObject[] {
   return objects;
 }
 
-// SQLite's keywords (verified: https://www.sqlite.org/lang_keywords.html). A
-// quoted name spelled like one keeps its quotes: unquoted it could read as the
-// keyword (`DEFAULT "current_time"` is a string, `DEFAULT current_time` the time).
-const KEYWORDS = new Set(
-  `abort action add after all alter always analyze and as asc attach autoincrement before
-  begin between by cascade case cast check collate column commit conflict constraint create
-  cross current current_date current_time current_timestamp database default deferrable
-  deferred delete desc detach distinct do drop each else end escape except exclude exclusive
-  exists explain fail filter first following for foreign from full generated glob group groups
-  having if ignore immediate in index indexed initially inner insert instead intersect into is
-  isnull join key last left like limit match materialized natural no not nothing notnull null
-  nulls of offset on or order others outer over partition plan pragma preceding primary query
-  raise range recursive references regexp reindex release rename replace restrict returning
-  right rollback row rows savepoint select set table temp temporary then ties to transaction
-  trigger unbounded union unique update using vacuum values view virtual when where window
-  with without`.split(/\s+/),
-);
+/**
+ * One token of SQL: its kind and its exact text. A `name` is the table's name
+ * where a rename quotes it (see `normaliseSql`), its text the name it spells.
+ */
+export interface SqlToken {
+  kind: "word" | "name" | "quoted" | "string" | "blob" | "number" | "variable" | "symbol";
+  text: string;
+}
 
-// SQLite's tokens as its tokenizer reads them (verified:
-// https://sqlite.org/src/file/src/tokenize.c): every character from U+0080 on
-// is a name character, and only these five are whitespace.
+// SQLite's tokenizer, so a text splits into the tokens SQLite reads (verified:
+// https://sqlite.org/src/file/src/tokenize.c). Every character from U+0080 on
+// is a name character, and only these five are whitespace. A number may hold
+// `_` digit separators, and name characters right after a number belong to
+// it (SQLite reads `1abc` as one, illegal, token).
 const SPACE = /[ \t\n\f\r]+/y;
-const NUMBER = /0[xX][0-9a-fA-F]+|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/y;
-const WORD = /[\w$\u0080-\uffff]+/y;
-const BARE_NAME = /^[A-Za-z_\u0080-\uffff][\w$\u0080-\uffff]*$/;
+const BLOB = /[xX]'[^']*'?/y;
+const NUMBER =
+  /(?:0[xX][0-9a-fA-F][0-9a-fA-F_]*|(?:[0-9][0-9_]*(?:\.[0-9_]*)?|\.[0-9][0-9_]*)(?:[eE][+-]?[0-9][0-9_]*)?)[\w$\u0080-￿]*/y;
+const WORD = /[A-Za-z_\u0080-￿][\w$\u0080-￿]*/y;
+const VARIABLE = /\?[0-9]*|[:@#$][\w$\u0080-￿]*/y;
 const OPERATORS = ["->>", "->", "||", "<=", ">=", "<>", "!=", "==", "<<", ">>"];
 const QUOTES: Record<string, string> = { "'": "'", '"': '"', "`": "`", "[": "]" };
-
-/** SQLite compares keywords and names ignoring the case of ASCII letters only. */
-const foldCase = (text: string) => text.replace(/[A-Z]/g, (ch) => ch.toLowerCase());
-
-/** A name in one spelling however it was quoted: bare when it can be, else in double quotes. */
-function nameToken(name: string): string {
-  const folded = foldCase(name);
-  return BARE_NAME.test(name) && !KEYWORDS.has(folded)
-    ? folded
-    : `"${folded.replaceAll('"', '""')}"`;
-}
 
 /** The match of a sticky pattern at `at`, if there is one. */
 function matchAt(pattern: RegExp, sql: string, at: number): string | undefined {
@@ -99,22 +83,18 @@ function matchAt(pattern: RegExp, sql: string, at: number): string | undefined {
   return pattern.exec(sql)?.[0];
 }
 
-/**
- * The SQL as its tokens, one space apart, so two texts SQLite reads the same
- * way compare equal: comments and the spacing between tokens are dropped,
- * keywords and names lose their letter case, and a quoted name is spelled
- * one way (`"effects"`, `[effects]` and `effects` are one name). String
- * literals and numbers are kept exactly as written.
- */
-export function normaliseSql(sql: string): string {
-  const tokens: string[] = [];
+/** The tokens of `sql` in order, without its comments and whitespace. */
+function tokenize(sql: string): SqlToken[] {
+  const tokens: SqlToken[] = [];
   let i = 0;
+  const push = (kind: SqlToken["kind"], text: string) => {
+    tokens.push({ kind, text });
+    i += text.length;
+  };
   while (i < sql.length) {
     const ch = sql[i] as string;
     const close = QUOTES[ch];
     const space = matchAt(SPACE, sql, i);
-    const number = matchAt(NUMBER, sql, i);
-    const word = matchAt(WORD, sql, i);
     if (space) i += space.length;
     else if (sql.startsWith("--", i)) {
       const end = sql.indexOf("\n", i);
@@ -123,31 +103,89 @@ export function normaliseSql(sql: string): string {
       const end = sql.indexOf("*/", i + 2);
       i = end === -1 ? sql.length : end + 2;
     } else if (close) {
-      let j = i + 1;
       // A doubled quote inside a literal or name is an escaped quote; a
-      // bracketed name has no escape.
+      // bracketed name has no escape. An unclosed one runs to the end.
+      let j = i + 1;
       while (j < sql.length && (sql[j] !== close || (close !== "]" && sql[j + 1] === close)))
         j += sql[j] === close ? 2 : 1;
-      tokens.push(
-        ch === "'"
-          ? sql.slice(i, j + 1)
-          : nameToken(sql.slice(i + 1, j).replaceAll(close + close, close)),
-      );
-      i = j + 1;
-    } else if (number) {
-      tokens.push(number);
-      i += number.length;
-    } else if (word) {
-      tokens.push(foldCase(word));
-      i += word.length;
+      push(ch === "'" ? "string" : "quoted", sql.slice(i, j + 1));
     } else {
-      const operator = OPERATORS.find((op) => sql.startsWith(op, i)) ?? ch;
-      tokens.push(operator);
-      i += operator.length;
+      const blob = matchAt(BLOB, sql, i);
+      const number = matchAt(NUMBER, sql, i);
+      const word = matchAt(WORD, sql, i);
+      const variable = matchAt(VARIABLE, sql, i);
+      if (blob) push("blob", blob);
+      else if (number) push("number", number);
+      else if (word) push("word", word);
+      else if (variable) push("variable", variable);
+      else push("symbol", OPERATORS.find((op) => sql.startsWith(op, i)) ?? ch);
     }
   }
-  if (tokens.at(-1) === ";") tokens.pop();
-  return tokens.join(" ");
+  return tokens;
+}
+
+/** Whether a token is the keyword, written in any letter case. */
+const isKeyword = (token: SqlToken | undefined, keyword: string) =>
+  token?.kind === "word" && token.text.replace(/[a-z]/g, (c) => c.toUpperCase()) === keyword;
+
+/**
+ * The position of the table's name that a rename rewrites. SQLite stores a
+ * definition from its own `CREATE TABLE ` or `CREATE [UNIQUE] INDEX ` prefix
+ * followed by the text from the object's name on (verified:
+ * https://sqlite.org/src/file/src/build.c), and `ALTER TABLE ... RENAME TO`
+ * writes the new name in double quotes in the table's definition and after
+ * `ON` in its indexes' (verified: https://sqlite.org/src/file/src/alter.c;
+ * measured with node:sqlite in packages/cli/test/d1-schema.test.ts).
+ */
+function tableNameAt(tokens: SqlToken[]): number | undefined {
+  if (!isKeyword(tokens[0], "CREATE")) return undefined;
+  if (isKeyword(tokens[1], "TABLE")) return 2;
+  const index = isKeyword(tokens[1], "UNIQUE") ? 2 : 1;
+  if (isKeyword(tokens[index], "INDEX") && isKeyword(tokens[index + 2], "ON")) return index + 3;
+  return undefined;
+}
+
+/** The name a bare or quoted name token spells; undefined for any other token. */
+function nameOf(token: SqlToken): string | undefined {
+  if (token.kind === "word") return token.text;
+  if (token.kind !== "quoted") return undefined;
+  const close = QUOTES[token.text[0] as string] as string;
+  if (token.text.length < 2 || !token.text.endsWith(close)) return undefined;
+  const inner = token.text.slice(1, -1);
+  return close === "]" ? inner : inner.replaceAll(close + close, close);
+}
+
+/**
+ * The SQL as SQLite's tokens, each with its kind and exact text, so two
+ * definitions compare equal only when SQLite reads the same tokens from both.
+ * Comments and whitespace are dropped: SQLite ignores them, and whitespace
+ * that keeps two tokens apart (`x '41'`, `1 _0`) leaves other tokens than
+ * the text without it (`x'41'`, `1_0`). Letter case is kept everywhere: a
+ * bare or double-quoted word can be a string (`DEFAULT Alpha`), and SQLite
+ * stores each definition as the migration wrote it. The one exception is the
+ * table's name where a rename quotes it: there a bare and a quoted name
+ * compare by the name they spell, so the `CREATE TABLE "effects"` SQLite
+ * stores after a rebuild matches `CREATE TABLE effects`.
+ */
+export function normaliseSql(sql: string): SqlToken[] {
+  const tokens = tokenize(sql);
+  const last = tokens.at(-1);
+  if (last?.kind === "symbol" && last.text === ";") tokens.pop();
+  const at = tableNameAt(tokens);
+  const table = at === undefined ? undefined : tokens[at];
+  const name = table && nameOf(table);
+  if (at !== undefined && name !== undefined) tokens[at] = { kind: "name", text: name };
+  return tokens;
+}
+
+/** Whether SQLite reads two definitions as the same tokens. */
+function sameSql(a: string, b: string): boolean {
+  const left = normaliseSql(a);
+  const right = normaliseSql(b);
+  return (
+    left.length === right.length &&
+    left.every((token, i) => token.kind === right[i]?.kind && token.text === right[i]?.text)
+  );
 }
 
 /** Each object that is missing, extra or different, in the expected file's order. */
@@ -158,7 +196,7 @@ export function diffSchema(expected: SchemaObject[], actual: SchemaObject[]): st
   for (const object of expected) {
     const found = deployed.get(object.name);
     if (!found) problems.push(`${object.name} (${object.type}) is missing`);
-    else if (found.type !== object.type || normaliseSql(found.sql) !== normaliseSql(object.sql))
+    else if (found.type !== object.type || !sameSql(found.sql, object.sql))
       problems.push(`${object.name} (${object.type}) differs`);
   }
   for (const object of actual)

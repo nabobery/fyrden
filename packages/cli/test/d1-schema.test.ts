@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
@@ -35,36 +35,102 @@ describe("expected D1 schemas", () => {
 });
 
 describe("normaliseSql", () => {
-  it("ignores comments, whitespace and line endings, but not literals", () => {
+  const same = (a: string, b: string) => expect(normaliseSql(a)).toEqual(normaliseSql(b));
+  const differ = (a: string, b: string) => expect(normaliseSql(a)).not.toEqual(normaliseSql(b));
+
+  it("is the SQL's tokens as written, each with its kind", () => {
     expect(
-      normaliseSql("CREATE TABLE t (\r\n  a TEXT, -- the a\n  /* b */ b TEXT DEFAULT '--  x'\n)"),
-    ).toBe(normaliseSql("CREATE TABLE t (a TEXT, b TEXT DEFAULT '--  x')"));
-    expect(normaliseSql("CREATE TABLE t (a TEXT DEFAULT 'x  y')")).not.toBe(
-      normaliseSql("CREATE TABLE t (a TEXT DEFAULT 'x y')"),
+      normaliseSql(
+        "CREATE TABLE \"effects\" (v BLOB DEFAULT x'41', n DEFAULT 1_0 CHECK (n->>'a' <> \"b\"));",
+      ),
+    ).toEqual([
+      { kind: "word", text: "CREATE" },
+      { kind: "word", text: "TABLE" },
+      { kind: "name", text: "effects" },
+      { kind: "symbol", text: "(" },
+      { kind: "word", text: "v" },
+      { kind: "word", text: "BLOB" },
+      { kind: "word", text: "DEFAULT" },
+      { kind: "blob", text: "x'41'" },
+      { kind: "symbol", text: "," },
+      { kind: "word", text: "n" },
+      { kind: "word", text: "DEFAULT" },
+      { kind: "number", text: "1_0" },
+      { kind: "word", text: "CHECK" },
+      { kind: "symbol", text: "(" },
+      { kind: "word", text: "n" },
+      { kind: "symbol", text: "->>" },
+      { kind: "string", text: "'a'" },
+      { kind: "symbol", text: "<>" },
+      { kind: "quoted", text: '"b"' },
+      { kind: "symbol", text: ")" },
+      { kind: "symbol", text: ")" },
+    ]);
+  });
+
+  it("ignores comments, whitespace and line endings, but not literals", () => {
+    same(
+      "CREATE TABLE t (\r\n  a TEXT, -- the a\n  /* b */ b TEXT DEFAULT '--  x'\n)",
+      "CREATE TABLE t (a TEXT, b TEXT DEFAULT '--  x')",
     );
-    expect(normaliseSql('CREATE TABLE "a  b" (c)')).not.toBe(
-      normaliseSql('CREATE TABLE "a b" (c)'),
+    differ("CREATE TABLE t (a TEXT DEFAULT 'x  y')", "CREATE TABLE t (a TEXT DEFAULT 'x y')");
+    differ('CREATE TABLE "a  b" (c)', 'CREATE TABLE "a b" (c)');
+  });
+
+  it("ignores spacing between tokens that stay apart without it", () => {
+    same("CREATE TABLE t (v TEXT CHECK (v <> 'x'))", "CREATE TABLE t (v TEXT CHECK(v<>'x'))");
+    same("CREATE INDEX i ON t (a, b) WHERE a >= 1", "CREATE INDEX i ON t(a,b)WHERE a>=1");
+    same(
+      "CREATE VIEW v AS SELECT a->>'k' || 'x' FROM t",
+      "CREATE VIEW v AS SELECT a ->> 'k'||'x' FROM t",
     );
   });
 
-  it("ignores how a name is quoted, letter case outside literals and spacing between tokens", () => {
-    const same = (a: string, b: string) => expect(normaliseSql(a)).toBe(normaliseSql(b));
+  it("ignores how the table's name is quoted where a rename quotes it, and nowhere else", () => {
     same('CREATE TABLE "effects" (id TEXT)', "CREATE TABLE effects (id TEXT)");
-    same("CREATE TABLE `effects` ([id] TEXT)", "create table EFFECTS (Id text)");
-    same("CREATE TABLE t (v TEXT CHECK (v <> 'x'))", "CREATE TABLE t (v TEXT CHECK(v<>'x'))");
-    same("CREATE INDEX i ON t (a, b) WHERE a >= 1", "CREATE INDEX i ON t(a,b)WHERE a>=1");
-    // A name that needs its quotes keeps them, whichever quotes they are.
-    same('CREATE TABLE "A B" (c)', "CREATE TABLE [a b] (c)");
+    same("CREATE TABLE `effects` (id TEXT)", "CREATE TABLE [effects] (id TEXT)");
+    same('CREATE TABLE "a b" (c)', "CREATE TABLE [a b] (c)");
     same('CREATE TABLE "a""b" (c)', 'CREATE TABLE `a"b` (c)');
+    same('CREATE INDEX i ON "effects" (a)', "CREATE INDEX i ON effects (a)");
+    same('CREATE UNIQUE INDEX i ON "effects" (a)', "CREATE UNIQUE INDEX i ON effects (a)");
+    // Anywhere else a quoted word may be a string or a different name.
+    differ('CREATE INDEX "i" ON t (a)', "CREATE INDEX i ON t (a)");
+    differ('CREATE TABLE t ("id" TEXT)', "CREATE TABLE t (id TEXT)");
+    differ('CREATE TABLE t (v REFERENCES "p")', "CREATE TABLE t (v REFERENCES p)");
+    differ("CREATE TABLE t (v DEFAULT 'x')", 'CREATE TABLE t (v DEFAULT "x")');
+  });
+
+  it("keeps letter case: SQLite stores the definition as the migration wrote it", () => {
+    // A bare or double-quoted word can be a string default.
+    differ("CREATE TABLE t (v TEXT DEFAULT Alpha)", "CREATE TABLE t (v TEXT DEFAULT alpha)");
+    differ('CREATE TABLE t (v TEXT DEFAULT "Alpha")', 'CREATE TABLE t (v TEXT DEFAULT "alpha")');
+    differ("CREATE TABLE t (id TEXT)", "CREATE TABLE t (id text)");
+    differ('CREATE TABLE "Effects" (id TEXT)', "CREATE TABLE effects (id TEXT)");
+  });
+
+  it("does not split or join a token at a space", () => {
+    // A blob literal against a column aliased by a string.
+    differ("CREATE VIEW v AS SELECT x'41' FROM t", "CREATE VIEW v AS SELECT x '41' FROM t");
+    differ("CREATE VIEW v AS SELECT X'41' FROM t", "CREATE VIEW v AS SELECT X '41' FROM t");
+    // 10 against 1 aliased as _0, and the like.
+    differ("CREATE VIEW v AS SELECT 1_0 FROM t", "CREATE VIEW v AS SELECT 1 _0 FROM t");
+    differ("CREATE VIEW v AS SELECT 0x1_F FROM t", "CREATE VIEW v AS SELECT 0x1 _F FROM t");
+    differ("CREATE VIEW v AS SELECT 1e5 FROM t", "CREATE VIEW v AS SELECT 1 e5 FROM t");
+    differ("CREATE VIEW v AS SELECT 1.5 FROM t", "CREATE VIEW v AS SELECT 1 .5 FROM t");
+    differ("CREATE VIEW v AS SELECT a$b FROM t", "CREATE VIEW v AS SELECT a $b FROM t");
+    differ("CREATE TABLE t (a, b)", "CREATE TABLE t (ab)");
+    differ("CREATE TABLE t (v CHECK (v <> 1))", "CREATE TABLE t (v CHECK (v < > 1))");
+    differ("CREATE VIEW v AS SELECT a || b FROM t", "CREATE VIEW v AS SELECT a | | b FROM t");
+    differ("CREATE VIEW v AS SELECT a ->> b FROM t", "CREATE VIEW v AS SELECT a -> > b FROM t");
+    differ("CREATE VIEW v AS SELECT 1 - -1 FROM t", "CREATE VIEW v AS SELECT 1 --1\n FROM t");
   });
 
   it("still tells apart what SQLite reads differently", () => {
-    const differ = (a: string, b: string) => expect(normaliseSql(a)).not.toBe(normaliseSql(b));
     differ("CREATE TABLE t (v TEXT CHECK (v <> 'x'))", "CREATE TABLE t (v TEXT CHECK (v <> 'X'))");
     differ("CREATE TABLE t (v TEXT CHECK (v <> 'x'))", "CREATE TABLE t (v TEXT CHECK (v < 'x'))");
     differ("CREATE TABLE t (v INTEGER DEFAULT 1)", "CREATE TABLE t (v INTEGER DEFAULT 1.0)");
-    differ("CREATE TABLE t (a, b)", "CREATE TABLE t (ab)");
     differ("CREATE TABLE t (a, b)", 'CREATE TABLE t ("a, b")');
+    differ("CREATE TABLE t (v DEFAULT 'it''s')", "CREATE TABLE t (v DEFAULT 'it' 's')");
     // A quoted keyword is a name or a string; the bare keyword is the keyword.
     differ('CREATE TABLE t (v DEFAULT "current_time")', "CREATE TABLE t (v DEFAULT current_time)");
   });
@@ -91,6 +157,30 @@ describe("diffSchema", () => {
     ]);
     expect(diffSchema(expected, expected)).toEqual([]);
   });
+
+  /** The objects SQLite stores for a database after running its migrations in order. */
+  function migrated(db: DatabaseSync, dir: string): SchemaObject[] {
+    for (const file of readdirSync(resolve(migrations, dir))
+      .filter((f) => f.endsWith(".sql"))
+      .sort())
+      db.exec(readFileSync(resolve(migrations, dir, file), "utf8"));
+    return db
+      .prepare(SCHEMA_QUERY)
+      .all()
+      .map((row) => ({ type: String(row.type), name: String(row.name), sql: String(row.sql) }));
+  }
+
+  it.each(["directory", "org"])(
+    "matches the committed %s schema against what SQLite stores for its migrations, letter case included",
+    (dir) => {
+      const expected = parseExpectedSchema(
+        readFileSync(resolve(migrations, `${dir}.expected.sql`), "utf8"),
+      );
+      const actual = migrated(new DatabaseSync(":memory:"), dir);
+      expect(actual.map((o) => o.name).sort()).toEqual(expected.map((o) => o.name).sort());
+      expect(diffSchema(expected, actual)).toEqual([]);
+    },
+  );
 
   const org = parseExpectedSchema(readFileSync(resolve(migrations, "org.expected.sql"), "utf8"));
   const effects = org.find((o) => o.name === "effects") ?? { type: "table", name: "", sql: "" };
