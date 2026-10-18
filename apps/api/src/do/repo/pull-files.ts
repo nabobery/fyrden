@@ -361,7 +361,7 @@ interface FileTurns {
  * what reading the files one by one would leave it. Once the page has
  * ended, no file reads on.
  */
-class ReadTurns {
+export class ReadTurns {
   /** The earliest file not taken yet: it never waits. */
   #first = 0;
   #ended = false;
@@ -370,7 +370,7 @@ class ReadTurns {
   #held: Promise<void> = Promise.resolve();
 
   constructor(
-    private readonly browse: RepoBrowse,
+    private readonly browse: Pick<RepoBrowse, "policy" | "reads" | "hold">,
     private readonly serialReads: number,
   ) {}
 
@@ -389,6 +389,7 @@ class ReadTurns {
       read: () => this.turn(i),
       hold: async (bytes) => {
         await before;
+        if (this.#ended) throw new Error("the page has ended");
         let held = this.browse.hold(bytes);
         if (!held) {
           await this.earliest(i);

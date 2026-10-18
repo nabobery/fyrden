@@ -8,7 +8,7 @@ import { type ObjectReader, type Oid, oidFromHex, oidToHex } from "@fyrden/git-c
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import { RepoBrowse } from "../src/do/repo/browse.js";
+import { BROWSE_POLICY, RepoBrowse } from "../src/do/repo/browse.js";
 import {
   type ChangeList,
   ChangeLists,
@@ -22,6 +22,7 @@ import {
   pullCommits,
   pullFiles,
   pullFilesListing,
+  ReadTurns,
 } from "../src/do/repo/pull-files.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { advance, runJob, setPolicy } from "./helpers/maintenance.js";
@@ -640,38 +641,11 @@ describe("a page's files read at once", () => {
     expect(outcome.differing).toEqual([]);
   });
 
-  it("gives each file the memory reading the files one at a time would, though little is free", async () => {
+  it("patches each file of a page though memory has room for one file at a time", async () => {
     const compared = await comparison();
-    const first = (await files()).body.files[0];
     const outcome = await inRepo(env.REPO.getByName(repo.id), async (r) => {
       const read = async (policy: PullFilesPolicy) => {
         const browse = browsing(r);
-        // The first file's sizes, and every file's contents, are read a
-        // task later, so a file read ahead holds its memory while the first
-        // file asks for its own.
-        const later = () =>
-          // biome-ignore lint/style/noRestrictedGlobals: a deliberate yield past every pending microtask, which is how the files read ahead reach their memory first.
-          new Promise((resolve) => setTimeout(resolve, 0));
-        const open = browse.reader.bind(browse);
-        browse.reader = async () => {
-          const reader = await open();
-          return new Proxy(reader, {
-            get(target, property) {
-              if (property === "readHeader")
-                return async (oid: Oid) => {
-                  if (oidToHex(oid) === first?.sha) await later();
-                  return target.readHeader(oid);
-                };
-              if (property === "readObject")
-                return async (oid: Oid) => {
-                  await later();
-                  return target.readObject(oid);
-                };
-              const value = Reflect.get(target, property);
-              return typeof value === "function" ? value.bind(target) : value;
-            },
-          });
-        };
         // Other work holds all but room for one file's sides.
         const hold = browse.hold.bind(browse);
         let held = 0;
@@ -823,5 +797,51 @@ describe("a page's files read at once", () => {
     expect(outcome.code).toBeNull();
     expect(outcome.events.at(-1)).toBe("page answered");
     expect(outcome.events).toContain("held call done");
+  });
+});
+
+describe("turns at memory while a page reads its files", () => {
+  /** Memory with room for one hold at a time, and reads to spare. */
+  const roomForOne = () => {
+    let held = false;
+    return {
+      policy: BROWSE_POLICY,
+      reads: 0,
+      hold: (bytes: number) => {
+        if (held) return undefined;
+        held = true;
+        return {
+          bytes,
+          release: () => {
+            held = false;
+          },
+        };
+      },
+    };
+  };
+
+  it("holds memory in file order, a file short of it waiting for the files before it", async () => {
+    const turns = new ReadTurns(roomForOne(), PULL_FILES_POLICY.serialReads);
+    const first = turns.file(0);
+    const second = turns.file(1);
+    // The second file asks first, but cannot hold before the first does.
+    const secondHeld = second.hold(1);
+    const firstHeld = await first.hold(1);
+    expect(firstHeld).toBeDefined();
+    // Short of memory, it waits until the first is taken and has released its own.
+    firstHeld?.release();
+    first.ended();
+    turns.first(1);
+    expect(await secondHeld).toBeDefined();
+  });
+
+  it("holds no memory for a file once the page has ended while it waited its turn", async () => {
+    const turns = new ReadTurns(roomForOne(), PULL_FILES_POLICY.serialReads);
+    const first = turns.file(0);
+    const second = turns.file(1);
+    const secondHeld = second.hold(1);
+    turns.end();
+    first.ended();
+    await expect(secondHeld).rejects.toThrow("the page has ended");
   });
 });
