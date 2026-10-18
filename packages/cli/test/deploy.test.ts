@@ -31,6 +31,7 @@ function deps(runner: WranglerRunner, overrides: Partial<DeployDeps> = {}) {
     plan: "paid",
     runner,
     buildWeb: async () => {},
+    source: { commit: "0123abc", dirty: false },
     randomSecret: () => "s3cret-value",
     onSecretGenerated: (s) => generated.push(s),
     log: (l) => lines.push(l),
@@ -239,6 +240,54 @@ describe("fyrden deploy", () => {
     expect(migrateIndex).toBeLessThan(deployIndex);
   });
 
+  it("checks each D1 schema against the repository once it is migrated", async () => {
+    const fake = fakeWrangler();
+    const { d, lines } = deps(fake.runner);
+    await deploy(d);
+    const applied = fake.calls.findIndex((c) => c.args.join(" ").includes("migrations apply"));
+    const checks = fake.calls.filter((c) => c.args[1] === "execute");
+    expect(checks.map((c) => [c.args[2], c.args.at(-1)])).toEqual([
+      ["fyrden-directory", API_DEPLOY_CONFIG],
+      ["fyrden-org", API_DEPLOY_CONFIG],
+    ]);
+    expect(fake.calls.indexOf(checks[0] as (typeof fake.calls)[number])).toBeGreaterThan(applied);
+    expect(lines).toContain("ok   fyrden-org schema matches apps/api/migrations/org.expected.sql");
+  });
+
+  it("stops before deploying a Worker when a migrated D1 schema differs from the repository", async () => {
+    const fake = fakeWrangler();
+    // A database that once ran an earlier text of a migration: D1 recorded it
+    // by name, so the migration's later text never ran there.
+    fake.state.d1.set("fyrden-org", "d1-org");
+    fake.state.d1Schema.set("fyrden-org", [
+      { type: "table", name: "effects", sql: "CREATE TABLE effects (effect_id TEXT PRIMARY KEY)" },
+    ]);
+    await expect(deploy(deps(fake.runner).d)).rejects.toThrow(
+      "fyrden-org schema differs from apps/api/migrations/org.expected.sql: effects (table) differs. " +
+        "Repair it as docs/operations/d1-schema.md says before deploying.",
+    );
+    expect(fake.state.migrated).toEqual(["fyrden-directory", "fyrden-org"]);
+    expect(fake.state.deployed).toEqual([]);
+  });
+
+  it("records the commit it deploys, and warns when the working tree has uncommitted changes", async () => {
+    const fake = fakeWrangler();
+    const clean = deps(fake.runner);
+    await deploy(clean.d);
+    expect((await generatedConfig()).vars).toMatchObject({ FYRDEN_COMMIT: "0123abc" });
+    expect(clean.lines.join("\n")).not.toContain("WARN");
+
+    const dirty = deps(fake.runner, { source: { commit: "0123abc", dirty: true } });
+    await deploy(dirty.d);
+    expect((await generatedConfig()).vars).toMatchObject({ FYRDEN_COMMIT: "0123abc-dirty" });
+    expect(dirty.lines[1]).toMatch(/^WARN the working tree has uncommitted changes/);
+
+    const unknown = deps(fake.runner, { source: { commit: undefined, dirty: false } });
+    await deploy(unknown.d);
+    expect((await generatedConfig()).vars).toMatchObject({ FYRDEN_COMMIT: "unknown" });
+    expect(unknown.lines[1]).toMatch(/^WARN not a git checkout/);
+  });
+
   it("treats an R2 error other than not-found as a failure, not as a missing bucket", async () => {
     const fake = fakeWrangler();
     const failing: WranglerRunner = {
@@ -423,6 +472,137 @@ describe("fyrden doctor", () => {
     expect(report.missing).toContain("r2:fyrden-assets");
     expect(fake.calls.some((c) => c.args.includes("create"))).toBe(false);
     expect(lines.join("\n")).toContain("free 100 MB");
+    expect(report.schemaDrift).toEqual([]);
+    expect(fake.calls.some((c) => c.args[1] === "execute")).toBe(false);
+  });
+
+  async function doctorLines(fake: ReturnType<typeof fakeWrangler>) {
+    const lines: string[] = [];
+    const report = await doctor(repoRoot, fake.runner, (l) => lines.push(l), undefined);
+    return { report, lines };
+  }
+
+  it("compares each deployed D1 schema with the repository, reading only", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    fake.calls.length = 0;
+    const { report, lines } = await doctorLines(fake);
+    expect(report.schemaDrift).toEqual([]);
+    expect(lines).toContain(
+      "ok   fyrden-directory schema matches apps/api/migrations/directory.expected.sql",
+    );
+    expect(lines).toContain("ok   fyrden-org schema matches apps/api/migrations/org.expected.sql");
+    const executed = fake.calls.filter((c) => c.args[1] === "execute");
+    // Each database's applied migrations, then its schema; and fyrden-org's effects.
+    expect(executed.map((c) => c.args[2])).toEqual([
+      "fyrden-directory",
+      "fyrden-directory",
+      "fyrden-org",
+      "fyrden-org",
+      "fyrden-org",
+    ]);
+    expect(
+      executed.every(
+        (c) =>
+          c.args.includes("--remote") &&
+          /^SELECT /.test(c.args[c.args.indexOf("--command") + 1] ?? ""),
+      ),
+    ).toBe(true);
+    expect(fake.calls.some((c) => c.args.includes("apply") || c.args.includes("create"))).toBe(
+      false,
+    );
+  });
+
+  it("fails on a deployed D1 schema that differs from the repository, naming each object", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    const org = fake.state.d1Schema.get("fyrden-org") ?? [];
+    fake.state.d1Schema.set("fyrden-org", [
+      ...org.filter((o) => o.name !== "effects" && o.name !== "effects_due_order"),
+      { type: "table", name: "effects", sql: "CREATE TABLE effects (effect_id TEXT PRIMARY KEY)" },
+      { type: "table", name: "scratch", sql: "CREATE TABLE scratch (x)" },
+    ]);
+    const { report, lines } = await doctorLines(fake);
+    expect(report.schemaDrift).toEqual(["fyrden-org"]);
+    expect(lines).toContain(
+      "FAIL fyrden-org schema differs from apps/api/migrations/org.expected.sql: " +
+        "effects (table) differs, effects_due_order (index) is missing, scratch (table) is not in the repository. " +
+        "Repair it as docs/operations/d1-schema.md says.",
+    );
+    expect(lines).toContain(
+      "ok   fyrden-directory schema matches apps/api/migrations/directory.expected.sql",
+    );
+  });
+
+  it("compares a schema only once the checkout's migrations are all applied, naming those that are not", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    // A deployment from before the checkout's latest org migration: as that migration found it.
+    const applied = fake.state.d1Migrations.get("fyrden-org") ?? [];
+    const latest = applied.at(-1) ?? "";
+    expect(latest).toBe("0006_effects_due_order.sql");
+    fake.state.d1Migrations.set("fyrden-org", applied.slice(0, -1));
+    const org = fake.state.d1Schema.get("fyrden-org") ?? [];
+    fake.state.d1Schema.set("fyrden-org", [
+      ...org.filter((o) => o.name !== "effects_due_order"),
+      {
+        type: "index",
+        name: "effects_due",
+        sql: "CREATE INDEX effects_due ON effects (next_attempt_at) WHERE state = 'pending'",
+      },
+    ]);
+    let { report, lines } = await doctorLines(fake);
+    expect(report.schemaDrift).toEqual([]);
+    expect(lines).toContain(
+      `WARN fyrden-org schema not compared: not yet applied: ${latest} (fyrden deploy applies them)`,
+    );
+    expect(lines).toContain(
+      "ok   fyrden-directory schema matches apps/api/migrations/directory.expected.sql",
+    );
+
+    // A deployment from a later checkout than this one.
+    fake.state.d1Migrations.set("fyrden-org", [...applied, "0007_later.sql"]);
+    ({ report, lines } = await doctorLines(fake));
+    expect(report.schemaDrift).toEqual([]);
+    expect(lines).toContain(
+      "WARN fyrden-org schema not compared: applied but not in this checkout: 0007_later.sql (check out the commit it runs)",
+    );
+
+    // A database no migration has been applied to yet.
+    fake.state.d1Migrations.delete("fyrden-directory");
+    ({ lines } = await doctorLines(fake));
+    expect(lines.find((l) => l.startsWith("WARN fyrden-directory"))).toMatch(
+      /^WARN fyrden-directory schema not compared: not yet applied: 0001_\S+\.sql, /,
+    );
+  });
+
+  it("summarises the effects journal by state, oldest first created", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    fake.state.effects = [
+      { state: "done", count: 3, oldest: Date.UTC(2026, 9, 17, 9) },
+      { state: "pending", count: 656, oldest: Date.UTC(2026, 9, 17, 10) },
+    ];
+    const { lines } = await doctorLines(fake);
+    expect(lines).toContain(
+      "info fyrden-org effects: done 3 (oldest 2026-10-17T09:00:00.000Z), pending 656 (oldest 2026-10-17T10:00:00.000Z)",
+    );
+    fake.state.effects = [];
+    expect((await doctorLines(fake)).lines).toContain("info fyrden-org effects: none");
+  });
+
+  it("names the commit fyrden-api runs, and warns when it was deployed with uncommitted changes", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    expect((await doctorLines(fake)).lines).toContain("ok   fyrden-api runs commit 0123abc");
+    await deploy(deps(fake.runner, { source: { commit: "4567def", dirty: true } }).d);
+    expect((await doctorLines(fake)).lines).toContain(
+      "WARN fyrden-api runs 4567def with uncommitted changes (deployed from a dirty working tree)",
+    );
+    await deploy(deps(fake.runner, { source: { commit: undefined, dirty: false } }).d);
+    expect((await doctorLines(fake)).lines).toContain(
+      "WARN fyrden-api runs an unknown commit (deployed outside a git checkout)",
+    );
   });
 });
 

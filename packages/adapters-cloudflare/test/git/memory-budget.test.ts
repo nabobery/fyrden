@@ -6,8 +6,10 @@ import {
 } from "../../src/git/memory-budget.js";
 
 describe("Durable Object memory pool", () => {
-  it("splits the usable memory into the block cache and the operation pool", () => {
-    expect(DO_MEMORY.blockCacheBytes + DO_MEMORY.operationPoolBytes).toBe(DO_MEMORY.usableBytes);
+  it("splits the usable memory into the block and index caches and the operation pool", () => {
+    expect(
+      DO_MEMORY.blockCacheBytes + DO_MEMORY.indexCacheBytes + DO_MEMORY.operationPoolBytes,
+    ).toBe(DO_MEMORY.usableBytes);
     expect(createDoMemoryBudget().stats().totalBytes).toBe(72 * 1024 * 1024);
   });
 

@@ -1,18 +1,28 @@
 // A pull request's files: compared from the merge base of its base and head
 // (three dots, as GitHub's), with patches, renames, pages that keep their
-// comparison, and cursors checked before they are used.
+// comparison, cursors checked before they are used, and the files changed
+// kept so that later pages and listings of a comparison read no trees.
 import { env } from "cloudflare:workers";
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
-import { oidFromHex } from "@fyrden/git-core";
+import { type ObjectReader, type Oid, oidFromHex, oidToHex } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import { RepoBrowse } from "../src/do/repo/browse.js";
+import type { RepoDO } from "../src/do/RepoDO.js";
+import { BROWSE_POLICY, RepoBrowse } from "../src/do/repo/browse.js";
+import {
+  type ChangeList,
+  ChangeLists,
+  type ChangeListsPolicy,
+} from "../src/do/repo/change-lists.js";
 import { TREE_ENTRY_MEMORY_BYTES } from "../src/do/repo/held-reads.js";
 import {
+  type ListingCursor,
   PULL_FILES_POLICY,
   type PullFilesPolicy,
   pullCommits,
   pullFiles,
+  pullFilesListing,
+  ReadTurns,
 } from "../src/do/repo/pull-files.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { advance, runJob, setPolicy } from "./helpers/maintenance.js";
@@ -25,6 +35,7 @@ type File = {
   filename: string;
   previous_filename?: string;
   status: string;
+  sha: string;
   additions: number;
   deletions: number;
   patch?: string;
@@ -156,6 +167,163 @@ describe("pull request files", () => {
   it("answers 404 for a pull request that does not exist", async () => {
     const missing = await json<{ code: string }>(api("GET", `${path}/pulls/9/files`, owner.token));
     expect(missing).toMatchObject({ status: 404, body: { code: "pull_not_found" } });
+  });
+});
+
+/** The work a files listing does: R2 GETs, trees read, objects located together. */
+type Work = { gets: number; trees: number; located: string[] };
+
+/** `reader`, counting into `work` the trees it reads and the objects it locates together. */
+function watched(reader: ObjectReader, work: Work): ObjectReader {
+  return new Proxy(reader, {
+    get(target, property) {
+      if (property === "readHeader")
+        return async (oid: Oid) => {
+          const header = await target.readHeader(oid);
+          if (header?.type === "tree") work.trees++;
+          return header;
+        };
+      if (property === "prefetch")
+        return (oids: Iterable<Oid>) => {
+          const all = [...oids];
+          work.located.push(...all.map(oidToHex));
+          return target.prefetch(all);
+        };
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+describe("a kept files listing", () => {
+  /** A page of pull request 1's files as the repository lists it, and the work it did. */
+  const listed = (from: ListingCursor | null, limit: number) =>
+    inRepo(env.REPO.getByName(repo.id), async (r) => {
+      const work: Work = { gets: 0, trees: 0, located: [] };
+      const browse = new RepoBrowse({ git: r.git, memoryBlocks: createClockBlockCache() });
+      const reader = browse.reader.bind(browse);
+      browse.reader = async () => watched(await reader(), work);
+      const bucket = r.git.bucket;
+      const get = bucket.get;
+      bucket.get = ((...args: Parameters<R2Bucket["get"]>) => {
+        work.gets++;
+        return get.apply(bucket, args);
+      }) as R2Bucket["get"];
+      try {
+        const page = await pullFilesListing(browse, r.pulls, r.git.commitGraph, r.changeLists, {
+          number: 1,
+          from,
+          limit,
+        });
+        if (!page.ok) throw new Error(page.code);
+        return { page: page.value, ...work };
+      } finally {
+        bucket.get = get;
+        browse.close();
+      }
+    });
+
+  it("lists the same comparison again without reading its trees, locating the page's files together", async () => {
+    const cold = await listed(null, 30);
+    expect(cold.trees).toBeGreaterThan(0);
+    const warm = await listed(null, 30);
+    expect(warm.trees).toBe(0);
+    expect(warm.page).toEqual(cold.page);
+    // The page's blobs (a.txt's two sides, b.txt, bin.dat, new.txt; the rename has no lines to compare).
+    expect(warm.located).toHaveLength(5);
+    expect(warm.located).toEqual(
+      expect.arrayContaining(
+        warm.page.files.filter((f) => f.status !== "renamed").map((f) => f.sha),
+      ),
+    );
+    expect(warm.gets).toBeLessThan(cold.gets);
+    // At most a batched index lookup (two reads) for each pack, and a read for each blob.
+    const packs = await inRepo(env.REPO.getByName(repo.id), (r) => r.git.registry.liveOwn().length);
+    expect(warm.gets).toBeLessThanOrEqual(2 * packs + warm.located.length);
+  });
+
+  it("reads no trees for a later page, and locates only that page's files", async () => {
+    const one = await listed(null, 1);
+    expect(one.trees).toBeGreaterThan(0);
+    expect(one.page.files.map((f) => f.filename)).toEqual(["a.txt"]);
+    const cursor = { listing: one.page.listing as string, start: one.page.next as number };
+    const two = await listed(cursor, 1);
+    expect(two.trees).toBe(0);
+    expect(two.page.files.map((f) => [f.filename, f.status])).toEqual([["b.txt", "removed"]]);
+    expect(two.located).toEqual([two.page.files[0]?.sha]);
+  });
+
+  it("works out a new head's comparison anew", async () => {
+    await listed(null, 30);
+    await commit("feature", [{ path: "late.txt", content: "late\n" }]);
+    const moved = await listed(null, 30);
+    expect(moved.trees).toBeGreaterThan(0);
+    expect(moved.page.files.map((f) => f.filename)).toContain("late.txt");
+  });
+
+  it("answers a kept listing byte for byte as it answered it first", async () => {
+    const text = async (query: string) =>
+      (await api("GET", `${path}/pulls/1/files${query}`, owner.token)).text();
+    const first = await text("?per_page=2");
+    const whole = await text("");
+    expect(await text("?per_page=2")).toBe(first);
+    expect(await text("")).toBe(whole);
+  });
+});
+
+describe("kept change lists", () => {
+  const list = (path: string): ChangeList => ({
+    changes: [
+      {
+        status: "added",
+        path,
+        previousPath: null,
+        oldMode: null,
+        newMode: 0o100644,
+        oldOid: null,
+        newOid: oidFromHex("1".repeat(40)),
+      },
+    ],
+    truncated: false,
+  });
+  const inFreshRepo = <R>(use: (lists: (policy: ChangeListsPolicy) => ChangeLists) => R) =>
+    inRepo(env.REPO.getByName(uniqueId("repo")), (r) =>
+      use((policy) => new ChangeLists(r.git, policy)),
+    );
+
+  it("keeps a bounded number of lists, found by their commits and limits, dropping the oldest", async () => {
+    const kept = await inFreshRepo((make) => {
+      const lists = make({ maxLists: 2, maxBytes: 1024 * 1024, maxListBytes: 1024 * 1024 });
+      for (const n of [1, 2, 3]) lists.keep(`base${n}`, "head", "limits", list(`file${n}`));
+      // The same comparison kept again (two requests worked it out at once): the first stays.
+      lists.keep("base3", "head", "limits", list("again"));
+      return {
+        dropped: lists.get("base1", "head", "limits"),
+        kept: lists.get("base3", "head", "limits"),
+        otherLimits: lists.get("base3", "head", "others"),
+        count: [2, 3].filter((n) => lists.get(`base${n}`, "head", "limits")).length,
+      };
+    });
+    expect(kept).toEqual({
+      dropped: undefined,
+      kept: list("file3"),
+      otherLimits: undefined,
+      count: 2,
+    });
+  });
+
+  it("keeps a bounded size of lists, dropping the oldest, and never one too long", async () => {
+    const kept = await inFreshRepo((make) => {
+      // Each list below takes a little over 1,000 bytes.
+      const lists = make({ maxLists: 100, maxBytes: 2_500, maxListBytes: 2_000 });
+      for (const n of [1, 2, 3])
+        lists.keep(`base${n}`, "head", "limits", list(`${n}`.repeat(1_000)));
+      lists.keep("long", "head", "limits", list("x".repeat(3_000)));
+      return ["base1", "base2", "base3", "long"].map(
+        (base) => lists.get(base, "head", "limits") !== undefined,
+      );
+    });
+    expect(kept).toEqual([false, true, true, false]);
   });
 });
 
@@ -416,5 +584,274 @@ describe("pull request file limits", () => {
     expect(listed.files.map((f) => f.filename)).toContain("many/0");
     // The directory's tree: a hundred entries of a few bytes each.
     expect(Math.max(...held)).toBeGreaterThanOrEqual(100 * TREE_ENTRY_MEMORY_BYTES);
+  });
+});
+
+describe("a page's files read at once", () => {
+  /** The comparison of pull request 1, its files listed and kept (later pages read no trees). */
+  const comparison = async () => {
+    const { merge_base_sha, head_sha } = (await files()).body;
+    return { mergeBase: oidFromHex(merge_base_sha), head: oidFromHex(head_sha) };
+  };
+  /**
+   * A browse request in `r` allowed `maxReads` R2 reads, with no Cache API
+   * tier: every block it has not read itself is a read.
+   */
+  const browsing = (r: RepoDO, maxReads?: number) =>
+    new RepoBrowse({
+      git: r.git,
+      memoryBlocks: createClockBlockCache(),
+      policy: { cacheCalls: 0, ...(maxReads !== undefined && { maxReads }) },
+    });
+
+  it("gives each file the reads reading the files one at a time would, whatever is left", async () => {
+    const compared = await comparison();
+    const serial = { ...PULL_FILES_POLICY, filesAtOnce: 1 };
+    // Few reads kept for one file at a time, so the files read at once run into them.
+    const atOnce = { ...PULL_FILES_POLICY, serialReads: 4 };
+    const outcome = await inRepo(env.REPO.getByName(repo.id), async (r) => {
+      const read = async (policy: PullFilesPolicy, maxReads?: number) => {
+        const browse = browsing(r, maxReads);
+        try {
+          const page = await pullFiles(
+            browse,
+            r.git.commitGraph,
+            { ...compared, start: 0, limit: 30 },
+            policy,
+            r.changeLists,
+          );
+          return { page: JSON.stringify(page), reads: browse.reads };
+        } finally {
+          browse.close();
+        }
+      };
+      const whole = await read(serial);
+      const differing: number[] = [];
+      let short = 0;
+      for (let budget = 0; budget <= whole.reads + atOnce.serialReads + 2; budget++) {
+        const one = await read(serial, budget);
+        if (one.page !== whole.page) short++;
+        if ((await read(atOnce, budget)).page !== one.page) differing.push(budget);
+      }
+      return { differing, short, whole: whole.page };
+    });
+    expect(JSON.parse(outcome.whole).value.files).toHaveLength(5);
+    // The budgets tried include ones too small for every patch.
+    expect(outcome.short).toBeGreaterThan(0);
+    expect(outcome.differing).toEqual([]);
+  });
+
+  it("patches each file of a page though memory has room for one file at a time", async () => {
+    const compared = await comparison();
+    const outcome = await inRepo(env.REPO.getByName(repo.id), async (r) => {
+      const read = async (policy: PullFilesPolicy) => {
+        const browse = browsing(r);
+        // Other work holds all but room for one file's sides.
+        const hold = browse.hold.bind(browse);
+        let held = 0;
+        browse.hold = (bytes) => {
+          const reservation = held === 0 ? hold(bytes) : undefined;
+          if (!reservation) return undefined;
+          held++;
+          return {
+            bytes: reservation.bytes,
+            release: () => {
+              held--;
+              reservation.release();
+            },
+          };
+        };
+        try {
+          const page = await pullFiles(
+            browse,
+            r.git.commitGraph,
+            { ...compared, start: 0, limit: 30 },
+            policy,
+            r.changeLists,
+          );
+          return JSON.stringify(page);
+        } finally {
+          browse.close();
+        }
+      };
+      return {
+        serial: await read({ ...PULL_FILES_POLICY, filesAtOnce: 1 }),
+        atOnce: await read(PULL_FILES_POLICY),
+      };
+    });
+    const patched = JSON.parse(outcome.serial).value.files.filter(
+      (file: { patch: string | null }) => file.patch !== null,
+    );
+    expect(patched.length).toBeGreaterThan(1);
+    expect(outcome.atOnce).toBe(outcome.serial);
+  });
+
+  /**
+   * Lists a page of `limit` of pull request 1's files with `policy` while
+   * one reader call is held until the code has had every chance to go on
+   * without it, and says what happened, in order: that call finishing,
+   * memory released, the page answered. `plan` says, for each call of
+   * `method` (counted from 1) and its object, whether it is held, fails (the
+   * object is missing) or runs.
+   */
+  const holding = async (
+    policy: PullFilesPolicy,
+    limit: number,
+    method: "readHeader" | "readObject",
+    plan: (call: number, oid: string) => "hold" | "fail" | "run",
+  ) => {
+    const compared = await comparison();
+    return inRepo(env.REPO.getByName(repo.id), async (r) => {
+      const events: string[] = [];
+      let holdStarted = () => {};
+      const started = new Promise<void>((resolve) => {
+        holdStarted = resolve;
+      });
+      let endHold = () => {};
+      const ended = new Promise<void>((resolve) => {
+        endHold = resolve;
+      });
+      const browse = browsing(r);
+      const open = browse.reader.bind(browse);
+      let calls = 0;
+      browse.reader = async () => {
+        const reader = await open();
+        return new Proxy(reader, {
+          get(target, property) {
+            if (property === method)
+              return async (oid: Oid) => {
+                const step = plan(++calls, oidToHex(oid));
+                if (step === "fail") return undefined;
+                if (step === "run") return target[method](oid);
+                holdStarted();
+                await ended;
+                const result = await target[method](oid);
+                events.push("held call done");
+                return result;
+              };
+            const value = Reflect.get(target, property);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      };
+      const hold = browse.hold.bind(browse);
+      browse.hold = (bytes) => {
+        const reservation = hold(bytes);
+        return (
+          reservation && {
+            bytes: reservation.bytes,
+            release: () => {
+              events.push("memory released");
+              reservation.release();
+            },
+          }
+        );
+      };
+      try {
+        const page = pullFiles(
+          browse,
+          r.git.commitGraph,
+          { ...compared, start: 0, limit },
+          policy,
+          r.changeLists,
+        ).then((listed) => {
+          events.push("page answered");
+          return listed;
+        });
+        await started;
+        // biome-ignore lint/style/noRestrictedGlobals: a deliberate yield. Every pending microtask runs before it ends, and cleaning up without the held call needs no more than those, so the yield can only show cleanup waiting when it does wait.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        endHold();
+        const listed = await page;
+        return { events, code: listed.ok ? null : listed.code };
+      } finally {
+        browse.close();
+      }
+    });
+  };
+
+  for (const method of ["readHeader", "readObject"] as const)
+    it(`cleans up after a file whose side fails only once its other side is read (${method})`, async () => {
+      // A page of a.txt alone, both of whose sides are read: the first call is held, the second fails.
+      const outcome = await holding(PULL_FILES_POLICY, 1, method, (call) =>
+        call === 1 ? "hold" : call === 2 ? "fail" : "run",
+      );
+      expect(outcome.code).toBe("unreadable");
+      expect(outcome.events).toEqual(
+        method === "readObject"
+          ? ["held call done", "memory released", "page answered"]
+          : ["held call done", "page answered"],
+      );
+    });
+
+  it("answers a page that ended early only once the files read past its end are read", async () => {
+    const { body } = await files();
+    const bin = body.files.find((f) => f.filename === "bin.dat");
+    // The page ends after a.txt, whose patch fills it, while bin.dat (the third file) is read.
+    const outcome = await holding(
+      { ...PULL_FILES_POLICY, maxPagePatchBytes: 1 },
+      30,
+      "readHeader",
+      (_, oid) => (oid === bin?.sha ? "hold" : "run"),
+    );
+    expect(outcome.code).toBeNull();
+    expect(outcome.events.at(-1)).toBe("page answered");
+    expect(outcome.events).toContain("held call done");
+  });
+});
+
+describe("turns at memory while a page reads its files", () => {
+  /** Memory with room for one hold at a time, and reads to spare; `refused` settles once it refuses one. */
+  const roomForOne = () => {
+    let held = false;
+    let refuse = () => {};
+    const refused = new Promise<void>((resolve) => {
+      refuse = resolve;
+    });
+    return {
+      refused,
+      policy: BROWSE_POLICY,
+      reads: 0,
+      hold: (bytes: number) => {
+        if (held) {
+          refuse();
+          return undefined;
+        }
+        held = true;
+        return {
+          bytes,
+          release: () => {
+            held = false;
+          },
+        };
+      },
+    };
+  };
+
+  it("holds memory in file order, a file short of it waiting for the files before it", async () => {
+    const memory = roomForOne();
+    const turns = new ReadTurns(memory, PULL_FILES_POLICY.serialReads);
+    const first = turns.file(0);
+    const second = turns.file(1);
+    // The second file asks first, but cannot hold before the first does.
+    const secondHeld = second.hold(1);
+    const firstHeld = await first.hold(1);
+    expect(firstHeld).toBeDefined();
+    // Short of memory, it waits until the first is taken and has released its own.
+    await memory.refused;
+    firstHeld?.release();
+    first.ended();
+    turns.first(1);
+    expect(await secondHeld).toBeDefined();
+  });
+
+  it("holds no memory for a file once the page has ended while it waited its turn", async () => {
+    const turns = new ReadTurns(roomForOne(), PULL_FILES_POLICY.serialReads);
+    const first = turns.file(0);
+    const second = turns.file(1);
+    const secondHeld = second.hold(1);
+    turns.end();
+    first.ended();
+    await expect(secondHeld).rejects.toThrow("the page has ended");
   });
 });

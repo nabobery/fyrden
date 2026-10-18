@@ -28,16 +28,29 @@ function requirements(rules: MergeRules): string[] {
 function Mergeability({ pull, conflicts }: { pull: PullRequest; conflicts: string }) {
   const revalidator = useRevalidator();
   const looks = useRef(0);
-  const unknown = pull.mergeable_state === "unknown";
+  const reason = pull.mergeable_reason;
+  // Past the budget or unreadable: worked out again only minutes later.
+  const deferred = reason === "too_expensive" || reason === "unreadable";
+  const working = pull.mergeable_state === "unknown" && !deferred;
   // Worked out in the background after each push: look again for a while.
   useEffect(() => {
-    if (!unknown || looks.current >= MERGEABILITY_LOOKS) return;
+    if (!working || looks.current >= MERGEABILITY_LOOKS) return;
     const timer = setTimeout(() => {
       looks.current++;
       void revalidator.revalidate();
     }, MERGEABILITY_RECHECK_MS);
     return () => clearTimeout(timer);
-  }, [unknown, revalidator]);
+  }, [working, revalidator]);
+  // Reloading shows the latest result; a deferred check is not started again by it.
+  const checkAgain = (
+    <button
+      type="button"
+      onClick={() => void revalidator.revalidate()}
+      disabled={revalidator.state !== "idle"}
+    >
+      {deferred ? "Refresh" : "Check again"}
+    </button>
+  );
   switch (pull.mergeable_state) {
     case "clean":
       return <p className="ok-text">No conflicts with the base branch.</p>;
@@ -51,18 +64,21 @@ function Mergeability({ pull, conflicts }: { pull: PullRequest; conflicts: strin
     case "draft":
       return <p className="muted">This pull request is a draft: mark it ready to merge it.</p>;
     default:
-      return (
-        <p className="muted">
-          Checking whether it merges cleanly…{" "}
-          <button
-            type="button"
-            onClick={() => void revalidator.revalidate()}
-            disabled={revalidator.state !== "idle"}
-          >
-            Check again
-          </button>
-        </p>
-      );
+      if (reason === "too_expensive")
+        return (
+          <p className="muted">
+            Checking whether it merges cleanly went past its budget; it will be checked again later,
+            and merging may still succeed. If this persists, merge it locally. {checkAgain}
+          </p>
+        );
+      if (reason === "unreadable")
+        return (
+          <p className="error">
+            Could not check whether it merges cleanly: an object it needs could not be read. It will
+            be checked again later. {checkAgain}
+          </p>
+        );
+      return <p className="muted">Checking whether it merges cleanly… {checkAgain}</p>;
   }
 }
 

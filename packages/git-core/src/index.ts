@@ -190,7 +190,13 @@ export {
   openRangedIdx,
   RangedPackIdx,
 } from "./pack/idx-range-read.js";
-export { type IdxEntry, type IdxLookup, type IdxReadBudget, PackIdx } from "./pack/idx-read.js";
+export {
+  type IdxEntry,
+  type IdxLocation,
+  type IdxLookup,
+  type IdxReadBudget,
+  PackIdx,
+} from "./pack/idx-read.js";
 export {
   type IdxWriteInput,
   type IdxWriteOptions,

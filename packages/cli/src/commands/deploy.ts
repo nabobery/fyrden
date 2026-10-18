@@ -2,8 +2,10 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertConfigAccount, pinAccount, resolveAccount } from "../account.ts";
+import { checkD1Schema, driftMessage, SCHEMA_RUNBOOK } from "../d1-schema.ts";
 import { parseJsonc } from "../jsonc.ts";
 import { readApiConfig, resourcePlan } from "../resources.ts";
+import { commitLabel, type SourceState } from "../source.ts";
 import { WranglerError, type WranglerRunner, wrangler } from "../wrangler.ts";
 import { provision } from "./provision.ts";
 
@@ -15,6 +17,8 @@ export interface DeployDeps {
   runner: WranglerRunner;
   /** Builds fyrden-web (react-router build). */
   buildWeb: () => Promise<void>;
+  /** The checkout being deployed, recorded on fyrden-api as FYRDEN_COMMIT. */
+  source: SourceState;
   /** A preset bootstrap secret (CI passes one from a GitHub secret), or undefined to generate one. */
   presetBootstrapSecret?: string | undefined;
   /**
@@ -83,7 +87,8 @@ export async function workerSecrets(
 }
 
 /**
- * `fyrden deploy`: provisions resources, applies D1 migrations, deploys
+ * `fyrden deploy`: provisions resources, applies D1 migrations and stops
+ * unless each database then matches its expected schema, deploys
  * fyrden-api first and fyrden-web second (fyrden-api must accept the current
  * and previous web RPC version). The required BOOTSTRAP_SECRET and the
  * platform's commit signing key (SIGNING_KEY) are uploaded with the first
@@ -96,6 +101,13 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
 
   const account = await resolveAccount(deps.runner, deps.envAccountId);
   log(`deploying to account ${account.name} (${account.id})`);
+  if (deps.source.commit === undefined)
+    log("WARN not a git checkout (or git failed): the deployed commit is recorded as unknown");
+  else if (deps.source.dirty)
+    log(
+      `WARN the working tree has uncommitted changes: recorded as ${commitLabel(deps.source)}. ` +
+        "D1 records a migration by file name, so a migration applied now is never applied again after it changes",
+    );
   // Every command below targets this account, whichever directory it runs in.
   const runner = pinAccount(deps.runner, account.id);
 
@@ -117,6 +129,7 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
     vars: {
       ...((config.vars as Record<string, string> | undefined) ?? {}),
       FYRDEN_PLAN: deps.plan,
+      FYRDEN_COMMIT: commitLabel(deps.source),
     },
     d1_databases: (config.d1_databases ?? []).map((d) => ({
       ...d,
@@ -138,6 +151,19 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
         { cwd: apiDir },
       );
       log(`applied D1 migrations to ${db.name}`);
+      // D1 skips a migration it recorded by name, even if the file changed
+      // since: only the resulting schema shows it.
+      const check = await checkD1Schema(
+        runner,
+        apiDir,
+        { name: db.name, migrationsDir: db.migrationsDir },
+        ["-c", API_DEPLOY_CONFIG],
+      );
+      if (check.problems.length > 0)
+        throw new Error(
+          `${driftMessage(db.name, check)} Repair it as ${SCHEMA_RUNBOOK} says before deploying.`,
+        );
+      log(`ok   ${db.name} schema matches ${check.expectedFile}`);
     }
   }
 

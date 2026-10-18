@@ -60,6 +60,7 @@ async function rangedView(spanBytes?: number): Promise<{ view: RepoView; reads: 
           : {
               lookup: (oid, at, budget) => ranged.lookup(oid, at, budget),
               lookupMany: (oids, budget) => ranged.lookupMany(oids, budget, spanBytes),
+              crc32At: (position, budget) => ranged.crc32At(position, budget),
             };
       return { ...pack, idx };
     }),

@@ -3,9 +3,13 @@
 // result kept only for the pair of base tip and head it was worked out for.
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
-import { beforeEach, describe, expect, inject, it } from "vitest";
+import { beforeEach, describe, expect, inject, it, vi } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import { MERGEABILITY_POLICY } from "../src/do/repo/mergeability.js";
+import {
+  MERGEABILITY_POLICY,
+  MERGEABILITY_RETRY,
+  mergeabilityRetryDelay,
+} from "../src/do/repo/mergeability.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
@@ -18,6 +22,7 @@ type Pull = {
   number: number;
   mergeable: boolean | null;
   mergeable_state: string;
+  mergeable_reason: string | null;
   head: { sha: string };
 };
 
@@ -95,6 +100,42 @@ const mergeabilityEvents = () =>
       .filter((e) => e.type === "pull_request.mergeability")
       .map((e) => e.data),
   );
+/** Makes every merge the job works out go past its budget, or no longer. */
+const pastBudget = (past: boolean) =>
+  inRepo(stub(), (r: RepoDO) => {
+    r.mergeabilityPolicy = past ? { ...MERGEABILITY_POLICY, maxTrees: 1 } : MERGEABILITY_POLICY;
+  });
+/** The result kept for pull request 1, with when it is due to be worked out again. */
+const kept = () =>
+  inRepo(stub(), (r: RepoDO) => {
+    const row = r.git.context.storage.sql
+      .exec<{
+        base_sha: string;
+        head_sha: string;
+        state: string;
+        attempts: number;
+        computed_at: number;
+      }>("SELECT base_sha, head_sha, state, attempts, computed_at FROM mergeability")
+      .one();
+    return { ...row, retry_at: row.computed_at + mergeabilityRetryDelay(row.attempts) };
+  });
+const waiting = () =>
+  inRepo(stub(), (r: RepoDO) =>
+    r.git.context.storage.sql
+      .exec<{ pr_number: number; requested_at: number }>(
+        "SELECT pr_number, requested_at FROM mergeability_jobs",
+      )
+      .toArray(),
+  );
+/** When the queue's job runs next. */
+const jobAt = () =>
+  inRepo(
+    stub(),
+    (r: RepoDO) =>
+      r.git.context.storage.sql
+        .exec<{ next_run_at: number }>("SELECT next_run_at FROM jobs WHERE job_id = 'mergeability'")
+        .one().next_run_at,
+  );
 
 let base: string;
 
@@ -114,10 +155,18 @@ beforeEach(async () => {
 describe("mergeability", () => {
   it("is unknown until worked out, then clean, with an event", async () => {
     await open("feature");
-    expect(await pull()).toMatchObject({ mergeable: null, mergeable_state: "unknown" });
+    expect(await pull()).toMatchObject({
+      mergeable: null,
+      mergeable_state: "unknown",
+      mergeable_reason: "pending",
+    });
     expect(await queue()).toEqual([1]);
     await runJobs();
-    expect(await pull()).toMatchObject({ mergeable: true, mergeable_state: "clean" });
+    expect(await pull()).toMatchObject({
+      mergeable: true,
+      mergeable_state: "clean",
+      mergeable_reason: null,
+    });
     expect(await queue()).toEqual([]);
     expect(await mergeabilityEvents()).toEqual([
       expect.objectContaining({ number: 1, state: "clean", mergeable: true }),
@@ -360,17 +409,133 @@ describe("mergeability", () => {
     expect(await pull()).toMatchObject({ mergeable: null, mergeable_state: "unknown" });
   });
 
-  it("is unknown past its budget, without being retried", async () => {
+  it("is too expensive past its budget, and worked out again after a delay that doubles", async () => {
     await open("feature");
     await commitOn("main", [{ path: "z.txt", content: "z\n" }]);
+    await pastBudget(true);
+    await runJobs();
+    expect(await pull()).toMatchObject({
+      mergeable: null,
+      mergeable_state: "unknown",
+      mergeable_reason: "too_expensive",
+    });
+    expect((await mergeabilityEvents()).at(-1)).toMatchObject({ state: "unknown" });
+    const first = await kept();
+    expect(first).toMatchObject({ state: "unknown", attempts: 1 });
+    expect(first.retry_at - first.computed_at).toBe(MERGEABILITY_RETRY.firstMs);
+    // Waiting out its delay, and the job with it: asking for it or running the job does nothing.
+    expect(await waiting()).toEqual([{ pr_number: 1, requested_at: first.retry_at }]);
+    expect(await jobAt()).toBe(first.retry_at);
+    await pull();
+    await runJobs();
+    expect(await kept()).toEqual(first);
+    expect(await jobAt()).toBe(first.retry_at);
+    // Its delay over, it is worked out again: still past, so it waits twice as long, with no
+    // event (its state is the same).
+    const announced: string[] = [];
     await inRepo(stub(), (r: RepoDO) => {
-      r.mergeabilityPolicy = { ...MERGEABILITY_POLICY, maxTrees: 1 };
+      const emit = r.events.emitActivity.bind(r.events);
+      r.events.emitActivity = (type, ...rest) => {
+        announced.push(type);
+        return emit(type, ...rest);
+      };
+    });
+    vi.setSystemTime(first.retry_at);
+    await runJobs();
+    const second = await kept();
+    expect(second).toMatchObject({ state: "unknown", attempts: 2 });
+    expect(second.retry_at - second.computed_at).toBe(2 * MERGEABILITY_RETRY.firstMs);
+    expect(await jobAt()).toBe(second.retry_at);
+    expect(announced).not.toContain("pull_request.mergeability");
+    await pastBudget(false);
+    vi.setSystemTime(second.retry_at);
+    await runJobs();
+    expect(await pull()).toMatchObject({ mergeable: true, mergeable_reason: null });
+    expect(await queue()).toEqual([]);
+  });
+
+  it("waits at most the longest delay between tries", () => {
+    expect(mergeabilityRetryDelay(1)).toBe(MERGEABILITY_RETRY.firstMs);
+    expect(mergeabilityRetryDelay(3)).toBe(4 * MERGEABILITY_RETRY.firstMs);
+    expect(mergeabilityRetryDelay(6)).toBe(32 * MERGEABILITY_RETRY.firstMs);
+    expect(mergeabilityRetryDelay(7)).toBe(MERGEABILITY_RETRY.maxMs);
+    expect(mergeabilityRetryDelay(5_000)).toBe(MERGEABILITY_RETRY.maxMs);
+  });
+
+  it("starts its delays over when the head or the base moves", async () => {
+    await open("feature");
+    await commitOn("main", [{ path: "z.txt", content: "z\n" }]);
+    await pastBudget(true);
+    await runJobs();
+    vi.setSystemTime((await kept()).retry_at);
+    await runJobs();
+    expect(await kept()).toMatchObject({ attempts: 2 });
+    // The head moves: worked out at once for the new pair, its delay the first one again.
+    const head = await commitOn("feature", [{ path: "b.txt", content: "b\n" }]);
+    await runJobs();
+    const moved = await kept();
+    expect(moved).toMatchObject({ head_sha: head, state: "unknown", attempts: 1 });
+    expect(moved.retry_at - moved.computed_at).toBe(MERGEABILITY_RETRY.firstMs);
+    // So does the base.
+    const tip = await commitOn("main", [{ path: "y.txt", content: "y\n" }]);
+    await runJobs();
+    expect(await kept()).toMatchObject({ base_sha: tip, state: "unknown", attempts: 1 });
+  });
+
+  it("is worked out again at once when its budgets changed since", async () => {
+    await open("feature");
+    await commitOn("main", [{ path: "z.txt", content: "z\n" }]);
+    await pastBudget(true);
+    await runJobs();
+    const before = await kept();
+    await pastBudget(false);
+    // Kept under other budgets (an older build's): asking for it brings its turn forward.
+    await inRepo(stub(), (r: RepoDO) =>
+      r.git.context.storage.sql.exec("UPDATE mergeability SET policy_version = 0"),
+    );
+    expect(await pull()).toMatchObject({ mergeable_reason: "too_expensive" });
+    expect((await waiting())[0]?.requested_at).toBeLessThan(before.retry_at);
+    expect(await jobAt()).toBeLessThan(before.retry_at);
+    await runJobs();
+    expect(await pull()).toMatchObject({ mergeable: true, mergeable_reason: null });
+  });
+
+  it("is queued when asked for, past the budget by older budgets and not waiting", async () => {
+    await open("feature");
+    await commitOn("main", [{ path: "z.txt", content: "z\n" }]);
+    await pastBudget(true);
+    await runJobs();
+    await pastBudget(false);
+    await inRepo(stub(), (r: RepoDO) => {
+      r.git.context.storage.sql.exec("UPDATE mergeability SET policy_version = 0");
+      r.git.context.storage.sql.exec("DELETE FROM mergeability_jobs");
+    });
+    await pull();
+    expect(await queue()).toEqual([1]);
+    await runJobs();
+    expect(await pull()).toMatchObject({ mergeable: true, mergeable_reason: null });
+  });
+
+  it("is unreadable when an object cannot be read, and worked out again after a delay", async () => {
+    await open("feature");
+    await inRepo(stub(), (r: RepoDO) => {
+      vi.spyOn(r.git.commitGraph, "read").mockRejectedValue(new Error("lost"));
     });
     await runJobs();
-    expect(await pull()).toMatchObject({ mergeable: null, mergeable_state: "unknown" });
-    expect((await mergeabilityEvents()).at(-1)).toMatchObject({ state: "unknown" });
-    // Known to be past the budget for this pair: asking again queues nothing.
-    expect(await queue()).toEqual([]);
+    await inRepo(stub(), (r: RepoDO) => {
+      vi.mocked(r.git.commitGraph.read).mockRestore();
+    });
+    expect(await pull()).toMatchObject({
+      mergeable: null,
+      mergeable_state: "unknown",
+      mergeable_reason: "unreadable",
+    });
+    const first = await kept();
+    expect(first).toMatchObject({ state: "error", attempts: 1 });
+    expect(await waiting()).toEqual([{ pr_number: 1, requested_at: first.retry_at }]);
+    vi.setSystemTime(first.retry_at);
+    await runJobs();
+    expect(await pull()).toMatchObject({ mergeable: true, mergeable_reason: null });
   });
 
   it("is queued when asked for and neither known nor queued", async () => {

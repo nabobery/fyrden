@@ -187,7 +187,7 @@ async function locate(objects: OidTable, view: RepoView): Promise<Located[][]> {
       if (pack.summary && !pack.summary.mayContain(oid)) continue;
       const hit = await pack.idx.lookup(oid);
       if (!hit) continue;
-      byPack[p]?.push({ index, offset: hit.offset, crc32: hit.crc32 });
+      byPack[p]?.push({ index, offset: hit.offset, crc32: await pack.idx.crc32At(hit.position) });
       found = true;
       break;
     }

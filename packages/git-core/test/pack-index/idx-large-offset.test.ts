@@ -75,10 +75,9 @@ describe("64-bit offset table", () => {
         offset: input.offsets[i],
         crc32: input.crc32s[i],
       });
-      expect(await ranged.lookup(oid)).toMatchObject({
-        offset: input.offsets[i],
-        crc32: input.crc32s[i],
-      });
+      const found = await ranged.lookup(oid);
+      expect(found).toMatchObject({ offset: input.offsets[i] });
+      expect(await ranged.crc32At(found?.position as number)).toBe(input.crc32s[i]);
     }
   });
 

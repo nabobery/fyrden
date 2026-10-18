@@ -12,6 +12,7 @@ export function pullRequest(overrides: Record<string, unknown> = {}) {
     head_repo_id: null,
     mergeable: true,
     mergeable_state: "clean",
+    mergeable_reason: null,
     draft: false,
     maintainer_can_modify: false,
     title: "Add a feature",

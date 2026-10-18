@@ -56,6 +56,8 @@ export interface PackRow {
   readonly kind: PackKind;
   readonly state: PackState;
   readonly bytes: number | null;
+  /** Objects in the pack, recorded when it was indexed (null when it was not). */
+  readonly objectCount: number | null;
   readonly unitId: string | null;
   readonly uploadId: string | null;
 }
@@ -67,11 +69,12 @@ type RawPackRow = {
   kind: string;
   state: string;
   bytes: number | null;
+  object_count: number | null;
   unit_id: string | null;
   upload_id: string | null;
 };
 
-const COLUMNS = "pack_id, network_id, r2_key, kind, state, bytes, unit_id, upload_id";
+const COLUMNS = "pack_id, network_id, r2_key, kind, state, bytes, object_count, unit_id, upload_id";
 
 function toRow(raw: RawPackRow): PackRow {
   return {
@@ -81,6 +84,7 @@ function toRow(raw: RawPackRow): PackRow {
     kind: raw.kind as PackKind,
     state: raw.state as PackState,
     bytes: raw.bytes,
+    objectCount: raw.object_count,
     unitId: raw.unit_id,
     uploadId: raw.upload_id,
   };
@@ -159,32 +163,26 @@ export class PackRegistry {
 
   /**
    * Live packs, newest first (the order lookups and verbatim plans follow),
-   * with what a fetch plan needs: the object count recorded at indexing
-   * (null when it was not recorded) and the `all_reachable` flag.
+   * with the `all_reachable` flag a fetch plan needs.
    */
-  liveForFetch(): (PackRow & { objectCount: number | null; allReachable: boolean })[] {
-    return rows<RawPackRow & { object_count: number | null; all_reachable: number }>(
+  liveForFetch(): (PackRow & { allReachable: boolean })[] {
+    return rows<RawPackRow & { all_reachable: number }>(
       this.context.storage,
-      `SELECT ${COLUMNS}, object_count, all_reachable FROM packs WHERE state = 'live'
+      `SELECT ${COLUMNS}, all_reachable FROM packs WHERE state = 'live'
        ORDER BY created_at DESC, pack_id DESC`,
-    ).map((raw) => ({
-      ...toRow(raw),
-      objectCount: raw.object_count,
-      allReachable: raw.all_reachable === 1,
-    }));
+    ).map((raw) => ({ ...toRow(raw), allReachable: raw.all_reachable === 1 }));
   }
 
   /**
    * The repository's own live packs (borrowed packs excluded), oldest first,
-   * with the object count recorded at indexing (null when it was not) and
-   * the creation time: what the pack-count cap counts and merges.
+   * with the creation time: what the pack-count cap counts and merges.
    */
-  liveOwn(): (PackRow & { objectCount: number | null; createdAt: number })[] {
-    return rows<RawPackRow & { object_count: number | null; created_at: number }>(
+  liveOwn(): (PackRow & { createdAt: number })[] {
+    return rows<RawPackRow & { created_at: number }>(
       this.context.storage,
-      `SELECT ${COLUMNS}, object_count, created_at FROM packs
+      `SELECT ${COLUMNS}, created_at FROM packs
        WHERE state = 'live' AND origin = 'own' ORDER BY created_at, pack_id`,
-    ).map((raw) => ({ ...toRow(raw), objectCount: raw.object_count, createdAt: raw.created_at }));
+    ).map((raw) => ({ ...toRow(raw), createdAt: raw.created_at }));
   }
 
   /**

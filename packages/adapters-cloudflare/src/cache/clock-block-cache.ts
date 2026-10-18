@@ -2,10 +2,11 @@ import { BLOCK_SIZE, type BlockCache } from "@fyrden/git-core";
 import { checkBlockAddress } from "./block-key.js";
 
 /**
- * The in-isolate block cache budget. Proposed: 24 MiB, fixed, inside the
- * 96 MiB a Durable Object isolate plans to use (design: memory admission).
+ * The in-isolate block cache budget. Proposed: 16 MiB, fixed, inside the
+ * 96 MiB a Durable Object isolate plans to use, beside the 8 MiB pack index
+ * cache (design: memory admission).
  */
-export const DEFAULT_CLOCK_CACHE_BYTES = 24 * 1024 * 1024;
+export const DEFAULT_CLOCK_CACHE_BYTES = 16 * 1024 * 1024;
 
 export interface ClockBlockCache extends BlockCache {
   /** Bytes of block data held. Never more than the budget. */
