@@ -76,7 +76,8 @@ describe("stopping wrangler dev", () => {
   it("ends what a launcher left running after it exited", async () => {
     const { child, stop, ready } = await started(launcher(KEEP_RUNNING, true));
     const pid = Number(ready.split(" ")[1]);
-    await once(child, "exit");
+    // The launcher can exit before its child prints `ready` (a slow start).
+    if (child.exitCode === null) await once(child, "exit");
     expect(alive(pid)).toBe(true);
     await stop();
     expect(groupRunning(child.pid as number)).toBe(false);
