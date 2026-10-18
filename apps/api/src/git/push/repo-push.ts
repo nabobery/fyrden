@@ -459,6 +459,8 @@ export class RepoPush {
         // wait on one another for the rest.
         const memory = await this.git.memory.begin(pushIndexMemoryBytes());
         try {
+          // The wait for memory spent part of the lock: the step gets all of it.
+          if (!this.git.locks.renew(lock, INDEX_LOCK_MS)) return "busy";
           await indexer.step(
             await pushIndexEnv(
               this.git,
