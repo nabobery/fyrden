@@ -1,6 +1,7 @@
 import { createWorkersZlib } from "@fyrden/adapters-cloudflare";
 import {
   DEFAULT_PART_BYTES,
+  MemoryWaitTimeoutError,
   type PackRow,
   packObjectKey,
   type RepoGitStorage,
@@ -11,7 +12,9 @@ import {
   createReadStats,
   type FetchPlan,
   type FetchResponsePart,
+  fetchPlanMemoryBytes,
   type MaterialisedPackStore,
+  type MemoryBudget,
   type MemoryReservation,
   type PackId,
   PackIdx,
@@ -22,6 +25,7 @@ import {
   type ViewPack,
 } from "@fyrden/git-core";
 import { openRequestBlockCache, type PackBlockStats } from "../cache/pack-blocks.js";
+import { idxBytesAtMost } from "../pack-view.js";
 import type { FetchPlanReply, FetchPlanRequest, WirePart, WorkersPlan } from "./wire.js";
 
 /**
@@ -57,11 +61,33 @@ interface Counters {
  * pack it has to build (a regenerated pack, or a side-band framed copy on
  * Free) is written to R2 before it returns; pack bytes never travel in the
  * reply. The live packs are leased while planning, and the stored objects
- * the reply names stay leased for the Worker until it releases them.
+ * the reply names stay leased for the Worker until it releases them. The
+ * plan first waits for its share of the object's memory, holding nothing:
+ * plans that each held part of the pool could otherwise wait on one
+ * another for the rest. The share covers the live packs' indexes, which
+ * the plan reads whole, as far as their sizes are known.
  */
 export async function planFetchInRepo(
   deps: FetchPlanDeps,
   request: FetchPlanRequest,
+): Promise<FetchPlanReply> {
+  const { git } = deps;
+  let indexes = 0;
+  for (const row of git.registry.liveForFetch())
+    indexes += idxBytesAtMost(row.objectCount, row.bytes ?? 0) ?? 0;
+  const share = Math.min(fetchPlanMemoryBytes() + indexes, git.memory.stats().totalBytes);
+  const memory = await git.memory.begin(share);
+  try {
+    return await plan(deps, request, memory);
+  } finally {
+    memory.release();
+  }
+}
+
+async function plan(
+  deps: FetchPlanDeps,
+  request: FetchPlanRequest,
+  memory: MemoryBudget,
 ): Promise<FetchPlanReply> {
   const { git } = deps;
   const calls: Counters = { r2: 0, cacheApi: 0 };
@@ -91,7 +117,7 @@ export async function planFetchInRepo(
   });
   const blockStats: { -readonly [K in keyof PackBlockStats]: PackBlockStats[K] } = blocks.stats();
   try {
-    const { view, candidates } = await fetchView(git, live, calls, reservations);
+    const { view, candidates } = await fetchView(git, live, calls, memory, reservations);
     let plan: FetchPlan;
     try {
       plan = await planFetch(
@@ -101,7 +127,7 @@ export async function planFetchInRepo(
           view: { scope, packs: view },
           packStore: countingStore(git.packStore, calls),
           zlib: createWorkersZlib(),
-          memory: git.memory,
+          memory,
           blockCache: blocks.cache,
           verbatim: candidates,
           materialised: countingMaterialised(git.fetchObjects, calls),
@@ -152,7 +178,8 @@ export async function planFetchInRepo(
 /**
  * `planFetchInRepo` for the object's RPC method: any failure other than a
  * refusal is logged here and answered with a generic `ERR`, so the error
- * never crosses the RPC boundary and the client always gets a message.
+ * never crosses the RPC boundary and the client always gets a message. A
+ * plan that waited too long for memory says the repository is busy.
  */
 export async function answerFetchPlan(
   deps: FetchPlanDeps,
@@ -161,6 +188,10 @@ export async function answerFetchPlan(
   try {
     return await planFetchInRepo(deps, request);
   } catch (error) {
+    if (error instanceof MemoryWaitTimeoutError) {
+      createLogger({ do: "RepoDO" }).warn("fetch plan waited too long for memory", { error });
+      return { ok: false, message: `upload-pack: ${error.message}`, calls: { r2: 0, cacheApi: 0 } };
+    }
     createLogger({ do: "RepoDO" }).error("fetch plan failed", { error });
     return {
       ok: false,
@@ -183,6 +214,7 @@ async function fetchView(
   git: RepoGitStorage,
   live: readonly (PackRow & { allReachable: boolean })[],
   calls: Counters,
+  memory: MemoryBudget,
   reservations: MemoryReservation[],
 ): Promise<{ view: ViewPack[]; candidates: VerbatimCandidate[] }> {
   const view: ViewPack[] = [];
@@ -191,7 +223,7 @@ async function fetchView(
     if (row.bytes === null) throw new Error(`live pack ${row.packId} has no length`);
     let loading: Promise<PackIdx> | undefined;
     const idx = () => {
-      loading ??= loadIdx(git, row, calls, reservations);
+      loading ??= loadIdx(git, row, calls, memory, reservations);
       return loading;
     };
     view.push({
@@ -216,13 +248,14 @@ async function loadIdx(
   git: RepoGitStorage,
   row: PackRow,
   calls: Counters,
+  memory: MemoryBudget,
   reservations: MemoryReservation[],
 ): Promise<PackIdx> {
   calls.r2++;
   git.context.metrics.count("r2.class_b", { bucket: "fyrden-git", op: "get_idx" });
   const object = await git.bucket.get(packObjectKey(row.networkId, row.packId, "idx"));
   if (!object) throw new Error(`the index of pack ${row.packId} is missing`);
-  reservations.push(await git.memory.reserve(Math.max(1, object.size)));
+  reservations.push(await memory.reserve(Math.max(1, object.size)));
   return PackIdx.parse(new Uint8Array(await object.arrayBuffer()));
 }
 

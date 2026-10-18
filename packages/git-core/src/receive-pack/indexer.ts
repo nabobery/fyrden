@@ -8,7 +8,7 @@ import { PackError } from "../pack/errors.js";
 import { IdxError } from "../pack/idx-format.js";
 import { PackIdx } from "../pack/idx-read.js";
 import { writeIdx } from "../pack/idx-write.js";
-import { type PackLimits, parsePack } from "../pack/parse.js";
+import { DEFAULT_PACK_LIMITS, type PackLimits, parsePack } from "../pack/parse.js";
 import { PackBuilder } from "../pack-write/pack-builder.js";
 import type { BlockCache } from "../ports/block-cache.js";
 import type { CommitGraph, CommitGraphEntry, CommitInfo } from "../ports/commit-graph.js";
@@ -17,7 +17,7 @@ import type { PackId, PackStore, PackWriter } from "../ports/pack-store.js";
 import type { RefStore } from "../ports/ref-store.js";
 import type { Zlib } from "../ports/zlib.js";
 import { excerpt } from "../protocol/errors.js";
-import { ObjectReader } from "../reader/object-reader.js";
+import { DEFAULT_READER_LIMITS, ObjectReader } from "../reader/object-reader.js";
 import type { RepoView, ViewPack } from "../reader/view.js";
 import { bodyChunks, type StoredBody } from "./body.js";
 import { RepoClosure } from "./closure.js";
@@ -107,6 +107,21 @@ export const DEFAULT_PUSH_LIMITS: PushLimits = Object.freeze({
   connectBatch: 512,
   closureReads: 200,
 });
+
+/**
+ * The memory an indexing phase holds at once besides what grows with the
+ * pack (tables, ranges of the body, the objects it resolves): its reader's
+ * delta-base cache and, while parsing, the parser's and the link table's
+ * first step: the share a phase reserves up front, holding nothing else
+ * (`DoMemoryBudget.begin`), so that concurrent phases each hold enough to
+ * go on instead of a part each of what was free.
+ */
+export function pushIndexMemoryBytes(limits: Partial<PushLimits> = {}): number {
+  const pack = { ...DEFAULT_PACK_LIMITS, ...(limits.pack ?? DEFAULT_PUSH_LIMITS.pack) };
+  return (
+    DEFAULT_READER_LIMITS.deltaBaseCacheBytes + pack.deltaBaseCacheBytes + LinkTable.RESERVE_STEP
+  );
+}
 
 /** What indexing needs from the Durable Object (or the in-memory fakes). */
 export interface PushIndexEnv {

@@ -1,7 +1,7 @@
 import { createWorkersZlib } from "@fyrden/adapters-cloudflare";
 import { packObjectKey, type RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
-import type { BlockCache, PackId, PushIndexEnv } from "@fyrden/git-core";
+import type { BlockCache, MemoryBudget, PackId, PushIndexEnv } from "@fyrden/git-core";
 import { openRequestBlockCache } from "../cache/pack-blocks.js";
 import { liveView } from "../pack-view.js";
 import { BUCKET_NAME } from "./scratch.js";
@@ -24,12 +24,15 @@ const PUSH_CACHE_API_CALLS = 40;
  * are looked up in the live packs only, through the object's in-memory
  * block tier and the network's Cache API tier (`memoryBlocks`); objects
  * found only in borrowed packs are proven reachable from the refs first.
+ * The phase reserves from `memory`, its share of the object's pool
+ * (`DoMemoryBudget.begin`).
  */
 export async function pushIndexEnv(
   git: RepoGitStorage,
   upload: { readonly uploadId: string; readonly packId: PackId },
   metrics: Metrics,
   memoryBlocks: BlockCache,
+  memory: MemoryBudget,
 ): Promise<PushIndexEnv> {
   const networkId = git.networkId();
   // Pack blocks are cached per network; a push reads only its own network's packs.
@@ -40,7 +43,7 @@ export async function pushIndexEnv(
   const idxKey = (packId: PackId) => packObjectKey(networkId, packId, "idx");
   return {
     zlib: createWorkersZlib(),
-    memory: git.memory,
+    memory,
     commitGraph: git.commitGraph,
     packStore: git.packStore,
     beginPack: (role) =>

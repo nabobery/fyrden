@@ -44,6 +44,7 @@ export {
   type DoMemoryBudget,
   type MemoryBudgetStats,
   MemoryWaitTimeoutError,
+  type OperationMemory,
   withReservation,
 } from "./memory-budget.js";
 export { type HeldPackIndex, PackIndexCache } from "./pack-index-cache.js";

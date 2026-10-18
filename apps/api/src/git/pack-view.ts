@@ -37,7 +37,7 @@ async function readObject(
 }
 
 /** The most bytes the pack's `.idx` can have, or undefined when its object count was not recorded. */
-function idxBytesAtMost(objectCount: number | null, packBytes: number): number | undefined {
+export function idxBytesAtMost(objectCount: number | null, packBytes: number): number | undefined {
   if (objectCount === null) return undefined;
   const perEntry = 20 + 4 + 4 + (packBytes >= LARGE_OFFSET_PACK_BYTES ? 8 : 0);
   return IDX_FIXED_BYTES + perEntry * objectCount;

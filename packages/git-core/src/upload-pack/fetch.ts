@@ -1,6 +1,7 @@
 import { WalkLimitError } from "../graph/errors.js";
 import { OidTable } from "../graph/oid-table.js";
 import { type Oid, oidToHex } from "../object/oid.js";
+import { DEFAULT_PACK_CHUNK_BYTES } from "../pack-write/pack-builder.js";
 import type { BlockCache } from "../ports/block-cache.js";
 import type { CommitGraph } from "../ports/commit-graph.js";
 import type { MemoryBudget } from "../ports/memory-budget.js";
@@ -10,7 +11,7 @@ import type { Zlib } from "../ports/zlib.js";
 import { flushPkt } from "../protocol/pktline.js";
 import { SIDEBAND_64K_MAX_PAYLOAD } from "../protocol/sideband.js";
 import type { FetchArgs } from "../protocol/v2-command.js";
-import { ObjectReader } from "../reader/object-reader.js";
+import { DEFAULT_READER_LIMITS, ObjectReader } from "../reader/object-reader.js";
 import { createReadStats, type ReadStats } from "../reader/stats.js";
 import type { RepoView } from "../reader/view.js";
 import { regeneratedPackKey } from "./cache-key.js";
@@ -82,6 +83,18 @@ export const DEFAULT_FETCH_PLAN_LIMITS: FetchPlanLimits = Object.freeze({
   maxVerbatimPacks: 32,
   rangeBytes: 8 * 1024 * 1024,
 });
+
+/**
+ * The memory a plan holds at once besides its walk tables and the packs'
+ * indexes: the reader's delta-base cache, a regenerated pack's read range
+ * and its writer's chunk: the share a plan reserves up front, holding
+ * nothing else (`DoMemoryBudget.begin`), so that concurrent plans each
+ * hold enough to go on instead of a part each of what was free.
+ */
+export function fetchPlanMemoryBytes(limits: Partial<FetchPlanLimits> = {}): number {
+  const { rangeBytes } = { ...DEFAULT_FETCH_PLAN_LIMITS, ...limits };
+  return DEFAULT_READER_LIMITS.deltaBaseCacheBytes + rangeBytes + DEFAULT_PACK_CHUNK_BYTES;
+}
 
 export interface FetchPlanOptions {
   /**

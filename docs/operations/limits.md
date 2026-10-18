@@ -268,12 +268,22 @@ parsing pass of one pack runs in one invocation.
 Each Durable Object has 128 MB of memory
 ([platform limit](https://developers.cloudflare.com/workers/platform/limits/#memory));
 Fyrden's git operations in one repository share a 72 MiB pool (default) and
-wait for room rather than exceed it. Besides the pool, a repository keeps
-pack blocks (16 MiB) and pack indexes (8 MiB) in memory between requests, so
-finding an object in a pack it read recently reads nothing from R2; an index
-over 2 MiB (a pack of about 75,000 objects) is read by ranges instead. Index
-reads in flight count against the 8 MiB too: when they fill it, further index
-reads wait for them to finish.
+wait for room rather than exceed it. A fetch plan and a push's indexing
+phase first wait for their share, holding nothing (25 MiB plus the packs'
+indexes, up to the whole pool, and 33 MiB, with the default limits), then
+reserve from it: a reservation that fits what is left of their share is
+granted at once. What they need past it (tables that grow with the
+repository, the objects a push resolves) comes from the pool ahead of work
+not yet started, and can wait for other work, so concurrent ones that both
+need more than their share can still wait on each other. In a small
+repository two shares of either kind fit in the pool at once; the rest wait
+their turn. A wait past 60 s fails: a fetch then answers that the repository
+is busy and to try again. Besides the pool, a repository keeps pack blocks
+(16 MiB) and pack indexes (8 MiB) in memory between requests, so finding an
+object in a pack it read recently reads nothing from R2; an index over 2 MiB
+(a pack of about 75,000 objects) is read by ranges instead. Index reads in
+flight count against the 8 MiB too: when they fill it, further index reads
+wait for them to finish.
 
 ## Chunked upload sessions
 
