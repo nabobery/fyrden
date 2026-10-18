@@ -801,14 +801,22 @@ describe("a page's files read at once", () => {
 });
 
 describe("turns at memory while a page reads its files", () => {
-  /** Memory with room for one hold at a time, and reads to spare. */
+  /** Memory with room for one hold at a time, and reads to spare; `refused` settles once it refuses one. */
   const roomForOne = () => {
     let held = false;
+    let refuse = () => {};
+    const refused = new Promise<void>((resolve) => {
+      refuse = resolve;
+    });
     return {
+      refused,
       policy: BROWSE_POLICY,
       reads: 0,
       hold: (bytes: number) => {
-        if (held) return undefined;
+        if (held) {
+          refuse();
+          return undefined;
+        }
         held = true;
         return {
           bytes,
@@ -821,7 +829,8 @@ describe("turns at memory while a page reads its files", () => {
   };
 
   it("holds memory in file order, a file short of it waiting for the files before it", async () => {
-    const turns = new ReadTurns(roomForOne(), PULL_FILES_POLICY.serialReads);
+    const memory = roomForOne();
+    const turns = new ReadTurns(memory, PULL_FILES_POLICY.serialReads);
     const first = turns.file(0);
     const second = turns.file(1);
     // The second file asks first, but cannot hold before the first does.
@@ -829,6 +838,7 @@ describe("turns at memory while a page reads its files", () => {
     const firstHeld = await first.hold(1);
     expect(firstHeld).toBeDefined();
     // Short of memory, it waits until the first is taken and has released its own.
+    await memory.refused;
     firstHeld?.release();
     first.ended();
     turns.first(1);
