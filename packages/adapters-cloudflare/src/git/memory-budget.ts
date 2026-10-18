@@ -53,12 +53,43 @@ export interface DoMemoryBudget extends MemoryBudget {
    * R2 scratch or reschedules itself on the alarm.
    */
   reserveWithin(bytes: number, waitMs: number): Promise<MemoryReservation | undefined>;
+  /**
+   * Starts an operation that reserves in steps (a fetch plan, an indexing
+   * phase). The caller holds nothing yet: it waits, behind every other
+   * waiter, for `bytes`, the most the operation holds at once besides what
+   * grows with its input, then the operation reserves from them: one that
+   * fits what is left of them is granted at once. One past them waits in
+   * arrival order with every other reservation, ahead of operations not
+   * yet started, until the pool's limit: operations that all need more
+   * than their share at once can still wait on one another.
+   */
+  begin(bytes: number, signal?: AbortSignal): Promise<OperationMemory>;
   stats(): MemoryBudgetStats;
+}
+
+/** A started operation's memory (`DoMemoryBudget.begin`). */
+export interface OperationMemory extends MemoryBudget {
+  /**
+   * Ends the operation: its share goes back to the pool, its waiters fail,
+   * and it reserves nothing more. Reservations it made past its share stay
+   * held until released. Calling it twice has no effect.
+   */
+  release(): void;
+}
+
+/** What a started operation holds of its share. */
+interface Share {
+  readonly bytes: number;
+  used: number;
+  ended: boolean;
 }
 
 interface Waiter {
   readonly bytes: number;
+  /** Set for a reservation of a started operation past its share. */
+  readonly share?: Share;
   grant(reservation: MemoryReservation): void;
+  fail(error: Error): void;
 }
 
 export interface DoMemoryBudgetOptions {
@@ -71,7 +102,10 @@ export interface DoMemoryBudgetOptions {
  * reservation belongs to a running request and disappears with the
  * instance, so nothing needs to survive eviction. Waiters are served in
  * arrival order; a large waiter at the front holds back smaller ones, so it
- * cannot starve.
+ * cannot starve. Operations not yet started (`begin`) wait behind every
+ * other waiter, in an order of their own: they hold nothing yet, while
+ * any other waiter may belong to work under way. A steady stream of other
+ * reservations can keep one from starting until its wait's limit.
  *
  * Several objects can share one isolate (**unverified** how often in
  * production), and this budget does not see the others. The per-object
@@ -87,6 +121,8 @@ export function createDoMemoryBudget(
   let reserved = 0;
   let peak = 0;
   const waiting: Waiter[] = [];
+  /** Operations waiting for their share (`begin`): served once `waiting` is empty. */
+  const starting: Waiter[] = [];
 
   function check(bytes: number): void {
     if (!Number.isSafeInteger(bytes) || bytes <= 0)
@@ -110,33 +146,105 @@ export function createDoMemoryBudget(
     };
   }
 
+  /** `bytes` of an operation's share, given back to the share on release. */
+  function grantShared(share: Share, bytes: number): MemoryReservation {
+    share.used += bytes;
+    let released = false;
+    return {
+      bytes,
+      release() {
+        if (released) return;
+        released = true;
+        if (share.ended) return;
+        share.used -= bytes;
+        serveWaiters();
+      },
+    };
+  }
+
+  const fitsShare = (share: Share, bytes: number) =>
+    !share.ended && bytes <= share.bytes - share.used;
+  /** Whether the operation already waits for more: its later reservations wait behind it. */
+  const waitsFor = (share: Share) => waiting.some((waiter) => waiter.share === share);
+
+  /**
+   * Grants the waiters of operations that their own share now covers, in
+   * each operation's order, wherever they are in the queue: they take
+   * nothing from the pool. Whether it granted any.
+   */
+  function serveFromShares(): boolean {
+    let served = false;
+    const behind = new Set<Share>();
+    for (const next of [...waiting]) {
+      if (!next.share || behind.has(next.share)) continue;
+      if (!fitsShare(next.share, next.bytes)) {
+        behind.add(next.share);
+        continue;
+      }
+      waiting.splice(waiting.indexOf(next), 1);
+      next.grant(grantShared(next.share, next.bytes));
+      served = true;
+    }
+    return served;
+  }
+
+  /**
+   * Grants waiters in arrival order, those of `waiting` and then those of
+   * `starting`, until the first that does not fit; nothing behind it is
+   * served. An operation's waiter at the front takes its own share first.
+   * Whether it granted any.
+   */
+  function serveFromPool(): boolean {
+    let served = false;
+    for (const queue of [waiting, starting]) {
+      while (queue.length > 0) {
+        const next = queue[0] as Waiter;
+        const { share } = next;
+        if (share && fitsShare(share, next.bytes)) {
+          queue.shift();
+          next.grant(grantShared(share, next.bytes));
+        } else if (next.bytes <= totalBytes - reserved) {
+          queue.shift();
+          next.grant(grantNow(next.bytes));
+        } else return served;
+        served = true;
+      }
+    }
+    return served;
+  }
+
   function serveWaiters(): void {
-    while (waiting.length > 0) {
-      const next = waiting[0] as Waiter;
-      if (next.bytes > totalBytes - reserved) return;
-      waiting.shift();
-      next.grant(grantNow(next.bytes));
+    // A grant from the pool can put an operation's waiter at the front of
+    // its order, so each pass may let the other serve more.
+    for (let served = true; served; ) {
+      served = serveFromShares();
+      served = serveFromPool() || served;
     }
   }
 
   /**
-   * Queues a waiter. It leaves the queue when granted, when `waitMs`
-   * passes (`onTimeout` decides the outcome) or when `signal` aborts
-   * (rejected with its reason).
+   * Queues a waiter in `queue`. It leaves the queue when granted, when
+   * `waitMs` passes (`onTimeout` decides the outcome), when `signal` aborts
+   * (rejected with its reason) or when it fails (its operation ended).
    */
   function enqueue<T>(
+    queue: Waiter[],
     bytes: number,
     waitMs: number,
     onTimeout: () => T,
     signal?: AbortSignal,
+    share?: Share,
   ): Promise<MemoryReservation | T> {
     return new Promise((resolve, reject) => {
-      const leave = (): boolean => {
+      const settle = () => {
         clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
-        const at = waiting.indexOf(waiter);
+      };
+      const leave = (): boolean => {
+        settle();
+        const at = queue.indexOf(waiter);
         if (at < 0) return false;
-        waiting.splice(at, 1);
+        queue.splice(at, 1);
         // Leaving the queue may unblock smaller waiters behind this one.
         serveWaiters();
         return true;
@@ -154,45 +262,93 @@ export function createDoMemoryBudget(
       }, waitMs);
       const waiter: Waiter = {
         bytes,
+        ...(share ? { share } : {}),
         grant(reservation) {
-          clearTimeout(timer);
-          signal?.removeEventListener("abort", onAbort);
+          settle();
           resolve(reservation);
+        },
+        fail(error) {
+          settle();
+          reject(error);
         },
       };
       signal?.addEventListener("abort", onAbort, { once: true });
-      waiting.push(waiter);
+      queue.push(waiter);
     });
   }
 
-  const free = () => totalBytes - reserved;
+  /** Whether `bytes` can be granted from the pool now, ahead of operations not yet started. */
+  const fitsNow = (bytes: number) => waiting.length === 0 && bytes <= totalBytes - reserved;
+  const timedOut = (bytes: number) => () => {
+    throw new MemoryWaitTimeoutError(bytes, maxWaitMs);
+  };
+
+  /** The memory of an operation whose share is `base`. */
+  function operation(base: MemoryReservation): OperationMemory {
+    const share: Share = { bytes: base.bytes, used: 0, ended: false };
+    const open = () => {
+      if (share.ended) throw new Error("the operation has ended and released its memory");
+    };
+    return {
+      async reserve(bytes, signal) {
+        check(bytes);
+        signal?.throwIfAborted();
+        open();
+        if (!waitsFor(share) && fitsShare(share, bytes)) return grantShared(share, bytes);
+        if (fitsNow(bytes)) return grantNow(bytes);
+        return enqueue(waiting, bytes, maxWaitMs, timedOut(bytes), signal, share);
+      },
+      tryReserve(bytes) {
+        check(bytes);
+        open();
+        if (waitsFor(share)) return undefined;
+        if (fitsShare(share, bytes)) return grantShared(share, bytes);
+        return fitsNow(bytes) ? grantNow(bytes) : undefined;
+      },
+      release() {
+        if (share.ended) return;
+        share.ended = true;
+        for (const next of waiting.filter((waiter) => waiter.share === share)) {
+          waiting.splice(waiting.indexOf(next), 1);
+          next.fail(new Error("the operation ended while it waited for memory"));
+        }
+        base.release();
+      },
+    };
+  }
 
   return {
     async reserve(bytes, signal) {
       check(bytes);
       signal?.throwIfAborted();
-      if (waiting.length === 0 && bytes <= free()) return grantNow(bytes);
-      return enqueue(
-        bytes,
-        maxWaitMs,
-        () => {
-          throw new MemoryWaitTimeoutError(bytes, maxWaitMs);
-        },
-        signal,
-      ) as Promise<MemoryReservation>;
+      if (fitsNow(bytes)) return grantNow(bytes);
+      return enqueue(waiting, bytes, maxWaitMs, timedOut(bytes), signal);
     },
     tryReserve(bytes) {
       check(bytes);
-      return waiting.length === 0 && bytes <= free() ? grantNow(bytes) : undefined;
+      return fitsNow(bytes) ? grantNow(bytes) : undefined;
     },
     async reserveWithin(bytes, waitMs) {
       check(bytes);
-      if (waiting.length === 0 && bytes <= free()) return grantNow(bytes);
+      if (fitsNow(bytes)) return grantNow(bytes);
       if (waitMs <= 0) return undefined;
-      return enqueue(bytes, Math.min(waitMs, maxWaitMs), () => undefined);
+      return enqueue(waiting, bytes, Math.min(waitMs, maxWaitMs), () => undefined);
+    },
+    async begin(bytes, signal) {
+      check(bytes);
+      signal?.throwIfAborted();
+      if (starting.length === 0 && fitsNow(bytes)) return operation(grantNow(bytes));
+      return operation(
+        (await enqueue(starting, bytes, maxWaitMs, timedOut(bytes), signal)) as MemoryReservation,
+      );
     },
     stats() {
-      return { totalBytes, reservedBytes: reserved, peakBytes: peak, waiting: waiting.length };
+      return {
+        totalBytes,
+        reservedBytes: reserved,
+        peakBytes: peak,
+        waiting: waiting.length + starting.length,
+      };
     },
   };
 }

@@ -68,3 +68,7 @@ describeCommitGraphContract("Durable Object SQLite", async () => {
 describeMemoryBudgetContract("Durable Object memory pool", async (total) =>
   createDoMemoryBudget(total),
 );
+
+describeMemoryBudgetContract("A started operation's memory", async (total) =>
+  createDoMemoryBudget(total).begin(total),
+);

@@ -85,3 +85,146 @@ describe("Durable Object memory pool", () => {
     held?.release();
   });
 });
+
+describe("operations started with their share of the pool", () => {
+  it("finish one after another where reserving in steps leaves each waiting on the other", async () => {
+    // Two pieces of work, each needing 40 bytes of a 100-byte pool and then 30 more.
+    const steps = createDoMemoryBudget(100, { maxWaitMs: 20 });
+    const held = [await steps.reserve(40), await steps.reserve(40)];
+    // Each waits for 30 that only the other's 40 could free.
+    await expect(Promise.all([steps.reserve(30), steps.reserve(30)])).rejects.toThrow(
+      MemoryWaitTimeoutError,
+    );
+    for (const reservation of held) reservation.release();
+
+    const budget = createDoMemoryBudget(100, { maxWaitMs: 20 });
+    const run = async () => {
+      const memory = await budget.begin(70);
+      try {
+        const first = await memory.reserve(40);
+        const second = await memory.reserve(30);
+        first.release();
+        second.release();
+      } finally {
+        memory.release();
+      }
+    };
+    await Promise.all([run(), run()]);
+    expect(budget.stats()).toMatchObject({ reservedBytes: 0, peakBytes: 70, waiting: 0 });
+  });
+
+  it("serves work under way, in arrival order, before operations not yet started", async () => {
+    const budget = createDoMemoryBudget(100);
+    const operation = await budget.begin(50);
+    const own = await operation.reserve(50);
+    const other = await budget.reserve(40);
+    const later = budget.begin(30);
+    // What is free goes to work under way, though an operation waits to start.
+    const past = await operation.reserve(10);
+    const plain = budget.reserve(5);
+    const more = operation.reserve(20);
+    expect(budget.stats()).toMatchObject({ reservedBytes: 100, waiting: 3 });
+    other.release();
+    expect((await plain).bytes).toBe(5);
+    expect((await more).bytes).toBe(20);
+    // The 15 left do not fit the operation waiting to start.
+    expect(budget.stats()).toMatchObject({ reservedBytes: 85, waiting: 1 });
+    for (const reservation of [own, past, await more]) reservation.release();
+    operation.release();
+    const started = await later;
+    expect(budget.stats()).toMatchObject({ reservedBytes: 35, waiting: 0 });
+    started.release();
+    (await plain).release();
+  });
+
+  it("serves a reservation of other work queued before an operation's, which it may need to finish", async () => {
+    const budget = createDoMemoryBudget(100, { maxWaitMs: 1_000 });
+    const operation = await budget.begin(40);
+    const own = await operation.reserve(40);
+    const other = await budget.reserve(40);
+    const brief = await budget.reserve(20);
+    // The other work needs 10 more before it can release its 40.
+    const otherMore = budget.reserve(10);
+    const operationMore = operation.reserve(30);
+    brief.release();
+    expect((await otherMore).bytes).toBe(10);
+    other.release();
+    (await otherMore).release();
+    expect((await operationMore).bytes).toBe(30);
+    for (const reservation of [own, await operationMore]) reservation.release();
+    operation.release();
+    expect(budget.stats()).toMatchObject({ reservedBytes: 0, waiting: 0 });
+  });
+
+  it("answers an operation's later waiter from its share once an earlier one came from the pool", async () => {
+    const budget = createDoMemoryBudget(100, { maxWaitMs: 1_000 });
+    const operation = await budget.begin(60);
+    const own = await operation.reserve(50);
+    const others = [await budget.reserve(20), await budget.reserve(20)];
+    const first = operation.reserve(20);
+    const second = operation.reserve(5);
+    others[0]?.release();
+    // The first comes from the pool, which is then full; the second fits the share.
+    expect((await first).bytes).toBe(20);
+    expect((await second).bytes).toBe(5);
+    expect(budget.stats()).toMatchObject({ reservedBytes: 100, waiting: 0 });
+    for (const reservation of [own, await first, await second, others[1]]) reservation?.release();
+    operation.release();
+    expect(budget.stats().reservedBytes).toBe(0);
+  });
+
+  it("answers an operation's waiter from its own share once the operation frees some", async () => {
+    const budget = createDoMemoryBudget(100);
+    const operation = await budget.begin(60);
+    const other = await budget.reserve(40);
+    const first = await operation.reserve(50);
+    const second = operation.reserve(20);
+    first.release();
+    expect((await second).bytes).toBe(20);
+    // Nothing more came from the pool, which stayed full.
+    expect(budget.stats()).toMatchObject({ reservedBytes: 100, waiting: 0 });
+    (await second).release();
+    other.release();
+    operation.release();
+    expect(budget.stats().reservedBytes).toBe(0);
+  });
+
+  it("takes an operation's waiter at the front from its share before the pool", async () => {
+    const budget = createDoMemoryBudget(100, { maxWaitMs: 1_000 });
+    const a = await budget.begin(40);
+    const b = await budget.begin(30);
+    const held = [await a.reserve(30), await b.reserve(30)];
+    const brief = await budget.reserve(30);
+    const [a20, a10, b10] = [a.reserve(20), a.reserve(10), b.reserve(10)];
+    brief.release();
+    // A's 20 comes from the pool, its 10 from its share, leaving room for B's 10.
+    expect((await a20).bytes).toBe(20);
+    expect((await a10).bytes).toBe(10);
+    expect((await b10).bytes).toBe(10);
+    expect(budget.stats()).toMatchObject({ reservedBytes: 100, waiting: 0 });
+    for (const reservation of [...held, await a20, await a10, await b10]) reservation.release();
+    a.release();
+    b.release();
+    expect(budget.stats().reservedBytes).toBe(0);
+  });
+
+  it("ends an operation: its share goes back, its waiters fail and it reserves no more", async () => {
+    const budget = createDoMemoryBudget(100);
+    const operation = await budget.begin(60);
+    const own = await operation.reserve(60);
+    const past = await operation.reserve(30);
+    const waits = operation.reserve(20);
+    operation.release();
+    await expect(waits).rejects.toThrow("the operation ended while it waited for memory");
+    expect(budget.stats()).toMatchObject({ reservedBytes: 30, waiting: 0 });
+    // What it held of its share went back with it; what it held past it stays held.
+    own.release();
+    expect(budget.stats().reservedBytes).toBe(30);
+    past.release();
+    expect(budget.stats().reservedBytes).toBe(0);
+    await expect(operation.reserve(1)).rejects.toThrow("the operation has ended");
+    expect(() => operation.tryReserve(1)).toThrow("the operation has ended");
+    operation.release();
+    expect(budget.stats().reservedBytes).toBe(0);
+  });
+});
