@@ -640,6 +640,78 @@ describe("a page's files read at once", () => {
     expect(outcome.differing).toEqual([]);
   });
 
+  it("gives each file the memory reading the files one at a time would, though little is free", async () => {
+    const compared = await comparison();
+    const first = (await files()).body.files[0];
+    const outcome = await inRepo(env.REPO.getByName(repo.id), async (r) => {
+      const read = async (policy: PullFilesPolicy) => {
+        const browse = browsing(r);
+        // The first file's sizes, and every file's contents, are read a
+        // task later, so a file read ahead holds its memory while the first
+        // file asks for its own.
+        const later = () =>
+          // biome-ignore lint/style/noRestrictedGlobals: a deliberate yield past every pending microtask, which is how the files read ahead reach their memory first.
+          new Promise((resolve) => setTimeout(resolve, 0));
+        const open = browse.reader.bind(browse);
+        browse.reader = async () => {
+          const reader = await open();
+          return new Proxy(reader, {
+            get(target, property) {
+              if (property === "readHeader")
+                return async (oid: Oid) => {
+                  if (oidToHex(oid) === first?.sha) await later();
+                  return target.readHeader(oid);
+                };
+              if (property === "readObject")
+                return async (oid: Oid) => {
+                  await later();
+                  return target.readObject(oid);
+                };
+              const value = Reflect.get(target, property);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        };
+        // Other work holds all but room for one file's sides.
+        const hold = browse.hold.bind(browse);
+        let held = 0;
+        browse.hold = (bytes) => {
+          const reservation = held === 0 ? hold(bytes) : undefined;
+          if (!reservation) return undefined;
+          held++;
+          return {
+            bytes: reservation.bytes,
+            release: () => {
+              held--;
+              reservation.release();
+            },
+          };
+        };
+        try {
+          const page = await pullFiles(
+            browse,
+            r.git.commitGraph,
+            { ...compared, start: 0, limit: 30 },
+            policy,
+            r.changeLists,
+          );
+          return JSON.stringify(page);
+        } finally {
+          browse.close();
+        }
+      };
+      return {
+        serial: await read({ ...PULL_FILES_POLICY, filesAtOnce: 1 }),
+        atOnce: await read(PULL_FILES_POLICY),
+      };
+    });
+    const patched = JSON.parse(outcome.serial).value.files.filter(
+      (file: { patch: string | null }) => file.patch !== null,
+    );
+    expect(patched.length).toBeGreaterThan(1);
+    expect(outcome.atOnce).toBe(outcome.serial);
+  });
+
   /**
    * Lists a page of `limit` of pull request 1's files with `policy` while
    * one reader call is held until the code has had every chance to go on

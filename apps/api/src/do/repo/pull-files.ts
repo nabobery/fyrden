@@ -4,6 +4,7 @@ import {
   diffFile,
   diffTrees,
   findExactRenames,
+  type MemoryReservation,
   MissingCommitError,
   mergeBases,
   type Oid,
@@ -279,8 +280,11 @@ async function page(
   const views: Promise<{ view: PullFileView } | { error: unknown }>[] = [];
   const read = (i: number) => {
     const change = listed[i];
-    if (change)
-      views[i] = fileView(browse, change, policy, () => turns.turn(i)).then(
+    if (!change) return;
+    const file = turns.file(i);
+    views[i] = fileView(browse, change, policy, file)
+      .finally(file.ended)
+      .then(
         (view) => ({ view }),
         (error: unknown) => ({ error }),
       );
@@ -338,29 +342,76 @@ function bare(change: ListedChange): PullFileView {
   };
 }
 
+/** What a file read with others needs from them (see `ReadTurns`). */
+interface FileTurns {
+  /** Settles when the file may read on. */
+  read(): Promise<void>;
+  /** The memory the file holds while it compares its sides, or undefined when none is free. */
+  hold(bytes: number): Promise<MemoryReservation | undefined>;
+}
+
 /**
- * Turns at the request's last reads while a page reads its files. Once
- * `serialReads` or fewer are left, a file waits before each of its reads
- * (its sides' headers, then their bodies) until the files before it are
- * taken, so they get the reads that reading the files one by one would
- * give them. Once the page has ended, no file reads on.
+ * Turns at the request's last reads, and at memory, while a page reads its
+ * files. Once `serialReads` or fewer are left, a file waits before each of
+ * its reads (its sides' headers, then their bodies) until the files before
+ * it are taken, so they get the reads that reading the files one by one
+ * would give them. Files hold memory in order, and one that finds too
+ * little free waits, holding up the files after it, until the files before
+ * it are taken and have released theirs, then tries once more: it gets
+ * what reading the files one by one would leave it. Once the page has
+ * ended, no file reads on.
  */
 class ReadTurns {
   /** The earliest file not taken yet: it never waits. */
   #first = 0;
   #ended = false;
   readonly #waiting = new Map<number, { go: () => void; stop: (error: Error) => void }>();
+  /** Settles once every file started so far holds its memory or needs none. */
+  #held: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly browse: RepoBrowse,
     private readonly serialReads: number,
   ) {}
 
+  /**
+   * The turns of file `i`, which starts now (files start in order);
+   * `ended` says it has ended, whether or not it held memory.
+   */
+  file(i: number): FileTurns & { ended: () => void } {
+    const before = this.#held;
+    let ended = () => {};
+    const done = new Promise<void>((resolve) => {
+      ended = resolve;
+    });
+    this.#held = before.then(() => done);
+    return {
+      read: () => this.turn(i),
+      hold: async (bytes) => {
+        await before;
+        let held = this.browse.hold(bytes);
+        if (!held) {
+          await this.earliest(i);
+          held = this.browse.hold(bytes);
+        }
+        ended();
+        return held;
+      },
+      ended,
+    };
+  }
+
   /** Settles when file `i` may read on; fails once the page has ended. */
   turn(i: number): Promise<void> {
-    if (this.#ended) return Promise.reject(new Error("the page has ended"));
     const left = this.browse.policy.maxReads - this.browse.reads;
-    if (i <= this.#first || left > this.serialReads) return Promise.resolve();
+    if (!this.#ended && left > this.serialReads) return Promise.resolve();
+    return this.earliest(i);
+  }
+
+  /** Settles once file `i` is the earliest not taken; fails once the page has ended. */
+  earliest(i: number): Promise<void> {
+    if (this.#ended) return Promise.reject(new Error("the page has ended"));
+    if (i <= this.#first) return Promise.resolve();
     return new Promise((go, stop) => this.#waiting.set(i, { go, stop }));
   }
 
@@ -396,13 +447,13 @@ async function bothSides<T>(
 
 /**
  * A file's listing with its patch, reading both sides within the policy's
- * bounds; `turn` settles when it may read (see `ReadTurns`).
+ * bounds, taking its turns at reads and memory (see `ReadTurns`).
  */
 async function fileView(
   browse: RepoBrowse,
   change: ListedChange,
   policy: PullFilesPolicy,
-  turn: () => Promise<void>,
+  turns: FileTurns,
 ): Promise<PullFileView> {
   const view = bare(change);
   if (isGitlink(change.oldMode) || isGitlink(change.newMode))
@@ -410,7 +461,7 @@ async function fileView(
   // The same content (a rename, a mode change) has no lines to compare.
   if (sameContent(change)) return view;
   const reader = await browse.reader();
-  await turn();
+  await turns.read();
   const sizeOf = async (oid: Oid | null) => {
     if (!oid) return 0;
     const header = await reader.readHeader(oid);
@@ -420,8 +471,8 @@ async function fileView(
   const [oldSize, newSize] = await bothSides(change, sizeOf);
   if (oldSize > policy.maxSideBytes || newSize > policy.maxSideBytes)
     return { ...view, patchOmitted: "too_large" };
-  await turn();
-  const hold = browse.hold(oldSize + newSize);
+  await turns.read();
+  const hold = await turns.hold(oldSize + newSize);
   if (!hold) return { ...view, patchOmitted: "budget" };
   try {
     const read = async (oid: Oid | null) => {
