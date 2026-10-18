@@ -21,6 +21,7 @@ import {
   PushIndexer,
   type PushResult,
   planPush,
+  pushIndexMemoryBytes,
   readPushBody,
   requestedSideband,
   type StoredBody,
@@ -453,15 +454,24 @@ export class RepoPush {
     try {
       const indexer = PushIndexer.resume(await this.#cursors.load(uploadId));
       if (indexer.phase !== "done") {
-        await indexer.step(
-          await pushIndexEnv(
-            this.git,
-            { uploadId, packId: upload.packId },
-            this.metrics,
-            this.memoryBlocks(),
-          ),
-          this.#body(uploadId, record),
-        );
+        // Its share of the memory first, holding nothing: phases of
+        // concurrent pushes that each held part of the pool could otherwise
+        // wait on one another for the rest.
+        const memory = await this.git.memory.begin(pushIndexMemoryBytes());
+        try {
+          await indexer.step(
+            await pushIndexEnv(
+              this.git,
+              { uploadId, packId: upload.packId },
+              this.metrics,
+              this.memoryBlocks(),
+              memory,
+            ),
+            this.#body(uploadId, record),
+          );
+        } finally {
+          memory.release();
+        }
         // The phase counts only while this runner still holds the lock: one
         // that outlived it (another runner may have finished the upload
         // meanwhile) publishes nothing, however late its write lands.

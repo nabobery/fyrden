@@ -4,6 +4,7 @@
 // R2 calls each request makes, on both plan modes.
 
 import { env } from "cloudflare:workers";
+import { fetchPlanMemoryBytes, parseFetchArgs } from "@fyrden/git-core";
 import { beforeAll, describe, expect, inject, it } from "vitest";
 import type { FetchFixtureRepo } from "./helpers/fetch-fixtures.js";
 import {
@@ -314,5 +315,31 @@ describe("fetch request handling", () => {
     const result = await exchange(repo, "paid", ["done"]);
     expect(result.bytes).toEqual(new Uint8Array(0));
     expect(result.r2).toEqual([]);
+  });
+});
+
+describe("fetch plans at once", () => {
+  it("each wait for their share of the repository's memory, holding nothing, and all answer", async () => {
+    const { repo } = await repoWith(fixtures.single, { allReachable: false });
+    const encoder = new TextEncoder();
+    const args = parseFetchArgs(cloneArgs(fixtures.single).map((line) => encoder.encode(line)));
+    const replies = await inRepo(repo.stub, async (r) => {
+      // Other work holds all but one and a half plans' shares: two plans
+      // never fit at once. Plans that each took part of what is free would
+      // wait on one another for the rest until the pool's limit.
+      const { totalBytes, reservedBytes } = r.git.memory.stats();
+      const free = Math.floor(1.5 * fetchPlanMemoryBytes());
+      const hog = r.git.memory.tryReserve(totalBytes - reservedBytes - free);
+      try {
+        return await Promise.all(
+          [1, 2, 3].map((n) =>
+            r.planFetch({ repoId: repo.id, args, plan: "free", holder: `plan-${n}` }),
+          ),
+        );
+      } finally {
+        hog?.release();
+      }
+    });
+    expect(replies.map((reply) => reply.ok)).toEqual([true, true, true]);
   });
 });

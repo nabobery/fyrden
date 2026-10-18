@@ -406,6 +406,7 @@ export {
   type PushIndexEnv,
   PushIndexer,
   type PushLimits,
+  pushIndexMemoryBytes,
 } from "./receive-pack/indexer.js";
 export {
   type ReceivePackOptions,
@@ -463,6 +464,7 @@ export {
   type FetchPlan,
   type FetchPlanLimits,
   type FetchPlanOptions,
+  fetchPlanMemoryBytes,
   planFetch,
   type UploadPackRepository,
 } from "./upload-pack/fetch.js";
