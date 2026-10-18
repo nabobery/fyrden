@@ -4,6 +4,7 @@
 // R2 calls each request makes, on both plan modes.
 
 import { env } from "cloudflare:workers";
+import { packObjectKey } from "@fyrden/adapters-cloudflare/git";
 import { fetchPlanMemoryBytes, parseFetchArgs } from "@fyrden/git-core";
 import { beforeAll, describe, expect, inject, it } from "vitest";
 import type { FetchFixtureRepo } from "./helpers/fetch-fixtures.js";
@@ -341,5 +342,34 @@ describe("fetch plans at once", () => {
       }
     });
     expect(replies.map((reply) => reply.ok)).toEqual([true, true, true]);
+  });
+
+  it("reserve a share that covers the live packs' indexes, which they read whole", async () => {
+    const { repo } = await repoWith(fixtures.split, { allReachable: false });
+    const encoder = new TextEncoder();
+    const args = parseFetchArgs(cloneArgs(fixtures.split).map((line) => encoder.encode(line)));
+    const outcome = await inRepo(repo.stub, async (r) => {
+      let indexes = 0;
+      for (const row of r.git.registry.liveForFetch()) {
+        const idx = await r.git.bucket.head(packObjectKey(row.networkId, row.packId, "idx"));
+        indexes += idx?.size ?? 0;
+      }
+      const shares: number[] = [];
+      const begin = r.git.memory.begin;
+      r.git.memory.begin = (bytes, signal) => {
+        shares.push(bytes);
+        return begin(bytes, signal);
+      };
+      try {
+        const reply = await r.planFetch({ repoId: repo.id, args, plan: "free", holder: "plan" });
+        return { ok: reply.ok, indexes, shares };
+      } finally {
+        r.git.memory.begin = begin;
+      }
+    });
+    expect(outcome.ok).toBe(true);
+    expect(outcome.indexes).toBeGreaterThan(0);
+    expect(outcome.shares).toHaveLength(1);
+    expect(outcome.shares[0]).toBeGreaterThanOrEqual(fetchPlanMemoryBytes() + outcome.indexes);
   });
 });

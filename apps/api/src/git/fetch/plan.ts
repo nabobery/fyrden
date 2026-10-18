@@ -25,6 +25,7 @@ import {
   type ViewPack,
 } from "@fyrden/git-core";
 import { openRequestBlockCache, type PackBlockStats } from "../cache/pack-blocks.js";
+import { idxBytesAtMost } from "../pack-view.js";
 import type { FetchPlanReply, FetchPlanRequest, WirePart, WorkersPlan } from "./wire.js";
 
 /**
@@ -63,13 +64,19 @@ interface Counters {
  * the reply names stay leased for the Worker until it releases them. The
  * plan first waits for its share of the object's memory, holding nothing:
  * plans that each held part of the pool could otherwise wait on one
- * another for the rest.
+ * another for the rest. The share covers the live packs' indexes, which
+ * the plan reads whole, as far as their sizes are known.
  */
 export async function planFetchInRepo(
   deps: FetchPlanDeps,
   request: FetchPlanRequest,
 ): Promise<FetchPlanReply> {
-  const memory = await deps.git.memory.begin(fetchPlanMemoryBytes());
+  const { git } = deps;
+  let indexes = 0;
+  for (const row of git.registry.liveForFetch())
+    indexes += idxBytesAtMost(row.objectCount, row.bytes ?? 0) ?? 0;
+  const share = Math.min(fetchPlanMemoryBytes() + indexes, git.memory.stats().totalBytes);
+  const memory = await git.memory.begin(share);
   try {
     return await plan(deps, request, memory);
   } finally {
