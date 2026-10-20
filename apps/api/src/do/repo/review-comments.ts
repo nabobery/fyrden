@@ -77,7 +77,9 @@ export type ReviewCommentFailure =
   | "not_found"
   | "comment_not_found"
   | "thread_not_found"
-  | "forbidden";
+  | "forbidden"
+  /** The pull request's conversation is locked: only write access and above. */
+  | "locked";
 
 type CommentRow = {
   comment_id: number;
@@ -197,8 +199,14 @@ export class RepoReviewComments {
     body: string,
     caller: PullCaller,
   ): { ok: true; comment: ReviewCommentRecord } | { ok: false; code: ReviewCommentFailure } {
-    if (!this.deps.pulls.get(number)) return { ok: false, code: "not_found" };
-    const decision = decideComment("create", { isCommentAuthor: true, role: caller.role });
+    const pull = this.deps.pulls.get(number);
+    if (!pull) return { ok: false, code: "not_found" };
+    // Read here, after anything the caller prepared: the lock as it is when the comment is written.
+    const decision = decideComment("create", {
+      isCommentAuthor: true,
+      role: caller.role,
+      locked: pull.locked,
+    });
     if (!decision.ok) return { ok: false, code: decision.refusal };
     const comment = this.deps.git.context.storage.transactionSync(() => {
       const [thread] = this.deps.git.context.storage.sql
@@ -227,10 +235,15 @@ export class RepoReviewComments {
     body: string,
     caller: PullCaller,
   ): { ok: true; comment: ReviewCommentRecord } | { ok: false; code: ReviewCommentFailure } {
-    if (!this.deps.pulls.get(number)) return { ok: false, code: "not_found" };
+    const pull = this.deps.pulls.get(number);
+    if (!pull) return { ok: false, code: "not_found" };
     const parent = this.get(to);
     if (parent?.number !== number) return { ok: false, code: "comment_not_found" };
-    const decision = decideComment("create", { isCommentAuthor: true, role: caller.role });
+    const decision = decideComment("create", {
+      isCommentAuthor: true,
+      role: caller.role,
+      locked: pull.locked,
+    });
     if (!decision.ok) return { ok: false, code: decision.refusal };
     const comment = this.deps.git.context.storage.transactionSync(() =>
       this.#insert(number, parent.threadId, to, body, caller),
@@ -377,6 +390,7 @@ export class RepoReviewComments {
     const decision = decideComment(action, {
       isCommentAuthor: caller.root === comment.authorRoot,
       role: caller.role,
+      locked: this.deps.pulls.get(comment.number)?.locked ?? false,
     });
     return decision.ok ? { ok: true, comment } : { ok: false, code: decision.refusal };
   }

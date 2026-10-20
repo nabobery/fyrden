@@ -851,4 +851,48 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 33,
+    // Issues, numbered with pull requests from `repo_meta.next_number`; a
+    // deleted issue leaves a tombstone for good (numbers are never reused,
+    // and feeds check it when they show the issue's items). Conversations
+    // of pull requests lock too. Listings sorted by update read an index
+    // per state on both tables.
+    name: "issues",
+    sql: `
+      CREATE TABLE issues (
+        number INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        body TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+        state_reason TEXT
+          CHECK (state_reason IN ('completed', 'not_planned', 'duplicate', 'reopened')),
+        duplicate_of INTEGER,
+        locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+        lock_reason TEXT CHECK (lock_reason IN ('off-topic', 'too heated', 'resolved', 'spam')),
+        author_id TEXT NOT NULL,
+        author_root TEXT NOT NULL,
+        author_act TEXT,
+        closed_at INTEGER,
+        closed_by TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK ((duplicate_of IS NOT NULL) = (state = 'closed' AND state_reason = 'duplicate')),
+        CHECK ((state = 'closed') = (closed_at IS NOT NULL))
+      ) STRICT;
+      CREATE INDEX issues_state ON issues (state, number);
+      CREATE INDEX issues_updated ON issues (state, updated_at, number);
+      CREATE TABLE issue_tombstones (
+        number INTEGER PRIMARY KEY,
+        version INTEGER NOT NULL,
+        deleted_at INTEGER NOT NULL,
+        deleted_by TEXT
+      ) STRICT;
+      ALTER TABLE pull_requests ADD COLUMN locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1));
+      ALTER TABLE pull_requests ADD COLUMN lock_reason TEXT
+        CHECK (lock_reason IN ('off-topic', 'too heated', 'resolved', 'spam'));
+      CREATE INDEX pull_requests_updated ON pull_requests (state, updated_at, number);
+    `,
+  },
 ];

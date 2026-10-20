@@ -418,6 +418,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "contents:write",
                         "pull_requests:read",
                         "pull_requests:write",
+                        "issues:read",
+                        "issues:write",
                         "administration:write",
                         "repository_hooks:read",
                         "repository_hooks:write",
@@ -1264,6 +1266,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "contents:write",
                         "pull_requests:read",
                         "pull_requests:write",
+                        "issues:read",
+                        "issues:write",
                         "administration:write",
                         "repository_hooks:read",
                         "repository_hooks:write",
@@ -1640,7 +1644,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "additionalProperties": false,
                             "properties": {
                               "kind": {
-                                "const": "pull",
+                                "enum": [
+                                  "issue",
+                                  "pull",
+                                ],
                                 "type": "string",
                               },
                               "number": {
@@ -1660,7 +1667,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "object",
                           },
                           "thread_key": {
-                            "description": "The thread within the repository, e.g. \`pull/12\`.",
+                            "description": "The thread within the repository, e.g. \`pull/12\` or \`issue/7\`.",
                             "type": "string",
                           },
                           "version": {
@@ -2007,7 +2014,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "additionalProperties": false,
                             "properties": {
                               "kind": {
-                                "const": "pull",
+                                "enum": [
+                                  "issue",
+                                  "pull",
+                                ],
                                 "type": "string",
                               },
                               "number": {
@@ -2027,7 +2037,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "object",
                           },
                           "thread_key": {
-                            "description": "The thread within the repository, e.g. \`pull/12\`.",
+                            "description": "The thread within the repository, e.g. \`pull/12\` or \`issue/7\`.",
                             "type": "string",
                           },
                           "version": {
@@ -2344,6 +2354,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "contents:write",
                         "pull_requests:read",
                         "pull_requests:write",
+                        "issues:read",
+                        "issues:write",
                         "administration:write",
                         "repository_hooks:read",
                         "repository_hooks:write",
@@ -10661,9 +10673,623 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/issues": {
+      "get": {
+        "description": "The repository's issues and pull requests (marked with \`pull_request\`), as GitHub's issue listing; \`type\` narrows it to one kind. Each kind is listed only for a caller that may read it: issues need the \`issues:read\` permission, pull requests \`pull_requests:read\`. A listing sorted by \`updated\` may move an item changed between pages.",
+        "operationId": "issues.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "default": "open",
+              "enum": [
+                "open",
+                "closed",
+                "all",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "description": "Fyrden (as Gitea's): only issues, or only pull requests; both when left out.",
+              "enum": [
+                "issues",
+                "pulls",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "created",
+              "enum": [
+                "created",
+                "updated",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "enum": [
+                "asc",
+                "desc",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`, with the same filters.",
+              "maxLength": 400,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "issues": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "active_lock_reason": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "off-topic",
+                                  "too heated",
+                                  "resolved",
+                                  "spam",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "body": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "closed_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Unix time in milliseconds.",
+                          },
+                          "closed_by": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "id",
+                                ],
+                                "type": "object",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Who closed it last, while closed; null for pull requests.",
+                          },
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "duplicate_of": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted.",
+                          },
+                          "id": {
+                            "description": "Fyrden: the number again (issues have no separate id space).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "locked": {
+                            "type": "boolean",
+                          },
+                          "number": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "performed_via_agents": {
+                            "description": "Fyrden: the agents that opened it for \`user\`, the acting one first; empty if none.",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "pull_request": {
+                            "additionalProperties": false,
+                            "description": "Present when this is a pull request (as GitHub's issue endpoints answer them); \`pulls.get\` has the rest.",
+                            "properties": {
+                              "merged_at": {
+                                "anyOf": [
+                                  {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                  {
+                                    "type": "null",
+                                  },
+                                ],
+                                "description": "Unix time in milliseconds.",
+                              },
+                            },
+                            "required": [
+                              "merged_at",
+                            ],
+                            "type": "object",
+                          },
+                          "state": {
+                            "description": "A merged pull request is \`closed\`.",
+                            "enum": [
+                              "open",
+                              "closed",
+                            ],
+                            "type": "string",
+                          },
+                          "state_reason": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "completed",
+                                  "not_planned",
+                                  "duplicate",
+                                  "reopened",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Why it is in its state; null for one never closed, and for pull requests.",
+                          },
+                          "title": {
+                            "type": "string",
+                          },
+                          "updated_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "user": {
+                            "additionalProperties": false,
+                            "description": "Who opened it (the user, when agents acted for one).",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                            ],
+                            "type": "object",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "number",
+                          "state",
+                          "state_reason",
+                          "duplicate_of",
+                          "title",
+                          "body",
+                          "user",
+                          "performed_via_agents",
+                          "locked",
+                          "active_lock_reason",
+                          "closed_by",
+                          "created_at",
+                          "updated_at",
+                          "closed_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                  },
+                  "required": [
+                    "issues",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List issues",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Opens an issue. Anyone who can read the repository may.",
+        "operationId": "issues.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "body": {
+                    "maxLength": 65536,
+                    "type": "string",
+                  },
+                  "title": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "title",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "active_lock_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "off-topic",
+                            "too heated",
+                            "resolved",
+                            "spam",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "body": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "closed_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Unix time in milliseconds.",
+                    },
+                    "closed_by": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "id",
+                          ],
+                          "type": "object",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Who closed it last, while closed; null for pull requests.",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "duplicate_of": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted.",
+                    },
+                    "id": {
+                      "description": "Fyrden: the number again (issues have no separate id space).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "locked": {
+                      "type": "boolean",
+                    },
+                    "number": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that opened it for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "pull_request": {
+                      "additionalProperties": false,
+                      "description": "Present when this is a pull request (as GitHub's issue endpoints answer them); \`pulls.get\` has the rest.",
+                      "properties": {
+                        "merged_at": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                          "description": "Unix time in milliseconds.",
+                        },
+                      },
+                      "required": [
+                        "merged_at",
+                      ],
+                      "type": "object",
+                    },
+                    "state": {
+                      "description": "A merged pull request is \`closed\`.",
+                      "enum": [
+                        "open",
+                        "closed",
+                      ],
+                      "type": "string",
+                    },
+                    "state_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "completed",
+                            "not_planned",
+                            "duplicate",
+                            "reopened",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Why it is in its state; null for one never closed, and for pull requests.",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who opened it (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "number",
+                    "state",
+                    "state_reason",
+                    "duplicate_of",
+                    "title",
+                    "body",
+                    "user",
+                    "performed_via_agents",
+                    "locked",
+                    "active_lock_reason",
+                    "closed_by",
+                    "created_at",
+                    "updated_at",
+                    "closed_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create an issue",
+        "x-fyrden-permission": "issues:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}/issues/comments/{comment_id}": {
       "delete": {
-        "description": "Deletes a comment. Its author may delete its own; write access and above, anyone's.",
+        "description": "Deletes a comment. Its author may delete its own; write access and above, anyone's (only they while the conversation is locked). Takes the permission for its kind.",
         "operationId": "issues.comments.delete",
         "parameters": [
           {
@@ -10744,7 +11370,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Delete a comment",
-        "x-fyrden-permission": "pull_requests:write",
+        "x-fyrden-permission": "metadata:read",
         "x-fyrden-principals": [
           "user",
           "agent",
@@ -10752,7 +11378,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
       "get": {
-        "description": "One conversation comment.",
+        "description": "One conversation comment, for a caller that may read its issue's or pull request's kind.",
         "operationId": "issues.comments.get",
         "parameters": [
           {
@@ -10811,7 +11437,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "integer",
                     },
                     "issue_number": {
-                      "description": "The pull request it is on.",
+                      "description": "The issue or pull request it is on.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",
@@ -10875,14 +11501,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Get a comment",
-        "x-fyrden-permission": "pull_requests:read",
+        "x-fyrden-permission": "metadata:read",
         "x-fyrden-principals": [
           "user",
           "agent",
         ],
       },
       "patch": {
-        "description": "Replaces a comment's body. Its author may edit its own; write access and above, anyone's.",
+        "description": "Replaces a comment's body. Its author may edit its own; write access and above, anyone's (only they while the conversation is locked). Takes the permission for its kind.",
         "operationId": "issues.comments.update",
         "parameters": [
           {
@@ -10960,7 +11586,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "integer",
                     },
                     "issue_number": {
-                      "description": "The pull request it is on.",
+                      "description": "The issue or pull request it is on.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",
@@ -11024,7 +11650,673 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Update a comment",
-        "x-fyrden-permission": "pull_requests:write",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/issues/{issue_number}": {
+      "delete": {
+        "description": "Fyrden (GitHub offers this through GraphQL only): deletes an issue and its comments for good; its number is never used again, and activity feeds stop showing it. Takes admin.",
+        "operationId": "issues.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "issue_number",
+            "required": true,
+            "schema": {
+              "description": "The issue's number (or a pull request's: they share one sequence).",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "number": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "const": "deleted",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "number",
+                    "state",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete an issue",
+        "x-fyrden-permission": "issues:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "One issue, or a pull request by its number (marked with \`pull_request\`), for a caller that may read that kind.",
+        "operationId": "issues.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "issue_number",
+            "required": true,
+            "schema": {
+              "description": "The issue's number (or a pull request's: they share one sequence).",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "active_lock_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "off-topic",
+                            "too heated",
+                            "resolved",
+                            "spam",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "body": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "closed_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Unix time in milliseconds.",
+                    },
+                    "closed_by": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "id",
+                          ],
+                          "type": "object",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Who closed it last, while closed; null for pull requests.",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "duplicate_of": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted.",
+                    },
+                    "id": {
+                      "description": "Fyrden: the number again (issues have no separate id space).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "locked": {
+                      "type": "boolean",
+                    },
+                    "number": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that opened it for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "pull_request": {
+                      "additionalProperties": false,
+                      "description": "Present when this is a pull request (as GitHub's issue endpoints answer them); \`pulls.get\` has the rest.",
+                      "properties": {
+                        "merged_at": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                          "description": "Unix time in milliseconds.",
+                        },
+                      },
+                      "required": [
+                        "merged_at",
+                      ],
+                      "type": "object",
+                    },
+                    "state": {
+                      "description": "A merged pull request is \`closed\`.",
+                      "enum": [
+                        "open",
+                        "closed",
+                      ],
+                      "type": "string",
+                    },
+                    "state_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "completed",
+                            "not_planned",
+                            "duplicate",
+                            "reopened",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Why it is in its state; null for one never closed, and for pull requests.",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who opened it (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "number",
+                    "state",
+                    "state_reason",
+                    "duplicate_of",
+                    "title",
+                    "body",
+                    "user",
+                    "performed_via_agents",
+                    "locked",
+                    "active_lock_reason",
+                    "closed_by",
+                    "created_at",
+                    "updated_at",
+                    "closed_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get an issue",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "patch": {
+        "description": "Changes the title or body, closes or reopens it, or marks it a duplicate; fields left out are kept, and all of it happens or none. The author may edit, close and reopen its own issue; on anyone else's, triage closes and reopens, and write edits. Marking a duplicate (\`state_reason: duplicate\` with \`duplicate_of\`) takes triage, the author's own issue included. As GitHub's, \`state_reason\` alone changes nothing unless the state changes, except moving a closed issue to or from \`duplicate\`. Pull requests change through \`pulls.update\`.",
+        "operationId": "issues.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "issue_number",
+            "required": true,
+            "schema": {
+              "description": "The issue's number (or a pull request's: they share one sequence).",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "body": {
+                    "anyOf": [
+                      {
+                        "maxLength": 65536,
+                        "type": "string",
+                      },
+                      {
+                        "type": "null",
+                      },
+                    ],
+                    "description": "Null clears it.",
+                  },
+                  "duplicate_of": {
+                    "description": "Fyrden: with \`state_reason: duplicate\`, the issue or pull request this one duplicates; the caller must be able to read it.",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer",
+                  },
+                  "state": {
+                    "enum": [
+                      "open",
+                      "closed",
+                    ],
+                    "type": "string",
+                  },
+                  "state_reason": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "completed",
+                          "not_planned",
+                          "duplicate",
+                          "reopened",
+                        ],
+                        "type": "string",
+                      },
+                      {
+                        "type": "null",
+                      },
+                    ],
+                    "description": "Null is as leaving it out (GitHub's accepts null).",
+                  },
+                  "title": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "active_lock_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "off-topic",
+                            "too heated",
+                            "resolved",
+                            "spam",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "body": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "closed_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Unix time in milliseconds.",
+                    },
+                    "closed_by": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "id",
+                          ],
+                          "type": "object",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Who closed it last, while closed; null for pull requests.",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "duplicate_of": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted.",
+                    },
+                    "id": {
+                      "description": "Fyrden: the number again (issues have no separate id space).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "locked": {
+                      "type": "boolean",
+                    },
+                    "number": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that opened it for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "pull_request": {
+                      "additionalProperties": false,
+                      "description": "Present when this is a pull request (as GitHub's issue endpoints answer them); \`pulls.get\` has the rest.",
+                      "properties": {
+                        "merged_at": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                          "description": "Unix time in milliseconds.",
+                        },
+                      },
+                      "required": [
+                        "merged_at",
+                      ],
+                      "type": "object",
+                    },
+                    "state": {
+                      "description": "A merged pull request is \`closed\`.",
+                      "enum": [
+                        "open",
+                        "closed",
+                      ],
+                      "type": "string",
+                    },
+                    "state_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "completed",
+                            "not_planned",
+                            "duplicate",
+                            "reopened",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Why it is in its state; null for one never closed, and for pull requests.",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who opened it (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "number",
+                    "state",
+                    "state_reason",
+                    "duplicate_of",
+                    "title",
+                    "body",
+                    "user",
+                    "performed_via_agents",
+                    "locked",
+                    "active_lock_reason",
+                    "closed_by",
+                    "created_at",
+                    "updated_at",
+                    "closed_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Update an issue",
+        "x-fyrden-permission": "issues:write",
         "x-fyrden-principals": [
           "user",
           "agent",
@@ -11034,7 +12326,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/issues/{issue_number}/comments": {
       "get": {
-        "description": "A pull request's conversation comments, oldest first.",
+        "description": "An issue's or pull request's conversation comments, oldest first, for a caller that may read that kind (\`issues:read\` or \`pull_requests:read\`).",
         "operationId": "issues.comments.list",
         "parameters": [
           {
@@ -11064,7 +12356,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "name": "issue_number",
             "required": true,
             "schema": {
-              "description": "The pull request's number (issues share these comments once they exist).",
+              "description": "The issue's or pull request's number.",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991,
               "type": "integer",
@@ -11119,7 +12411,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "integer",
                           },
                           "issue_number": {
-                            "description": "The pull request it is on.",
+                            "description": "The issue or pull request it is on.",
                             "maximum": 9007199254740991,
                             "minimum": -9007199254740991,
                             "type": "integer",
@@ -11199,14 +12491,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "List comments",
-        "x-fyrden-permission": "pull_requests:read",
+        "x-fyrden-permission": "metadata:read",
         "x-fyrden-principals": [
           "user",
           "agent",
         ],
       },
       "post": {
-        "description": "Adds a comment to a pull request's conversation, open or closed. Anyone who can read the repository may comment.",
+        "description": "Adds a comment to an issue's or pull request's conversation, open or closed. Anyone who can read the repository may comment, with the permission for that kind (\`issues:write\` or \`pull_requests:write\`); while the conversation is locked, only write access and above.",
         "operationId": "issues.comments.create",
         "parameters": [
           {
@@ -11236,7 +12528,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "name": "issue_number",
             "required": true,
             "schema": {
-              "description": "The pull request's number (issues share these comments once they exist).",
+              "description": "The issue's or pull request's number.",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991,
               "type": "integer",
@@ -11284,7 +12576,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "integer",
                     },
                     "issue_number": {
-                      "description": "The pull request it is on.",
+                      "description": "The issue or pull request it is on.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",
@@ -11348,7 +12640,229 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Create a comment",
-        "x-fyrden-permission": "pull_requests:write",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/issues/{issue_number}/lock": {
+      "delete": {
+        "description": "Unlocks an issue's or a pull request's conversation. Takes write access, and the permission for that kind. Answers the lock (GitHub answers 204).",
+        "operationId": "issues.unlock",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "issue_number",
+            "required": true,
+            "schema": {
+              "description": "The issue's number (or a pull request's: they share one sequence).",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "active_lock_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "off-topic",
+                            "too heated",
+                            "resolved",
+                            "spam",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "locked": {
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "locked",
+                    "active_lock_reason",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Unlock a conversation",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "put": {
+        "description": "Locks an issue's or a pull request's conversation: from then on only write access and above may comment, or edit or delete comments. Takes write access, and the permission for that kind (\`issues:write\` or \`pull_requests:write\`). Answers the lock (GitHub answers 204).",
+        "operationId": "issues.lock",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "issue_number",
+            "required": true,
+            "schema": {
+              "description": "The issue's number (or a pull request's: they share one sequence).",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "lock_reason": {
+                    "enum": [
+                      "off-topic",
+                      "too heated",
+                      "resolved",
+                      "spam",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "active_lock_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "off-topic",
+                            "too heated",
+                            "resolved",
+                            "spam",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "locked": {
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "locked",
+                    "active_lock_reason",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Lock a conversation",
+        "x-fyrden-permission": "metadata:read",
         "x-fyrden-principals": [
           "user",
           "agent",
@@ -11438,6 +12952,22 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "items": {
                         "additionalProperties": false,
                         "properties": {
+                          "active_lock_reason": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "off-topic",
+                                  "too heated",
+                                  "resolved",
+                                  "spam",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
                           "base": {
                             "additionalProperties": false,
                             "description": "The branch the changes are for.",
@@ -11514,6 +13044,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "string",
                               "null",
                             ],
+                          },
+                          "locked": {
+                            "description": "Its conversation is locked: only write access and above comment and review.",
+                            "type": "boolean",
                           },
                           "maintainer_can_modify": {
                             "description": "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
@@ -11647,6 +13181,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "mergeable_reason",
                           "draft",
                           "maintainer_can_modify",
+                          "locked",
+                          "active_lock_reason",
                           "title",
                           "body",
                           "user",
@@ -11786,6 +13322,22 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                 "schema": {
                   "additionalProperties": false,
                   "properties": {
+                    "active_lock_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "off-topic",
+                            "too heated",
+                            "resolved",
+                            "spam",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
                     "base": {
                       "additionalProperties": false,
                       "description": "The branch the changes are for.",
@@ -11862,6 +13414,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "locked": {
+                      "description": "Its conversation is locked: only write access and above comment and review.",
+                      "type": "boolean",
                     },
                     "maintainer_can_modify": {
                       "description": "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
@@ -11995,6 +13551,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "mergeable_reason",
                     "draft",
                     "maintainer_can_modify",
+                    "locked",
+                    "active_lock_reason",
                     "title",
                     "body",
                     "user",
@@ -12659,6 +14217,22 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                 "schema": {
                   "additionalProperties": false,
                   "properties": {
+                    "active_lock_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "off-topic",
+                            "too heated",
+                            "resolved",
+                            "spam",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
                     "base": {
                       "additionalProperties": false,
                       "description": "The branch the changes are for.",
@@ -12735,6 +14309,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "locked": {
+                      "description": "Its conversation is locked: only write access and above comment and review.",
+                      "type": "boolean",
                     },
                     "maintainer_can_modify": {
                       "description": "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
@@ -12868,6 +14446,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "mergeable_reason",
                     "draft",
                     "maintainer_can_modify",
+                    "locked",
+                    "active_lock_reason",
                     "title",
                     "body",
                     "user",
@@ -13007,6 +14587,22 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                 "schema": {
                   "additionalProperties": false,
                   "properties": {
+                    "active_lock_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "off-topic",
+                            "too heated",
+                            "resolved",
+                            "spam",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
                     "base": {
                       "additionalProperties": false,
                       "description": "The branch the changes are for.",
@@ -13083,6 +14679,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "locked": {
+                      "description": "Its conversation is locked: only write access and above comment and review.",
+                      "type": "boolean",
                     },
                     "maintainer_can_modify": {
                       "description": "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
@@ -13216,6 +14816,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "mergeable_reason",
                     "draft",
                     "maintainer_can_modify",
+                    "locked",
+                    "active_lock_reason",
                     "title",
                     "body",
                     "user",
@@ -14778,6 +16380,22 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                 "schema": {
                   "additionalProperties": false,
                   "properties": {
+                    "active_lock_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "off-topic",
+                            "too heated",
+                            "resolved",
+                            "spam",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
                     "base": {
                       "additionalProperties": false,
                       "description": "The branch the changes are for.",
@@ -14854,6 +16472,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "locked": {
+                      "description": "Its conversation is locked: only write access and above comment and review.",
+                      "type": "boolean",
                     },
                     "maintainer_can_modify": {
                       "description": "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
@@ -14987,6 +16609,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "mergeable_reason",
                     "draft",
                     "maintainer_can_modify",
+                    "locked",
+                    "active_lock_reason",
                     "title",
                     "body",
                     "user",
@@ -15215,6 +16839,22 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                 "schema": {
                   "additionalProperties": false,
                   "properties": {
+                    "active_lock_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "off-topic",
+                            "too heated",
+                            "resolved",
+                            "spam",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
                     "base": {
                       "additionalProperties": false,
                       "description": "The branch the changes are for.",
@@ -15291,6 +16931,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "locked": {
+                      "description": "Its conversation is locked: only write access and above comment and review.",
+                      "type": "boolean",
                     },
                     "maintainer_can_modify": {
                       "description": "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
@@ -15424,6 +17068,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "mergeable_reason",
                     "draft",
                     "maintainer_can_modify",
+                    "locked",
+                    "active_lock_reason",
                     "title",
                     "body",
                     "user",
@@ -22406,6 +24052,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "contents:write",
                         "pull_requests:read",
                         "pull_requests:write",
+                        "issues:read",
+                        "issues:write",
                         "administration:write",
                         "repository_hooks:read",
                         "repository_hooks:write",

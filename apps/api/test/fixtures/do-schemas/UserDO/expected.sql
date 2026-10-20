@@ -1,4 +1,7 @@
 CREATE INDEX feed_evictions_at ON feed_evictions (event_at);
+CREATE INDEX feed_items_subject
+        ON feed_items (substr(thread_key, 1, instr(thread_key, '/') - 1), feed_seq)
+        WHERE feed_seq IS NOT NULL;
 CREATE INDEX feed_tombstones ON feed_items (seq_at) WHERE feed_seq IS NULL;
 CREATE TABLE feed_evictions (
         repo_id TEXT NOT NULL,

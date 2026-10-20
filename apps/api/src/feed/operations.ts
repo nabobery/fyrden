@@ -1,5 +1,14 @@
 import type { ackFeedItem, getFeed, Input, Output, syncFeed } from "@fyrden/api-contract";
-import { FEED_KINDS, type FeedKind, feedItemKey } from "@fyrden/domain";
+import type { RepoPermission } from "@fyrden/domain";
+import {
+  FEED_KINDS,
+  FEED_SUBJECT_KINDS,
+  type FeedKind,
+  type FeedSubjectKind,
+  feedItemKey,
+  type RepoRole,
+  scopesAllow,
+} from "@fyrden/domain";
 import type { FeedViewDenial } from "../do/repo/feed-view.js";
 import {
   FEED_POLICY,
@@ -20,7 +29,10 @@ import { allowedWithRole, findReposById, type RepoEntry } from "../repos/directo
  * signed-in session. Every item is checked again when read: its
  * repository must exist and the caller (with its token's limits, a
  * delegated token's grant included, and its agents' owners' rights) must
- * read its pull requests now. Items it may not read are skipped, and
+ * read the item's kind now (its issues for an issue's thread, its pull
+ * requests for a pull request's), and the thread must not be gone for
+ * good (a deleted issue's, which the read makes the feed forget). Items it
+ * may not read are skipped, and
  * nothing says how many: a cursor only ever names an item the caller was
  * shown (or where it started), so it tells nothing of the others, and an
  * answer changes only when what the caller may see does. Items hold ids:
@@ -59,15 +71,32 @@ const pollAfter = (quiet: number) => Math.min(FEED_POLL.baseMs * 2 ** quiet, FEE
 /** Where a client whose cursor expired starts over. */
 const RESYNC = "/api/feed/sync";
 
-/** The permission an item's repository must grant the caller now. */
-const READ = "pull_requests:read";
+/** The permission an item's repository must grant the caller now, by what its thread is about. */
+const READ = { issue: "issues:read", pull: "pull_requests:read" } as const;
+
+/** What a thread key's thread is about (`issue/7`, `pull/12`); undefined for any other key. */
+function subjectOf(threadKey: string): FeedSubjectKind | undefined {
+  const kind = /^(issue|pull)\/[1-9][0-9]*$/.exec(threadKey)?.[1];
+  return kind as FeedSubjectKind | undefined;
+}
+
+/**
+ * The kinds of thread the caller's token may ever read (its scopes; a
+ * delegated token's are its grant's), null for both: its feed is read
+ * without the others, so they cost no budget and show nowhere.
+ */
+function readableSubjects(ctx: OpContext): FeedSubjectKind[] | null {
+  const kinds = FEED_SUBJECT_KINDS.filter((kind) => scopesAllow(ctx.auth.scopes, READ[kind]));
+  return kinds.length === FEED_SUBJECT_KINDS.length ? null : kinds;
+}
 
 /**
  * Repositories one answer checks with their objects at most (one call
- * each, of the 1,000 an invocation may make), items it reads from the
- * feed at most, shown or not, and how many a read takes. Proposed.
+ * each, of the 1,000 an invocation may make), calls checking issue threads
+ * beyond those (a hundred threads each), items it reads from the feed at
+ * most, shown or not, and how many a read takes. Proposed.
  */
-const SCAN = { repoChecks: 100, items: 1_000, page: 200 } as const;
+const SCAN = { repoChecks: 100, threadChecks: 20, items: 1_000, page: 200 } as const;
 
 /** Members one repository call reads at most. */
 const VIEW_MEMBERS = 100;
@@ -129,19 +158,26 @@ const feedOf = (ctx: OpContext) => ctx.env.USER.getByName(ctx.auth.principalId);
 const counted = (ctx: OpContext, method: string) =>
   ctx.metrics.count("do.request", { class: "UserDO", method });
 
-/** An item as a check needs it: its repository, and the member it displays. */
-type Displayed = Pick<FeedItem, "repoId" | "member">;
+/** An item as a check needs it: its repository, its thread, and the member it displays. */
+type Displayed = Pick<FeedItem, "repoId" | "threadKey" | "member">;
 
 /**
  * What the caller may see of a feed's items, decided once per repository
  * within one answer, and what the members they display say.
  */
 class Visibility {
-  readonly #decided = new Map<string, RepoEntry | "denied" | "unknown">();
+  readonly #decided = new Map<
+    string,
+    { entry: RepoEntry; role: RepoRole | null } | "denied" | "unknown"
+  >();
+  /** Issue threads checked (`<repository>\n<thread>`), and those found gone for good. */
+  readonly #checkedThreads = new Set<string>();
+  readonly #gone = new Set<string>();
   readonly #excerpts = new Map<string, string | null>();
   /** Repositories the feed's owner itself cannot read: gone, or its access says so, as of when. */
   readonly #lost = new Map<string, Extract<FeedViewDenial, { kind: "lost" }>["loss"]>();
   #checks = 0;
+  #threadChecks = 0;
 
   constructor(private readonly ctx: OpContext) {}
 
@@ -152,13 +188,20 @@ class Visibility {
   async decide(items: readonly Displayed[]): Promise<void> {
     const { env, auth, metrics } = this.ctx;
     const members = new Map<string, Set<string>>();
-    for (const { repoId, member } of items) {
+    const threads = new Map<string, Set<string>>();
+    for (const { repoId, threadKey, member } of items) {
+      // Only an issue's thread can be gone for good: each is checked, whenever it first shows.
+      if (subjectOf(threadKey) === "issue" && !this.#checkedThreads.has(key(repoId, threadKey)))
+        threads.set(repoId, (threads.get(repoId) ?? new Set()).add(threadKey));
       if (this.#decided.has(repoId)) continue;
       const set = members.get(repoId) ?? new Set();
       members.set(repoId, set);
       if (member !== null && set.size < VIEW_MEMBERS) set.add(member);
     }
-    if (members.size === 0) return;
+    if (members.size === 0) {
+      await this.#checkThreads(threads);
+      return;
+    }
     const entries = new Map(
       (await findReposById(env, [...members.keys()], metrics)).map((e) => [e.id, e]),
     );
@@ -166,8 +209,13 @@ class Visibility {
     const checking: RepoEntry[] = [];
     for (const id of members.keys()) {
       const entry = entries.get(id);
-      // Gone, or outside the token's own limits: no call needed.
-      if (!entry || !allowedWithRole(auth, entry, READ, "admin")) {
+      // Gone, or outside the token's own limits for every kind: no call needed.
+      if (
+        !entry ||
+        !(Object.values(READ) as RepoPermission[]).some((p) =>
+          allowedWithRole(auth, entry, p, "admin"),
+        )
+      ) {
         this.#decided.set(id, "denied");
         if (!entry) this.#lost.set(id, { accountId: "", epochGen: 0, aclVersion: 0, until: read });
       } else if (this.#checks < SCAN.repoChecks) {
@@ -177,17 +225,19 @@ class Visibility {
     }
     await Promise.all(
       checking.map(async (entry) => {
-        const view = await this.#view(entry.id, [...(members.get(entry.id) ?? [])]).catch(
+        const asked = [...(threads.get(entry.id) ?? [])].slice(0, VIEW_MEMBERS);
+        const view = await this.#view(entry.id, [...(members.get(entry.id) ?? [])], asked).catch(
           () => undefined,
         );
+        if (view?.readable) this.#threadsChecked(entry.id, asked, view.gone);
         this.#decided.set(
           entry.id,
           // No answer, or a denial the repository could not be sure of: not checked.
           view === undefined || view.denial?.kind === "unknown"
             ? "unknown"
             : // A public repository is read without a role there (the token's limits still apply).
-              view.readable && allowedWithRole(auth, entry, READ, view.role ?? "read")
-              ? entry
+              view.readable
+              ? { entry, role: view.role ?? "read" }
               : "denied",
         );
         // Lost to the owner itself; under a grant, its acting agents' owners' rights capped the
@@ -196,13 +246,70 @@ class Visibility {
           this.#lost.set(entry.id, view.denial.loss);
       }),
     );
+    await this.#checkThreads(threads);
   }
 
-  /** Makes the feed forget the repositories decided its owner cannot read now (one call). */
+  /**
+   * Checks the issue threads of readable repositories not checked yet, a
+   * call per hundred, within the budget of checks; a thread left unchecked
+   * stops an answer at it (see `of`).
+   */
+  async #checkThreads(threads: ReadonlyMap<string, ReadonlySet<string>>): Promise<void> {
+    const calls: Promise<void>[] = [];
+    for (const [repoId, set] of threads) {
+      if (typeof this.#decided.get(repoId) !== "object") continue;
+      const unchecked = [...set].filter((t) => !this.#checkedThreads.has(key(repoId, t)));
+      for (
+        let i = 0;
+        i < unchecked.length && this.#threadChecks < SCAN.threadChecks;
+        i += VIEW_MEMBERS
+      ) {
+        this.#threadChecks++;
+        const batch = unchecked.slice(i, i + VIEW_MEMBERS);
+        calls.push(
+          this.#view(repoId, [], batch).then(
+            (view) => {
+              // Only a readable answer checked the threads. One saying the repository cannot be
+              // read now decides it, as its first check would have; one unsure leaves them
+              // unchecked (an answer stops at them).
+              if (view.readable) this.#threadsChecked(repoId, batch, view.gone);
+              else if (view.denial?.kind !== "unknown") {
+                this.#decided.set(repoId, "denied");
+                if (view.denial?.kind === "lost" && this.ctx.auth.grantId === null)
+                  this.#lost.set(repoId, view.denial.loss);
+              }
+            },
+            () => undefined,
+          ),
+        );
+      }
+    }
+    await Promise.all(calls);
+  }
+
+  #threadsChecked(repoId: string, asked: readonly string[], gone: readonly string[]): void {
+    for (const thread of asked) this.#checkedThreads.add(key(repoId, thread));
+    for (const thread of gone) this.#gone.add(key(repoId, thread));
+  }
+
+  /**
+   * Makes the feed forget the repositories decided its owner cannot read
+   * now, and the threads found gone for good (a call each, when any).
+   */
   async forgetLost(): Promise<void> {
+    const feed = this.ctx.env.USER.getByName(this.ctx.auth.principalId);
+    if (this.#gone.size > 0) {
+      this.ctx.metrics.count("do.request", { class: "UserDO", method: "forgetThreads" });
+      await feed.forgetThreads(
+        [...this.#gone].map((k) => {
+          const [repoId, threadKey] = k.split("\n") as [string, string];
+          return { repoId, threadKey };
+        }),
+      );
+    }
     if (this.#lost.size === 0) return;
     this.ctx.metrics.count("do.request", { class: "UserDO", method: "forgetRepos" });
-    await this.ctx.env.USER.getByName(this.ctx.auth.principalId).forgetRepos(
+    await feed.forgetRepos(
       [...this.#lost].map(([repoId, loss]) => ({ ...loss, repoIds: [repoId] })),
     );
   }
@@ -223,19 +330,37 @@ class Visibility {
     await Promise.allSettled(calls);
   }
 
-  async #view(repoId: string, members: readonly string[]) {
+  async #view(repoId: string, members: readonly string[], threads: readonly string[] = []) {
     const { env, auth, metrics } = this.ctx;
     metrics.count("do.request", { class: "RepoDO", method: "feedView" });
-    const view = await viewOf(env, repoId).feedView(auth.principalId, auth.grantId, members);
+    const view = await viewOf(env, repoId).feedView(
+      auth.principalId,
+      auth.grantId,
+      members,
+      threads,
+    );
     for (const member of members)
       this.#excerpts.set(key(repoId, member), view.excerpts[member] ?? null);
     return view;
   }
 
-  /** The repository when the caller may see it; undefined when unknown (not checked). */
-  of(repoId: string): RepoEntry | "hidden" | undefined {
-    const decided = this.#decided.get(repoId);
-    return decided === "denied" ? "hidden" : decided === "unknown" ? undefined : decided;
+  /**
+   * The item's repository when the caller may see the item: it reads the
+   * repository and the item's kind there, and the thread is not gone;
+   * undefined when unknown (not checked).
+   */
+  of(item: Pick<Displayed, "repoId" | "threadKey">): RepoEntry | "hidden" | undefined {
+    const decided = this.#decided.get(item.repoId);
+    if (decided === undefined || decided === "unknown") return undefined;
+    const subject = subjectOf(item.threadKey);
+    if (decided === "denied" || subject === undefined) return "hidden";
+    const thread = key(item.repoId, item.threadKey);
+    // An issue's thread not checked (past the budget): not known whether it is gone.
+    if (subject === "issue" && !this.#checkedThreads.has(thread)) return undefined;
+    if (this.#gone.has(thread)) return "hidden";
+    return allowedWithRole(this.ctx.auth, decided.entry, READ[subject], decided.role)
+      ? decided.entry
+      : "hidden";
   }
 
   /** What the item's member says; null for none, or one that is gone. */
@@ -268,7 +393,7 @@ async function scan<P>(
     const page = await read(after);
     await visibility.decide(page.items);
     for (const item of page.items) {
-      const repo = visibility.of(item.repoId);
+      const repo = visibility.of(item);
       if (repo === undefined) return { shown, more: true };
       if (repo !== "hidden") shown.push({ item, repo });
       if (shown.length > limit) return { shown, more: true };
@@ -287,7 +412,12 @@ function itemOutput(item: FeedItem, repo: RepoEntry, excerpt: string | null): Fe
     repo: { id: repo.id, full_name: `${repo.ownerHandle}/${repo.name}` },
     thread_key: item.threadKey,
     kind: item.kind,
-    subject: { kind: "pull", number: item.number, title: item.title },
+    // Shown items have a thread of a known kind (`of` hides any other).
+    subject: {
+      kind: subjectOf(item.threadKey) as FeedSubjectKind,
+      number: item.number,
+      title: item.title,
+    },
     epoch: item.epoch,
     version: item.version,
     state: item.state,
@@ -326,6 +456,7 @@ export async function getFeedOperation(
     priority: input.priority,
     kind: input.kind,
     repoIds: ctx.auth.repoIds,
+    subjects: readableSubjects(ctx),
   };
   let epoch = since?.epoch;
   let lowWatermark = 0;
@@ -376,7 +507,10 @@ export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof s
     FEED_POLICY.syncItems,
     async (after: SyncPosition | null) => {
       counted(ctx, "syncFeed");
-      const page = await feed.syncFeed(after, SCAN.page, ctx.auth.repoIds);
+      const page = await feed.syncFeed(after, SCAN.page, {
+        repoIds: ctx.auth.repoIds,
+        subjects: readableSubjects(ctx),
+      });
       epoch = page.epoch;
       lowWatermark = page.lowWatermark;
       return page;
@@ -420,8 +554,8 @@ export async function ackFeedItemOperation(
   const id = parseItemKey(input.item_key);
   if (!id) throw notFound;
   const visibility = new Visibility(ctx);
-  await visibility.decide([{ repoId: id.repoId, member: null }]);
-  const repo = visibility.of(id.repoId);
+  await visibility.decide([{ repoId: id.repoId, threadKey: id.threadKey, member: null }]);
+  const repo = visibility.of(id);
   if (repo === undefined) throw new Error("the repository's access could not be checked");
   if (repo === "hidden") throw notFound;
   counted(ctx, "ackFeed");

@@ -16,7 +16,7 @@ const IssueNumber = z.coerce
   .number()
   .int()
   .positive()
-  .describe("The pull request's number (issues share these comments once they exist).");
+  .describe("The issue's or pull request's number.");
 const CommentId = z.coerce.number().int().positive().describe("The comment's id.");
 // Kept as written (leading spaces are Markdown: indented code); only a blank one is refused.
 const Body = z
@@ -26,7 +26,7 @@ const Body = z
 
 export const Comment = z.object({
   id: z.number().int(),
-  issue_number: z.number().int().describe("The pull request it is on."),
+  issue_number: z.number().int().describe("The issue or pull request it is on."),
   user: z
     .object({ id: z.string() })
     .describe("Who wrote it (the user, when agents acted for one)."),
@@ -43,7 +43,8 @@ export const listComments = defineOperation({
   method: "GET",
   path: "/repos/{owner}/{repo}/issues/{issue_number}/comments",
   summary: "List comments",
-  description: "A pull request's conversation comments, oldest first.",
+  description:
+    "An issue's or pull request's conversation comments, oldest first, for a caller that may read that kind (`issues:read` or `pull_requests:read`).",
   input: z.object({
     ...RepoInput,
     issue_number: IssueNumber,
@@ -57,14 +58,14 @@ export const listComments = defineOperation({
       .nullable()
       .describe("Pass as `cursor` for the next page; null on the last page."),
   }),
-  permission: "pull_requests:read",
+  permission: "metadata:read",
   principals: ["user", "agent"],
   rateLimit: "read",
   idempotency: "none",
   mcp: {
     tool: "list_comments",
     title: "List comments",
-    description: "List the conversation comments of a pull request.",
+    description: "List the conversation comments of an issue or pull request.",
     readOnly: true,
   },
 });
@@ -75,19 +76,19 @@ export const createComment = defineOperation({
   path: "/repos/{owner}/{repo}/issues/{issue_number}/comments",
   summary: "Create a comment",
   description:
-    "Adds a comment to a pull request's conversation, open or closed. Anyone who can read the repository may comment.",
+    "Adds a comment to an issue's or pull request's conversation, open or closed. Anyone who can read the repository may comment, with the permission for that kind (`issues:write` or `pull_requests:write`); while the conversation is locked, only write access and above.",
   input: z.object({ ...RepoInput, issue_number: IssueNumber, body: Body }),
   output: Comment,
-  permission: "pull_requests:write",
+  permission: "metadata:read",
   principals: ["user", "agent"],
   rateLimit: "write",
   idempotency: "key",
   successStatus: 201,
   mcp: {
-    tool: "comment_on_pull_request",
-    title: "Comment on a pull request",
+    tool: "add_issue_comment",
+    title: "Comment on an issue or pull request",
     description:
-      "Add a comment to a pull request's conversation (anyone who can read the repository may).",
+      "Add a comment to an issue's or pull request's conversation (anyone who can read the repository may, unless it is locked).",
     readOnly: false,
   },
 });
@@ -97,10 +98,11 @@ export const getComment = defineOperation({
   method: "GET",
   path: "/repos/{owner}/{repo}/issues/comments/{comment_id}",
   summary: "Get a comment",
-  description: "One conversation comment.",
+  description:
+    "One conversation comment, for a caller that may read its issue's or pull request's kind.",
   input: z.object({ ...RepoInput, comment_id: CommentId }),
   output: Comment,
-  permission: "pull_requests:read",
+  permission: "metadata:read",
   principals: ["user", "agent"],
   rateLimit: "read",
   idempotency: "none",
@@ -113,10 +115,10 @@ export const updateComment = defineOperation({
   path: "/repos/{owner}/{repo}/issues/comments/{comment_id}",
   summary: "Update a comment",
   description:
-    "Replaces a comment's body. Its author may edit its own; write access and above, anyone's.",
+    "Replaces a comment's body. Its author may edit its own; write access and above, anyone's (only they while the conversation is locked). Takes the permission for its kind.",
   input: z.object({ ...RepoInput, comment_id: CommentId, body: Body }),
   output: Comment,
-  permission: "pull_requests:write",
+  permission: "metadata:read",
   principals: ["user", "agent"],
   rateLimit: "write",
   idempotency: "key",
@@ -124,7 +126,7 @@ export const updateComment = defineOperation({
     tool: "update_comment",
     title: "Update a comment",
     description:
-      "Replace the body of a pull request comment: your own, or anyone's with write access.",
+      "Replace the body of an issue or pull request comment: your own, or anyone's with write access.",
     readOnly: false,
   },
 });
@@ -135,17 +137,18 @@ export const deleteComment = defineOperation({
   path: "/repos/{owner}/{repo}/issues/comments/{comment_id}",
   summary: "Delete a comment",
   description:
-    "Deletes a comment. Its author may delete its own; write access and above, anyone's.",
+    "Deletes a comment. Its author may delete its own; write access and above, anyone's (only they while the conversation is locked). Takes the permission for its kind.",
   input: z.object({ ...RepoInput, comment_id: CommentId }),
   output: z.object({ id: z.number().int(), state: z.literal("deleted") }),
-  permission: "pull_requests:write",
+  permission: "metadata:read",
   principals: ["user", "agent"],
   rateLimit: "write",
   idempotency: "key",
   mcp: {
     tool: "delete_comment",
     title: "Delete a comment",
-    description: "Delete a pull request comment: your own, or anyone's with write access.",
+    description:
+      "Delete an issue or pull request comment: your own, or anyone's with write access.",
     readOnly: false,
   },
 });

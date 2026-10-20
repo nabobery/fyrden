@@ -141,9 +141,21 @@ export function entityBody(name: WebhookEventName, event: DomainEvent): Row {
       return row === null
         ? { number: data.number, comment: { id: data.comment_id } }
         : { number: row.number, comment: reviewCommentOf(row), ...changes };
-    default:
+    default: {
+      // What the comment is on, as it was then (GitHub's `issue`, marked for a pull request).
+      const parent = data.parent as
+        | { kind?: string; number?: number; title?: string; state?: string }
+        | null
+        | undefined;
+      const issue = parent && {
+        number: parent.number,
+        title: parent.title,
+        state: parent.state === "open" ? "open" : "closed",
+        ...(parent.kind === "pull" && { pull_request: {} }),
+      };
       return row === null
-        ? { number: data.number, comment: { id: data.comment_id } }
-        : { number: row.number, comment: issueCommentOf(row), ...changes };
+        ? { number: data.number, issue, comment: { id: data.comment_id } }
+        : { number: row.number, issue, comment: issueCommentOf(row), ...changes };
+    }
   }
 }

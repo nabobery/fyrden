@@ -59,6 +59,14 @@ export class UserDO extends MigratingDO {
     return { deleted };
   }
 
+  /** Forgets threads a read found gone for good (see `Feed.forgetThreads`), in one transaction. */
+  forgetThreads(threads: readonly { readonly repoId: string; readonly threadKey: string }[]): {
+    deleted: number;
+  } {
+    const feed = this.#feed();
+    return { deleted: this.ctx.storage.transactionSync(() => feed.forgetThreads(threads)) };
+  }
+
   async listFeed(since: FeedPosition | null, limit: number, filter: FeedFilter): Promise<FeedPage> {
     await this.#checkEpoch();
     return this.#feed().list(since, limit, filter);
@@ -67,10 +75,10 @@ export class UserDO extends MigratingDO {
   async syncFeed(
     after: SyncPosition | null,
     limit: number,
-    repoIds: readonly string[] | null,
+    filter: Pick<FeedFilter, "repoIds" | "subjects">,
   ): Promise<{ epoch: string; lowWatermark: number; items: FeedItem[]; more: boolean }> {
     await this.#checkEpoch();
-    return this.#feed().sync(after, limit, repoIds);
+    return this.#feed().sync(after, limit, filter);
   }
 
   ackFeed(id: FeedItemId, at: ThreadVersion): FeedAck {

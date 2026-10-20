@@ -11,6 +11,7 @@ import { principalWithToken, scopedToken } from "./helpers/principals.js";
 // here, so a new one that skips or weakens the check fails this test.
 
 const ORIGIN = "https://fyrden.test";
+const MISSING_KIND = { status: 403, code: "missing_permission" };
 const UPLOAD_ID = "0".repeat(26);
 const SHA = "a".repeat(40);
 const RULESET = {
@@ -162,17 +163,28 @@ const CASES: Record<
     },
     expected: { status: 404, code: "pull_not_found" },
   },
-  "issues.comments.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
-  "issues.comments.create": {
-    input: { body: "checked" },
-    expected: { status: 404, code: "pull_not_found" },
+  // Serving issues and pull requests alike, these declare metadata:read and take each kind's own
+  // permission in the handler (see BOTH_KINDS below): metadata:read alone gets no further.
+  "issues.list": { input: {}, expected: MISSING_KIND },
+  "issues.get": { input: {}, expected: MISSING_KIND },
+  "issues.lock": { input: {}, expected: MISSING_KIND },
+  "issues.unlock": { input: {}, expected: MISSING_KIND },
+  "issues.comments.list": { input: {}, expected: MISSING_KIND },
+  "issues.comments.create": { input: { body: "checked" }, expected: MISSING_KIND },
+  "issues.comments.get": { input: {}, expected: MISSING_KIND },
+  "issues.comments.update": { input: { body: "checked" }, expected: MISSING_KIND },
+  "issues.comments.delete": { input: {}, expected: MISSING_KIND },
+  // These test repositories predate identities (no events to record an issue with): refused
+  // after authorization, with its own code.
+  "issues.create": {
+    input: { title: "checked" },
+    expected: { status: 409, code: "repo_not_ready" },
   },
-  "issues.comments.get": { input: {}, expected: { status: 404, code: "comment_not_found" } },
-  "issues.comments.update": {
-    input: { body: "checked" },
-    expected: { status: 404, code: "comment_not_found" },
+  "issues.update": {
+    input: { title: "checked" },
+    expected: { status: 404, code: "issue_not_found" },
   },
-  "issues.comments.delete": { input: {}, expected: { status: 404, code: "comment_not_found" } },
+  "issues.delete": { input: {}, expected: { status: 404, code: "issue_not_found" } },
   "pulls.requested_reviewers.remove": {
     input: {
       get reviewers() {
@@ -310,6 +322,56 @@ describe("repository operations", () => {
       const token = await scopedToken(owner.principalId, [op.permission]);
       const name = CASES[op.id]?.ownRepo ? (await createRepo(owner.principalId)).name : repo.name;
       expect(await outcome(await call(op, token, name))).toEqual(CASES[op.id]?.expected);
+    },
+  );
+});
+
+/**
+ * The operations serving issues and pull requests alike, and what each
+ * answers once its kind's permission lets it through (the repository has
+ * no issue or pull request #1, nor comment 1).
+ */
+const BOTH_KINDS: Record<string, Outcome> = {
+  "issues.list": { status: 200 },
+  "issues.get": { status: 404, code: "issue_not_found" },
+  "issues.lock": { status: 404, code: "issue_not_found" },
+  "issues.unlock": { status: 404, code: "issue_not_found" },
+  "issues.comments.list": { status: 404, code: "issue_not_found" },
+  "issues.comments.create": { status: 404, code: "issue_not_found" },
+  "issues.comments.get": { status: 404, code: "comment_not_found" },
+  "issues.comments.update": { status: 404, code: "comment_not_found" },
+  "issues.comments.delete": { status: 404, code: "comment_not_found" },
+};
+
+describe("operations serving issues and pull requests", () => {
+  it("are every repository operation that declares metadata:read and names an issue number or comment", () => {
+    const serving = repoOps.filter(
+      (op) =>
+        op.permission === "metadata:read" &&
+        (op.path.includes("/issues") || op.path.includes("{issue_number}")),
+    );
+    expect(serving.map((op) => op.id).sort()).toEqual(Object.keys(BOTH_KINDS).sort());
+  });
+
+  it.each(
+    Object.keys(BOTH_KINDS).flatMap((id) =>
+      (["issues", "pull_requests"] as const).map((kind) => [id, kind] as const),
+    ),
+  )("%s goes on with %s's own permission", async (id, kind) => {
+    const op = registry.find((o) => o.id === id) as OperationDef;
+    const token = await scopedToken(owner.principalId, [
+      `${kind}:${op.method === "GET" ? "read" : "write"}`,
+    ]);
+    expect(await outcome(await call(op, token))).toEqual(BOTH_KINDS[id]);
+  });
+
+  it.each(Object.keys(BOTH_KINDS))(
+    "%s writes nothing with a kind's read permission",
+    async (id) => {
+      const op = registry.find((o) => o.id === id) as OperationDef;
+      if (op.method === "GET") return;
+      const token = await scopedToken(owner.principalId, ["issues:read", "pull_requests:read"]);
+      expect(await outcome(await call(op, token))).toEqual(MISSING_KIND);
     },
   );
 });

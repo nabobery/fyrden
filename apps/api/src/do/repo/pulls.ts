@@ -6,6 +6,7 @@ import type {
 } from "@fyrden/adapters-cloudflare/git";
 import {
   decidePullAction,
+  type LockReason,
   PULL_ACTION_RULES,
   PULL_ENTITY,
   type PullAction,
@@ -74,6 +75,8 @@ type Row = {
   head_repo_id: string | null;
   head_ref_version: number | null;
   maintainer_can_modify: number;
+  locked: number;
+  lock_reason: LockReason | null;
   last_pusher: string | null;
   last_pusher_grant: string | null;
   last_push_at: number | null;
@@ -126,6 +129,11 @@ export interface PullCaller {
   readonly root: string;
   readonly role: RepoRole | null;
 }
+
+/** An open pull request's head moved: its new head, who pushed it, under which grant, and when (twice). */
+export const HEAD_MOVED = `UPDATE pull_requests SET head_sha = ?, last_pusher = ?, last_pusher_grant = ?,
+    last_push_at = ?, version = version + 1, updated_at = ?
+  WHERE number = ? AND state = 'open' RETURNING *`;
 
 /** A page of the open pull requests whose head is in a repository: its id, the number after, the size. */
 export const OPEN_FROM_HEAD_REPO = `SELECT * FROM pull_requests
@@ -235,9 +243,7 @@ export class RepoPulls {
       const number = Number(PULL_HEAD.exec(update.name)?.[1]);
       if (!number || update.newOid === null) continue;
       const [row] = this.#rows(
-        `UPDATE pull_requests SET head_sha = ?, last_pusher = ?, last_pusher_grant = ?,
-           last_push_at = ?, version = version + 1, updated_at = ?
-         WHERE number = ? AND state = 'open' RETURNING *`,
+        HEAD_MOVED,
         oidToHex(update.newOid),
         actor?.principal ?? null,
         actor?.grantId ?? null,
@@ -756,6 +762,44 @@ export class RepoPulls {
   }
 
   /**
+   * Locks or unlocks the pull request's conversation (write access), with
+   * its event and audit row; changing nothing (locked already with that
+   * reason) emits nothing.
+   */
+  setLock(
+    number: number,
+    locked: boolean,
+    reason: LockReason | null,
+    caller: PullCaller,
+  ): { ok: true } | { ok: false; code: "not_found" | "forbidden" } {
+    const current = this.get(number);
+    if (!current) return { ok: false, code: "not_found" };
+    const action = locked ? "lock" : "unlock";
+    const decision = decidePullAction(action, {
+      state: current.state,
+      headRefDeleted: current.headRefDeleted,
+      isAuthor: caller.root === current.authorRoot,
+      role: caller.role,
+    });
+    if (!decision.ok) return { ok: false, code: "forbidden" };
+    if (current.locked === locked && current.lockReason === reason) return { ok: true };
+    const rule = PULL_ACTION_RULES[action];
+    this.deps.git.context.storage.transactionSync(() => {
+      const [row] = this.#rows(
+        `UPDATE pull_requests SET locked = ?, lock_reason = ?, version = version + 1, updated_at = ?
+         WHERE number = ? RETURNING *`,
+        locked ? 1 : 0,
+        reason,
+        this.deps.git.context.now(),
+        number,
+      );
+      this.#emit(rule.event, record(row as Row), caller.actor);
+      this.deps.events.auditChange(rule.audit, caller.actor, { number, ...(reason && { reason }) });
+    });
+    return { ok: true };
+  }
+
+  /**
    * What a pull request's files and commits are compared from: an open
    * one's base branch tip (the recorded base once the branch is gone); a
    * closed or merged one's recorded base, the branch's tip when it closed
@@ -852,8 +896,8 @@ export class RepoPulls {
   }
 }
 
-/** What a patch can ask for: a merge is made through the push path. */
-type PatchAction = Exclude<PullAction, "merge">;
+/** What a patch can ask for: a merge is made through the push path, a lock through its own. */
+type PatchAction = Exclude<PullAction, "merge" | "lock" | "unlock">;
 
 /** The actions a patch asks for, in the order they apply: a reopen first, a close last. */
 function plannedActions(current: PullRecord, patch: PullPatch): PatchAction[] {
@@ -893,6 +937,8 @@ function record(row: Row): PullRecord {
     headRepoId: row.head_repo_id,
     headRefVersion: row.head_ref_version,
     maintainerCanModify: row.maintainer_can_modify === 1,
+    locked: row.locked === 1,
+    lockReason: row.lock_reason,
     baseSha: row.base_sha,
     headSha: row.head_sha,
     headRefDeleted: row.head_ref_deleted === 1,

@@ -10,6 +10,8 @@ CREATE INDEX audit_segments_to ON audit_segments (to_seq);
 CREATE INDEX comments_number ON comments (number, comment_id);
 CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
 CREATE INDEX import_commits_staged ON import_commits (staged_at);
+CREATE INDEX issues_state ON issues (state, number);
+CREATE INDEX issues_updated ON issues (state, updated_at, number);
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
 CREATE INDEX leases_pack ON leases (pack_id, expires_at);
 CREATE INDEX mergeability_jobs_waiting ON mergeability_jobs (requested_at, pr_number);
@@ -23,6 +25,7 @@ CREATE INDEX pull_requests_base ON pull_requests (base_ref, state);
 CREATE INDEX pull_requests_head ON pull_requests (head_ref, state);
 CREATE INDEX pull_requests_head_repo ON pull_requests (head_repo_id, state, number);
 CREATE INDEX pull_requests_state ON pull_requests (state, number);
+CREATE INDEX pull_requests_updated ON pull_requests (state, updated_at, number);
 CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
 CREATE INDEX refollow_bases_due ON refollow_bases (next_at);
@@ -199,6 +202,33 @@ CREATE TABLE import_commits (
         staged_at INTEGER NOT NULL,
         PRIMARY KEY (import_id, oid)
       ) STRICT;
+CREATE TABLE issue_tombstones (
+        number INTEGER PRIMARY KEY,
+        version INTEGER NOT NULL,
+        deleted_at INTEGER NOT NULL,
+        deleted_by TEXT
+      ) STRICT;
+CREATE TABLE issues (
+        number INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        body TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+        state_reason TEXT
+          CHECK (state_reason IN ('completed', 'not_planned', 'duplicate', 'reopened')),
+        duplicate_of INTEGER,
+        locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+        lock_reason TEXT CHECK (lock_reason IN ('off-topic', 'too heated', 'resolved', 'spam')),
+        author_id TEXT NOT NULL,
+        author_root TEXT NOT NULL,
+        author_act TEXT,
+        closed_at INTEGER,
+        closed_by TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK ((duplicate_of IS NOT NULL) = (state = 'closed' AND state_reason = 'duplicate')),
+        CHECK ((state = 'closed') = (closed_at IS NOT NULL))
+      ) STRICT;
 CREATE TABLE jobs (
     job_id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -363,7 +393,8 @@ CREATE TABLE pull_requests (
         closed_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
-      , last_pusher TEXT, last_pusher_grant TEXT, last_push_at INTEGER, merge_commit_sha TEXT, merged_by TEXT, merged_at INTEGER, head_repo_id TEXT, head_ref_version INTEGER, maintainer_can_modify INTEGER NOT NULL DEFAULT 0, approvals_after INTEGER NOT NULL DEFAULT 0, reviews_revision INTEGER NOT NULL DEFAULT 0) STRICT;
+      , last_pusher TEXT, last_pusher_grant TEXT, last_push_at INTEGER, merge_commit_sha TEXT, merged_by TEXT, merged_at INTEGER, head_repo_id TEXT, head_ref_version INTEGER, maintainer_can_modify INTEGER NOT NULL DEFAULT 0, approvals_after INTEGER NOT NULL DEFAULT 0, reviews_revision INTEGER NOT NULL DEFAULT 0, locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)), lock_reason TEXT
+        CHECK (lock_reason IN ('off-topic', 'too heated', 'resolved', 'spam'))) STRICT;
 CREATE TABLE ref_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL,

@@ -152,7 +152,7 @@ export type UsersTokensListOutput = {
 export type UsersTokensCreateInput = {
   type?: "pat" | "git";
   /** Permissions it is limited to (and what they imply). Empty: your token's. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -217,7 +217,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -334,7 +334,7 @@ export type AgentsTokensCreateInput = {
   agent: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -402,7 +402,7 @@ export type GrantsCreateInput = {
   /** The agent's handle. */
   agent: string;
   /** Permissions the agent may use for you (and what they imply). */
-  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
   repositories?: string[];
   expires_in_days?: number;
@@ -1632,6 +1632,9 @@ export type PullsListOutput = {
     draft: boolean;
     /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
     maintainer_can_modify: boolean;
+    /** Its conversation is locked: only write access and above comment and review. */
+    locked: boolean;
+    active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
     title: string;
     body: string | null;
     /** Who opened it (the user, when agents acted for one). */
@@ -1711,6 +1714,9 @@ export type PullsCreateOutput = {
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
+  /** Its conversation is locked: only write access and above comment and review. */
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -1777,6 +1783,9 @@ export type PullsGetOutput = {
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
+  /** Its conversation is locked: only write access and above comment and review. */
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -1853,6 +1862,9 @@ export type PullsUpdateOutput = {
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
+  /** Its conversation is locked: only write access and above comment and review. */
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -2680,6 +2692,9 @@ export type PullsRequestedReviewersAddOutput = {
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
+  /** Its conversation is locked: only write access and above comment and review. */
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -2750,6 +2765,9 @@ export type PullsRequestedReviewersRemoveOutput = {
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
+  /** Its conversation is locked: only write access and above comment and review. */
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -2790,13 +2808,273 @@ export type PullsRequestedReviewersRemoveOutput = {
   } | null;
 };
 
+/** Input of `issues.list`: List issues. */
+export type IssuesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  state?: "open" | "closed" | "all";
+  /** Fyrden (as Gitea's): only issues, or only pull requests; both when left out. */
+  type?: "issues" | "pulls";
+  sort?: "created" | "updated";
+  direction?: "asc" | "desc";
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`, with the same filters. */
+  cursor?: string;
+};
+
+/** Output of `issues.list`. */
+export type IssuesListOutput = {
+  issues: ({
+    /** Fyrden: the number again (issues have no separate id space). */
+    id: number;
+    number: number;
+    /** A merged pull request is `closed`. */
+    state: "open" | "closed";
+    /** Why it is in its state; null for one never closed, and for pull requests. */
+    state_reason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+    /** Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted. */
+    duplicate_of: number | null;
+    title: string;
+    body: string | null;
+    /** Who opened it (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    locked: boolean;
+    active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+    /** Who closed it last, while closed; null for pull requests. */
+    closed_by: {
+      id: string;
+    } | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
+    pull_request?: {
+      /** Unix time in milliseconds. */
+      merged_at: number | null;
+    };
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `issues.create`: Create an issue. */
+export type IssuesCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  title: string;
+  body?: string;
+};
+
+/** Output of `issues.create`. */
+export type IssuesCreateOutput = {
+  /** Fyrden: the number again (issues have no separate id space). */
+  id: number;
+  number: number;
+  /** A merged pull request is `closed`. */
+  state: "open" | "closed";
+  /** Why it is in its state; null for one never closed, and for pull requests. */
+  state_reason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted. */
+  duplicate_of: number | null;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+  /** Who closed it last, while closed; null for pull requests. */
+  closed_by: {
+    id: string;
+  } | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
+  pull_request?: {
+    /** Unix time in milliseconds. */
+    merged_at: number | null;
+  };
+};
+
+/** Input of `issues.get`: Get an issue. */
+export type IssuesGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+};
+
+/** Output of `issues.get`. */
+export type IssuesGetOutput = {
+  /** Fyrden: the number again (issues have no separate id space). */
+  id: number;
+  number: number;
+  /** A merged pull request is `closed`. */
+  state: "open" | "closed";
+  /** Why it is in its state; null for one never closed, and for pull requests. */
+  state_reason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted. */
+  duplicate_of: number | null;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+  /** Who closed it last, while closed; null for pull requests. */
+  closed_by: {
+    id: string;
+  } | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
+  pull_request?: {
+    /** Unix time in milliseconds. */
+    merged_at: number | null;
+  };
+};
+
+/** Input of `issues.update`: Update an issue. */
+export type IssuesUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+  title?: string;
+  /** Null clears it. */
+  body?: string | null;
+  state?: "open" | "closed";
+  /** Null is as leaving it out (GitHub's accepts null). */
+  state_reason?: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** Fyrden: with `state_reason: duplicate`, the issue or pull request this one duplicates; the caller must be able to read it. */
+  duplicate_of?: number;
+};
+
+/** Output of `issues.update`. */
+export type IssuesUpdateOutput = {
+  /** Fyrden: the number again (issues have no separate id space). */
+  id: number;
+  number: number;
+  /** A merged pull request is `closed`. */
+  state: "open" | "closed";
+  /** Why it is in its state; null for one never closed, and for pull requests. */
+  state_reason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted. */
+  duplicate_of: number | null;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+  /** Who closed it last, while closed; null for pull requests. */
+  closed_by: {
+    id: string;
+  } | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
+  pull_request?: {
+    /** Unix time in milliseconds. */
+    merged_at: number | null;
+  };
+};
+
+/** Input of `issues.delete`: Delete an issue. */
+export type IssuesDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+};
+
+/** Output of `issues.delete`. */
+export type IssuesDeleteOutput = {
+  number: number;
+  state: "deleted";
+};
+
+/** Input of `issues.lock`: Lock a conversation. */
+export type IssuesLockInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+  lock_reason?: "off-topic" | "too heated" | "resolved" | "spam";
+};
+
+/** Output of `issues.lock`. */
+export type IssuesLockOutput = {
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+};
+
+/** Input of `issues.unlock`: Unlock a conversation. */
+export type IssuesUnlockInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+};
+
+/** Output of `issues.unlock`. */
+export type IssuesUnlockOutput = {
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+};
+
 /** Input of `issues.comments.list`: List comments. */
 export type IssuesCommentsListInput = {
   /** The owner's handle. */
   owner: string;
   /** The repository's name. */
   repo: string;
-  /** The pull request's number (issues share these comments once they exist). */
+  /** The issue's or pull request's number. */
   issue_number: number;
   /** Page size, 1-100. */
   per_page?: number;
@@ -2808,7 +3086,7 @@ export type IssuesCommentsListInput = {
 export type IssuesCommentsListOutput = {
   comments: {
     id: number;
-    /** The pull request it is on. */
+    /** The issue or pull request it is on. */
     issue_number: number;
     /** Who wrote it (the user, when agents acted for one). */
     user: {
@@ -2832,7 +3110,7 @@ export type IssuesCommentsCreateInput = {
   owner: string;
   /** The repository's name. */
   repo: string;
-  /** The pull request's number (issues share these comments once they exist). */
+  /** The issue's or pull request's number. */
   issue_number: number;
   body: string;
 };
@@ -2840,7 +3118,7 @@ export type IssuesCommentsCreateInput = {
 /** Output of `issues.comments.create`. */
 export type IssuesCommentsCreateOutput = {
   id: number;
-  /** The pull request it is on. */
+  /** The issue or pull request it is on. */
   issue_number: number;
   /** Who wrote it (the user, when agents acted for one). */
   user: {
@@ -2868,7 +3146,7 @@ export type IssuesCommentsGetInput = {
 /** Output of `issues.comments.get`. */
 export type IssuesCommentsGetOutput = {
   id: number;
-  /** The pull request it is on. */
+  /** The issue or pull request it is on. */
   issue_number: number;
   /** Who wrote it (the user, when agents acted for one). */
   user: {
@@ -2897,7 +3175,7 @@ export type IssuesCommentsUpdateInput = {
 /** Output of `issues.comments.update`. */
 export type IssuesCommentsUpdateOutput = {
   id: number;
-  /** The pull request it is on. */
+  /** The issue or pull request it is on. */
   issue_number: number;
   /** Who wrote it (the user, when agents acted for one). */
   user: {
@@ -3022,11 +3300,11 @@ export type FeedListOutput = {
       /** owner/name */
       full_name: string;
     };
-    /** The thread within the repository, e.g. `pull/12`. */
+    /** The thread within the repository, e.g. `pull/12` or `issue/7`. */
     thread_key: string;
     kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
     subject: {
-      kind: "pull";
+      kind: "issue" | "pull";
       number: number;
       title: string;
     };
@@ -3081,11 +3359,11 @@ export type FeedSyncOutput = {
       /** owner/name */
       full_name: string;
     };
-    /** The thread within the repository, e.g. `pull/12`. */
+    /** The thread within the repository, e.g. `pull/12` or `issue/7`. */
     thread_key: string;
     kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
     subject: {
-      kind: "pull";
+      kind: "issue" | "pull";
       number: number;
       title: string;
     };
@@ -4601,6 +4879,13 @@ export const OPERATIONS = {
   "pulls.requested_reviewers.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: false },
   "pulls.requested_reviewers.add": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.requested_reviewers.remove": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "issues.list": { method: "GET", path: "/repos/{owner}/{repo}/issues", pathParams: ["owner","repo"], idempotent: false, items: "issues" },
+  "issues.create": { method: "POST", path: "/repos/{owner}/{repo}/issues", pathParams: ["owner","repo"], idempotent: true },
+  "issues.get": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}", pathParams: ["owner","repo","issue_number"], idempotent: false },
+  "issues.update": { method: "PATCH", path: "/repos/{owner}/{repo}/issues/{issue_number}", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.lock": { method: "PUT", path: "/repos/{owner}/{repo}/issues/{issue_number}/lock", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.unlock": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/lock", pathParams: ["owner","repo","issue_number"], idempotent: true },
   "issues.comments.list": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}/comments", pathParams: ["owner","repo","issue_number"], idempotent: false, items: "comments" },
   "issues.comments.create": { method: "POST", path: "/repos/{owner}/{repo}/issues/{issue_number}/comments", pathParams: ["owner","repo","issue_number"], idempotent: true },
   "issues.comments.get": { method: "GET", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: false },
@@ -4809,15 +5094,29 @@ export interface Operations {
   "pulls.requested_reviewers.add": { input: PullsRequestedReviewersAddInput; output: PullsRequestedReviewersAddOutput };
   /** Remove requested reviewers. Withdraws review requests; reviewers not requested are ignored. */
   "pulls.requested_reviewers.remove": { input: PullsRequestedReviewersRemoveInput; output: PullsRequestedReviewersRemoveOutput };
-  /** List comments. A pull request's conversation comments, oldest first. */
+  /** List issues. The repository's issues and pull requests (marked with `pull_request`), as GitHub's issue listing; `type` narrows it to one kind. Each kind is listed only for a caller that may read it: issues need the `issues:read` permission, pull requests `pull_requests:read`. A listing sorted by `updated` may move an item changed between pages. */
+  "issues.list": { input: IssuesListInput; output: IssuesListOutput };
+  /** Create an issue. Opens an issue. Anyone who can read the repository may. */
+  "issues.create": { input: IssuesCreateInput; output: IssuesCreateOutput };
+  /** Get an issue. One issue, or a pull request by its number (marked with `pull_request`), for a caller that may read that kind. */
+  "issues.get": { input: IssuesGetInput; output: IssuesGetOutput };
+  /** Update an issue. Changes the title or body, closes or reopens it, or marks it a duplicate; fields left out are kept, and all of it happens or none. The author may edit, close and reopen its own issue; on anyone else's, triage closes and reopens, and write edits. Marking a duplicate (`state_reason: duplicate` with `duplicate_of`) takes triage, the author's own issue included. As GitHub's, `state_reason` alone changes nothing unless the state changes, except moving a closed issue to or from `duplicate`. Pull requests change through `pulls.update`. */
+  "issues.update": { input: IssuesUpdateInput; output: IssuesUpdateOutput };
+  /** Delete an issue. Fyrden (GitHub offers this through GraphQL only): deletes an issue and its comments for good; its number is never used again, and activity feeds stop showing it. Takes admin. */
+  "issues.delete": { input: IssuesDeleteInput; output: IssuesDeleteOutput };
+  /** Lock a conversation. Locks an issue's or a pull request's conversation: from then on only write access and above may comment, or edit or delete comments. Takes write access, and the permission for that kind (`issues:write` or `pull_requests:write`). Answers the lock (GitHub answers 204). */
+  "issues.lock": { input: IssuesLockInput; output: IssuesLockOutput };
+  /** Unlock a conversation. Unlocks an issue's or a pull request's conversation. Takes write access, and the permission for that kind. Answers the lock (GitHub answers 204). */
+  "issues.unlock": { input: IssuesUnlockInput; output: IssuesUnlockOutput };
+  /** List comments. An issue's or pull request's conversation comments, oldest first, for a caller that may read that kind (`issues:read` or `pull_requests:read`). */
   "issues.comments.list": { input: IssuesCommentsListInput; output: IssuesCommentsListOutput };
-  /** Create a comment. Adds a comment to a pull request's conversation, open or closed. Anyone who can read the repository may comment. */
+  /** Create a comment. Adds a comment to an issue's or pull request's conversation, open or closed. Anyone who can read the repository may comment, with the permission for that kind (`issues:write` or `pull_requests:write`); while the conversation is locked, only write access and above. */
   "issues.comments.create": { input: IssuesCommentsCreateInput; output: IssuesCommentsCreateOutput };
-  /** Get a comment. One conversation comment. */
+  /** Get a comment. One conversation comment, for a caller that may read its issue's or pull request's kind. */
   "issues.comments.get": { input: IssuesCommentsGetInput; output: IssuesCommentsGetOutput };
-  /** Update a comment. Replaces a comment's body. Its author may edit its own; write access and above, anyone's. */
+  /** Update a comment. Replaces a comment's body. Its author may edit its own; write access and above, anyone's (only they while the conversation is locked). Takes the permission for its kind. */
   "issues.comments.update": { input: IssuesCommentsUpdateInput; output: IssuesCommentsUpdateOutput };
-  /** Delete a comment. Deletes a comment. Its author may delete its own; write access and above, anyone's. */
+  /** Delete a comment. Deletes a comment. Its author may delete its own; write access and above, anyone's (only they while the conversation is locked). Takes the permission for its kind. */
   "issues.comments.delete": { input: IssuesCommentsDeleteInput; output: IssuesCommentsDeleteOutput };
   /** Star a repository. Stars a repository the caller can read. Starring one already starred changes nothing. The token also needs `metadata:read` for the repository. */
   "stars.put": { input: StarsPutInput; output: StarsPutOutput };

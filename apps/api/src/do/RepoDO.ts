@@ -22,6 +22,7 @@ import {
 } from "@fyrden/adapters-cloudflare/obs";
 import {
   type Envelope,
+  type LockReason,
   protectsBranch,
   type RepoRole,
   type ReviewEvent,
@@ -149,6 +150,13 @@ import {
   type UpdateBranchInput,
 } from "./repo/head-writes.js";
 import { type HookForDelivery, type HookView, RepoHooks } from "./repo/hooks.js";
+import {
+  type IssuePatch,
+  RepoIssues,
+  type Subject,
+  type SubjectKind,
+  type SubjectQuery,
+} from "./repo/issues.js";
 import { MERGE_POLICY, type MergeMade, type MergePolicy } from "./repo/merge.js";
 import { MERGEABILITY_POLICY, type PullView, RepoMergeability } from "./repo/mergeability.js";
 import {
@@ -274,7 +282,10 @@ export class RepoDO extends MigratingDO {
   /** Reviews of pull requests, and reviews requested. */
   readonly reviews: RepoReviews;
 
-  /** Conversation comments on pull requests. */
+  /** Issues, numbered with pull requests. */
+  readonly issues: RepoIssues;
+
+  /** Conversation comments on issues and pull requests. */
   readonly comments: RepoComments;
 
   /** Comments on pull requests' diffs, and their threads. */
@@ -421,10 +432,16 @@ export class RepoDO extends MigratingDO {
       pulls: this.pulls,
       repoId: () => this.#repoId(),
     });
-    this.comments = new RepoComments({
+    this.issues = new RepoIssues({
       git: this.git,
       events: this.events,
       pulls: this.pulls,
+      repoId: () => this.#repoId(),
+    });
+    this.comments = new RepoComments({
+      git: this.git,
+      events: this.events,
+      issues: this.issues,
       repoId: () => this.#repoId(),
     });
     this.reviewComments = new RepoReviewComments({
@@ -486,6 +503,7 @@ export class RepoDO extends MigratingDO {
       acl: this.acl,
       authority: this.#authority,
       pulls: this.pulls,
+      issues: this.issues,
       comments: this.comments,
       reviewComments: this.reviewComments,
       isPublic: () => this.events.visibility() === "public",
@@ -1087,44 +1105,123 @@ export class RepoDO extends MigratingDO {
     });
   }
 
-  /** A pull request's comments, oldest first; null when the repository is gone, undefined without the pull request. */
-  listComments(number: number, after: number, limit: number) {
+  /**
+   * An issue's or pull request's comments, oldest first; null when the
+   * repository is gone, undefined without that number among `kinds` (the
+   * kinds the caller may read).
+   */
+  listComments(number: number, after: number, limit: number, kinds: readonly SubjectKind[]) {
     return this.#measured("listComments", () => {
       if (this.#refusesReads()) return null;
-      if (!this.pulls.get(number)) return undefined;
+      const kind = this.issues.kindOf(number);
+      if (!kind || !kinds.includes(kind)) return undefined;
       return this.comments.list(number, after, limit);
     });
   }
 
-  /** One comment; null when the repository is gone. */
-  getComment(id: number) {
-    return this.#measured("getComment", () =>
-      this.#refusesReads() ? null : (this.comments.get(id) ?? undefined),
-    );
+  /** One comment, on a subject of `kinds`; null when the repository is gone. */
+  getComment(id: number, kinds: readonly SubjectKind[]) {
+    return this.#measured("getComment", () => {
+      if (this.#refusesReads()) return null;
+      const kind = this.comments.kindOf(id);
+      return kind && kinds.includes(kind) ? this.comments.get(id) : undefined;
+    });
   }
 
-  createComment(number: number, body: string, actor: RefActor) {
+  createComment(number: number, body: string, actor: RefActor, kinds: readonly SubjectKind[]) {
     return this.#pullChange(
       "createComment",
       actor,
-      (caller) => this.comments.create(number, body, caller),
+      (caller) => this.comments.create(number, body, caller, kinds),
       undefined,
       [body],
     );
   }
 
-  editComment(id: number, body: string, actor: RefActor) {
+  editComment(id: number, body: string, actor: RefActor, kinds: readonly SubjectKind[]) {
     return this.#pullChange(
       "editComment",
       actor,
-      (caller) => this.comments.edit(id, body, caller),
+      (caller) => this.comments.edit(id, body, caller, kinds),
       undefined,
       [body],
     );
   }
 
-  deleteComment(id: number, actor: RefActor) {
-    return this.#pullChange("deleteComment", actor, (caller) => this.comments.delete(id, caller));
+  deleteComment(id: number, actor: RefActor, kinds: readonly SubjectKind[]) {
+    return this.#pullChange("deleteComment", actor, (caller) =>
+      this.comments.delete(id, caller, kinds),
+    );
+  }
+
+  /** A page of the issues and pull requests of `query.kinds` (see `RepoIssues.list`); null when gone. */
+  listSubjects(query: SubjectQuery) {
+    return this.#measured("listSubjects", () =>
+      this.#refusesReads() ? null : this.issues.list(query),
+    );
+  }
+
+  /** The issue or pull request numbered `number`, of `kinds`; null when gone, undefined for none. */
+  getSubject(number: number, kinds: readonly SubjectKind[]) {
+    return this.#measured("getSubject", (): Subject | null | undefined => {
+      if (this.#refusesReads()) return null;
+      const kind = this.issues.kindOf(number);
+      if (!kind || !kinds.includes(kind)) return undefined;
+      if (kind === "issue") {
+        const issue = this.issues.get(number);
+        return issue && { kind, issue };
+      }
+      const pull = this.pulls.get(number);
+      return pull && { kind, pull };
+    });
+  }
+
+  /** Opens an issue as the caller, its root identity worked out here. */
+  createIssue(input: { readonly title: string; readonly body: string | null }, actor: RefActor) {
+    return this.#pullChange(
+      "createIssue",
+      actor,
+      (caller) =>
+        // An object from before identities has no events to record an issue with.
+        this.events.hasIdentity()
+          ? { ok: true as const, record: this.issues.open(input, caller) }
+          : { ok: false as const, code: "repo_not_ready" as const },
+      undefined,
+      [input.body],
+    );
+  }
+
+  /** Changes an issue as the matrix allows (see `RepoIssues.change`); `readable`: kinds a duplicate may be. */
+  changeIssue(
+    number: number,
+    patch: IssuePatch,
+    actor: RefActor,
+    readable: readonly SubjectKind[],
+  ) {
+    return this.#pullChange(
+      "changeIssue",
+      actor,
+      (caller) => this.issues.change(number, patch, caller, readable),
+      undefined,
+      [patch.body],
+    );
+  }
+
+  /** Locks or unlocks an issue's or pull request's conversation, of `kinds`. */
+  setConversationLock(
+    number: number,
+    lock: { readonly locked: boolean; readonly reason: LockReason | null },
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#pullChange("setConversationLock", actor, (caller) =>
+      this.issues.setLock(number, lock, caller, kinds),
+    );
+  }
+
+  /** Deletes an issue for good (admin). */
+  deleteIssue(number: number, actor: RefActor) {
+    return this.#pullChange("deleteIssue", actor, (caller) => this.issues.delete(number, caller));
   }
 
   /** Requests reviews of principals, each one's access checked here (see `PullDiscussion`). */
@@ -1257,6 +1354,7 @@ export class RepoDO extends MigratingDO {
       });
       const prepared = (prepare ? await prepare() : undefined) as P;
       const mentioned = await this.feed.prepare(texts);
+      await this.changeHooks.beforeChange?.(method);
       const refused = this.#writeRefusal();
       if (refused)
         return { ok: false as const, code: refused.code as "repo_not_found" | "repo_transferring" };
@@ -1953,6 +2051,12 @@ export class RepoDO extends MigratingDO {
   /** Hooks into applying suggestions. For tests. */
   suggestionHooks: { beforeWrite?: () => Promise<void> } = {};
 
+  /**
+   * Hooks into a change of pull requests, issues or comments: after what it
+   * prepared (and awaited), right before its checks and write. For tests.
+   */
+  changeHooks: { beforeChange?: (method: string) => Promise<void> } = {};
+
   /** A merge's budgets. Tests may replace them. */
   mergePolicy: MergePolicy = MERGE_POLICY;
 
@@ -2031,8 +2135,11 @@ export class RepoDO extends MigratingDO {
     principal: string,
     grantId: string | null,
     members: readonly string[],
+    threads: readonly string[] = [],
   ): Promise<FeedViewAnswer> {
-    return this.#measured("feedView", () => this.#feedView.view(principal, grantId, members));
+    return this.#measured("feedView", () =>
+      this.#feedView.view(principal, grantId, members, threads),
+    );
   }
 
   /** Whether `principalId` may read this repository (public, or a role here). */

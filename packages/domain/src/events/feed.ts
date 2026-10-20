@@ -19,6 +19,10 @@ export const FEED_KINDS = [
 ] as const;
 export type FeedKind = (typeof FEED_KINDS)[number];
 
+/** What a feed thread is about. */
+export const FEED_SUBJECT_KINDS = ["issue", "pull"] as const;
+export type FeedSubjectKind = (typeof FEED_SUBJECT_KINDS)[number];
+
 /** P0: act on this; P1: a thread one takes part in. */
 export const FEED_PRIORITIES = ["P0", "P1"] as const;
 export type FeedPriority = (typeof FEED_PRIORITIES)[number];
@@ -45,33 +49,37 @@ export const FeedRecipientSchema = z.strictObject({
 });
 export type FeedRecipient = z.infer<typeof FeedRecipientSchema>;
 
-export const FeedBlockSchema = z.strictObject({
-  /** The thread within the repository, e.g. `pull/12`. */
-  threadKey: z
-    .string()
-    .max(64)
-    .regex(/^[a-z]+\/[1-9][0-9]*$/),
-  subject: z.strictObject({
-    kind: z.literal("pull"),
-    number: z.number().int().positive(),
-    title: z.string().max(MAX_FEED_TITLE),
-    /** The thread's feed version, bumped by every change of it that has a feed block. */
-    version: z.number().int().positive(),
-  }),
-  /** What happened, e.g. `comment`, `review_requested`, `merged`. */
-  action: z
-    .string()
-    .max(32)
-    .regex(/^[a-z][a-z_]*$/),
-  /** The actor's root identity (the user its agents act for), compared to exclude it. */
-  actorRoot: id.nullable(),
-  /** The actor's access to the repository when it acted. */
-  actorTrust: z.enum(["write", "read", "none"]),
-  /** The entity an activity item aggregates (a comment's or review's id), stable across deliveries. */
-  member: z.string().max(64).nullable(),
-  excerpt: z.string().max(MAX_FEED_EXCERPT).nullable(),
-  audience: z.array(FeedRecipientSchema).max(MAX_FEED_AUDIENCE),
-});
+export const FeedBlockSchema = z
+  .strictObject({
+    /** The thread within the repository, e.g. `pull/12` or `issue/7`: its subject's kind and number. */
+    threadKey: z
+      .string()
+      .max(64)
+      .regex(/^(issue|pull)\/[1-9][0-9]*$/),
+    subject: z.strictObject({
+      kind: z.enum(FEED_SUBJECT_KINDS),
+      number: z.number().int().positive(),
+      title: z.string().max(MAX_FEED_TITLE),
+      /** The thread's feed version, bumped by every change of it that has a feed block. */
+      version: z.number().int().positive(),
+    }),
+    /** What happened, e.g. `comment`, `review_requested`, `merged`. */
+    action: z
+      .string()
+      .max(32)
+      .regex(/^[a-z][a-z_]*$/),
+    /** The actor's root identity (the user its agents act for), compared to exclude it. */
+    actorRoot: id.nullable(),
+    /** The actor's access to the repository when it acted. */
+    actorTrust: z.enum(["write", "read", "none"]),
+    /** The entity an activity item aggregates (a comment's or review's id), stable across deliveries. */
+    member: z.string().max(64).nullable(),
+    excerpt: z.string().max(MAX_FEED_EXCERPT).nullable(),
+    audience: z.array(FeedRecipientSchema).max(MAX_FEED_AUDIENCE),
+  })
+  .refine((block) => block.threadKey === `${block.subject.kind}/${block.subject.number}`, {
+    message: "the thread key names another subject than the block's",
+  });
 export type FeedBlock = z.infer<typeof FeedBlockSchema>;
 
 /** A feed item's key in a principal's feed. */

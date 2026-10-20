@@ -103,6 +103,15 @@ import {
   rotateHookSecretOperation,
   updateHookOperation,
 } from "../repos/hooks.js";
+import {
+  createIssueOperation,
+  deleteIssueOperation,
+  getIssueOperation,
+  listIssuesOperation,
+  lockIssueOperation,
+  unlockIssueOperation,
+  updateIssueOperation,
+} from "../repos/issues.js";
 import { listAccountRepos } from "../repos/listing.js";
 import { networkSource, repoOutput, starCounts, visibleParents } from "../repos/output.js";
 import {
@@ -385,6 +394,15 @@ export const handlers: Handlers = {
   "pulls.requested_reviewers.list": listRequestedReviewersOperation,
   "pulls.requested_reviewers.add": requestReviewersOperation,
   "pulls.requested_reviewers.remove": removeRequestedReviewersOperation,
+  // Issues; the listing, get, lock and comments serve pull requests too, each kind on its
+  // own permission (repos/subjects).
+  "issues.list": listIssuesOperation,
+  "issues.create": createIssueOperation,
+  "issues.get": getIssueOperation,
+  "issues.update": updateIssueOperation,
+  "issues.delete": deleteIssueOperation,
+  "issues.lock": lockIssueOperation,
+  "issues.unlock": unlockIssueOperation,
   "issues.comments.list": listCommentsOperation,
   "issues.comments.create": createCommentOperation,
   "issues.comments.get": getCommentOperation,

@@ -13,6 +13,8 @@ export const DAY = 24 * 60 * 60 * 1000;
 export interface EntryInit {
   repoId?: string;
   thread?: number;
+  /** What the thread is about (a pull request unless said). */
+  subject?: "issue" | "pull";
   kind?: FeedKind;
   version: number;
   state?: "open" | "resolved";
@@ -31,6 +33,7 @@ export interface EntryInit {
 export function entry(init: EntryInit): FeedEntry {
   const thread = init.thread ?? 1;
   const kind = init.kind ?? "activity";
+  const subject = init.subject ?? "pull";
   return {
     eventKey: `rep_test:${init.epochGen ?? 1}:${init.version}`,
     repoId: init.repoId ?? "rep_test",
@@ -38,8 +41,13 @@ export function entry(init: EntryInit): FeedEntry {
     actor: init.actor ?? "usr_actor",
     epochGen: init.epochGen ?? 1,
     feed: {
-      threadKey: `pull/${thread}`,
-      subject: { kind: "pull", number: thread, title: `Pull ${thread}`, version: init.version },
+      threadKey: `${subject}/${thread}`,
+      subject: {
+        kind: subject,
+        number: thread,
+        title: `${subject === "pull" ? "Pull" : "Issue"} ${thread}`,
+        version: init.version,
+      },
       action: init.action ?? (kind === "activity" ? "comment" : kind),
       actorRoot: "usr_actor",
       actorTrust: init.actorTrust ?? "write",
