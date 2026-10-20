@@ -21,8 +21,9 @@ and end-to-end tiers, MCP conformance and REST API fuzzing (one job,
 `contract`, which deploys also wait for), and the interoperability subset with
 the current pinned git. Pull requests also run mutation testing
 (incremental) for the `git-core` scopes they change. The nightly workflow runs
-every interoperability case on every pinned git, long fuzzing budgets, and a
-full mutation run of every scope.
+every interoperability case on every pinned git, long fuzzing budgets, the
+shuffle guard with ten seeds per package (in five parallel shards), and a full
+mutation run of every scope.
 
 `git-core` and `domain` run under plain Node on purpose: it proves they do not
 depend on the Workers runtime.

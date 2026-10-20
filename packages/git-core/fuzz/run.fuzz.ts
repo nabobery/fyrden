@@ -23,6 +23,7 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate as eventLoopTurn } from "node:timers/promises";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { FUZZ_TARGETS, type FuzzTarget } from "./targets.js";
@@ -150,7 +151,9 @@ async function check(target: FuzzTarget, input: Uint8Array): Promise<void> {
     );
   }
   if (live() > MAX_LIVE) {
-    // Garbage from earlier inputs counts too; judge only what survives a collection.
+    // Garbage from earlier inputs counts too; judge only what survives a collection, after the
+    // callbacks earlier inputs left waiting have run (see the batch loop).
+    await eventLoopTurn();
     gc();
     const bytes = live();
     if (bytes > MAX_LIVE) throw new Error(`${bytes} bytes still live, bound ${MAX_LIVE}`);
@@ -197,6 +200,11 @@ describe("fuzz", () => {
           { seed: SEED + batch, numRuns: BATCH },
         );
         runs += result.numRuns;
+        // Parsing resolves through promises alone, so without a turn of the event loop the
+        // process.nextTick queue never runs: each failed node:zlib inflateSync leaves its
+        // destroyed stream there (error and close callbacks) with its buffers, about 1.3 KiB
+        // apiece, which passed the live-memory bound within a minute (measured, Node 24).
+        await eventLoopTurn();
         if (result.failed) {
           const input = result.counterexample?.[0] as Uint8Array;
           const file = await findingFile(target, input);
