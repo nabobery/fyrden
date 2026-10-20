@@ -2121,6 +2121,11 @@ export class RepoDO extends MigratingDO {
     return this.events.exportSnapshot();
   }
 
+  /** The tombstone the deletion puts into the read model (null without an identity). */
+  deletionTombstone(): RepoExport | "not_frozen" | null {
+    return this.events.deletionTombstone();
+  }
+
   /**
    * The deletion's first steps, each safe to redo: freeze the repository
    * and emit its tombstone (once; from then on no background job but the

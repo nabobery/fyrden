@@ -580,7 +580,7 @@ describe("webhooks", () => {
     });
   });
 
-  it("are cancelled, and leave nothing to turn off, once their repository is erased", async () => {
+  it("are deleted with their repository, an attempt still queued sends nothing, and leave nothing to turn off", async () => {
     const hook = (await t.createHook()).body;
     await t.materialize((await t.outbox()).filter((e) => e.webhooks));
     const [ping] = await t.deliveries();
@@ -589,7 +589,7 @@ describe("webhooks", () => {
     expect(await t.stub().eraseForDeletion()).toBe("erased");
     await attemptDelivery(t.deps(), id);
     expect(t.received).toHaveLength(0);
-    expect((await t.deliveries())[0]).toMatchObject({ state: "cancelled", reason: "hook_deleted" });
+    expect(await t.deliveries()).toEqual([]);
     expect(await t.stub().disableHook(hook.id, 1, "gone")).toBe(false);
   });
 });

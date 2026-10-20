@@ -33,6 +33,7 @@ describe("D1 directory schema", () => {
       "passkeys",
       "principals",
       "refresh_tokens",
+      "repo_deletion_cleanups",
       "repo_deletions",
       "repo_redirects",
       "repo_transfers",

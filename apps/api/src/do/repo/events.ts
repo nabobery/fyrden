@@ -378,6 +378,20 @@ export class RepoEvents {
   }
 
   /**
+   * The tombstone the deletion puts into the read model: an export of the
+   * repository entity alone, deleted (its other entities go by the
+   * deletion's cleanups); null without an identity, `not_frozen` before
+   * `markDeleted`.
+   */
+  deletionTombstone(): RepoExport | "not_frozen" | null {
+    const exported = this.exportSnapshot();
+    if (!exported) return null;
+    const entity = exported.entities.find((e) => e.type === REPO_ENTITY);
+    if (!entity?.deleted) return "not_frozen";
+    return { ...exported, entities: [entity] };
+  }
+
+  /**
    * Freezes the repository for its deletion: from now on no ref, HEAD or
    * setting changes; emits its tombstone and the audit row, once.
    */

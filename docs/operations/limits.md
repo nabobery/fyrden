@@ -409,6 +409,7 @@ deletion that finishes in the background:
 | A clone or fork in progress | The erase waits for its read lease: 10 minutes, renewed while it reads |
 | A push admitted before the deletion | The erase waits up to 15 minutes for it to store its body; a body stored later is deleted by the push itself |
 | Forks | Keep the packs they borrowed; the network deletes a pack once no member claims it |
+| Webhook deliveries, their attempts and bodies, and queued effects | Deleted before the repository's storage, up to 4 pages a call (500 effects, 200 deliveries or 1,000 bodies a page); none are made once the deletion's tombstone is in the read model |
 | Incomplete multipart uploads of interrupted maintenance | Left to R2, which aborts them after 7 days |
 
 A deletion that keeps failing shows `attempts` and `last_error` in the

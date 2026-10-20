@@ -1,9 +1,10 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
-import { parseRepoRow } from "@fyrden/domain";
+import { parseRepoRow, REPO_ENTITY } from "@fyrden/domain";
 import type { RepoExport } from "../do/repo/events.js";
 import { readModelFor } from "../events/read-model.js";
 import { applyExport } from "../events/rebuild.js";
 import { clock } from "../services.js";
+import { runCleanups } from "./cleanups.js";
 import {
   actChain,
   forgetRepo,
@@ -27,21 +28,25 @@ import {
  * 3. `purge`: the tombstone goes into the read model through the
  *    consumer's guarded upsert (the consumer drops events of a repository
  *    that is not active), kept with the deletion for later rebuilds.
- * 4. `erase`: the object erases its R2 bytes and leaves its fork networks
+ * 4. `cleanup`: what the repository left outside its storage (effects,
+ *    webhook deliveries and their bodies) goes, a cleanup at a time, each
+ *    recorded once done (`cleanups.ts`).
+ * 5. `erase`: the object erases its R2 bytes and leaves its fork networks
  *    (forks keep the packs they claim), then deletes its storage.
- * 5. `done`: the repository becomes `deleted`, which frees its name. Its
+ * 6. `done`: the repository becomes `deleted`, which frees its name. Its
  *    id is never reused.
  *
  * The request that deletes advances the job as far as it can; the cron
  * advances the rest, oldest first.
  */
 
-export type DeletionStep = "prepare" | "purge" | "erase" | "done";
+export type DeletionStep = "prepare" | "purge" | "cleanup" | "erase" | "done";
 
 /**
- * Keeps a deleted repository's tombstone with its deletion, with the row
- * the read model ended with (an event's tombstone carries none): a rebuild
- * puts the same tombstone into an empty read model.
+ * Keeps a deleted repository's tombstone (its repository entity alone)
+ * with its deletion, with the row the read model ended with (an event's
+ * tombstone carries none): a rebuild puts the same tombstone into an empty
+ * read model.
  */
 export async function keepTombstone(
   env: Env,
@@ -49,6 +54,9 @@ export async function keepTombstone(
   exported: RepoExport,
   metrics?: Metrics,
 ): Promise<void> {
+  const entity = exported.entities.find((e) => e.type === REPO_ENTITY);
+  if (exported.entities.length !== 1 || !entity?.deleted)
+    throw new Error("a tombstone is the deleted repository entity alone");
   metrics?.count("d1.query", { db: "org", op: "deletion_tombstone_row" });
   const last = await readModelFor(env, shard)
     .prepare(
@@ -59,10 +67,7 @@ export async function keepTombstone(
     .bind(exported.sourceId)
     .first<Record<string, unknown>>();
   const row = parseRepoRow(last ?? null) ?? null;
-  const tombstone: RepoExport = {
-    ...exported,
-    entities: exported.entities.map((entity) => ({ ...entity, row })),
-  };
+  const tombstone: RepoExport = { ...exported, entities: [{ ...entity, row }] };
   metrics?.count("d1.query", { db: "directory", op: "deletion_tombstone" });
   // Only ever newer (a purge of an older epoch resuming late keeps nothing).
   await env.DIRECTORY.prepare(
@@ -70,12 +75,7 @@ export async function keepTombstone(
        AND (tombstone IS NULL OR (json_extract(tombstone, '$.epochGen'),
          json_extract(tombstone, '$.entities[0].version')) <= (?3, ?4))`,
   )
-    .bind(
-      JSON.stringify(tombstone),
-      exported.sourceId,
-      exported.epochGen,
-      exported.entities[0]?.version ?? 0,
-    )
+    .bind(JSON.stringify(tombstone), exported.sourceId, exported.epochGen, entity.version)
     .run();
 }
 
@@ -94,6 +94,7 @@ export const DELETION_POLICY = {
 };
 
 type Deletion = {
+  repo_id: string;
   step: DeletionStep;
   requested_by: string | null;
   act_chain: string | null;
@@ -211,7 +212,7 @@ export async function advanceDeletion(
   metrics?.count("d1.query", { db: "directory", op: "deletion_read" });
   const deletion = await db
     .prepare(
-      `SELECT d.step, d.requested_by, d.act_chain, d.request_id, r.org_shard FROM repo_deletions d
+      `SELECT d.repo_id, d.step, d.requested_by, d.act_chain, d.request_id, r.org_shard FROM repo_deletions d
        JOIN repos r ON r.id = d.repo_id WHERE d.repo_id = ?`,
     )
     .bind(repoId)
@@ -270,16 +271,20 @@ async function runStep(
       return prepared.ready ? "purge" : "prepare";
     }
     case "purge": {
-      metrics?.count("do.request", { class: "RepoDO", method: "exportSnapshot" });
-      const exported = await stub.exportSnapshot();
-      if (exported) {
-        if (!exported.entities.every((entity) => entity.deleted))
-          throw new Error("the repository was not frozen before its purge");
-        await applyExport(env, deletion.org_shard, exported, options);
+      metrics?.count("do.request", { class: "RepoDO", method: "deletionTombstone" });
+      const tombstone = await stub.deletionTombstone();
+      if (tombstone === "not_frozen")
+        throw new Error("the repository was not frozen before its purge");
+      if (tombstone) {
+        await applyExport(env, deletion.org_shard, tombstone, options);
         // Kept for rebuilds after the erase: the tombstone with the row it ended with.
-        await keepTombstone(env, deletion.org_shard, exported, metrics);
+        await keepTombstone(env, deletion.org_shard, tombstone, metrics);
       }
-      return "erase";
+      return "cleanup";
+    }
+    case "cleanup": {
+      const target = { repoId: deletion.repo_id, shard: deletion.org_shard };
+      return (await runCleanups(env, target, options)) ? "erase" : "cleanup";
     }
     case "erase": {
       metrics?.count("do.request", { class: "RepoDO", method: "eraseForDeletion" });
