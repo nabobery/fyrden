@@ -8,13 +8,15 @@ import type {
   updateComment,
 } from "@fyrden/api-contract";
 import type { CommentRecord } from "../do/repo/comments.js";
+import type { Reacted } from "../do/repo/reactions.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import type { RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
+import { reactionRollup } from "./sorting.js";
 import { subjectAccess, subjectNotFound } from "./subjects.js";
 
-function commentOutput(comment: CommentRecord): Output<typeof getComment> {
+function commentOutput(comment: Reacted<CommentRecord>): Output<typeof getComment> {
   return {
     id: comment.id,
     issue_number: comment.number,
@@ -23,6 +25,7 @@ function commentOutput(comment: CommentRecord): Output<typeof getComment> {
     body: comment.body,
     created_at: comment.createdAt,
     updated_at: comment.updatedAt,
+    reactions: reactionRollup(comment.reactions),
   };
 }
 

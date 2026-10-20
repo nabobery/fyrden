@@ -151,6 +151,17 @@ import {
   updatePullOperation,
 } from "../repos/pulls.js";
 import {
+  createCommentReactionOperation,
+  createIssueReactionOperation,
+  createReviewCommentReactionOperation,
+  deleteCommentReactionOperation,
+  deleteIssueReactionOperation,
+  deleteReviewCommentReactionOperation,
+  listCommentReactionsOperation,
+  listIssueReactionsOperation,
+  listReviewCommentReactionsOperation,
+} from "../repos/reactions.js";
+import {
   applySuggestionsOperation,
   createReviewCommentOperation,
   deleteReviewCommentOperation,
@@ -421,6 +432,15 @@ export const handlers: Handlers = {
   // Issues; the listing, get, lock and comments serve pull requests too, each kind on its
   // own permission (repos/subjects).
   "issues.list": listIssuesOperation,
+  "reactions.issue.list": listIssueReactionsOperation,
+  "reactions.issue.create": createIssueReactionOperation,
+  "reactions.issue.delete": deleteIssueReactionOperation,
+  "reactions.comment.list": listCommentReactionsOperation,
+  "reactions.comment.create": createCommentReactionOperation,
+  "reactions.comment.delete": deleteCommentReactionOperation,
+  "reactions.review_comment.list": listReviewCommentReactionsOperation,
+  "reactions.review_comment.create": createReviewCommentReactionOperation,
+  "reactions.review_comment.delete": deleteReviewCommentReactionOperation,
   "labels.list": listLabelsOperation,
   "labels.get": getLabelOperation,
   "labels.create": createLabelOperation,

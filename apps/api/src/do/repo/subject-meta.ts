@@ -13,6 +13,7 @@ import {
 } from "@fyrden/domain";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller } from "./pulls.js";
+import { NO_REACTIONS, type ReactionCounts } from "./reactions.js";
 
 /*
  * A repository's labels and milestones, and the labels, assignees and
@@ -61,6 +62,8 @@ export interface SubjectMeta {
   /** Principal ids, ascending. */
   readonly assignees: readonly string[];
   readonly milestone: MilestoneRecord | null;
+  /** Its reactions counted by content, as they stand. */
+  readonly reactions: ReactionCounts;
 }
 
 /** An issue or pull request whose labels, assignees and milestone are read: its number, and its milestone as recorded. */
@@ -184,6 +187,8 @@ export class RepoSubjectMeta {
       readonly repoId: () => string;
       /** Whether `number` is an issue or a pull request now; undefined for neither. */
       readonly kindOf: (number: number) => SubjectKind | undefined;
+      /** Reactions to issues and pull requests, counted for each answered. */
+      readonly reactionsOf: (numbers: readonly number[]) => Map<number, ReactionCounts>;
       /**
        * In the change's transaction: bumps the subject's version and update
        * time, and emits each event with its snapshot as it now stands.
@@ -510,13 +515,13 @@ export class RepoSubjectMeta {
   // --- Issues and pull requests -------------------------------------------
 
   /** What `number` is sorted by (labels, assignees, milestone), as it stands; nothing for none. */
-  of(number: number): SubjectMeta {
+  of(number: number, withReactions = true): SubjectMeta {
     const [recorded] = this.#exec<{ milestone: number | null }>(
       `SELECT milestone FROM issues WHERE number = ?1
        UNION ALL SELECT milestone FROM pull_requests WHERE number = ?1`,
       number,
     );
-    return this.ofMany([{ number, milestone: recorded?.milestone ?? null }]).get(
+    return this.ofMany([{ number, milestone: recorded?.milestone ?? null }], withReactions).get(
       number,
     ) as SubjectMeta;
   }
@@ -526,7 +531,7 @@ export class RepoSubjectMeta {
    * recorded): their labels and assignees in one query, their milestones
    * in another.
    */
-  ofMany(subjects: readonly MetaSubject[]): Map<number, SubjectMeta> {
+  ofMany(subjects: readonly MetaSubject[], withReactions = true): Map<number, SubjectMeta> {
     const labels = new Map<number, LabelRecord[]>();
     const assignees = new Map<number, string[]>();
     if (subjects.length > 0)
@@ -554,10 +559,15 @@ export class RepoSubjectMeta {
           )
       ).map((row) => [row.number, milestoneRecord(row)]),
     );
+    // Snapshots and planned changes leave the counts out (not read at all).
+    const reactions = withReactions
+      ? this.deps.reactionsOf(subjects.map((s) => s.number))
+      : new Map<number, ReactionCounts>();
     return new Map(
       subjects.map((s) => [
         s.number,
         {
+          reactions: reactions.get(s.number) ?? NO_REACTIONS,
           labels: (labels.get(s.number) ?? []).sort(byName),
           assignees: (assignees.get(s.number) ?? []).sort(),
           milestone: (s.milestone !== null && milestones.get(s.milestone)) || null,
@@ -568,7 +578,7 @@ export class RepoSubjectMeta {
 
   /** What a snapshot of `number` carries of it, as it stands. */
   snapshot(number: number): SnapshotMeta {
-    const meta = this.of(number);
+    const meta = this.of(number, false);
     return {
       labels: meta.labels.map((l) => l.id).sort((a, b) => a - b),
       assignees: [...meta.assignees],
@@ -627,7 +637,7 @@ export class RepoSubjectMeta {
     patch: MetaPatch,
     caller: PullCaller,
   ): { ok: true; plan: MetaPlan } | { ok: false; code: MetaFailure } {
-    const current = this.of(number);
+    const current = this.of(number, false);
     const writes: (() => void)[] = [];
     const events: SubjectEvent[] = [];
 

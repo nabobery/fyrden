@@ -103,6 +103,17 @@ import {
 } from "../ops/pulls.js";
 import { getOrgQuota, getUserQuota, setQuota } from "../ops/quotas.js";
 import {
+  createCommentReaction,
+  createIssueReaction,
+  createReviewCommentReaction,
+  deleteCommentReaction,
+  deleteIssueReaction,
+  deleteReviewCommentReaction,
+  listCommentReactions,
+  listIssueReactions,
+  listReviewCommentReactions,
+} from "../ops/reactions.js";
+import {
   createOrgRepo,
   createRepo,
   deleteRepo,
@@ -268,6 +279,15 @@ export const registry = defineRegistry([
   getComment,
   updateComment,
   deleteComment,
+  listIssueReactions,
+  createIssueReaction,
+  deleteIssueReaction,
+  listCommentReactions,
+  createCommentReaction,
+  deleteCommentReaction,
+  listReviewCommentReactions,
+  createReviewCommentReaction,
+  deleteReviewCommentReaction,
   starRepo,
   unstarRepo,
   listStarred,

@@ -13,6 +13,7 @@ import type {
 } from "@fyrden/api-contract";
 import { coAuthorTrailers } from "@fyrden/domain";
 import { appendTrailers } from "@fyrden/git-core";
+import type { Reacted } from "../do/repo/reactions.js";
 import {
   type Comparison,
   isOutdated,
@@ -26,10 +27,11 @@ import { resolveOne } from "../signing/verification.js";
 import type { RepoEntry } from "./directory.js";
 import { commitIdentityOf, noReplyPeople } from "./file-writes.js";
 import { actorOf, failure } from "./pulls.js";
+import { reactionRollup } from "./sorting.js";
 
 /** A diff comment as the API returns it, judged against what its pull request's diff compares now. */
 function commentOutput(
-  comment: ReviewCommentRecord,
+  comment: Reacted<ReviewCommentRecord>,
   now: Comparison | null,
 ): Output<typeof getReviewComment> {
   const { anchor } = comment;
@@ -54,6 +56,7 @@ function commentOutput(
     resolved: comment.resolved,
     created_at: comment.createdAt,
     updated_at: comment.updatedAt,
+    reactions: reactionRollup(comment.reactions),
   };
 }
 

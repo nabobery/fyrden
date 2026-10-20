@@ -1711,6 +1711,18 @@ export type PullsListOutput = {
       /** Unix time in milliseconds. */
       closed_at: number | null;
     } | null;
+    /** Its reactions counted by content, as they stand. */
+    reactions: {
+      total_count: number;
+      "+1": number;
+      "-1": number;
+      laugh: number;
+      confused: number;
+      heart: number;
+      hooray: number;
+      rocket: number;
+      eyes: number;
+    };
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -1831,6 +1843,18 @@ export type PullsCreateOutput = {
     /** Unix time in milliseconds. */
     closed_at: number | null;
   } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
 };
 
 /** Input of `pulls.get`: Get a pull request. */
@@ -1938,6 +1962,18 @@ export type PullsGetOutput = {
     /** Unix time in milliseconds. */
     closed_at: number | null;
   } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
 };
 
 /** Input of `pulls.update`: Update a pull request. */
@@ -2055,6 +2091,18 @@ export type PullsUpdateOutput = {
     /** Unix time in milliseconds. */
     closed_at: number | null;
   } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
 };
 
 /** Input of `pulls.merge`: Merge a pull request. */
@@ -2307,6 +2355,18 @@ export type PullsCommentsListOutput = {
     created_at: number;
     /** Unix time in milliseconds. */
     updated_at: number;
+    /** Its reactions counted by content, as they stand. */
+    reactions: {
+      total_count: number;
+      "+1": number;
+      "-1": number;
+      laugh: number;
+      confused: number;
+      heart: number;
+      hooray: number;
+      rocket: number;
+      eyes: number;
+    };
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -2372,6 +2432,18 @@ export type PullsCommentsCreateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
 };
 
 /** Input of `pulls.comments.get`: Get a review comment. */
@@ -2420,6 +2492,18 @@ export type PullsCommentsGetOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
 };
 
 /** Input of `pulls.comments.update`: Update a review comment. */
@@ -2469,6 +2553,18 @@ export type PullsCommentsUpdateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
 };
 
 /** Input of `pulls.comments.delete`: Delete a review comment. */
@@ -2923,6 +3019,18 @@ export type PullsRequestedReviewersAddOutput = {
     /** Unix time in milliseconds. */
     closed_at: number | null;
   } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
 };
 
 /** Input of `pulls.requested_reviewers.remove`: Remove requested reviewers. */
@@ -3034,6 +3142,18 @@ export type PullsRequestedReviewersRemoveOutput = {
     /** Unix time in milliseconds. */
     closed_at: number | null;
   } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
 };
 
 /** Input of `issues.list`: List issues. */
@@ -3123,6 +3243,18 @@ export type IssuesListOutput = {
       /** Unix time in milliseconds. */
       closed_at: number | null;
     } | null;
+    /** Its reactions counted by content, as they stand. */
+    reactions: {
+      total_count: number;
+      "+1": number;
+      "-1": number;
+      laugh: number;
+      confused: number;
+      heart: number;
+      hooray: number;
+      rocket: number;
+      eyes: number;
+    };
     /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
     pull_request?: {
       /** Unix time in milliseconds. */
@@ -3218,6 +3350,18 @@ export type IssuesCreateOutput = {
     /** Unix time in milliseconds. */
     closed_at: number | null;
   } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
   /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
   pull_request?: {
     /** Unix time in milliseconds. */
@@ -3304,6 +3448,18 @@ export type IssuesGetOutput = {
     /** Unix time in milliseconds. */
     closed_at: number | null;
   } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
   /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
   pull_request?: {
     /** Unix time in milliseconds. */
@@ -3404,6 +3560,18 @@ export type IssuesUpdateOutput = {
     /** Unix time in milliseconds. */
     closed_at: number | null;
   } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
   /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
   pull_request?: {
     /** Unix time in milliseconds. */
@@ -3788,6 +3956,18 @@ export type IssuesAssigneesAddOutput = {
     /** Unix time in milliseconds. */
     closed_at: number | null;
   } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
   /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
   pull_request?: {
     /** Unix time in milliseconds. */
@@ -3876,6 +4056,18 @@ export type IssuesAssigneesRemoveOutput = {
     /** Unix time in milliseconds. */
     closed_at: number | null;
   } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
   /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
   pull_request?: {
     /** Unix time in milliseconds. */
@@ -4129,6 +4321,18 @@ export type IssuesCommentsListOutput = {
     created_at: number;
     /** Unix time in milliseconds. */
     updated_at: number;
+    /** Its reactions counted by content, as they stand. */
+    reactions: {
+      total_count: number;
+      "+1": number;
+      "-1": number;
+      laugh: number;
+      confused: number;
+      heart: number;
+      hooray: number;
+      rocket: number;
+      eyes: number;
+    };
   }[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -4161,6 +4365,18 @@ export type IssuesCommentsCreateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
 };
 
 /** Input of `issues.comments.get`: Get a comment. */
@@ -4189,6 +4405,18 @@ export type IssuesCommentsGetOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
 };
 
 /** Input of `issues.comments.update`: Update a comment. */
@@ -4218,6 +4446,18 @@ export type IssuesCommentsUpdateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+  };
 };
 
 /** Input of `issues.comments.delete`: Delete a comment. */
@@ -4232,6 +4472,237 @@ export type IssuesCommentsDeleteInput = {
 
 /** Output of `issues.comments.delete`. */
 export type IssuesCommentsDeleteOutput = {
+  id: number;
+  state: "deleted";
+};
+
+/** Input of `reactions.issue.list`: List reactions to an issue. */
+export type ReactionsIssueListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** Only reactions of this content. */
+  content?: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `reactions.issue.list`. */
+export type ReactionsIssueListOutput = {
+  reactions: ({
+    id: number;
+    /** Who reacted (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that reacted for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    /** Unix time in milliseconds. */
+    created_at: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `reactions.issue.create`: React to an issue. */
+export type ReactionsIssueCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+};
+
+/** Output of `reactions.issue.create`. */
+export type ReactionsIssueCreateOutput = {
+  id: number;
+  /** Who reacted (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that reacted for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+  /** Unix time in milliseconds. */
+  created_at: number;
+};
+
+/** Input of `reactions.issue.delete`: Delete a reaction to an issue. */
+export type ReactionsIssueDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** The reaction's id. */
+  reaction_id: number;
+};
+
+/** Output of `reactions.issue.delete`. */
+export type ReactionsIssueDeleteOutput = {
+  id: number;
+  state: "deleted";
+};
+
+/** Input of `reactions.comment.list`: List reactions to a comment. */
+export type ReactionsCommentListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  /** Only reactions of this content. */
+  content?: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `reactions.comment.list`. */
+export type ReactionsCommentListOutput = {
+  reactions: ({
+    id: number;
+    /** Who reacted (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that reacted for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    /** Unix time in milliseconds. */
+    created_at: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `reactions.comment.create`: React to a comment. */
+export type ReactionsCommentCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+};
+
+/** Output of `reactions.comment.create`. */
+export type ReactionsCommentCreateOutput = {
+  id: number;
+  /** Who reacted (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that reacted for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+  /** Unix time in milliseconds. */
+  created_at: number;
+};
+
+/** Input of `reactions.comment.delete`: Delete a reaction to a comment. */
+export type ReactionsCommentDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  /** The reaction's id. */
+  reaction_id: number;
+};
+
+/** Output of `reactions.comment.delete`. */
+export type ReactionsCommentDeleteOutput = {
+  id: number;
+  state: "deleted";
+};
+
+/** Input of `reactions.review_comment.list`: List reactions to a diff comment. */
+export type ReactionsReviewCommentListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  /** Only reactions of this content. */
+  content?: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `reactions.review_comment.list`. */
+export type ReactionsReviewCommentListOutput = {
+  reactions: ({
+    id: number;
+    /** Who reacted (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that reacted for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    /** Unix time in milliseconds. */
+    created_at: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `reactions.review_comment.create`: React to a diff comment. */
+export type ReactionsReviewCommentCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+};
+
+/** Output of `reactions.review_comment.create`. */
+export type ReactionsReviewCommentCreateOutput = {
+  id: number;
+  /** Who reacted (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that reacted for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+  /** Unix time in milliseconds. */
+  created_at: number;
+};
+
+/** Input of `reactions.review_comment.delete`: Delete a reaction to a diff comment. */
+export type ReactionsReviewCommentDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  /** The reaction's id. */
+  reaction_id: number;
+};
+
+/** Output of `reactions.review_comment.delete`. */
+export type ReactionsReviewCommentDeleteOutput = {
   id: number;
   state: "deleted";
 };
@@ -5941,6 +6412,15 @@ export const OPERATIONS = {
   "issues.comments.get": { method: "GET", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: false },
   "issues.comments.update": { method: "PATCH", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: true },
   "issues.comments.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: true },
+  "reactions.issue.list": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}/reactions", pathParams: ["owner","repo","issue_number"], idempotent: false, items: "reactions" },
+  "reactions.issue.create": { method: "POST", path: "/repos/{owner}/{repo}/issues/{issue_number}/reactions", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "reactions.issue.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/reactions/{reaction_id}", pathParams: ["owner","repo","issue_number","reaction_id"], idempotent: true },
+  "reactions.comment.list": { method: "GET", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions", pathParams: ["owner","repo","comment_id"], idempotent: false, items: "reactions" },
+  "reactions.comment.create": { method: "POST", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions", pathParams: ["owner","repo","comment_id"], idempotent: true },
+  "reactions.comment.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions/{reaction_id}", pathParams: ["owner","repo","comment_id","reaction_id"], idempotent: true },
+  "reactions.review_comment.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions", pathParams: ["owner","repo","comment_id"], idempotent: false, items: "reactions" },
+  "reactions.review_comment.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions", pathParams: ["owner","repo","comment_id"], idempotent: true },
+  "reactions.review_comment.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions/{reaction_id}", pathParams: ["owner","repo","comment_id","reaction_id"], idempotent: true },
   "stars.put": { method: "PUT", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.delete": { method: "DELETE", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.list": { method: "GET", path: "/user/starred", pathParams: [], idempotent: false, items: "repos" },
@@ -6208,6 +6688,24 @@ export interface Operations {
   "issues.comments.update": { input: IssuesCommentsUpdateInput; output: IssuesCommentsUpdateOutput };
   /** Delete a comment. Deletes a comment. Its author may delete its own; write access and above, anyone's (only they while the conversation is locked). Takes the permission for its kind. */
   "issues.comments.delete": { input: IssuesCommentsDeleteInput; output: IssuesCommentsDeleteOutput };
+  /** List reactions to an issue. The reactions to an issue, oldest first. On an issue, or a pull request by its number. Takes the permission for the kind it is on (`issues:*`, or `pull_requests:*` for a pull request). */
+  "reactions.issue.list": { input: ReactionsIssueListInput; output: ReactionsIssueListOutput };
+  /** React to an issue. Reacts to an issue. Anyone who reads the repository reacts, once per content (posting it again answers the reaction it has: GitHub answers 200 for that, Fyrden 201); while the conversation is locked, write access and above. A reaction is taken back only by whoever made it (another's is not found). On an issue, or a pull request by its number. Takes the permission for the kind it is on (`issues:*`, or `pull_requests:*` for a pull request). */
+  "reactions.issue.create": { input: ReactionsIssueCreateInput; output: ReactionsIssueCreateOutput };
+  /** Delete a reaction to an issue. Takes the caller's own reaction to an issue back. Answers what was deleted (GitHub answers 204). On an issue, or a pull request by its number. Takes the permission for the kind it is on (`issues:*`, or `pull_requests:*` for a pull request). */
+  "reactions.issue.delete": { input: ReactionsIssueDeleteInput; output: ReactionsIssueDeleteOutput };
+  /** List reactions to a comment. The reactions to a comment, oldest first. On a conversation comment of an issue or a pull request. Takes the permission for the kind it is on (`issues:*`, or `pull_requests:*` for a pull request). */
+  "reactions.comment.list": { input: ReactionsCommentListInput; output: ReactionsCommentListOutput };
+  /** React to a comment. Reacts to a comment. Anyone who reads the repository reacts, once per content (posting it again answers the reaction it has: GitHub answers 200 for that, Fyrden 201); while the conversation is locked, write access and above. A reaction is taken back only by whoever made it (another's is not found). On a conversation comment of an issue or a pull request. Takes the permission for the kind it is on (`issues:*`, or `pull_requests:*` for a pull request). */
+  "reactions.comment.create": { input: ReactionsCommentCreateInput; output: ReactionsCommentCreateOutput };
+  /** Delete a reaction to a comment. Takes the caller's own reaction to a comment back. Answers what was deleted (GitHub answers 204). On a conversation comment of an issue or a pull request. Takes the permission for the kind it is on (`issues:*`, or `pull_requests:*` for a pull request). */
+  "reactions.comment.delete": { input: ReactionsCommentDeleteInput; output: ReactionsCommentDeleteOutput };
+  /** List reactions to a diff comment. The reactions to a diff comment, oldest first. On a pull request's diff comment. */
+  "reactions.review_comment.list": { input: ReactionsReviewCommentListInput; output: ReactionsReviewCommentListOutput };
+  /** React to a diff comment. Reacts to a diff comment. Anyone who reads the repository reacts, once per content (posting it again answers the reaction it has: GitHub answers 200 for that, Fyrden 201); while the conversation is locked, write access and above. A reaction is taken back only by whoever made it (another's is not found). On a pull request's diff comment. */
+  "reactions.review_comment.create": { input: ReactionsReviewCommentCreateInput; output: ReactionsReviewCommentCreateOutput };
+  /** Delete a reaction to a diff comment. Takes the caller's own reaction to a diff comment back. Answers what was deleted (GitHub answers 204). On a pull request's diff comment. */
+  "reactions.review_comment.delete": { input: ReactionsReviewCommentDeleteInput; output: ReactionsReviewCommentDeleteOutput };
   /** Star a repository. Stars a repository the caller can read. Starring one already starred changes nothing. The token also needs `metadata:read` for the repository. */
   "stars.put": { input: StarsPutInput; output: StarsPutOutput };
   /** Unstar a repository. Takes the caller's star off a repository it can read. Unstarring one not starred changes nothing. */

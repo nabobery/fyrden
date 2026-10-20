@@ -3,6 +3,7 @@ import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { CommitObject } from "./browse.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
+import { ReactionRollup } from "./subject-meta.js";
 
 const RepoInput = {
   owner: z
@@ -60,6 +61,7 @@ export const ReviewComment = z.object({
   resolved: z.boolean().describe("Fyrden: its thread is resolved."),
   created_at: z.number().int().describe("Unix time in milliseconds."),
   updated_at: z.number().int().describe("Unix time in milliseconds."),
+  reactions: ReactionRollup,
 });
 
 export const ReviewThread = z.object({

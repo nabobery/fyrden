@@ -196,6 +196,25 @@ const CASES: Record<
     },
     expected: MISSING_KIND,
   },
+  "reactions.issue.list": { input: {}, expected: MISSING_KIND },
+  "reactions.issue.create": { input: { content: "+1" }, expected: MISSING_KIND },
+  "reactions.issue.delete": { input: {}, expected: MISSING_KIND },
+  "reactions.comment.list": { input: {}, expected: MISSING_KIND },
+  "reactions.comment.create": { input: { content: "+1" }, expected: MISSING_KIND },
+  "reactions.comment.delete": { input: {}, expected: MISSING_KIND },
+  // Diff comments are pull requests' only: their reactions declare the pull requests permission.
+  "reactions.review_comment.list": {
+    input: {},
+    expected: { status: 404, code: "comment_not_found" },
+  },
+  "reactions.review_comment.create": {
+    input: { content: "+1" },
+    expected: { status: 404, code: "comment_not_found" },
+  },
+  "reactions.review_comment.delete": {
+    input: {},
+    expected: { status: 404, code: "comment_not_found" },
+  },
   // Labels and milestones serve both kinds: either kind's permission lets a caller through
   // (see EITHER_KIND below).
   "labels.list": { input: {}, expected: MISSING_KIND },
@@ -303,6 +322,7 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{review_id}", "1")
     .replace("{issue_number}", "1")
     .replace("{milestone_number}", "1")
+    .replace("{reaction_id}", "1")
     .replace("{name}", "checked")
     .replace("{comment_id}", "1")
     .replace("{thread_id}", "1")
@@ -382,6 +402,12 @@ const BOTH_KINDS: Record<string, Outcome> = {
   "issues.labels.clear": { status: 404, code: "issue_not_found" },
   "issues.assignees.add": { status: 404, code: "issue_not_found" },
   "issues.assignees.remove": { status: 404, code: "issue_not_found" },
+  "reactions.issue.list": { status: 404, code: "issue_not_found" },
+  "reactions.issue.create": { status: 404, code: "issue_not_found" },
+  "reactions.issue.delete": { status: 404, code: "issue_not_found" },
+  "reactions.comment.list": { status: 404, code: "comment_not_found" },
+  "reactions.comment.create": { status: 404, code: "comment_not_found" },
+  "reactions.comment.delete": { status: 404, code: "comment_not_found" },
 };
 
 /**

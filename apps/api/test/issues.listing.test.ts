@@ -144,9 +144,9 @@ describe("the issue listing", () => {
                 const label = JSON.stringify(query);
                 expect(page.numbers, label).toEqual(expected(held, query));
                 // At most five ranges (issues: two states; pull requests: three), each split in
-                // two, each taking a page; the page's rows read back, and its labels and
-                // assignees sought by number: never the 2N held.
-                expect(page.rowsRead, label).toBeLessThanOrEqual(5 * 2 * (LIMIT + 1) + 3 * LIMIT);
+                // two, each taking a page; the page's rows read back, and its labels, assignees
+                // and reaction counts sought by number: never the 2N held.
+                expect(page.rowsRead, label).toBeLessThanOrEqual(5 * 2 * (LIMIT + 1) + 4 * LIMIT);
               }
     },
   );

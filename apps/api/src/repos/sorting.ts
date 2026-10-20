@@ -1,5 +1,6 @@
 import type { getIssue, getLabel, getMilestone, Output } from "@fyrden/api-contract";
 import type { SubjectKind } from "../do/repo/issues.js";
+import type { ReactionCounts } from "../do/repo/reactions.js";
 import type {
   LabelRecord,
   MetaInput,
@@ -50,17 +51,23 @@ export function milestoneOutput(
   };
 }
 
+/** A target's reactions as the API answers them (GitHub's rollup). */
+export function reactionRollup(counts: ReactionCounts): Output<typeof getIssue>["reactions"] {
+  return { total_count: Object.values(counts).reduce((a, b) => a + b, 0), ...counts };
+}
+
 /** An issue's or pull request's labels, assignees and milestone, as both answer them, for a caller reading `readable`. */
 export function sortingOutput(
   meta: SubjectMeta,
   readable: readonly SubjectKind[],
-): Pick<Output<typeof getIssue>, "labels" | "assignee" | "assignees" | "milestone"> {
+): Pick<Output<typeof getIssue>, "labels" | "assignee" | "assignees" | "milestone" | "reactions"> {
   const assignees = meta.assignees.map((id) => ({ id }));
   return {
     labels: meta.labels.map(labelOutput),
     assignee: assignees[0] ?? null,
     assignees,
     milestone: meta.milestone && milestoneOutput(meta.milestone, readable),
+    reactions: reactionRollup(meta.reactions),
   };
 }
 

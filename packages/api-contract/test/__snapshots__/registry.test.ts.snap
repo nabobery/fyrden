@@ -11340,6 +11340,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             ],
                             "type": "object",
                           },
+                          "reactions": {
+                            "additionalProperties": false,
+                            "description": "Its reactions counted by content, as they stand.",
+                            "properties": {
+                              "+1": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "-1": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "confused": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "eyes": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "heart": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "hooray": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "laugh": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "rocket": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "total_count": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "total_count",
+                              "+1",
+                              "-1",
+                              "laugh",
+                              "confused",
+                              "heart",
+                              "hooray",
+                              "rocket",
+                              "eyes",
+                            ],
+                            "type": "object",
+                          },
                           "state": {
                             "description": "A merged pull request is \`closed\`.",
                             "enum": [
@@ -11408,6 +11471,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "assignee",
                           "assignees",
                           "milestone",
+                          "reactions",
                         ],
                         "type": "object",
                       },
@@ -11852,6 +11916,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "state": {
                       "description": "A merged pull request is \`closed\`.",
                       "enum": [
@@ -11920,6 +12047,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "assignee",
                     "assignees",
                     "milestone",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -12114,6 +12242,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       },
                       "type": "array",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "updated_at": {
                       "description": "Unix time in milliseconds.",
                       "maximum": 9007199254740991,
@@ -12142,6 +12333,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "body",
                     "created_at",
                     "updated_at",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -12263,6 +12455,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       },
                       "type": "array",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "updated_at": {
                       "description": "Unix time in milliseconds.",
                       "maximum": 9007199254740991,
@@ -12291,6 +12546,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "body",
                     "created_at",
                     "updated_at",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -12315,6 +12571,452 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Update a comment",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions": {
+      "get": {
+        "description": "The reactions to a comment, oldest first. On a conversation comment of an issue or a pull request. Takes the permission for the kind it is on (\`issues:*\`, or \`pull_requests:*\` for a pull request).",
+        "operationId": "reactions.comment.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "comment_id",
+            "required": true,
+            "schema": {
+              "description": "The comment's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "content",
+            "required": false,
+            "schema": {
+              "description": "Only reactions of this content.",
+              "enum": [
+                "+1",
+                "-1",
+                "laugh",
+                "confused",
+                "heart",
+                "hooray",
+                "rocket",
+                "eyes",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "reactions": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "content": {
+                            "enum": [
+                              "+1",
+                              "-1",
+                              "laugh",
+                              "confused",
+                              "heart",
+                              "hooray",
+                              "rocket",
+                              "eyes",
+                            ],
+                            "type": "string",
+                          },
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "id": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "performed_via_agents": {
+                            "description": "Fyrden: the agents that reacted for \`user\`, the acting one first; empty if none.",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "user": {
+                            "additionalProperties": false,
+                            "description": "Who reacted (the user, when agents acted for one).",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                            ],
+                            "type": "object",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "user",
+                          "performed_via_agents",
+                          "content",
+                          "created_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "reactions",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List reactions to a comment",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Reacts to a comment. Anyone who reads the repository reacts, once per content (posting it again answers the reaction it has: GitHub answers 200 for that, Fyrden 201); while the conversation is locked, write access and above. A reaction is taken back only by whoever made it (another's is not found). On a conversation comment of an issue or a pull request. Takes the permission for the kind it is on (\`issues:*\`, or \`pull_requests:*\` for a pull request).",
+        "operationId": "reactions.comment.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "comment_id",
+            "required": true,
+            "schema": {
+              "description": "The comment's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "content": {
+                    "enum": [
+                      "+1",
+                      "-1",
+                      "laugh",
+                      "confused",
+                      "heart",
+                      "hooray",
+                      "rocket",
+                      "eyes",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "content",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "content": {
+                      "enum": [
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "string",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that reacted for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who reacted (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "user",
+                    "performed_via_agents",
+                    "content",
+                    "created_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "React to a comment",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions/{reaction_id}": {
+      "delete": {
+        "description": "Takes the caller's own reaction to a comment back. Answers what was deleted (GitHub answers 204). On a conversation comment of an issue or a pull request. Takes the permission for the kind it is on (\`issues:*\`, or \`pull_requests:*\` for a pull request).",
+        "operationId": "reactions.comment.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "comment_id",
+            "required": true,
+            "schema": {
+              "description": "The comment's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "path",
+            "name": "reaction_id",
+            "required": true,
+            "schema": {
+              "description": "The reaction's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "const": "deleted",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete a reaction to a comment",
         "x-fyrden-permission": "metadata:read",
         "x-fyrden-principals": [
           "user",
@@ -12764,6 +13466,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "state": {
                       "description": "A merged pull request is \`closed\`.",
                       "enum": [
@@ -12832,6 +13597,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "assignee",
                     "assignees",
                     "milestone",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -13307,6 +14073,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "state": {
                       "description": "A merged pull request is \`closed\`.",
                       "enum": [
@@ -13375,6 +14204,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "assignee",
                     "assignees",
                     "milestone",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -13786,6 +14616,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "state": {
                       "description": "A merged pull request is \`closed\`.",
                       "enum": [
@@ -13854,6 +14747,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "assignee",
                     "assignees",
                     "milestone",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -14263,6 +15157,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "state": {
                       "description": "A merged pull request is \`closed\`.",
                       "enum": [
@@ -14331,6 +15288,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "assignee",
                     "assignees",
                     "milestone",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -14462,6 +15420,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             },
                             "type": "array",
                           },
+                          "reactions": {
+                            "additionalProperties": false,
+                            "description": "Its reactions counted by content, as they stand.",
+                            "properties": {
+                              "+1": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "-1": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "confused": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "eyes": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "heart": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "hooray": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "laugh": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "rocket": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "total_count": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "total_count",
+                              "+1",
+                              "-1",
+                              "laugh",
+                              "confused",
+                              "heart",
+                              "hooray",
+                              "rocket",
+                              "eyes",
+                            ],
+                            "type": "object",
+                          },
                           "updated_at": {
                             "description": "Unix time in milliseconds.",
                             "maximum": 9007199254740991,
@@ -14490,6 +15511,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "body",
                           "created_at",
                           "updated_at",
+                          "reactions",
                         ],
                         "type": "object",
                       },
@@ -14627,6 +15649,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       },
                       "type": "array",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "updated_at": {
                       "description": "Unix time in milliseconds.",
                       "maximum": 9007199254740991,
@@ -14655,6 +15740,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "body",
                     "created_at",
                     "updated_at",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -15551,6 +16637,452 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Lock a conversation",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/issues/{issue_number}/reactions": {
+      "get": {
+        "description": "The reactions to an issue, oldest first. On an issue, or a pull request by its number. Takes the permission for the kind it is on (\`issues:*\`, or \`pull_requests:*\` for a pull request).",
+        "operationId": "reactions.issue.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "issue_number",
+            "required": true,
+            "schema": {
+              "description": "The issue's or pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "content",
+            "required": false,
+            "schema": {
+              "description": "Only reactions of this content.",
+              "enum": [
+                "+1",
+                "-1",
+                "laugh",
+                "confused",
+                "heart",
+                "hooray",
+                "rocket",
+                "eyes",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "reactions": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "content": {
+                            "enum": [
+                              "+1",
+                              "-1",
+                              "laugh",
+                              "confused",
+                              "heart",
+                              "hooray",
+                              "rocket",
+                              "eyes",
+                            ],
+                            "type": "string",
+                          },
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "id": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "performed_via_agents": {
+                            "description": "Fyrden: the agents that reacted for \`user\`, the acting one first; empty if none.",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "user": {
+                            "additionalProperties": false,
+                            "description": "Who reacted (the user, when agents acted for one).",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                            ],
+                            "type": "object",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "user",
+                          "performed_via_agents",
+                          "content",
+                          "created_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "reactions",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List reactions to an issue",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Reacts to an issue. Anyone who reads the repository reacts, once per content (posting it again answers the reaction it has: GitHub answers 200 for that, Fyrden 201); while the conversation is locked, write access and above. A reaction is taken back only by whoever made it (another's is not found). On an issue, or a pull request by its number. Takes the permission for the kind it is on (\`issues:*\`, or \`pull_requests:*\` for a pull request).",
+        "operationId": "reactions.issue.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "issue_number",
+            "required": true,
+            "schema": {
+              "description": "The issue's or pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "content": {
+                    "enum": [
+                      "+1",
+                      "-1",
+                      "laugh",
+                      "confused",
+                      "heart",
+                      "hooray",
+                      "rocket",
+                      "eyes",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "content",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "content": {
+                      "enum": [
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "string",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that reacted for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who reacted (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "user",
+                    "performed_via_agents",
+                    "content",
+                    "created_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "React to an issue",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/issues/{issue_number}/reactions/{reaction_id}": {
+      "delete": {
+        "description": "Takes the caller's own reaction to an issue back. Answers what was deleted (GitHub answers 204). On an issue, or a pull request by its number. Takes the permission for the kind it is on (\`issues:*\`, or \`pull_requests:*\` for a pull request).",
+        "operationId": "reactions.issue.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "issue_number",
+            "required": true,
+            "schema": {
+              "description": "The issue's or pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "path",
+            "name": "reaction_id",
+            "required": true,
+            "schema": {
+              "description": "The reaction's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "const": "deleted",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete a reaction to an issue",
         "x-fyrden-permission": "metadata:read",
         "x-fyrden-principals": [
           "user",
@@ -17677,6 +19209,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             },
                             "type": "array",
                           },
+                          "reactions": {
+                            "additionalProperties": false,
+                            "description": "Its reactions counted by content, as they stand.",
+                            "properties": {
+                              "+1": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "-1": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "confused": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "eyes": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "heart": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "hooray": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "laugh": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "rocket": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "total_count": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "total_count",
+                              "+1",
+                              "-1",
+                              "laugh",
+                              "confused",
+                              "heart",
+                              "hooray",
+                              "rocket",
+                              "eyes",
+                            ],
+                            "type": "object",
+                          },
                           "state": {
                             "enum": [
                               "open",
@@ -17736,6 +19331,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "assignee",
                           "assignees",
                           "milestone",
+                          "reactions",
                         ],
                         "type": "object",
                       },
@@ -18239,6 +19835,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       },
                       "type": "array",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "state": {
                       "enum": [
                         "open",
@@ -18298,6 +19957,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "assignee",
                     "assignees",
                     "milestone",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -18537,6 +20197,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "description": "Always null: comments are not part of a review yet.",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "resolved": {
                       "description": "Fyrden: its thread is resolved.",
                       "type": "boolean",
@@ -18621,6 +20344,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "resolved",
                     "created_at",
                     "updated_at",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -18787,6 +20511,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "description": "Always null: comments are not part of a review yet.",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "resolved": {
                       "description": "Fyrden: its thread is resolved.",
                       "type": "boolean",
@@ -18871,6 +20658,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "resolved",
                     "created_at",
                     "updated_at",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -18895,6 +20683,452 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Update a review comment",
+        "x-fyrden-permission": "pull_requests:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions": {
+      "get": {
+        "description": "The reactions to a diff comment, oldest first. On a pull request's diff comment.",
+        "operationId": "reactions.review_comment.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "comment_id",
+            "required": true,
+            "schema": {
+              "description": "The comment's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "content",
+            "required": false,
+            "schema": {
+              "description": "Only reactions of this content.",
+              "enum": [
+                "+1",
+                "-1",
+                "laugh",
+                "confused",
+                "heart",
+                "hooray",
+                "rocket",
+                "eyes",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "reactions": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "content": {
+                            "enum": [
+                              "+1",
+                              "-1",
+                              "laugh",
+                              "confused",
+                              "heart",
+                              "hooray",
+                              "rocket",
+                              "eyes",
+                            ],
+                            "type": "string",
+                          },
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "id": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "performed_via_agents": {
+                            "description": "Fyrden: the agents that reacted for \`user\`, the acting one first; empty if none.",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "user": {
+                            "additionalProperties": false,
+                            "description": "Who reacted (the user, when agents acted for one).",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                            ],
+                            "type": "object",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "user",
+                          "performed_via_agents",
+                          "content",
+                          "created_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "reactions",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List reactions to a diff comment",
+        "x-fyrden-permission": "pull_requests:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Reacts to a diff comment. Anyone who reads the repository reacts, once per content (posting it again answers the reaction it has: GitHub answers 200 for that, Fyrden 201); while the conversation is locked, write access and above. A reaction is taken back only by whoever made it (another's is not found). On a pull request's diff comment.",
+        "operationId": "reactions.review_comment.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "comment_id",
+            "required": true,
+            "schema": {
+              "description": "The comment's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "content": {
+                    "enum": [
+                      "+1",
+                      "-1",
+                      "laugh",
+                      "confused",
+                      "heart",
+                      "hooray",
+                      "rocket",
+                      "eyes",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "content",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "content": {
+                      "enum": [
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "string",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that reacted for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who reacted (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "user",
+                    "performed_via_agents",
+                    "content",
+                    "created_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "React to a diff comment",
+        "x-fyrden-permission": "pull_requests:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions/{reaction_id}": {
+      "delete": {
+        "description": "Takes the caller's own reaction to a diff comment back. Answers what was deleted (GitHub answers 204). On a pull request's diff comment.",
+        "operationId": "reactions.review_comment.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "comment_id",
+            "required": true,
+            "schema": {
+              "description": "The comment's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "path",
+            "name": "reaction_id",
+            "required": true,
+            "schema": {
+              "description": "The reaction's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "const": "deleted",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete a reaction to a diff comment",
         "x-fyrden-permission": "pull_requests:write",
         "x-fyrden-principals": [
           "user",
@@ -19326,6 +21560,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       },
                       "type": "array",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "state": {
                       "enum": [
                         "open",
@@ -19385,6 +21682,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "assignee",
                     "assignees",
                     "milestone",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -19888,6 +22186,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       },
                       "type": "array",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "state": {
                       "enum": [
                         "open",
@@ -19947,6 +22308,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "assignee",
                     "assignees",
                     "milestone",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -20123,6 +22485,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             ],
                             "description": "Always null: comments are not part of a review yet.",
                           },
+                          "reactions": {
+                            "additionalProperties": false,
+                            "description": "Its reactions counted by content, as they stand.",
+                            "properties": {
+                              "+1": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "-1": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "confused": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "eyes": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "heart": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "hooray": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "laugh": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "rocket": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "total_count": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "total_count",
+                              "+1",
+                              "-1",
+                              "laugh",
+                              "confused",
+                              "heart",
+                              "hooray",
+                              "rocket",
+                              "eyes",
+                            ],
+                            "type": "object",
+                          },
                           "resolved": {
                             "description": "Fyrden: its thread is resolved.",
                             "type": "boolean",
@@ -20207,6 +22632,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "resolved",
                           "created_at",
                           "updated_at",
+                          "reactions",
                         ],
                         "type": "object",
                       },
@@ -20434,6 +22860,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "description": "Always null: comments are not part of a review yet.",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "resolved": {
                       "description": "Fyrden: its thread is resolved.",
                       "type": "boolean",
@@ -20518,6 +23007,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "resolved",
                     "created_at",
                     "updated_at",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -21873,6 +24363,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       },
                       "type": "array",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "state": {
                       "enum": [
                         "open",
@@ -21932,6 +24485,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "assignee",
                     "assignees",
                     "milestone",
+                    "reactions",
                   ],
                   "type": "object",
                 },
@@ -22524,6 +25078,69 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       },
                       "type": "array",
                     },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
                     "state": {
                       "enum": [
                         "open",
@@ -22583,6 +25200,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "assignee",
                     "assignees",
                     "milestone",
+                    "reactions",
                   ],
                   "type": "object",
                 },

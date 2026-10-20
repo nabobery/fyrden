@@ -995,4 +995,47 @@ export const repoSchema: readonly DoMigration[] = [
       END;
     `,
   },
+  {
+    version: 35,
+    // Reactions to issues and pull requests (by number), conversation
+    // comments and diff comments: one per principal, content and target.
+    // Ids come from a counter and are never reused (a deletion by id cannot
+    // reach a later reaction); the counts each target answers with are kept
+    // by triggers (a count back at 0 stays; a target's go with it).
+    name: "reactions",
+    sql: `
+      ALTER TABLE repo_meta ADD COLUMN next_reaction_id INTEGER NOT NULL DEFAULT 1;
+      CREATE TABLE reactions (
+        id INTEGER PRIMARY KEY,
+        target TEXT NOT NULL CHECK (target IN ('subject', 'comment', 'review_comment')),
+        target_id INTEGER NOT NULL,
+        content TEXT NOT NULL
+          CHECK (content IN ('+1', '-1', 'laugh', 'confused', 'heart', 'hooray', 'rocket', 'eyes')),
+        principal TEXT NOT NULL,
+        act_chain TEXT,
+        created_at INTEGER NOT NULL,
+        UNIQUE (target, target_id, principal, content)
+      ) STRICT;
+      CREATE INDEX reactions_target ON reactions (target, target_id, id);
+      CREATE INDEX reactions_content ON reactions (target, target_id, content, id);
+      CREATE TABLE reaction_counts (
+        target TEXT NOT NULL,
+        target_id INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (target, target_id, content)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TRIGGER reactions_count_insert AFTER INSERT ON reactions
+      BEGIN
+        INSERT INTO reaction_counts (target, target_id, content, count)
+          VALUES (NEW.target, NEW.target_id, NEW.content, 1)
+          ON CONFLICT (target, target_id, content) DO UPDATE SET count = count + 1;
+      END;
+      CREATE TRIGGER reactions_count_delete AFTER DELETE ON reactions
+      BEGIN
+        UPDATE reaction_counts SET count = count - 1
+          WHERE target = OLD.target AND target_id = OLD.target_id AND content = OLD.content;
+      END;
+    `,
+  },
 ];
