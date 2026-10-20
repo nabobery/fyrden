@@ -49,6 +49,8 @@ export class RepoComments {
       readonly events: RepoEvents;
       readonly issues: RepoIssues;
       readonly repoId: () => string;
+      /** In a comment's deletion: its reactions go with it. */
+      readonly forgetReactions: (id: number) => void;
     },
   ) {}
 
@@ -147,6 +149,7 @@ export class RepoComments {
     const current = this.#changeable(id, "delete", caller, kinds);
     if (!current.ok) return current;
     this.deps.git.context.storage.transactionSync(() => {
+      this.deps.forgetReactions(id);
       this.#rows("DELETE FROM comments WHERE comment_id = ?", id);
       // Gone, its snapshot carries no row: what it was on, for those told of it.
       this.#emit(

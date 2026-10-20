@@ -12,7 +12,7 @@ import {
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
-import { SortingOutput } from "./subject-meta.js";
+import { ReactionRollup, SortingOutput } from "./subject-meta.js";
 
 const RepoInput = {
   owner: z
@@ -84,6 +84,7 @@ export const Issue = z.object({
   updated_at: z.number().int().describe("Unix time in milliseconds."),
   closed_at: z.number().int().nullable().describe("Unix time in milliseconds."),
   ...SortingOutput,
+  reactions: ReactionRollup,
   pull_request: z
     .object({
       merged_at: z.number().int().nullable().describe("Unix time in milliseconds."),

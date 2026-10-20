@@ -2,6 +2,7 @@ import { HANDLE_SHAPE, MAX_COMMENT_BODY_LENGTH, MAX_HANDLE_LENGTH } from "@fyrde
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
+import { ReactionRollup } from "./subject-meta.js";
 
 const RepoInput = {
   owner: z
@@ -36,6 +37,7 @@ export const Comment = z.object({
   body: z.string(),
   created_at: z.number().int().describe("Unix time in milliseconds."),
   updated_at: z.number().int().describe("Unix time in milliseconds."),
+  reactions: ReactionRollup,
 });
 
 export const listComments = defineOperation({

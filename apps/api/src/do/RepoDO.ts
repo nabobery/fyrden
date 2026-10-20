@@ -26,6 +26,8 @@ import {
   type LabelSpec,
   type LockReason,
   protectsBranch,
+  type ReactionContent,
+  type ReactionTarget,
   type RepoRole,
   type ReviewEvent,
   rootIdentity,
@@ -114,7 +116,7 @@ import {
   type TagPage,
 } from "./repo/browse.js";
 import { ChangeLists } from "./repo/change-lists.js";
-import { RepoComments } from "./repo/comments.js";
+import { type CommentRecord, RepoComments } from "./repo/comments.js";
 import type { ConflictsView, MergedIntoHead } from "./repo/conflicts.js";
 import {
   type ContentsView,
@@ -178,6 +180,7 @@ import {
   RepoPulls,
 } from "./repo/pulls.js";
 import { hasPrecheckRules } from "./repo/push-rules.js";
+import { type Reacted, type ReactionSubject, RepoReactions } from "./repo/reactions.js";
 import { REBASE_POLICY, type RebasePolicy } from "./repo/rebase-replay.js";
 import { RebaseSagas } from "./repo/rebase-saga.js";
 import { RepoReviewComments } from "./repo/review-comments.js";
@@ -298,6 +301,9 @@ export class RepoDO extends MigratingDO {
   /** Labels and milestones, and what issues and pull requests carry of them and who is assigned. */
   readonly subjectMeta: RepoSubjectMeta;
 
+  /** Reactions to issues, pull requests and their comments. */
+  readonly reactions: RepoReactions;
+
   /** Conversation comments on issues and pull requests. */
   readonly comments: RepoComments;
 
@@ -360,11 +366,13 @@ export class RepoDO extends MigratingDO {
       },
     );
     this.changeLists = new ChangeLists(this.git);
+    this.reactions = new RepoReactions({ git: this.git, events: this.events });
     this.subjectMeta = new RepoSubjectMeta({
       git: this.git,
       events: this.events,
       repoId: () => this.#repoId(),
       kindOf: (number) => this.issues.kindOf(number),
+      reactionsOf: (numbers) => this.reactions.countsOf("subject", numbers),
       touch: (kind, number, events, actor) =>
         kind === "issue"
           ? this.issues.touch(number, events, actor)
@@ -464,6 +472,7 @@ export class RepoDO extends MigratingDO {
       meta: {
         snapshot: (number) => this.subjectMeta.snapshot(number),
         forget: (number) => this.subjectMeta.forget(number),
+        forgetReactions: (number) => this.reactions.forgetSubject(number),
         ofMany: (numbers) => this.subjectMeta.ofMany(numbers),
       },
     });
@@ -472,12 +481,14 @@ export class RepoDO extends MigratingDO {
       events: this.events,
       issues: this.issues,
       repoId: () => this.#repoId(),
+      forgetReactions: (id) => this.reactions.forget("comment", id),
     });
     this.reviewComments = new RepoReviewComments({
       git: this.git,
       events: this.events,
       pulls: this.pulls,
       repoId: () => this.#repoId(),
+      forgetReactions: (id) => this.reactions.forget("review_comment", id),
     });
     this.pullAcl = async (accountId) => {
       this.git.context.metrics.count("do.request", { class: "OrgDO", method: "snapshotFor" });
@@ -544,6 +555,7 @@ export class RepoDO extends MigratingDO {
       pulls: this.pulls,
       reviews: this.reviews,
       reviewComments: this.reviewComments,
+      reacted: (comments) => this.reactions.attach("review_comment", comments),
       authority: this.#authority,
       memoryBlocks: () => this.#memoryBlocks(),
       viewed: (pull) => this.#viewed(pull),
@@ -1151,7 +1163,7 @@ export class RepoDO extends MigratingDO {
       if (this.#refusesReads()) return null;
       const kind = this.issues.kindOf(number);
       if (!kind || !kinds.includes(kind)) return undefined;
-      return this.comments.list(number, after, limit);
+      return this.reactions.attach("comment", this.comments.list(number, after, limit));
     });
   }
 
@@ -1160,7 +1172,8 @@ export class RepoDO extends MigratingDO {
     return this.#measured("getComment", () => {
       if (this.#refusesReads()) return null;
       const kind = this.comments.kindOf(id);
-      return kind && kinds.includes(kind) ? this.comments.get(id) : undefined;
+      const comment = kind && kinds.includes(kind) ? this.comments.get(id) : undefined;
+      return comment && this.reactions.attach("comment", [comment])[0];
     });
   }
 
@@ -1168,7 +1181,7 @@ export class RepoDO extends MigratingDO {
     return this.#pullChange(
       "createComment",
       actor,
-      (caller) => this.comments.create(number, body, caller, kinds),
+      (caller) => this.#reacted(this.comments.create(number, body, caller, kinds)),
       undefined,
       [body],
     );
@@ -1178,7 +1191,7 @@ export class RepoDO extends MigratingDO {
     return this.#pullChange(
       "editComment",
       actor,
-      (caller) => this.comments.edit(id, body, caller, kinds),
+      (caller) => this.#reacted(this.comments.edit(id, body, caller, kinds)),
       undefined,
       [body],
     );
@@ -1188,6 +1201,16 @@ export class RepoDO extends MigratingDO {
     return this.#pullChange("deleteComment", actor, (caller) =>
       this.comments.delete(id, caller, kinds),
     );
+  }
+
+  /** A comment change's comment as the API answers it, with its reactions counted. */
+  #reacted<R extends { ok: true; comment: CommentRecord } | { ok: false }>(result: R) {
+    return result.ok
+      ? {
+          ...result,
+          comment: this.reactions.attach("comment", [result.comment])[0] as Reacted<CommentRecord>,
+        }
+      : (result as Exclude<R, { ok: true }>);
   }
 
   /** A page of the issues and pull requests of `query.kinds` (see `RepoIssues.list`); null when gone. */
@@ -1301,7 +1324,7 @@ export class RepoDO extends MigratingDO {
       if (this.#refusesReads()) return null;
       const kind = this.issues.kindOf(number);
       if (!kind || !kinds.includes(kind)) return undefined;
-      return this.subjectMeta.of(number).labels;
+      return this.subjectMeta.of(number, false).labels;
     });
   }
 
@@ -1332,6 +1355,75 @@ export class RepoDO extends MigratingDO {
       },
       () => this.#assigneeCeilings(meta),
     );
+  }
+
+  /** A page of a target's reactions (of a conversation of `kinds`); null when gone, undefined for none. */
+  listReactions(
+    target: ReactionTarget,
+    targetId: number,
+    content: ReactionContent | null,
+    after: number,
+    limit: number,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#measured("listReactions", () => {
+      if (this.#refusesReads()) return null;
+      const on = this.#reactionSubject(target, targetId, kinds);
+      return on && this.reactions.list(target, targetId, content, after, limit);
+    });
+  }
+
+  /** Reacts to a target (of a conversation of `kinds`) as the caller (see `RepoReactions.react`). */
+  createReaction(
+    target: ReactionTarget,
+    targetId: number,
+    content: ReactionContent,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#pullChange("createReaction", actor, (caller) => {
+      const on = this.#reactionSubject(target, targetId, kinds);
+      if (!on) return { ok: false as const, code: "not_found" as const };
+      return this.#withIdentity(() => this.reactions.react(on, content, caller));
+    });
+  }
+
+  /** Takes the caller's reaction `id` to a target back (see `RepoReactions.delete`). */
+  deleteReaction(
+    target: ReactionTarget,
+    targetId: number,
+    id: number,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#pullChange("deleteReaction", actor, (caller) => {
+      const on = this.#reactionSubject(target, targetId, kinds);
+      if (!on) return { ok: false as const, code: "not_found" as const };
+      return this.reactions.delete(on, id, caller);
+    });
+  }
+
+  /**
+   * What a reaction to `targetId` is on, when it exists and its
+   * conversation is of `kinds` (a diff comment's is a pull request's):
+   * its number and whether it is locked.
+   */
+  #reactionSubject(
+    target: ReactionTarget,
+    targetId: number,
+    kinds: readonly SubjectKind[],
+  ): ReactionSubject | undefined {
+    const number =
+      target === "subject"
+        ? targetId
+        : target === "comment"
+          ? this.comments.get(targetId)?.number
+          : this.reviewComments.get(targetId)?.number;
+    const conversation = number === undefined ? undefined : this.issues.conversation(number);
+    if (!conversation || number === undefined || !kinds.includes(conversation.kind))
+      return undefined;
+    if (target === "review_comment" && conversation.kind !== "pull") return undefined;
+    return { target, targetId, number, locked: conversation.locked };
   }
 
   /** A page of the repository's labels by name, after `after`; null when gone. */

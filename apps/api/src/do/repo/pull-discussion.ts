@@ -14,6 +14,7 @@ import { rawFile } from "./contents.js";
 import type { PullView } from "./mergeability.js";
 import { mergeBaseOf } from "./pull-files.js";
 import type { PullCaller, PullRecord, RepoPulls } from "./pulls.js";
+import type { Reacted } from "./reactions.js";
 import {
   type Comparison,
   needsMergeBase,
@@ -91,6 +92,8 @@ export interface DiscussionDeps {
   readonly pulls: RepoPulls;
   readonly reviews: RepoReviews;
   readonly reviewComments: RepoReviewComments;
+  /** Diff comments as the API answers them, with their reactions counted. */
+  readonly reacted: (comments: readonly ReviewCommentRecord[]) => Reacted<ReviewCommentRecord>[];
   readonly authority: RepoAuthority;
   readonly memoryBlocks: () => BlockCache;
   /** A pull request with whether it merges, as far as that is known now. */
@@ -217,7 +220,7 @@ export class PullDiscussion {
   async reviewComments(number: number, after: number, limit: number) {
     const pull = this.deps.pulls.get(number);
     if (!pull) return undefined;
-    const comments = this.deps.reviewComments.list(number, after, limit);
+    const comments = this.deps.reacted(this.deps.reviewComments.list(number, after, limit));
     const { comparison } = await this.#compared(
       pull,
       comments.map((c) => c.anchor),
@@ -227,8 +230,9 @@ export class PullDiscussion {
 
   /** One diff comment, with what its pull request's diff compares now. */
   async reviewComment(id: number) {
-    const comment = this.deps.reviewComments.get(id);
-    if (!comment) return undefined;
+    const found = this.deps.reviewComments.get(id);
+    if (!found) return undefined;
+    const [comment] = this.deps.reacted([found]) as [Reacted<ReviewCommentRecord>];
     const pull = this.deps.pulls.get(comment.number);
     const comparison = pull ? (await this.#compared(pull, [comment.anchor])).comparison : null;
     return { comparison, comment };
@@ -396,7 +400,11 @@ export class PullDiscussion {
     compared: Compared | null,
   ) {
     return result.ok
-      ? { ...result, comparison: this.#comparisonNow(result.comment.number, compared) }
+      ? {
+          ...result,
+          comment: (this.deps.reacted([result.comment]) as [Reacted<ReviewCommentRecord>])[0],
+          comparison: this.#comparisonNow(result.comment.number, compared),
+        }
       : result;
   }
 

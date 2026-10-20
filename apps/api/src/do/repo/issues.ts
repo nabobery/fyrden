@@ -121,6 +121,8 @@ export class RepoIssues {
       readonly meta: {
         readonly snapshot: (number: number) => SnapshotMeta;
         readonly forget: (number: number) => void;
+        /** The reactions to it and to its comments, gone with it (before its comments). */
+        readonly forgetReactions: (number: number) => void;
         readonly ofMany: (subjects: readonly MetaSubject[]) => Map<number, SubjectMeta>;
       };
     },
@@ -370,6 +372,7 @@ export class RepoIssues {
     this.deps.git.context.storage.transactionSync(() => {
       const now = this.deps.git.context.now();
       const version = current.version + 1;
+      this.deps.meta.forgetReactions(number);
       this.#exec("DELETE FROM comments WHERE number = ?", number);
       this.#exec("DELETE FROM feed_participants WHERE number = ?", number);
       this.deps.meta.forget(number);

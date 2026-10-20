@@ -135,6 +135,8 @@ export class RepoReviewComments {
       readonly events: RepoEvents;
       readonly pulls: RepoPulls;
       readonly repoId: () => string;
+      /** In a diff comment's deletion: its reactions go with it. */
+      readonly forgetReactions: (id: number) => void;
     },
   ) {}
 
@@ -285,6 +287,7 @@ export class RepoReviewComments {
     if (!current.ok) return current;
     const { comment } = current;
     this.deps.git.context.storage.transactionSync(() => {
+      this.deps.forgetReactions(id);
       this.#run("DELETE FROM review_comments WHERE comment_id = ?", id);
       this.#run(
         `DELETE FROM review_threads WHERE thread_id = ?

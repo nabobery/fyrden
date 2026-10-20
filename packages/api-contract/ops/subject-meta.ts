@@ -42,3 +42,18 @@ export const SortingOutput = {
   assignees: z.array(z.object({ id: z.string() })),
   milestone: Milestone.nullable(),
 };
+
+/** What reactions a target has, counted by content (GitHub's rollup). */
+export const ReactionRollup = z
+  .object({
+    total_count: z.number().int(),
+    "+1": z.number().int(),
+    "-1": z.number().int(),
+    laugh: z.number().int(),
+    confused: z.number().int(),
+    heart: z.number().int(),
+    hooray: z.number().int(),
+    rocket: z.number().int(),
+    eyes: z.number().int(),
+  })
+  .describe("Its reactions counted by content, as they stand.");

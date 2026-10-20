@@ -29,6 +29,8 @@ CREATE INDEX pull_requests_head ON pull_requests (head_ref, state);
 CREATE INDEX pull_requests_head_repo ON pull_requests (head_repo_id, state, number);
 CREATE INDEX pull_requests_state ON pull_requests (state, number);
 CREATE INDEX pull_requests_updated ON pull_requests (state, updated_at, number);
+CREATE INDEX reactions_content ON reactions (target, target_id, content, id);
+CREATE INDEX reactions_target ON reactions (target, target_id, id);
 CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
 CREATE INDEX refollow_bases_due ON refollow_bases (next_at);
@@ -425,6 +427,24 @@ CREATE TABLE pull_requests (
         updated_at INTEGER NOT NULL
       , last_pusher TEXT, last_pusher_grant TEXT, last_push_at INTEGER, merge_commit_sha TEXT, merged_by TEXT, merged_at INTEGER, head_repo_id TEXT, head_ref_version INTEGER, maintainer_can_modify INTEGER NOT NULL DEFAULT 0, approvals_after INTEGER NOT NULL DEFAULT 0, reviews_revision INTEGER NOT NULL DEFAULT 0, locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)), lock_reason TEXT
         CHECK (lock_reason IN ('off-topic', 'too heated', 'resolved', 'spam')), milestone INTEGER) STRICT;
+CREATE TABLE reaction_counts (
+        target TEXT NOT NULL,
+        target_id INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (target, target_id, content)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE reactions (
+        id INTEGER PRIMARY KEY,
+        target TEXT NOT NULL CHECK (target IN ('subject', 'comment', 'review_comment')),
+        target_id INTEGER NOT NULL,
+        content TEXT NOT NULL
+          CHECK (content IN ('+1', '-1', 'laugh', 'confused', 'heart', 'hooray', 'rocket', 'eyes')),
+        principal TEXT NOT NULL,
+        act_chain TEXT,
+        created_at INTEGER NOT NULL,
+        UNIQUE (target, target_id, principal, content)
+      ) STRICT;
 CREATE TABLE ref_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL,
@@ -471,7 +491,7 @@ CREATE TABLE repo_meta (
         write_frozen INTEGER NOT NULL DEFAULT 0 CHECK (write_frozen IN (0, 1)),
         created_at INTEGER NOT NULL
       , epoch_uuid TEXT, source_seq INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, owner_id TEXT, name TEXT, visibility TEXT
-        CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT, next_number INTEGER NOT NULL DEFAULT 1, next_label_id INTEGER NOT NULL DEFAULT 1, next_milestone INTEGER NOT NULL DEFAULT 1) STRICT;
+        CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT, next_number INTEGER NOT NULL DEFAULT 1, next_label_id INTEGER NOT NULL DEFAULT 1, next_milestone INTEGER NOT NULL DEFAULT 1, next_reaction_id INTEGER NOT NULL DEFAULT 1) STRICT;
 CREATE TABLE review_comments (
         comment_id INTEGER PRIMARY KEY AUTOINCREMENT,
         pr_number INTEGER NOT NULL,
@@ -669,4 +689,15 @@ CREATE TRIGGER pull_requests_milestone_update AFTER UPDATE OF state, milestone O
           closed_pulls = closed_pulls - (OLD.state <> 'open') WHERE number = OLD.milestone;
         UPDATE milestones SET open_pulls = open_pulls + (NEW.state = 'open'),
           closed_pulls = closed_pulls + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+CREATE TRIGGER reactions_count_delete AFTER DELETE ON reactions
+      BEGIN
+        UPDATE reaction_counts SET count = count - 1
+          WHERE target = OLD.target AND target_id = OLD.target_id AND content = OLD.content;
+      END;
+CREATE TRIGGER reactions_count_insert AFTER INSERT ON reactions
+      BEGIN
+        INSERT INTO reaction_counts (target, target_id, content, count)
+          VALUES (NEW.target, NEW.target_id, NEW.content, 1)
+          ON CONFLICT (target, target_id, content) DO UPDATE SET count = count + 1;
       END;
