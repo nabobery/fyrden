@@ -54,6 +54,15 @@ import {
   updateHook,
 } from "../ops/hooks.js";
 import { createImport, getImport } from "../ops/imports.js";
+import {
+  createIssue,
+  deleteIssue,
+  getIssue,
+  listIssues,
+  lockIssue,
+  unlockIssue,
+  updateIssue,
+} from "../ops/issues.js";
 import { listSigningKeys, whoami } from "../ops/meta.js";
 import { createOrg, listMembers, removeMembership, setMembership, updateOrg } from "../ops/orgs.js";
 import {
@@ -203,6 +212,13 @@ export const registry = defineRegistry([
   listRequestedReviewers,
   requestReviewers,
   removeRequestedReviewers,
+  listIssues,
+  createIssue,
+  getIssue,
+  updateIssue,
+  deleteIssue,
+  lockIssue,
+  unlockIssue,
   listComments,
   createComment,
   getComment,

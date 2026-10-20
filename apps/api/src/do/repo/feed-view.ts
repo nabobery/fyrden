@@ -5,6 +5,7 @@ import type { RepoAcl } from "./acl.js";
 import type { RepoAuthority } from "./authority.js";
 import type { RepoComments } from "./comments.js";
 import { excerpt, type FeedPrincipal } from "./feed.js";
+import type { RepoIssues } from "./issues.js";
 import type { RepoPulls } from "./pulls.js";
 import type { RepoReviewComments } from "./review-comments.js";
 
@@ -34,6 +35,8 @@ export interface FeedViewAnswer {
   readonly readable: boolean;
   readonly role: RepoRole | null;
   readonly excerpts: Record<string, string | null>;
+  /** Of the threads asked about, those gone for good (a deleted issue's). */
+  readonly gone: readonly string[];
   readonly denial: FeedViewDenial | null;
 }
 
@@ -44,6 +47,7 @@ export interface FeedViewDeps {
   readonly acl: RepoAcl;
   readonly authority: RepoAuthority;
   readonly pulls: RepoPulls;
+  readonly issues: RepoIssues;
   readonly comments: RepoComments;
   readonly reviewComments: RepoReviewComments;
   /** Whether the repository is public now. */
@@ -62,20 +66,23 @@ export class RepoFeedView {
    * grant's owners) reads the repository now, its role, and, if it reads
    * it, the excerpts of `members` (at most 100): what feed items name of
    * the repository (`comment/<id>`, `review_comment/<id>`, `review/<id>`,
-   * `pull/<n>` for a pull request's description), read now so an edit or
-   * deletion shows at once (null for one gone or empty). When it does not
-   * read it, `denial` says how sure that is (see `FeedViewDenial`).
+   * `pull/<n>` and `issue/<n>` for a description), read now so an edit or
+   * deletion shows at once (null for one gone or empty), and which of
+   * `threads` (at most 100) are gone for good. When it does not read it,
+   * `denial` says how sure that is (see `FeedViewDenial`).
    */
   async view(
     principal: string,
     grantId: string | null,
     members: readonly string[],
+    threads: readonly string[] = [],
   ): Promise<FeedViewAnswer> {
     const { authority } = this.deps;
     const gone = () => ({
       readable: false,
       role: null,
       excerpts: {},
+      gone: [],
       denial: {
         kind: "lost" as const,
         loss: { accountId: "", epochGen: 0, aclVersion: 0, until: Date.now() },
@@ -106,7 +113,7 @@ export class RepoFeedView {
                   until: basis.pulledAt,
                 },
               };
-      return { readable, role, excerpts: {}, denial };
+      return { readable, role, excerpts: {}, gone: [], denial };
     }
     const excerpts: Record<string, string | null> = {};
     for (const member of members.slice(0, 100)) {
@@ -120,17 +127,25 @@ export class RepoFeedView {
             ? this.deps.reviewComments.get(n)?.body
             : kind === "pull"
               ? this.deps.pulls.get(n)?.body
-              : kind === "review"
-                ? this.deps.git.context.storage.sql
-                    .exec<{ body: string | null }>(
-                      "SELECT body FROM reviews WHERE review_id = ?",
-                      n,
-                    )
-                    .toArray()[0]?.body
-                : undefined;
+              : kind === "issue"
+                ? this.deps.issues.get(n)?.body
+                : kind === "review"
+                  ? this.deps.git.context.storage.sql
+                      .exec<{ body: string | null }>(
+                        "SELECT body FROM reviews WHERE review_id = ?",
+                        n,
+                      )
+                      .toArray()[0]?.body
+                  : undefined;
       excerpts[member] = excerpt(body);
     }
-    return { readable, role, excerpts, denial: null };
+    // A deleted issue's thread: its number is never used again.
+    const goneThreads = threads.slice(0, 100).filter((thread) => {
+      const [kind, id] = thread.split("/");
+      const n = Number(id);
+      return kind === "issue" && Number.isSafeInteger(n) && this.deps.issues.deleted(n);
+    });
+    return { readable, role, excerpts, gone: goneThreads, denial: null };
   }
 
   /**

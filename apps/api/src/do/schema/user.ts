@@ -103,4 +103,15 @@ export const userSchema: readonly DoMigration[] = [
       CREATE INDEX feed_evictions_at ON feed_evictions (event_at);
     `,
   },
+  {
+    version: 3,
+    // A token that reads one kind of thread (issues or pull requests) reads
+    // its feed through this index: the other kind's items cost nothing.
+    name: "feed_items_subject",
+    sql: `
+      CREATE INDEX feed_items_subject
+        ON feed_items (substr(thread_key, 1, instr(thread_key, '/') - 1), feed_seq)
+        WHERE feed_seq IS NOT NULL;
+    `,
+  },
 ];

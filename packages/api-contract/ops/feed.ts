@@ -1,4 +1,4 @@
-import { FEED_KINDS, FEED_PRIORITIES } from "@fyrden/domain";
+import { FEED_KINDS, FEED_PRIORITIES, FEED_SUBJECT_KINDS } from "@fyrden/domain";
 import { z } from "zod";
 import { AUTHENTICATED, defineOperation } from "../src/op.js";
 
@@ -7,10 +7,10 @@ const Cursor = z.string().max(200);
 export const FeedItem = z.object({
   item_key: z.string().describe("The item's key: `<repository id>:<thread>:<kind>`."),
   repo: z.object({ id: z.string(), full_name: z.string().describe("owner/name") }),
-  thread_key: z.string().describe("The thread within the repository, e.g. `pull/12`."),
+  thread_key: z.string().describe("The thread within the repository, e.g. `pull/12` or `issue/7`."),
   kind: z.enum(FEED_KINDS),
   subject: z.object({
-    kind: z.literal("pull"),
+    kind: z.enum(FEED_SUBJECT_KINDS),
     number: z.number().int(),
     title: z.string(),
   }),

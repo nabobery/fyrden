@@ -11,6 +11,8 @@ export const PULL_ACTIONS = [
   "reopen",
   "merge",
   "set_maintainer_edits",
+  "lock",
+  "unlock",
 ] as const;
 export type PullAction = (typeof PULL_ACTIONS)[number];
 
@@ -98,6 +100,21 @@ export const PULL_ACTION_RULES: Readonly<Record<PullAction, PullActionRule>> = {
     from: ["open", "closed"],
     event: "edited",
     audit: "pull_request.maintainer_edits",
+  },
+  // Locking the conversation, as an issue's (merged ones too, as GitHub's).
+  lock: {
+    author: false,
+    minRole: "write",
+    from: ["open", "closed", "merged"],
+    event: "locked",
+    audit: "pull_request.lock",
+  },
+  unlock: {
+    author: false,
+    minRole: "write",
+    from: ["open", "closed", "merged"],
+    event: "unlocked",
+    audit: "pull_request.unlock",
   },
 };
 

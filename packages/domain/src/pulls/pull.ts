@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LOCK_REASONS } from "../issues/issue.js";
 
 /** Where a pull request stands. Only a merge makes one `merged`, and nothing undoes it. */
 export const PULL_STATES = ["open", "closed", "merged"] as const;
@@ -46,6 +47,9 @@ export const PullRequestRowSchema = z.strictObject({
   headSha: sha,
   /** The head branch was deleted: the pull request stays at its last head revision. */
   headRefDeleted: z.boolean(),
+  /** Its conversation is locked: only write access and above comment (and review). */
+  locked: z.boolean(),
+  lockReason: z.enum(LOCK_REASONS).nullable(),
   /** Bumped by each reopen: work started for an earlier opening does not apply. */
   generation: z.number().int().positive(),
   closedAt: z.number().int().min(0).nullable(),

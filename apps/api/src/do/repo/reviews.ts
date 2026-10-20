@@ -86,6 +86,7 @@ export type ReviewFailure =
   | "not_found"
   | "review_not_found"
   | "forbidden"
+  | "locked"
   | "wrong_state"
   | "own_pull_request"
   | "body_required"
@@ -223,6 +224,7 @@ export class RepoReviews {
       pullState: pull.state,
       isAuthor: caller.root === pull.authorRoot,
       role: caller.role,
+      locked: pull.locked,
     });
     if (!decision.ok) return { ok: false, code: decision.refusal };
     if (!this.deps.pulls.hadHead(number, input.commitSha))

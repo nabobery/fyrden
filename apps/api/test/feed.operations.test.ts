@@ -37,6 +37,8 @@ const viewCalls = new Map<string, string[][]>();
 const directoryOnly = new Set<string>();
 /** Of those, the ones whose check says the caller may not read them. */
 const unreadable = new Set<string>();
+/** Repositories whose checks of issue threads alone (no members) cannot say. */
+const unsureThreads = new Set<string>();
 
 /**
  * `env` whose repository objects count their `feedView` calls and lay
@@ -45,22 +47,36 @@ const unreadable = new Set<string>();
 function withFeedView(base: Env): Env {
   const view =
     (repoId: string, stub: DurableObjectStub<RepoDO>) =>
-    async (principal: string, grantId: string | null, members: readonly string[]) => {
+    async (
+      principal: string,
+      grantId: string | null,
+      members: readonly string[],
+      threads: readonly string[] = [],
+    ) => {
       viewCalls.set(repoId, [...(viewCalls.get(repoId) ?? []), [...members]]);
+      if (unsureThreads.has(repoId) && members.length === 0 && threads.length > 0)
+        return {
+          readable: false,
+          role: null,
+          excerpts: {},
+          gone: [],
+          denial: { kind: "unknown" as const },
+        };
       if (directoryOnly.has(repoId))
         return unreadable.has(repoId)
           ? {
               readable: false,
               role: null,
               excerpts: {},
+              gone: [],
               // As a fresh snapshot of an account's ACL would say it.
               denial: {
                 kind: "lost" as const,
                 loss: { accountId: "acct_double", epochGen: 1, aclVersion: 1, until: Date.now() },
               },
             }
-          : { readable: true, role: "admin" as const, excerpts: {}, denial: null };
-      const real = await stub.feedView(principal, grantId, members);
+          : { readable: true, role: "admin" as const, excerpts: {}, gone: [], denial: null };
+      const real = await stub.feedView(principal, grantId, members, threads);
       if (!real.readable) return real;
       const excerpts = { ...real.excerpts };
       for (const m of members) {
@@ -747,5 +763,44 @@ describe("the feed operations", () => {
     const start = await json<FeedOut>(feedApi("GET", "/feed", limited));
     const next = await feedApi("GET", `/feed?since=${start.body.next_cursor}`, limited);
     expect(next.status).toBe(200);
+  });
+});
+
+describe("the feed operations' checks of issue threads", () => {
+  const issueItems = (repoId: string, principal: string, from: number, n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      entry({ repoId, subject: "issue", thread: from + i, version: 1, principal }),
+    );
+  const sync = (token: string) =>
+    json<{ items: { thread_key: string }[]; complete: boolean }>(
+      feedApi("GET", "/feed/sync", token),
+    );
+
+  it("leave threads unchecked when a later check cannot say, and stop there", async () => {
+    const someone = await user();
+    const [repoId] = await directoryRepos(someone, 1);
+    unsureThreads.add(repoId as string);
+    await env.USER.getByName(someone.principalId).applyFeed(
+      issueItems(repoId as string, someone.principalId, 1, 150),
+    );
+    const synced = await sync(someone.token);
+    // The first hundred threads were checked with the repository; the rest could not be.
+    expect(synced.body.items).toHaveLength(100);
+    expect(synced.body.complete).toBe(false);
+  });
+
+  it("check threads beyond the budget of repository checks", async () => {
+    const someone = await user();
+    const others = await directoryRepos(someone, 99);
+    const [crowded] = await directoryRepos(someone, 1);
+    const feed = env.USER.getByName(someone.principalId);
+    await feed.applyFeed(
+      others.map((repoId) => entry({ repoId, version: 1, principal: someone.principalId })),
+    );
+    // Newest, so first in a sync: more issue threads of one repository than its check asks about.
+    await feed.applyFeed(issueItems(crowded as string, someone.principalId, 1, 101));
+    const synced = await sync(someone.token);
+    expect(synced.body.items).toHaveLength(200);
+    expect(synced.body.complete).toBe(true);
   });
 });

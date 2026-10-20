@@ -15,7 +15,7 @@ import {
 /*
  * What the repository's events mean for principals' activity feeds,
  * decided in the transaction of the change (the only place that sees the
- * state before and after it). Each event about a pull request may name
+ * state before and after it). Each event about an issue or a pull request may name
  * who should hear of it: the people taking part in the thread (its author,
  * reviewers asked or reviewing, commenters, the mentioned) for its
  * activity, and those who have something to act on (a review asked of
@@ -132,8 +132,8 @@ export class RepoFeed {
   ): FeedBlock | undefined {
     const plan = this.#plan(type, data ?? {}, row);
     if (!plan) return undefined;
-    const pull = this.#pull(plan.number);
-    if (!pull) return undefined;
+    const subject = this.#subject(plan.number);
+    if (!subject) return undefined;
     const actorRoot = this.#actor?.root ?? actor;
     const audience: FeedRecipient[] = [];
     const add = (r: Named, exact = false) => {
@@ -177,7 +177,7 @@ export class RepoFeed {
     audience.sort((a, b) => (a.priority === b.priority ? 0 : a.priority === "P0" ? -1 : 1));
     if (audience.length > MAX_FEED_AUDIENCE)
       this.deps.metrics.count("feed.audience_dropped", {}, audience.length - MAX_FEED_AUDIENCE);
-    const threadKey = `pull/${plan.number}`;
+    const threadKey = `${subject.kind}/${plan.number}`;
     const [bumped] = this.#exec<{ version: number }>(
       "feed.version",
       `INSERT INTO feed_threads (thread_key, version) VALUES (?, 1)
@@ -187,9 +187,9 @@ export class RepoFeed {
     return {
       threadKey,
       subject: {
-        kind: "pull",
+        kind: subject.kind,
         number: plan.number,
-        title: String(pull.title ?? "").slice(0, MAX_FEED_TITLE),
+        title: String(subject.title ?? "").slice(0, MAX_FEED_TITLE),
         version: (bumped as { version: number }).version,
       },
       action: plan.action,
@@ -211,6 +211,28 @@ export class RepoFeed {
     const changes = (data.changes ?? {}) as Record<string, { from?: unknown }>;
     const before = typeof changes.body?.from === "string" ? changes.body.from : null;
     switch (type) {
+      case "issue.opened":
+        if (!row) return undefined;
+        return {
+          ...nothing(row.number as number, "opened"),
+          member: `issue/${row.number}`,
+          mentions: mentioned(mentionsIn(row.body as string | null)),
+          joins: authorsOf(row).map((who) => [who, "author"] as const),
+        };
+      case "issue.edited":
+        if (!row || !("body" in changes)) return undefined;
+        return {
+          ...nothing(row.number as number, "edited"),
+          member: `issue/${row.number}`,
+          mentions: mentioned(newMentions(before, row.body as string | null)),
+        };
+      case "issue.closed":
+      case "issue.reopened":
+        if (!row) return undefined;
+        return {
+          ...nothing(row.number as number, type === "issue.closed" ? "closed" : "reopened"),
+          activity: true,
+        };
       case "pull_request.opened": {
         if (!row) return undefined;
         return {
@@ -391,6 +413,18 @@ export class RepoFeed {
     return atLeast(role, "write") ? "write" : atLeast(role, "read") ? "read" : "none";
   }
 
+  /** What thread `number` is about: an issue or a pull request, with its title and author. */
+  #subject(number: number): (Row & { kind: "issue" | "pull" }) | undefined {
+    return this.#exec<Record<string, SqlStorageValue> & { kind: "issue" | "pull" }>(
+      "feed.read",
+      `SELECT 'issue' AS kind, number, title, author_id AS authorId, author_root AS authorRoot
+       FROM issues WHERE number = ?1
+       UNION ALL
+       SELECT 'pull', number, title, author_id, author_root FROM pull_requests WHERE number = ?1`,
+      number,
+    )[0];
+  }
+
   #pull(number: number): Row | undefined {
     return this.#exec<Record<string, SqlStorageValue>>(
       "feed.read",
@@ -483,7 +517,7 @@ function settledAs(who: FeedPrincipal, kind: FeedKind, reason: string): Named {
   };
 }
 
-/** The pull request's author, and the user its agent author acts for. */
+/** The issue's or pull request's author, and the user its agent author acts for. */
 function authorsOf(pull: Row): FeedPrincipal[] {
   const root = String(pull.authorRoot);
   const author = String(pull.authorId);

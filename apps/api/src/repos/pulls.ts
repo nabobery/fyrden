@@ -36,6 +36,8 @@ export function pullOutput(pull: PullView): PullOutput {
     mergeable_reason: pull.mergeableReason,
     draft: pull.draft,
     maintainer_can_modify: pull.maintainerCanModify,
+    locked: pull.locked,
+    active_lock_reason: pull.lockReason,
     title: pull.title,
     body: pull.body,
     user: { id: pull.authorId },
@@ -173,6 +175,12 @@ export function failure(entry: RepoEntry, code: string, number?: number): Operat
         422,
         "too_many_reviewers",
         `A pull request may have at most ${MAX_REQUESTED_REVIEWERS} reviews requested at once.`,
+      );
+    case "locked":
+      return new OperationError(
+        403,
+        "conversation_locked",
+        "The conversation is locked: only write access and above may comment or review.",
       );
     case "busy":
       return new OperationError(409, "busy", "The repository is busy; try again.");

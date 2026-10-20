@@ -1,14 +1,15 @@
 import type { RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import { decideComment } from "@fyrden/domain";
 import type { RepoEvents } from "./events.js";
-import type { PullCaller, RepoPulls } from "./pulls.js";
+import type { RepoIssues, SubjectKind } from "./issues.js";
+import type { PullCaller } from "./pulls.js";
 
 /** The entity type comment snapshots travel as in events. */
 export const COMMENT_ENTITY = "issue_comment";
 
 export interface CommentRecord {
   readonly id: number;
-  /** The pull request it is on. */
+  /** The issue or pull request it is on. */
   readonly number: number;
   readonly authorId: string;
   readonly authorRoot: string;
@@ -20,7 +21,7 @@ export interface CommentRecord {
   readonly version: number;
 }
 
-export type CommentFailure = "not_found" | "comment_not_found" | "forbidden";
+export type CommentFailure = "not_found" | "comment_not_found" | "forbidden" | "locked";
 
 type Row = {
   comment_id: number;
@@ -34,18 +35,30 @@ type Row = {
   version: number;
 };
 
-/** Conversation comments on the repository's pull requests; each change commits with its event and audit row. */
+/**
+ * Conversation comments on the repository's issues and pull requests; each
+ * change commits with its event and audit row, and the event carries what
+ * the comment is on as it was then. A caller acts only on the kinds it may
+ * (`kinds`): any other is not found. While a conversation is locked, only
+ * write access and above write, edit or delete its comments.
+ */
 export class RepoComments {
   constructor(
     private readonly deps: {
       readonly git: RepoGitStorage;
       readonly events: RepoEvents;
-      readonly pulls: RepoPulls;
+      readonly issues: RepoIssues;
       readonly repoId: () => string;
     },
   ) {}
 
-  /** A pull request's comments, oldest first, after comment `after`. */
+  /** The kind of what comment `id` is on; undefined for no comment. */
+  kindOf(id: number): SubjectKind | undefined {
+    const comment = this.get(id);
+    return comment && this.deps.issues.kindOf(comment.number);
+  }
+
+  /** An issue's or pull request's comments, oldest first, after comment `after`. */
   list(number: number, after: number, limit: number): CommentRecord[] {
     return this.#rows(
       "SELECT * FROM comments WHERE number = ? AND comment_id > ? ORDER BY comment_id LIMIT ?",
@@ -64,9 +77,16 @@ export class RepoComments {
     number: number,
     body: string,
     caller: PullCaller,
+    kinds: readonly SubjectKind[],
   ): { ok: true; comment: CommentRecord } | { ok: false; code: CommentFailure } {
-    if (!this.deps.pulls.get(number)) return { ok: false, code: "not_found" };
-    const decision = decideComment("create", { isCommentAuthor: true, role: caller.role });
+    const conversation = this.deps.issues.conversation(number);
+    if (!conversation || !kinds.includes(conversation.kind))
+      return { ok: false, code: "not_found" };
+    const decision = decideComment("create", {
+      isCommentAuthor: true,
+      role: caller.role,
+      locked: conversation.locked,
+    });
     if (!decision.ok) return { ok: false, code: decision.refusal };
     const { actor } = caller;
     const comment = this.deps.git.context.storage.transactionSync(() => {
@@ -94,8 +114,9 @@ export class RepoComments {
     id: number,
     body: string,
     caller: PullCaller,
+    kinds: readonly SubjectKind[],
   ): { ok: true; comment: CommentRecord } | { ok: false; code: CommentFailure } {
-    const current = this.#changeable(id, "edit", caller);
+    const current = this.#changeable(id, "edit", caller, kinds);
     if (!current.ok) return current;
     if (current.comment.body === body) return current;
     const comment = this.deps.git.context.storage.transactionSync(() => {
@@ -118,8 +139,12 @@ export class RepoComments {
     return { ok: true, comment };
   }
 
-  delete(id: number, caller: PullCaller): { ok: true } | { ok: false; code: CommentFailure } {
-    const current = this.#changeable(id, "delete", caller);
+  delete(
+    id: number,
+    caller: PullCaller,
+    kinds: readonly SubjectKind[],
+  ): { ok: true } | { ok: false; code: CommentFailure } {
+    const current = this.#changeable(id, "delete", caller, kinds);
     if (!current.ok) return current;
     this.deps.git.context.storage.transactionSync(() => {
       this.#rows("DELETE FROM comments WHERE comment_id = ?", id);
@@ -143,12 +168,16 @@ export class RepoComments {
     id: number,
     action: "edit" | "delete",
     caller: PullCaller,
+    kinds: readonly SubjectKind[],
   ): { ok: true; comment: CommentRecord } | { ok: false; code: CommentFailure } {
     const comment = this.get(id);
-    if (!comment) return { ok: false, code: "comment_not_found" };
+    const conversation = comment && this.deps.issues.conversation(comment.number);
+    if (!comment || !conversation || !kinds.includes(conversation.kind))
+      return { ok: false, code: "comment_not_found" };
     const decision = decideComment(action, {
       isCommentAuthor: caller.root === comment.authorRoot,
       role: caller.role,
+      locked: conversation.locked,
     });
     return decision.ok ? { ok: true, comment } : { ok: false, code: decision.refusal };
   }
@@ -161,6 +190,14 @@ export class RepoComments {
     data: Record<string, unknown> | null = null,
   ): void {
     const { version, ...row } = comment;
+    // What it is on, as it was then (webhooks and later readers cannot ask once that changed).
+    const conversation = this.deps.issues.conversation(comment.number);
+    const parent = conversation && {
+      kind: conversation.kind,
+      number: comment.number,
+      title: conversation.title,
+      state: conversation.state,
+    };
     this.deps.events.emitEntity(
       `issue_comment.${event}`,
       actor,
@@ -170,7 +207,7 @@ export class RepoComments {
         version,
         row: deleted ? null : { ...row, actChain: [...row.actChain] },
       },
-      data,
+      { ...data, parent },
       deleted,
     );
   }

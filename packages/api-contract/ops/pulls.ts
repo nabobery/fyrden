@@ -1,5 +1,6 @@
 import {
   HANDLE_SHAPE,
+  LOCK_REASONS,
   MAX_HANDLE_LENGTH,
   MAX_PULL_BODY_LENGTH,
   MAX_PULL_TITLE_LENGTH,
@@ -65,6 +66,10 @@ export const PullRequest = z.object({
     .describe(
       "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
     ),
+  locked: z
+    .boolean()
+    .describe("Its conversation is locked: only write access and above comment and review."),
+  active_lock_reason: z.enum(LOCK_REASONS).nullable(),
   title: z.string(),
   body: z.string().nullable(),
   user: z
