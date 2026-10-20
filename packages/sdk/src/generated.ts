@@ -3628,6 +3628,38 @@ export type IssuesUnlockOutput = {
   active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
 };
 
+/** Input of `issues.references.list`: List what refers to an issue. */
+export type IssuesReferencesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `issues.references.list`. */
+export type IssuesReferencesListOutput = {
+  references: ({
+    source: {
+      /** `owner/name`, as the repository is named now. */
+      repository: string;
+      number: number;
+      kind: "issue" | "pull_request";
+      /** The comment naming it; null when it is the issue's or pull request's text. */
+      comment_id: number | null;
+    };
+    /** Unix time in milliseconds. */
+    created_at: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
 /** Input of `labels.list`: List labels. */
 export type LabelsListInput = {
   /** The owner's handle. */
@@ -6387,6 +6419,7 @@ export const OPERATIONS = {
   "issues.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}", pathParams: ["owner","repo","issue_number"], idempotent: true },
   "issues.lock": { method: "PUT", path: "/repos/{owner}/{repo}/issues/{issue_number}/lock", pathParams: ["owner","repo","issue_number"], idempotent: true },
   "issues.unlock": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/lock", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.references.list": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}/references", pathParams: ["owner","repo","issue_number"], idempotent: false, items: "references" },
   "labels.list": { method: "GET", path: "/repos/{owner}/{repo}/labels", pathParams: ["owner","repo"], idempotent: false, items: "labels" },
   "labels.get": { method: "GET", path: "/repos/{owner}/{repo}/labels/{name}", pathParams: ["owner","repo","name"], idempotent: false },
   "labels.create": { method: "POST", path: "/repos/{owner}/{repo}/labels", pathParams: ["owner","repo"], idempotent: true },
@@ -6638,6 +6671,8 @@ export interface Operations {
   "issues.lock": { input: IssuesLockInput; output: IssuesLockOutput };
   /** Unlock a conversation. Unlocks an issue's or a pull request's conversation. Takes write access, and the permission for that kind. Answers the lock (GitHub answers 204). */
   "issues.unlock": { input: IssuesUnlockInput; output: IssuesUnlockOutput };
+  /** List what refers to an issue. Fyrden (GitHub shows these as cross-referenced events in its timeline): the issues, pull requests and comments whose text names this issue or pull request (`#12`, or `owner/repo#12` from another repository), by repository, then number. A reference shows only when the caller can read both its ends: this issue or pull request with its kind's permission, and the source's repository with the source's kind's permission; one whose repository is gone is left out. A page holds only references the caller sees, and checks at most 10 other repositories: past them it ends early, with a continuation. */
+  "issues.references.list": { input: IssuesReferencesListInput; output: IssuesReferencesListOutput };
   /** List labels. The repository's labels by name, ignoring case. Takes the `issues:read` or `pull_requests:read` permission (labels serve both). */
   "labels.list": { input: LabelsListInput; output: LabelsListOutput };
   /** Get a label. One label by name, ignoring case. Takes the `issues:read` or `pull_requests:read` permission (labels serve both). */

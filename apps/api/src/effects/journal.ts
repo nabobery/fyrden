@@ -50,6 +50,12 @@ export interface EffectSink {
    * it delivers itself. One when not said.
    */
   calls?(planned: PlannedEffect): number;
+  /**
+   * Its effects stand across a transfer of their source: what they carry
+   * does not depend on who owned it (the journal still drops a deleted
+   * source's, and a restored epoch's).
+   */
+  readonly acrossTransfers?: boolean;
 }
 
 /** What a batch delivery did: the effects delivered, and the first failure of the rest. */
@@ -226,6 +232,7 @@ export function effectStatements(
           payload: JSON.stringify(planned.payload),
           epoch: event.id.epochGen,
           ownerGen: event.ownerGen,
+          anyOwner: sink.acrossTransfers ? 1 : 0,
         };
         // The row as it is bound: UTF-8 JSON, its payload escaped once more.
         const size = encoder.encode(JSON.stringify(row)).length + 1;
@@ -246,8 +253,8 @@ export function effectStatements(
            SELECT e.value ->> 'id', e.value ->> 'sink', e.value ->> 'target', e.value ->> 'payload', ?1, ?2
            FROM json_each(?3) e
            WHERE (e.value ->> 'epoch') >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?4)
-             AND (e.value ->> 'ownerGen') >=
-                 coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?4), 0)
+             AND ((e.value ->> 'anyOwner') = 1 OR (e.value ->> 'ownerGen') >=
+                 coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?4), 0))
              -- Nothing of a deleted repository once its tombstone is in: its cleanups may have run.
              AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = ?4 AND deleted = 1)
            RETURNING effect_id, sink`,

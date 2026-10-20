@@ -294,3 +294,49 @@ export const deleteIssue = defineOperation({
     readOnly: false,
   },
 });
+
+export const listIssueReferences = defineOperation({
+  id: "issues.references.list",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/issues/{issue_number}/references",
+  summary: "List what refers to an issue",
+  description:
+    "Fyrden (GitHub shows these as cross-referenced events in its timeline): the issues, pull requests and comments whose text names this issue or pull request (`#12`, or `owner/repo#12` from another repository), by repository, then number. A reference shows only when the caller can read both its ends: this issue or pull request with its kind's permission, and the source's repository with the source's kind's permission; one whose repository is gone is left out. A page holds only references the caller sees, and checks at most 10 other repositories: past them it ends early, with a continuation.",
+  input: z.object({
+    ...RepoInput,
+    issue_number: IssueNumber,
+    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+    cursor: z.string().max(400).optional().describe("From a previous page's `next_cursor`."),
+  }),
+  output: z.object({
+    references: z.array(
+      z.object({
+        source: z.object({
+          repository: z.string().describe("`owner/name`, as the repository is named now."),
+          number: z.number().int(),
+          kind: z.enum(["issue", "pull_request"]),
+          comment_id: z
+            .number()
+            .int()
+            .nullable()
+            .describe("The comment naming it; null when it is the issue's or pull request's text."),
+        }),
+        created_at: z.number().int().describe("Unix time in milliseconds."),
+      }),
+    ),
+    next_cursor: z
+      .string()
+      .nullable()
+      .describe("Pass as `cursor` for the next page; null on the last page."),
+  }),
+  permission: "metadata:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "list_issue_references",
+    title: "List what refers to an issue",
+    description: "List the issues, pull requests and comments that name an issue or pull request.",
+    readOnly: true,
+  },
+});

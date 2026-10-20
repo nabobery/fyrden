@@ -1038,4 +1038,69 @@ export const repoSchema: readonly DoMigration[] = [
       END;
     `,
   },
+  {
+    version: 36,
+    // References between issues and pull requests. `outgoing_references`:
+    // what each of this repository's sources (an issue's or pull request's
+    // body, comment 0, or a conversation comment) names, here (whether it
+    // exists yet or not) or in another repository, under each name it was
+    // written with (empty for `#N`; each keeps where it pointed then), and
+    // whether it closes it. `incoming_references`: what
+    // names each of this repository's issues and pull requests, from here
+    // or from another repository, whose sets arrive in order of the
+    // source's events (`reference_sources` keeps the last applied).
+    // `reference_closes`: each close another repository's merge asked of
+    // this one, by its effect, with what came of it (a repeat answers the
+    // same). `resolved_repos`: other repositories' names as texts here last
+    // resolved them (a merge reads them, however long after). `cursor_keys`:
+    // the key listing cursors are sealed with. A target's references are
+    // kept by source repository and kind, so a listing passes over those a
+    // reader may not see a group at a time.
+    name: "references",
+    sql: `
+      CREATE TABLE outgoing_references (
+        source_number INTEGER NOT NULL,
+        source_comment INTEGER NOT NULL,
+        repo_id TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        closes INTEGER NOT NULL CHECK (closes IN (0, 1)),
+        name TEXT NOT NULL,
+        PRIMARY KEY (source_number, source_comment, repo_id, number, name)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE incoming_references (
+        target INTEGER NOT NULL,
+        source_repo TEXT NOT NULL,
+        source_number INTEGER NOT NULL,
+        source_comment INTEGER NOT NULL,
+        source_kind TEXT NOT NULL CHECK (source_kind IN ('issue', 'pull')),
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (target, source_repo, source_kind, source_number, source_comment)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX incoming_references_source
+        ON incoming_references (source_repo, source_number, source_comment);
+      CREATE TABLE reference_closes (
+        effect_id TEXT PRIMARY KEY,
+        outcome TEXT NOT NULL CHECK (outcome IN ('closed', 'unchanged', 'refused')),
+        at INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE resolved_repos (
+        name TEXT PRIMARY KEY,
+        repo_id TEXT,
+        resolved_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX resolved_repos_at ON resolved_repos (resolved_at);
+      CREATE TABLE cursor_keys (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        key BLOB NOT NULL CHECK (length(key) = 32)
+      ) STRICT;
+      CREATE TABLE reference_sources (
+        source_repo TEXT NOT NULL,
+        source_number INTEGER NOT NULL,
+        source_comment INTEGER NOT NULL,
+        epoch_gen INTEGER NOT NULL,
+        source_seq INTEGER NOT NULL,
+        PRIMARY KEY (source_repo, source_number, source_comment)
+      ) STRICT, WITHOUT ROWID;
+    `,
+  },
 ];

@@ -123,6 +123,10 @@ export class RepoIssues {
         readonly forget: (number: number) => void;
         /** The reactions to it and to its comments, gone with it (before its comments). */
         readonly forgetReactions: (number: number) => void;
+        /** In a change's transaction: its body now, for what it refers to. */
+        readonly described: (number: number, body: string | null, actor: RefActor | null) => void;
+        /** In its deletion: what it and its comments refer to, and what refers to it, go. */
+        readonly forgetReferences: (number: number, actor: RefActor) => void;
         readonly ofMany: (subjects: readonly MetaSubject[]) => Map<number, SubjectMeta>;
       };
     },
@@ -294,6 +298,37 @@ export class RepoIssues {
   }
 
   /**
+   * In a merge's transaction, or applying another repository's: closes an
+   * issue a merged pull request's description names (`completed`, closed by
+   * `actor`), naming the pull request when it is this repository's. An
+   * issue closed already, or none, changes nothing.
+   */
+  closeByReference(number: number, pull: number | null, actor: RefActor): boolean {
+    const current = this.get(number);
+    if (current?.state !== "open") return false;
+    const now = this.deps.git.context.now();
+    const [row] = this.#update(
+      number,
+      now,
+      "state = 'closed', state_reason = 'completed', closed_at = ?, closed_by = ?",
+      now,
+      actor.principal,
+    );
+    this.#emit(
+      "closed",
+      this.#record(row as Row),
+      actor,
+      pull === null ? null : { pull_request: pull },
+    );
+    this.deps.events.auditChange(ISSUE_ACTION_RULES.close.audit, actor, {
+      number,
+      reason: "completed",
+      ...(pull !== null && { pull_request: pull }),
+    });
+    return true;
+  }
+
+  /**
    * In a change's transaction: the issue's labels, assignees or milestone
    * changed; bumps its version and update time and emits `events` with its
    * snapshot as it now stands.
@@ -373,6 +408,7 @@ export class RepoIssues {
       const now = this.deps.git.context.now();
       const version = current.version + 1;
       this.deps.meta.forgetReactions(number);
+      this.deps.meta.forgetReferences(number, caller.actor);
       this.#exec("DELETE FROM comments WHERE number = ?", number);
       this.#exec("DELETE FROM feed_participants WHERE number = ?", number);
       this.deps.meta.forget(number);
@@ -500,6 +536,11 @@ export class RepoIssues {
       data,
       deleted,
     );
+    if (
+      event === "opened" ||
+      (event === "edited" && data?.changes && "body" in (data.changes as object))
+    )
+      this.deps.meta.described(issue.number, issue.body, actor);
   }
 
   #record(row: Row): IssueRecord {

@@ -55,6 +55,7 @@ import { packCapCompactionHandler } from "../git/maintenance/tail-merge-job.js";
 import { type PackCapPolicy, packCapPolicy } from "../git/maintenance/tail-merge-plan.js";
 import type { PushDecision } from "../git/push/commit.js";
 import { ACCESS_LOST } from "../git/push/reauthorize.js";
+import { reauthorizeByToken } from "../git/push/reauthorize-token.js";
 import {
   type BeginPushInput,
   type BeginPushResult,
@@ -88,6 +89,7 @@ import {
   forgetMerged,
   viewCompactionHandler,
 } from "../network/view-cap.js";
+import { resolveRepo } from "../repos/directory.js";
 import { platformSigner } from "../signing/platform-key.js";
 import { secretKeys } from "../webhooks/secrets.js";
 import {
@@ -183,6 +185,7 @@ import { hasPrecheckRules } from "./repo/push-rules.js";
 import { type Reacted, type ReactionSubject, RepoReactions } from "./repo/reactions.js";
 import { REBASE_POLICY, type RebasePolicy } from "./repo/rebase-replay.js";
 import { RebaseSagas } from "./repo/rebase-saga.js";
+import { type IncomingReferences, RepoReferences } from "./repo/references.js";
 import { RepoReviewComments } from "./repo/review-comments.js";
 import { RepoReviews } from "./repo/reviews.js";
 import { RepoRulesets, type RuleSuite, type RulesetRecord } from "./repo/rulesets.js";
@@ -304,6 +307,9 @@ export class RepoDO extends MigratingDO {
   /** Reactions to issues, pull requests and their comments. */
   readonly reactions: RepoReactions;
 
+  /** References between issues and pull requests, here and across repositories. */
+  readonly references: RepoReferences;
+
   /** Conversation comments on issues and pull requests. */
   readonly comments: RepoComments;
 
@@ -367,6 +373,15 @@ export class RepoDO extends MigratingDO {
     );
     this.changeLists = new ChangeLists(this.git);
     this.reactions = new RepoReactions({ git: this.git, events: this.events });
+    this.references = new RepoReferences({
+      git: this.git,
+      events: this.events,
+      repoId: () => this.#repoId(),
+      kindOf: (number) => this.issues.kindOf(number),
+      resolve: async (owner, name) =>
+        (await resolveRepo(this.env, owner, name, { metrics: this.git.context.metrics }))?.id ??
+        null,
+    });
     this.subjectMeta = new RepoSubjectMeta({
       git: this.git,
       events: this.events,
@@ -383,6 +398,9 @@ export class RepoDO extends MigratingDO {
       events: this.events,
       repoId: () => this.#repoId(),
       snapshotMeta: (number) => this.subjectMeta.snapshot(number),
+      described: (number, body, actor) =>
+        this.references.sync({ kind: "pull", number, comment: 0 }, body, actor),
+      merged: (pull, actor) => this.#closeOnMerge(pull, actor),
       stale: (number, open) => this.mergeability.stale(number, open),
       staleBase: (branch) => this.mergeability.staleBase(branch),
       follow: (pull) => this.#forkPulls.follow(pull),
@@ -436,6 +454,7 @@ export class RepoDO extends MigratingDO {
       roleOf: (principal) => this.acl.lastRoleOf(principal),
       refreshAccess: () => this.acl.refresh(),
       resolveHandles: (handles) => this.#feedView.resolveHandles(handles),
+      prepareTexts: (texts) => this.references.prepare(texts),
       metrics: this.git.context.metrics,
     });
     this.events.routeFeed((type, actor, data, row) => this.feed.blockFor(type, actor, data, row));
@@ -473,6 +492,9 @@ export class RepoDO extends MigratingDO {
         snapshot: (number) => this.subjectMeta.snapshot(number),
         forget: (number) => this.subjectMeta.forget(number),
         forgetReactions: (number) => this.reactions.forgetSubject(number),
+        described: (number, body, actor) =>
+          this.references.sync({ kind: "issue", number, comment: 0 }, body, actor),
+        forgetReferences: (number, actor) => this.references.forgetSubject(number, actor),
         ofMany: (numbers) => this.subjectMeta.ofMany(numbers),
       },
     });
@@ -482,6 +504,8 @@ export class RepoDO extends MigratingDO {
       issues: this.issues,
       repoId: () => this.#repoId(),
       forgetReactions: (id) => this.reactions.forget("comment", id),
+      described: (comment, kind, text, actor) =>
+        this.references.sync({ kind, number: comment.number, comment: comment.id }, text, actor),
     });
     this.reviewComments = new RepoReviewComments({
       git: this.git,
@@ -1077,7 +1101,11 @@ export class RepoDO extends MigratingDO {
 
   /** Merges a pull request into its base branch (see `PullMerging.merge`). */
   mergePull(input: MergePullInput, actor: RefActor): Promise<Browsed<MergeMade>> {
-    return this.#measured("mergePull", () => this.#merging.merge(input, actor));
+    return this.#measured("mergePull", async () => {
+      // What the description closes in other repositories is resolved now, for the merge to read.
+      await this.references.prepare([this.pulls.get(input.number)?.body]);
+      return this.#merging.merge(input, actor);
+    });
   }
 
   /** A page of the files a pull request changes (see `pullFilesListing`). */
@@ -1201,6 +1229,24 @@ export class RepoDO extends MigratingDO {
     return this.#pullChange("deleteComment", actor, (caller) =>
       this.comments.delete(id, caller, kinds),
     );
+  }
+
+  /**
+   * In a merge's transaction: a pull request merged into the default branch
+   * closes what its description names after a closing keyword: issues here
+   * at once; elsewhere by a `reference.close` event carrying the merger's
+   * credential (none without a token to check there).
+   */
+  #closeOnMerge(pull: PullRecord, actor: RefActor): void {
+    if (this.git.refStore.head() !== `refs/heads/${pull.baseRef}`) return;
+    const { here, elsewhere } = this.references.closing(pull.number, pull.body);
+    for (const number of here) this.issues.closeByReference(number, pull.number, actor);
+    if (elsewhere.length > 0 && actor.tokenId)
+      this.events.emitActivity("reference.close", actor, {
+        source_number: pull.number,
+        token_id: actor.tokenId,
+        targets: elsewhere.map((t) => ({ repo_id: t.repoId, number: t.number })),
+      });
   }
 
   /** A comment change's comment as the API answers it, with its reactions counted. */
@@ -1424,6 +1470,120 @@ export class RepoDO extends MigratingDO {
       return undefined;
     if (target === "review_comment" && conversation.kind !== "pull") return undefined;
     return { target, targetId, number, locked: conversation.locked };
+  }
+
+  /**
+   * What refers to issue or pull request `number` (of `kinds`): a page by
+   * source repository, number and comment; null when gone, undefined for
+   * none. The caller checks the sources it may read.
+   */
+  listReferences(
+    number: number,
+    kinds: readonly SubjectKind[],
+    cursor: string | null,
+    limit: number,
+  ) {
+    return this.#measured("listReferences", async () => {
+      if (this.#refusesReads()) return null;
+      const kind = this.issues.kindOf(number);
+      if (!kind || !kinds.includes(kind)) return undefined;
+      return this.references.page(number, cursor, limit);
+    });
+  }
+
+  /**
+   * From another repository's effect: a source's references here (see
+   * `RepoReferences.apply`). `retry` while a transfer holds the
+   * repository; nothing for one gone.
+   */
+  applyReferences(input: IncomingReferences): Promise<"applied" | "gone" | "retry"> {
+    return this.#measured("applyReferences", async () => {
+      await this.checkEpoch();
+      const refused = this.#writeRefusal();
+      if (refused) return refused.code === "repo_transferring" ? "retry" : "gone";
+      if (!this.events.hasIdentity()) return "gone";
+      this.references.apply(input);
+      return "applied";
+    });
+  }
+
+  /**
+   * From another repository's effect: a pull request merged there names
+   * issue `number` here after a closing keyword. Its merger's credential
+   * must hold here now (`issues:write`, its repository restrictions, a live
+   * grant and agents' ceilings) with triage; else nothing closes, and the
+   * refusal is audited (for good: it is not retried). `retry` while a
+   * transfer holds the repository.
+   */
+  closeFromReference(input: {
+    /** The effect asking it: a repeat answers what came of the first. */
+    readonly effectId: string;
+    readonly number: number;
+    readonly principal: string;
+    readonly tokenId: string;
+    readonly actChain: readonly string[];
+  }): Promise<"closed" | "unchanged" | "refused" | "gone" | "retry"> {
+    return this.#measured("closeFromReference", async () => {
+      await this.checkEpoch();
+      const refused = this.#writeRefusal();
+      if (refused) return refused.code === "repo_transferring" ? "retry" : "gone";
+      if (!this.events.hasIdentity()) return "gone";
+      const done = this.references.closeOutcome(input.effectId);
+      if (done) return done;
+      const issue = this.issues.get(input.number);
+      if (issue?.state !== "open") {
+        this.references.recordClose(input.effectId, "unchanged");
+        return "unchanged";
+      }
+      const actor: RefActor = {
+        principal: input.principal,
+        tokenId: input.tokenId,
+        actChain: [...input.actChain],
+        via: "api",
+      };
+      // Who hears of the close is read from the access list: brought up to date first.
+      await this.feed.prepare();
+      // The decision holds for the ownership it was made in.
+      const ownerGen = this.events.account()?.ownerGen;
+      const decision = await reauthorizeByToken(
+        this.env.DIRECTORY,
+        { tokenId: input.tokenId, principal: input.principal, repoId: this.#repoId() },
+        (principalId) => this.acl.roleOf(principalId, "write"),
+        { permission: "issues:write", minRole: "triage" },
+      );
+      await this.changeHooks.beforeChange?.("closeFromReference");
+      if (this.#writeRefusal()) return "retry";
+      const outcome = this.ctx.storage.transactionSync(() => {
+        // Another delivery of the same effect may have finished meanwhile.
+        const already = this.references.closeOutcome(input.effectId);
+        if (already) return already;
+        // Transferred meanwhile, or the merger's role (or an acting agent's owner's) changed:
+        // decided again on a later try.
+        if (
+          this.events.account()?.ownerGen !== ownerGen ||
+          (decision.refusal === undefined &&
+            !(decision.checked ?? [input.principal]).every((id) => this.acl.allows(id, "triage")))
+        )
+          return "retry" as const;
+        let outcome: "closed" | "unchanged" | "refused";
+        if (decision.refusal !== undefined) {
+          this.events.auditChange("issue.close_refused", actor, {
+            number: input.number,
+            refusal: decision.refusal,
+          });
+          outcome = "refused";
+        } else
+          outcome = this.issues.closeByReference(input.number, null, actor)
+            ? "closed"
+            : "unchanged";
+        this.references.recordClose(input.effectId, outcome);
+        return outcome;
+      });
+      if (outcome === "retry") return outcome;
+      this.#armOutbox();
+      this.#ensureAuditArchive();
+      return outcome;
+    });
   }
 
   /** A page of the repository's labels by name, after `after`; null when gone. */

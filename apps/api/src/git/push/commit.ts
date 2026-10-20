@@ -19,6 +19,11 @@ export interface PushDecision {
   readonly actChain?: readonly string[];
   /** The request committing the push, for its audit row. */
   readonly requestId?: string | null;
+  /**
+   * The principals whose roles the decision rests on (the token's, and
+   * its agents' owners'), for a write that checks them again as it commits.
+   */
+  readonly checked?: readonly string[];
 }
 
 /**

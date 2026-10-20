@@ -53,6 +53,8 @@ export interface RepoFeedDeps {
   readonly refreshAccess: () => Promise<void>;
   /** Handles (lower-cased) to the active users and agents with them. */
   readonly resolveHandles: (handles: readonly string[]) => Promise<Map<string, FeedPrincipal>>;
+  /** Before a change, with the texts it writes: what else they need resolved (other repositories). */
+  readonly prepareTexts?: (texts: readonly (string | null | undefined)[]) => Promise<void>;
   readonly metrics: { count(name: string, labels: Record<string, string>, n?: number): void };
 }
 
@@ -105,6 +107,7 @@ export class RepoFeed {
     texts: readonly (string | null | undefined)[] = [],
   ): Promise<Map<string, FeedPrincipal>> {
     await this.deps.refreshAccess();
+    await this.deps.prepareTexts?.(texts);
     const handles = [...new Set(texts.flatMap((t) => mentionsIn(t)))];
     return handles.length === 0 ? new Map() : this.deps.resolveHandles(handles);
   }

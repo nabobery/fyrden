@@ -9,6 +9,7 @@ export * from "./issues/issue.js";
 export * from "./issues/lifecycle.js";
 export * from "./issues/metadata.js";
 export * from "./issues/reactions.js";
+export * from "./issues/references.js";
 export * from "./principals/commit-identity.js";
 export * from "./principals/principal.js";
 export * from "./principals/root.js";

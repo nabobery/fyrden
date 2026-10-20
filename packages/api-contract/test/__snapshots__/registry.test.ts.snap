@@ -17091,6 +17091,176 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/issues/{issue_number}/references": {
+      "get": {
+        "description": "Fyrden (GitHub shows these as cross-referenced events in its timeline): the issues, pull requests and comments whose text names this issue or pull request (\`#12\`, or \`owner/repo#12\` from another repository), by repository, then number. A reference shows only when the caller can read both its ends: this issue or pull request with its kind's permission, and the source's repository with the source's kind's permission; one whose repository is gone is left out. A page holds only references the caller sees, and checks at most 10 other repositories: past them it ends early, with a continuation.",
+        "operationId": "issues.references.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "issue_number",
+            "required": true,
+            "schema": {
+              "description": "The issue's number (or a pull request's: they share one sequence).",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 400,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "references": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "source": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "comment_id": {
+                                "anyOf": [
+                                  {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                  {
+                                    "type": "null",
+                                  },
+                                ],
+                                "description": "The comment naming it; null when it is the issue's or pull request's text.",
+                              },
+                              "kind": {
+                                "enum": [
+                                  "issue",
+                                  "pull_request",
+                                ],
+                                "type": "string",
+                              },
+                              "number": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "repository": {
+                                "description": "\`owner/name\`, as the repository is named now.",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "repository",
+                              "number",
+                              "kind",
+                              "comment_id",
+                            ],
+                            "type": "object",
+                          },
+                        },
+                        "required": [
+                          "source",
+                          "created_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "references",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List what refers to an issue",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/repos/{owner}/{repo}/labels": {
       "get": {
         "description": "The repository's labels by name, ignoring case. Takes the \`issues:read\` or \`pull_requests:read\` permission (labels serve both).",

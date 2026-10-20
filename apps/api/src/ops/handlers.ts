@@ -107,6 +107,7 @@ import {
   createIssueOperation,
   deleteIssueOperation,
   getIssueOperation,
+  listIssueReferencesOperation,
   listIssuesOperation,
   lockIssueOperation,
   unlockIssueOperation,
@@ -432,6 +433,7 @@ export const handlers: Handlers = {
   // Issues; the listing, get, lock and comments serve pull requests too, each kind on its
   // own permission (repos/subjects).
   "issues.list": listIssuesOperation,
+  "issues.references.list": listIssueReferencesOperation,
   "reactions.issue.list": listIssueReactionsOperation,
   "reactions.issue.create": createIssueReactionOperation,
   "reactions.issue.delete": deleteIssueReactionOperation,
