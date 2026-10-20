@@ -13,8 +13,11 @@ CREATE INDEX import_commits_staged ON import_commits (staged_at);
 CREATE INDEX issues_state ON issues (state, number);
 CREATE INDEX issues_updated ON issues (state, updated_at, number);
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
+CREATE UNIQUE INDEX labels_name ON labels (name COLLATE NOCASE);
 CREATE INDEX leases_pack ON leases (pack_id, expires_at);
 CREATE INDEX mergeability_jobs_waiting ON mergeability_jobs (requested_at, pr_number);
+CREATE INDEX milestones_due ON milestones (state, ifnull(due_on, 9007199254740991), number);
+CREATE UNIQUE INDEX milestones_title ON milestones (title);
 CREATE INDEX outgoing_pulls_head ON outgoing_pulls (head_ref);
 CREATE INDEX packs_state ON packs (state, created_at);
 CREATE INDEX packs_unit ON packs (unit_id) WHERE unit_id IS NOT NULL;
@@ -225,7 +228,7 @@ CREATE TABLE issues (
         closed_by TEXT,
         version INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL, milestone INTEGER,
         CHECK ((duplicate_of IS NOT NULL) = (state = 'closed' AND state_reason = 'duplicate')),
         CHECK ((state = 'closed') = (closed_at IS NOT NULL))
       ) STRICT;
@@ -242,6 +245,16 @@ CREATE TABLE jobs (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   ) STRICT;
+CREATE TABLE labels (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        color TEXT NOT NULL CHECK (length(color) = 6),
+        description TEXT,
+        is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE leases (
     lease_id TEXT NOT NULL,
     pack_id TEXT NOT NULL,
@@ -305,6 +318,23 @@ CREATE TABLE mergeability_jobs (
         pr_number INTEGER PRIMARY KEY,
         seq INTEGER NOT NULL,
         requested_at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE milestones (
+        number INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+        due_on INTEGER,
+        closed_at INTEGER,
+        open_issues INTEGER NOT NULL DEFAULT 0,
+        closed_issues INTEGER NOT NULL DEFAULT 0,
+        open_pulls INTEGER NOT NULL DEFAULT 0,
+        closed_pulls INTEGER NOT NULL DEFAULT 0,
+        creator TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK ((state = 'closed') = (closed_at IS NOT NULL))
       ) STRICT;
 CREATE TABLE networks (
         network_id TEXT PRIMARY KEY,
@@ -394,7 +424,7 @@ CREATE TABLE pull_requests (
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       , last_pusher TEXT, last_pusher_grant TEXT, last_push_at INTEGER, merge_commit_sha TEXT, merged_by TEXT, merged_at INTEGER, head_repo_id TEXT, head_ref_version INTEGER, maintainer_can_modify INTEGER NOT NULL DEFAULT 0, approvals_after INTEGER NOT NULL DEFAULT 0, reviews_revision INTEGER NOT NULL DEFAULT 0, locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)), lock_reason TEXT
-        CHECK (lock_reason IN ('off-topic', 'too heated', 'resolved', 'spam'))) STRICT;
+        CHECK (lock_reason IN ('off-topic', 'too heated', 'resolved', 'spam')), milestone INTEGER) STRICT;
 CREATE TABLE ref_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL,
@@ -441,7 +471,7 @@ CREATE TABLE repo_meta (
         write_frozen INTEGER NOT NULL DEFAULT 0 CHECK (write_frozen IN (0, 1)),
         created_at INTEGER NOT NULL
       , epoch_uuid TEXT, source_seq INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, owner_id TEXT, name TEXT, visibility TEXT
-        CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT, next_number INTEGER NOT NULL DEFAULT 1) STRICT;
+        CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT, next_number INTEGER NOT NULL DEFAULT 1, next_label_id INTEGER NOT NULL DEFAULT 1, next_milestone INTEGER NOT NULL DEFAULT 1) STRICT;
 CREATE TABLE review_comments (
         comment_id INTEGER PRIMARY KEY AUTOINCREMENT,
         pr_number INTEGER NOT NULL,
@@ -548,6 +578,18 @@ CREATE TABLE storage_owed (
         bytes INTEGER NOT NULL,
         owed_at INTEGER NOT NULL
       ) STRICT;
+CREATE TABLE subject_assignees (
+        number INTEGER NOT NULL,
+        principal TEXT NOT NULL,
+        root TEXT NOT NULL,
+        assigned_at INTEGER NOT NULL,
+        PRIMARY KEY (number, principal)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE subject_labels (
+        number INTEGER NOT NULL,
+        label_id INTEGER NOT NULL,
+        PRIMARY KEY (number, label_id)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE uploads (
     upload_id TEXT PRIMARY KEY,
     pack_id TEXT,
@@ -588,3 +630,43 @@ CREATE TABLE webhooks (
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       ) STRICT;
+CREATE TRIGGER issues_milestone_delete AFTER DELETE ON issues
+        WHEN OLD.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_issues = open_issues - (OLD.state = 'open'),
+          closed_issues = closed_issues - (OLD.state <> 'open') WHERE number = OLD.milestone;
+      END;
+CREATE TRIGGER issues_milestone_insert AFTER INSERT ON issues
+        WHEN NEW.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_issues = open_issues + (NEW.state = 'open'),
+          closed_issues = closed_issues + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+CREATE TRIGGER issues_milestone_update AFTER UPDATE OF state, milestone ON issues
+        WHEN OLD.milestone IS NOT NEW.milestone OR OLD.state IS NOT NEW.state
+      BEGIN
+        UPDATE milestones SET open_issues = open_issues - (OLD.state = 'open'),
+          closed_issues = closed_issues - (OLD.state <> 'open') WHERE number = OLD.milestone;
+        UPDATE milestones SET open_issues = open_issues + (NEW.state = 'open'),
+          closed_issues = closed_issues + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+CREATE TRIGGER pull_requests_milestone_delete AFTER DELETE ON pull_requests
+        WHEN OLD.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_pulls = open_pulls - (OLD.state = 'open'),
+          closed_pulls = closed_pulls - (OLD.state <> 'open') WHERE number = OLD.milestone;
+      END;
+CREATE TRIGGER pull_requests_milestone_insert AFTER INSERT ON pull_requests
+        WHEN NEW.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_pulls = open_pulls + (NEW.state = 'open'),
+          closed_pulls = closed_pulls + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+CREATE TRIGGER pull_requests_milestone_update AFTER UPDATE OF state, milestone ON pull_requests
+        WHEN OLD.milestone IS NOT NEW.milestone OR OLD.state IS NOT NEW.state
+      BEGIN
+        UPDATE milestones SET open_pulls = open_pulls - (OLD.state = 'open'),
+          closed_pulls = closed_pulls - (OLD.state <> 'open') WHERE number = OLD.milestone;
+        UPDATE milestones SET open_pulls = open_pulls + (NEW.state = 'open'),
+          closed_pulls = closed_pulls + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;

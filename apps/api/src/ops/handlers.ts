@@ -112,7 +112,31 @@ import {
   unlockIssueOperation,
   updateIssueOperation,
 } from "../repos/issues.js";
+import {
+  addAssigneesOperation,
+  addIssueLabelsOperation,
+  clearIssueLabelsOperation,
+  copyDefaultLabelsOperation,
+  createLabelOperation,
+  deleteLabelOperation,
+  getDefaultLabelsOperation,
+  getLabelOperation,
+  listIssueLabelsOperation,
+  listLabelsOperation,
+  removeAssigneesOperation,
+  removeIssueLabelOperation,
+  setDefaultLabelsOperation,
+  setIssueLabelsOperation,
+  updateLabelOperation,
+} from "../repos/labels.js";
 import { listAccountRepos } from "../repos/listing.js";
+import {
+  createMilestoneOperation,
+  deleteMilestoneOperation,
+  getMilestoneOperation,
+  listMilestonesOperation,
+  updateMilestoneOperation,
+} from "../repos/milestones.js";
 import { networkSource, repoOutput, starCounts, visibleParents } from "../repos/output.js";
 import {
   createPullOperation,
@@ -397,6 +421,26 @@ export const handlers: Handlers = {
   // Issues; the listing, get, lock and comments serve pull requests too, each kind on its
   // own permission (repos/subjects).
   "issues.list": listIssuesOperation,
+  "labels.list": listLabelsOperation,
+  "labels.get": getLabelOperation,
+  "labels.create": createLabelOperation,
+  "labels.update": updateLabelOperation,
+  "labels.delete": deleteLabelOperation,
+  "labels.copy_defaults": copyDefaultLabelsOperation,
+  "issues.labels.list": listIssueLabelsOperation,
+  "issues.labels.add": addIssueLabelsOperation,
+  "issues.labels.set": setIssueLabelsOperation,
+  "issues.labels.remove": removeIssueLabelOperation,
+  "issues.labels.clear": clearIssueLabelsOperation,
+  "issues.assignees.add": addAssigneesOperation,
+  "issues.assignees.remove": removeAssigneesOperation,
+  "orgs.default_labels.get": getDefaultLabelsOperation,
+  "orgs.default_labels.set": setDefaultLabelsOperation,
+  "milestones.list": listMilestonesOperation,
+  "milestones.get": getMilestoneOperation,
+  "milestones.create": createMilestoneOperation,
+  "milestones.update": updateMilestoneOperation,
+  "milestones.delete": deleteMilestoneOperation,
   "issues.create": createIssueOperation,
   "issues.get": getIssueOperation,
   "issues.update": updateIssueOperation,

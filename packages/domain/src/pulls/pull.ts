@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { LOCK_REASONS } from "../issues/issue.js";
+import { SubjectMetaRowShape } from "../issues/metadata.js";
 
 /** Where a pull request stands. Only a merge makes one `merged`, and nothing undoes it. */
 export const PULL_STATES = ["open", "closed", "merged"] as const;
@@ -59,5 +60,6 @@ export const PullRequestRowSchema = z.strictObject({
   mergedAt: z.number().int().min(0).nullable(),
   createdAt: z.number().int().min(0),
   updatedAt: z.number().int().min(0),
+  ...SubjectMetaRowShape,
 });
 export type PullRequestRow = z.infer<typeof PullRequestRowSchema>;

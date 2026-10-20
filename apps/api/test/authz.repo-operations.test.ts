@@ -174,15 +174,46 @@ const CASES: Record<
   "issues.comments.get": { input: {}, expected: MISSING_KIND },
   "issues.comments.update": { input: { body: "checked" }, expected: MISSING_KIND },
   "issues.comments.delete": { input: {}, expected: MISSING_KIND },
+  "issues.update": { input: { title: "checked" }, expected: MISSING_KIND },
+  "issues.labels.list": { input: {}, expected: MISSING_KIND },
+  "issues.labels.add": { input: { labels: ["checked"] }, expected: MISSING_KIND },
+  "issues.labels.set": { input: { labels: [] }, expected: MISSING_KIND },
+  "issues.labels.remove": { input: {}, expected: MISSING_KIND },
+  "issues.labels.clear": { input: {}, expected: MISSING_KIND },
+  "issues.assignees.add": {
+    input: {
+      get assignees() {
+        return [handle];
+      },
+    },
+    expected: MISSING_KIND,
+  },
+  "issues.assignees.remove": {
+    input: {
+      get assignees() {
+        return [handle];
+      },
+    },
+    expected: MISSING_KIND,
+  },
+  // Labels and milestones serve both kinds: either kind's permission lets a caller through
+  // (see EITHER_KIND below).
+  "labels.list": { input: {}, expected: MISSING_KIND },
+  "labels.get": { input: {}, expected: MISSING_KIND },
+  "labels.create": { input: { name: "checked", color: "000000" }, expected: MISSING_KIND },
+  "labels.update": { input: { color: "000000" }, expected: MISSING_KIND },
+  "labels.delete": { input: {}, expected: MISSING_KIND },
+  "labels.copy_defaults": { input: {}, expected: MISSING_KIND },
+  "milestones.list": { input: {}, expected: MISSING_KIND },
+  "milestones.get": { input: {}, expected: MISSING_KIND },
+  "milestones.create": { input: { title: "checked" }, expected: MISSING_KIND },
+  "milestones.update": { input: { title: "checked" }, expected: MISSING_KIND },
+  "milestones.delete": { input: {}, expected: MISSING_KIND },
   // These test repositories predate identities (no events to record an issue with): refused
   // after authorization, with its own code.
   "issues.create": {
     input: { title: "checked" },
     expected: { status: 409, code: "repo_not_ready" },
-  },
-  "issues.update": {
-    input: { title: "checked" },
-    expected: { status: 404, code: "issue_not_found" },
   },
   "issues.delete": { input: {}, expected: { status: 404, code: "issue_not_found" } },
   "pulls.requested_reviewers.remove": {
@@ -271,6 +302,8 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{pull_number}", "1")
     .replace("{review_id}", "1")
     .replace("{issue_number}", "1")
+    .replace("{milestone_number}", "1")
+    .replace("{name}", "checked")
     .replace("{comment_id}", "1")
     .replace("{thread_id}", "1")
     .replace("{username}", handle)
@@ -341,6 +374,33 @@ const BOTH_KINDS: Record<string, Outcome> = {
   "issues.comments.get": { status: 404, code: "comment_not_found" },
   "issues.comments.update": { status: 404, code: "comment_not_found" },
   "issues.comments.delete": { status: 404, code: "comment_not_found" },
+  "issues.update": { status: 404, code: "issue_not_found" },
+  "issues.labels.list": { status: 404, code: "issue_not_found" },
+  "issues.labels.add": { status: 404, code: "issue_not_found" },
+  "issues.labels.set": { status: 404, code: "issue_not_found" },
+  "issues.labels.remove": { status: 404, code: "issue_not_found" },
+  "issues.labels.clear": { status: 404, code: "issue_not_found" },
+  "issues.assignees.add": { status: 404, code: "issue_not_found" },
+  "issues.assignees.remove": { status: 404, code: "issue_not_found" },
+};
+
+/**
+ * Labels and milestones, serving both kinds: what each answers once either
+ * kind's permission lets it through (the repository has no label or
+ * milestone, and predates the identities writes need to record events).
+ */
+const EITHER_KIND: Record<string, Outcome> = {
+  "labels.list": { status: 200 },
+  "labels.get": { status: 404, code: "label_not_found" },
+  "labels.create": { status: 409, code: "repo_not_ready" },
+  "labels.update": { status: 409, code: "repo_not_ready" },
+  "labels.delete": { status: 409, code: "repo_not_ready" },
+  "labels.copy_defaults": { status: 409, code: "repo_not_ready" },
+  "milestones.list": { status: 200 },
+  "milestones.get": { status: 404, code: "milestone_not_found" },
+  "milestones.create": { status: 409, code: "repo_not_ready" },
+  "milestones.update": { status: 409, code: "repo_not_ready" },
+  "milestones.delete": { status: 409, code: "repo_not_ready" },
 };
 
 describe("operations serving issues and pull requests", () => {
@@ -374,6 +434,37 @@ describe("operations serving issues and pull requests", () => {
       expect(await outcome(await call(op, token))).toEqual(MISSING_KIND);
     },
   );
+});
+
+describe("label and milestone operations", () => {
+  it("are every repository operation that declares metadata:read on labels or milestones", () => {
+    const serving = repoOps.filter(
+      (op) =>
+        op.permission === "metadata:read" &&
+        (op.path.includes("/labels") || op.path.includes("/milestones")) &&
+        !op.path.includes("/issues"),
+    );
+    expect(serving.map((op) => op.id).sort()).toEqual(Object.keys(EITHER_KIND).sort());
+  });
+
+  it.each(
+    Object.keys(EITHER_KIND).flatMap((id) =>
+      (["issues", "pull_requests"] as const).map((kind) => [id, kind] as const),
+    ),
+  )("%s goes on with %s's permission", async (id, kind) => {
+    const op = registry.find((o) => o.id === id) as OperationDef;
+    const token = await scopedToken(owner.principalId, [
+      `${kind}:${op.method === "GET" ? "read" : "write"}`,
+    ]);
+    expect(await outcome(await call(op, token))).toEqual(EITHER_KIND[id]);
+  });
+
+  it.each(Object.keys(EITHER_KIND))("%s writes nothing with read permissions", async (id) => {
+    const op = registry.find((o) => o.id === id) as OperationDef;
+    if (op.method === "GET") return;
+    const token = await scopedToken(owner.principalId, ["issues:read", "pull_requests:read"]);
+    expect(await outcome(await call(op, token))).toEqual(MISSING_KIND);
+  });
 });
 
 describe("operations that read a repository beyond their declared permission", () => {

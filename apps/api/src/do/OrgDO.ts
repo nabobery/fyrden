@@ -1,6 +1,8 @@
 import { createLogger, createMetrics } from "@fyrden/adapters-cloudflare/obs";
 import {
   atLeast,
+  GITHUB_DEFAULT_LABELS,
+  type LabelSpec,
   type OrgRole,
   orgRepoRole,
   REPO_ROLES,
@@ -596,6 +598,67 @@ export class OrgDO extends MigratingDO {
       if (current === null || current > at) return this.ctx.storage.setAlarm(at);
     });
     return limits;
+  }
+
+  /**
+   * The labels the account's new repositories get, in order: the set its
+   * owners last set, or GitHub's until they set one.
+   */
+  defaultLabels(): LabelSpec[] {
+    const meta = this.ctx.storage.sql
+      .exec<{ set: number }>('SELECT default_labels_set AS "set" FROM org_meta')
+      .toArray()[0];
+    if (!meta?.set) return GITHUB_DEFAULT_LABELS.map((l) => ({ ...l }));
+    return this.ctx.storage.sql
+      .exec<{ name: string; color: string; description: string | null }>(
+        "SELECT name, color, description FROM default_labels ORDER BY position",
+      )
+      .toArray();
+  }
+
+  /**
+   * Replaces the organization's default labels, if `audit.actor` is an
+   * owner now (checked in the change's transaction; the Worker checked that
+   * names are unique), with its audit row in the same transaction.
+   * Repositories made before keep theirs.
+   */
+  setDefaultLabels(
+    labels: readonly LabelSpec[],
+    audit: { readonly accountId: string; readonly actor: ChangeActor },
+  ):
+    | { ok: true; labels: LabelSpec[] }
+    | { ok: false; code: "not_an_org" | "forbidden"; error: string } {
+    const sql = this.ctx.storage.sql;
+    const refused = this.ctx.storage.transactionSync(() => {
+      const refused = this.#refuse(audit.actor);
+      if (refused) return refused as typeof NOT_AN_ORG | typeof FORBIDDEN;
+      sql.exec("DELETE FROM default_labels");
+      for (const [position, label] of labels.entries())
+        sql.exec(
+          "INSERT INTO default_labels (position, name, color, description) VALUES (?, ?, ?, ?)",
+          position,
+          label.name,
+          label.color.toLowerCase(),
+          label.description,
+        );
+      sql.exec("UPDATE org_meta SET default_labels_set = 1");
+      sql.exec(
+        `INSERT INTO pending_audit (at, actor_id, action, target_id, details, request_id)
+         VALUES (?, ?, 'org.default_labels', ?, ?, ?)`,
+        this.#now(),
+        audit.actor.principalId,
+        audit.accountId,
+        JSON.stringify({ labels: labels.map((l) => l.name) }),
+        audit.actor.requestId ?? null,
+      );
+      return undefined;
+    });
+    if (refused) return { ok: false, code: refused.code, error: refused.error };
+    void this.ctx.storage.getAlarm().then((current) => {
+      const at = this.#now() + AUDIT_RETRY_MS;
+      if (current === null || current > at) return this.ctx.storage.setAlarm(at);
+    });
+    return { ok: true, labels: this.defaultLabels() };
   }
 
   /** Reserves storage for an upload being stored (see `AccountQuotas.reserve`). */

@@ -14,6 +14,7 @@ export const FEED_KINDS = [
   "changes_requested",
   "approved",
   "merge_conflict",
+  "assigned",
   "mention",
   "activity",
 ] as const;

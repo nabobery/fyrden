@@ -1673,6 +1673,44 @@ export type PullsListOutput = {
     merged_by: {
       id: string;
     } | null;
+    labels: ({
+      id: number;
+      name: string;
+      color: string;
+      description: string | null;
+      /** Copied in from a default set. */
+      default: boolean;
+    })[];
+    /** The first of `assignees` (GitHub's older field); null for none. */
+    assignee: {
+      id: string;
+    } | null;
+    assignees: {
+      id: string;
+    }[];
+    milestone: {
+      /** Fyrden: the number again (milestones have no separate id space). */
+      id: number;
+      number: number;
+      title: string;
+      description: string | null;
+      state: "open" | "closed";
+      /** Open issues and pull requests in it, of the kinds the caller reads. */
+      open_issues: number;
+      /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+      closed_issues: number;
+      creator: {
+        id: string;
+      };
+      /** Unix time in milliseconds. */
+      due_on: number | null;
+      /** Unix time in milliseconds. */
+      created_at: number;
+      /** Unix time in milliseconds. */
+      updated_at: number;
+      /** Unix time in milliseconds. */
+      closed_at: number | null;
+    } | null;
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -1755,6 +1793,44 @@ export type PullsCreateOutput = {
   merged_by: {
     id: string;
   } | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+  } | null;
 };
 
 /** Input of `pulls.get`: Get a pull request. */
@@ -1823,6 +1899,44 @@ export type PullsGetOutput = {
   /** Who merged it (the user, when agents acted for one). */
   merged_by: {
     id: string;
+  } | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
   } | null;
 };
 
@@ -1902,6 +2016,44 @@ export type PullsUpdateOutput = {
   /** Who merged it (the user, when agents acted for one). */
   merged_by: {
     id: string;
+  } | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
   } | null;
 };
 
@@ -2733,6 +2885,44 @@ export type PullsRequestedReviewersAddOutput = {
   merged_by: {
     id: string;
   } | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+  } | null;
 };
 
 /** Input of `pulls.requested_reviewers.remove`: Remove requested reviewers. */
@@ -2806,6 +2996,44 @@ export type PullsRequestedReviewersRemoveOutput = {
   merged_by: {
     id: string;
   } | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+  } | null;
 };
 
 /** Input of `issues.list`: List issues. */
@@ -2857,6 +3085,44 @@ export type IssuesListOutput = {
     updated_at: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
+    labels: ({
+      id: number;
+      name: string;
+      color: string;
+      description: string | null;
+      /** Copied in from a default set. */
+      default: boolean;
+    })[];
+    /** The first of `assignees` (GitHub's older field); null for none. */
+    assignee: {
+      id: string;
+    } | null;
+    assignees: {
+      id: string;
+    }[];
+    milestone: {
+      /** Fyrden: the number again (milestones have no separate id space). */
+      id: number;
+      number: number;
+      title: string;
+      description: string | null;
+      state: "open" | "closed";
+      /** Open issues and pull requests in it, of the kinds the caller reads. */
+      open_issues: number;
+      /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+      closed_issues: number;
+      creator: {
+        id: string;
+      };
+      /** Unix time in milliseconds. */
+      due_on: number | null;
+      /** Unix time in milliseconds. */
+      created_at: number;
+      /** Unix time in milliseconds. */
+      updated_at: number;
+      /** Unix time in milliseconds. */
+      closed_at: number | null;
+    } | null;
     /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
     pull_request?: {
       /** Unix time in milliseconds. */
@@ -2875,6 +3141,12 @@ export type IssuesCreateInput = {
   repo: string;
   title: string;
   body?: string;
+  /** Label names (ignoring case), each one the repository has; replaces its labels. */
+  labels?: string[];
+  /** Handles of users and agents who can read the repository; replaces its assignees. */
+  assignees?: string[];
+  /** A milestone's number; null takes it out of its milestone. */
+  milestone?: number | null;
 };
 
 /** Output of `issues.create`. */
@@ -2908,6 +3180,44 @@ export type IssuesCreateOutput = {
   updated_at: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+  } | null;
   /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
   pull_request?: {
     /** Unix time in milliseconds. */
@@ -2956,6 +3266,44 @@ export type IssuesGetOutput = {
   updated_at: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+  } | null;
   /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
   pull_request?: {
     /** Unix time in milliseconds. */
@@ -2979,6 +3327,12 @@ export type IssuesUpdateInput = {
   state_reason?: "completed" | "not_planned" | "duplicate" | "reopened" | null;
   /** Fyrden: with `state_reason: duplicate`, the issue or pull request this one duplicates; the caller must be able to read it. */
   duplicate_of?: number;
+  /** Label names (ignoring case), each one the repository has; replaces its labels. */
+  labels?: string[];
+  /** Handles of users and agents who can read the repository; replaces its assignees. */
+  assignees?: string[];
+  /** A milestone's number; null takes it out of its milestone. */
+  milestone?: number | null;
 };
 
 /** Output of `issues.update`. */
@@ -3012,6 +3366,44 @@ export type IssuesUpdateOutput = {
   updated_at: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+  } | null;
   /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
   pull_request?: {
     /** Unix time in milliseconds. */
@@ -3066,6 +3458,644 @@ export type IssuesUnlockInput = {
 export type IssuesUnlockOutput = {
   locked: boolean;
   active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+};
+
+/** Input of `labels.list`: List labels. */
+export type LabelsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `labels.list`. */
+export type LabelsListOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `labels.get`: Get a label. */
+export type LabelsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+  name: string;
+};
+
+/** Output of `labels.get`. */
+export type LabelsGetOutput = {
+  id: number;
+  name: string;
+  color: string;
+  description: string | null;
+  /** Copied in from a default set. */
+  default: boolean;
+};
+
+/** Input of `labels.create`: Create a label. */
+export type LabelsCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+  name: string;
+  /** Six hex digits, without `#` (kept lower-case). */
+  color: string;
+  description?: string;
+};
+
+/** Output of `labels.create`. */
+export type LabelsCreateOutput = {
+  id: number;
+  name: string;
+  color: string;
+  description: string | null;
+  /** Copied in from a default set. */
+  default: boolean;
+};
+
+/** Input of `labels.update`: Update a label. */
+export type LabelsUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+  name: string;
+  /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+  new_name?: string;
+  /** Six hex digits, without `#` (kept lower-case). */
+  color?: string;
+  /** Null clears it. */
+  description?: string | null;
+};
+
+/** Output of `labels.update`. */
+export type LabelsUpdateOutput = {
+  id: number;
+  name: string;
+  color: string;
+  description: string | null;
+  /** Copied in from a default set. */
+  default: boolean;
+};
+
+/** Input of `labels.delete`: Delete a label. */
+export type LabelsDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+  name: string;
+};
+
+/** Output of `labels.delete`. */
+export type LabelsDeleteOutput = {
+  name: string;
+  state: "deleted";
+};
+
+/** Input of `labels.copy_defaults`: Copy the default labels in. */
+export type LabelsCopyDefaultsInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+};
+
+/** Output of `labels.copy_defaults`. */
+export type LabelsCopyDefaultsOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+};
+
+/** Input of `issues.labels.list`: List an issue's labels. */
+export type IssuesLabelsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+};
+
+/** Output of `issues.labels.list`. */
+export type IssuesLabelsListOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+};
+
+/** Input of `issues.labels.add`: Add labels to an issue. */
+export type IssuesLabelsAddInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** Label names, matched ignoring case; each must exist in the repository. */
+  labels: string[];
+};
+
+/** Output of `issues.labels.add`. */
+export type IssuesLabelsAddOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+};
+
+/** Input of `issues.labels.set`: Set an issue's labels. */
+export type IssuesLabelsSetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** Label names, matched ignoring case; each must exist in the repository. */
+  labels: string[];
+};
+
+/** Output of `issues.labels.set`. */
+export type IssuesLabelsSetOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+};
+
+/** Input of `issues.labels.remove`: Remove a label from an issue. */
+export type IssuesLabelsRemoveInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+  name: string;
+};
+
+/** Output of `issues.labels.remove`. */
+export type IssuesLabelsRemoveOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+};
+
+/** Input of `issues.labels.clear`: Remove all labels from an issue. */
+export type IssuesLabelsClearInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+};
+
+/** Output of `issues.labels.clear`. */
+export type IssuesLabelsClearOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+};
+
+/** Input of `issues.assignees.add`: Add assignees to an issue. */
+export type IssuesAssigneesAddInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** Handles of users and agents who can read the repository. */
+  assignees: string[];
+};
+
+/** Output of `issues.assignees.add`. */
+export type IssuesAssigneesAddOutput = {
+  /** Fyrden: the number again (issues have no separate id space). */
+  id: number;
+  number: number;
+  /** A merged pull request is `closed`. */
+  state: "open" | "closed";
+  /** Why it is in its state; null for one never closed, and for pull requests. */
+  state_reason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted. */
+  duplicate_of: number | null;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+  /** Who closed it last, while closed; null for pull requests. */
+  closed_by: {
+    id: string;
+  } | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+  } | null;
+  /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
+  pull_request?: {
+    /** Unix time in milliseconds. */
+    merged_at: number | null;
+  };
+};
+
+/** Input of `issues.assignees.remove`: Remove assignees from an issue. */
+export type IssuesAssigneesRemoveInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** Handles of users and agents who can read the repository. */
+  assignees: string[];
+};
+
+/** Output of `issues.assignees.remove`. */
+export type IssuesAssigneesRemoveOutput = {
+  /** Fyrden: the number again (issues have no separate id space). */
+  id: number;
+  number: number;
+  /** A merged pull request is `closed`. */
+  state: "open" | "closed";
+  /** Why it is in its state; null for one never closed, and for pull requests. */
+  state_reason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted. */
+  duplicate_of: number | null;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+  /** Who closed it last, while closed; null for pull requests. */
+  closed_by: {
+    id: string;
+  } | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+  } | null;
+  /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
+  pull_request?: {
+    /** Unix time in milliseconds. */
+    merged_at: number | null;
+  };
+};
+
+/** Input of `orgs.default_labels.get`: Get an organization's default labels. */
+export type OrgsDefaultLabelsGetInput = {
+  /** The organization's handle. */
+  org: string;
+};
+
+/** Output of `orgs.default_labels.get`. */
+export type OrgsDefaultLabelsGetOutput = {
+  labels: ({
+    /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+    name: string;
+    /** Six hex digits, without `#` (kept lower-case). */
+    color: string;
+    description: string | null;
+  })[];
+};
+
+/** Input of `orgs.default_labels.set`: Set an organization's default labels. */
+export type OrgsDefaultLabelsSetInput = {
+  /** The organization's handle. */
+  org: string;
+  labels: ({
+    /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+    name: string;
+    /** Six hex digits, without `#` (kept lower-case). */
+    color: string;
+    description?: string | null;
+  })[];
+};
+
+/** Output of `orgs.default_labels.set`. */
+export type OrgsDefaultLabelsSetOutput = {
+  labels: ({
+    /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+    name: string;
+    /** Six hex digits, without `#` (kept lower-case). */
+    color: string;
+    description: string | null;
+  })[];
+};
+
+/** Input of `milestones.list`: List milestones. */
+export type MilestonesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  state?: "open" | "closed" | "all";
+  sort?: "due_on";
+  direction?: "asc" | "desc";
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`, with the same filters. */
+  cursor?: string;
+};
+
+/** Output of `milestones.list`. */
+export type MilestonesListOutput = {
+  milestones: ({
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `milestones.get`: Get a milestone. */
+export type MilestonesGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The milestone's number. */
+  milestone_number: number;
+};
+
+/** Output of `milestones.get`. */
+export type MilestonesGetOutput = {
+  /** Fyrden: the number again (milestones have no separate id space). */
+  id: number;
+  number: number;
+  title: string;
+  description: string | null;
+  state: "open" | "closed";
+  /** Open issues and pull requests in it, of the kinds the caller reads. */
+  open_issues: number;
+  /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+  closed_issues: number;
+  creator: {
+    id: string;
+  };
+  /** Unix time in milliseconds. */
+  due_on: number | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+};
+
+/** Input of `milestones.create`: Create a milestone. */
+export type MilestonesCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  title: string;
+  state?: "open" | "closed";
+  description?: string;
+  /** Fyrden: Unix time in milliseconds (GitHub takes an ISO 8601 time). */
+  due_on?: number;
+};
+
+/** Output of `milestones.create`. */
+export type MilestonesCreateOutput = {
+  /** Fyrden: the number again (milestones have no separate id space). */
+  id: number;
+  number: number;
+  title: string;
+  description: string | null;
+  state: "open" | "closed";
+  /** Open issues and pull requests in it, of the kinds the caller reads. */
+  open_issues: number;
+  /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+  closed_issues: number;
+  creator: {
+    id: string;
+  };
+  /** Unix time in milliseconds. */
+  due_on: number | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+};
+
+/** Input of `milestones.update`: Update a milestone. */
+export type MilestonesUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The milestone's number. */
+  milestone_number: number;
+  title?: string;
+  state?: "open" | "closed";
+  /** Null clears it. */
+  description?: string | null;
+  /** Null clears it. */
+  due_on?: number | null;
+};
+
+/** Output of `milestones.update`. */
+export type MilestonesUpdateOutput = {
+  /** Fyrden: the number again (milestones have no separate id space). */
+  id: number;
+  number: number;
+  title: string;
+  description: string | null;
+  state: "open" | "closed";
+  /** Open issues and pull requests in it, of the kinds the caller reads. */
+  open_issues: number;
+  /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+  closed_issues: number;
+  creator: {
+    id: string;
+  };
+  /** Unix time in milliseconds. */
+  due_on: number | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+};
+
+/** Input of `milestones.delete`: Delete a milestone. */
+export type MilestonesDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The milestone's number. */
+  milestone_number: number;
+};
+
+/** Output of `milestones.delete`. */
+export type MilestonesDeleteOutput = {
+  number: number;
+  state: "deleted";
 };
 
 /** Input of `issues.comments.list`: List comments. */
@@ -3287,7 +4317,7 @@ export type FeedListInput = {
   /** Only items of this priority. */
   priority?: "P0" | "P1";
   /** Only items of this kind. */
-  kind?: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
+  kind?: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity";
 };
 
 /** Output of `feed.list`. */
@@ -3302,7 +4332,7 @@ export type FeedListOutput = {
     };
     /** The thread within the repository, e.g. `pull/12` or `issue/7`. */
     thread_key: string;
-    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity";
     subject: {
       kind: "issue" | "pull";
       number: number;
@@ -3361,7 +4391,7 @@ export type FeedSyncOutput = {
     };
     /** The thread within the repository, e.g. `pull/12` or `issue/7`. */
     thread_key: string;
-    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity";
     subject: {
       kind: "issue" | "pull";
       number: number;
@@ -4886,6 +5916,26 @@ export const OPERATIONS = {
   "issues.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}", pathParams: ["owner","repo","issue_number"], idempotent: true },
   "issues.lock": { method: "PUT", path: "/repos/{owner}/{repo}/issues/{issue_number}/lock", pathParams: ["owner","repo","issue_number"], idempotent: true },
   "issues.unlock": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/lock", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "labels.list": { method: "GET", path: "/repos/{owner}/{repo}/labels", pathParams: ["owner","repo"], idempotent: false, items: "labels" },
+  "labels.get": { method: "GET", path: "/repos/{owner}/{repo}/labels/{name}", pathParams: ["owner","repo","name"], idempotent: false },
+  "labels.create": { method: "POST", path: "/repos/{owner}/{repo}/labels", pathParams: ["owner","repo"], idempotent: true },
+  "labels.update": { method: "PATCH", path: "/repos/{owner}/{repo}/labels/{name}", pathParams: ["owner","repo","name"], idempotent: true },
+  "labels.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/labels/{name}", pathParams: ["owner","repo","name"], idempotent: true },
+  "labels.copy_defaults": { method: "POST", path: "/repos/{owner}/{repo}/labels/defaults", pathParams: ["owner","repo"], idempotent: true },
+  "issues.labels.list": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}/labels", pathParams: ["owner","repo","issue_number"], idempotent: false },
+  "issues.labels.add": { method: "POST", path: "/repos/{owner}/{repo}/issues/{issue_number}/labels", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.labels.set": { method: "PUT", path: "/repos/{owner}/{repo}/issues/{issue_number}/labels", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.labels.remove": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/labels/{name}", pathParams: ["owner","repo","issue_number","name"], idempotent: true },
+  "issues.labels.clear": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/labels", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.assignees.add": { method: "POST", path: "/repos/{owner}/{repo}/issues/{issue_number}/assignees", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.assignees.remove": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/assignees", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "orgs.default_labels.get": { method: "GET", path: "/orgs/{org}/default-labels", pathParams: ["org"], idempotent: false },
+  "orgs.default_labels.set": { method: "PUT", path: "/orgs/{org}/default-labels", pathParams: ["org"], idempotent: true },
+  "milestones.list": { method: "GET", path: "/repos/{owner}/{repo}/milestones", pathParams: ["owner","repo"], idempotent: false, items: "milestones" },
+  "milestones.get": { method: "GET", path: "/repos/{owner}/{repo}/milestones/{milestone_number}", pathParams: ["owner","repo","milestone_number"], idempotent: false },
+  "milestones.create": { method: "POST", path: "/repos/{owner}/{repo}/milestones", pathParams: ["owner","repo"], idempotent: true },
+  "milestones.update": { method: "PATCH", path: "/repos/{owner}/{repo}/milestones/{milestone_number}", pathParams: ["owner","repo","milestone_number"], idempotent: true },
+  "milestones.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/milestones/{milestone_number}", pathParams: ["owner","repo","milestone_number"], idempotent: true },
   "issues.comments.list": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}/comments", pathParams: ["owner","repo","issue_number"], idempotent: false, items: "comments" },
   "issues.comments.create": { method: "POST", path: "/repos/{owner}/{repo}/issues/{issue_number}/comments", pathParams: ["owner","repo","issue_number"], idempotent: true },
   "issues.comments.get": { method: "GET", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: false },
@@ -5096,11 +6146,11 @@ export interface Operations {
   "pulls.requested_reviewers.remove": { input: PullsRequestedReviewersRemoveInput; output: PullsRequestedReviewersRemoveOutput };
   /** List issues. The repository's issues and pull requests (marked with `pull_request`), as GitHub's issue listing; `type` narrows it to one kind. Each kind is listed only for a caller that may read it: issues need the `issues:read` permission, pull requests `pull_requests:read`. A listing sorted by `updated` may move an item changed between pages. */
   "issues.list": { input: IssuesListInput; output: IssuesListOutput };
-  /** Create an issue. Opens an issue. Anyone who can read the repository may. */
+  /** Create an issue. Opens an issue. Anyone who can read the repository may; giving it labels, assignees or a milestone takes triage (refused without it, where GitHub drops them). */
   "issues.create": { input: IssuesCreateInput; output: IssuesCreateOutput };
   /** Get an issue. One issue, or a pull request by its number (marked with `pull_request`), for a caller that may read that kind. */
   "issues.get": { input: IssuesGetInput; output: IssuesGetOutput };
-  /** Update an issue. Changes the title or body, closes or reopens it, or marks it a duplicate; fields left out are kept, and all of it happens or none. The author may edit, close and reopen its own issue; on anyone else's, triage closes and reopens, and write edits. Marking a duplicate (`state_reason: duplicate` with `duplicate_of`) takes triage, the author's own issue included. As GitHub's, `state_reason` alone changes nothing unless the state changes, except moving a closed issue to or from `duplicate`. Pull requests change through `pulls.update`. */
+  /** Update an issue. Changes the title or body, closes or reopens it, marks it a duplicate, or sets its labels, assignees or milestone; fields left out are kept, and all of it happens or none. The author may edit, close and reopen its own issue; on anyone else's, triage closes and reopens, and write edits. Marking a duplicate (`state_reason: duplicate` with `duplicate_of`) and setting labels, assignees or the milestone take triage, the author's own issue included. As GitHub's, `state_reason` alone changes nothing unless the state changes, except moving a closed issue to or from `duplicate`. A pull request's number takes only labels, assignees and milestone (with `pull_requests:write`); its title, body and state change through `pulls.update`. */
   "issues.update": { input: IssuesUpdateInput; output: IssuesUpdateOutput };
   /** Delete an issue. Fyrden (GitHub offers this through GraphQL only): deletes an issue and its comments for good; its number is never used again, and activity feeds stop showing it. Takes admin. */
   "issues.delete": { input: IssuesDeleteInput; output: IssuesDeleteOutput };
@@ -5108,6 +6158,46 @@ export interface Operations {
   "issues.lock": { input: IssuesLockInput; output: IssuesLockOutput };
   /** Unlock a conversation. Unlocks an issue's or a pull request's conversation. Takes write access, and the permission for that kind. Answers the lock (GitHub answers 204). */
   "issues.unlock": { input: IssuesUnlockInput; output: IssuesUnlockOutput };
+  /** List labels. The repository's labels by name, ignoring case. Takes the `issues:read` or `pull_requests:read` permission (labels serve both). */
+  "labels.list": { input: LabelsListInput; output: LabelsListOutput };
+  /** Get a label. One label by name, ignoring case. Takes the `issues:read` or `pull_requests:read` permission (labels serve both). */
+  "labels.get": { input: LabelsGetInput; output: LabelsGetOutput };
+  /** Create a label. Creates a label; its name must be new, ignoring case. Takes write access, and the `issues:write` or `pull_requests:write` permission (labels serve both). */
+  "labels.create": { input: LabelsCreateInput; output: LabelsCreateOutput };
+  /** Update a label. Renames a label (`new_name`), or changes its color or description; issues and pull requests keep it. Takes write access, and the `issues:write` or `pull_requests:write` permission (labels serve both). */
+  "labels.update": { input: LabelsUpdateInput; output: LabelsUpdateOutput };
+  /** Delete a label. Deletes a label; issues and pull requests carrying it no longer do. Answers what was deleted (GitHub answers 204). Takes write access, and the `issues:write` or `pull_requests:write` permission (labels serve both). */
+  "labels.delete": { input: LabelsDeleteInput; output: LabelsDeleteOutput };
+  /** Copy the default labels in. Fyrden: copies the account's default labels (its organization's set, or GitHub's) into the repository; names it has already are kept as they are. New repositories get them when created. Answers the labels added. Takes write access, and the `issues:write` or `pull_requests:write` permission (labels serve both). */
+  "labels.copy_defaults": { input: LabelsCopyDefaultsInput; output: LabelsCopyDefaultsOutput };
+  /** List an issue's labels. An issue's or a pull request's labels by name (at most 100, all on one page), for a caller that may read that kind. */
+  "issues.labels.list": { input: IssuesLabelsListInput; output: IssuesLabelsListOutput };
+  /** Add labels to an issue. Adds labels to an issue or pull request (it holds at most 100); ones it has are kept. Names that do not exist are refused (GitHub creates them). Answers its labels. Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
+  "issues.labels.add": { input: IssuesLabelsAddInput; output: IssuesLabelsAddOutput };
+  /** Set an issue's labels. Replaces an issue's or pull request's labels (empty takes them all off). Answers its labels. Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
+  "issues.labels.set": { input: IssuesLabelsSetInput; output: IssuesLabelsSetOutput };
+  /** Remove a label from an issue. Takes a label off an issue or pull request (one it does not have changes nothing; one the repository does not have is not found). Answers its labels. Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
+  "issues.labels.remove": { input: IssuesLabelsRemoveInput; output: IssuesLabelsRemoveOutput };
+  /** Remove all labels from an issue. Takes every label off an issue or pull request. Answers its labels, none (GitHub answers 204). Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
+  "issues.labels.clear": { input: IssuesLabelsClearInput; output: IssuesLabelsClearOutput };
+  /** Add assignees to an issue. Assigns users or agents who can read the repository to an issue or pull request (at most 10 in all); ones assigned already are kept. Answers the issue (or pull request, as the issue endpoints show one). Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
+  "issues.assignees.add": { input: IssuesAssigneesAddInput; output: IssuesAssigneesAddOutput };
+  /** Remove assignees from an issue. Unassigns users or agents from an issue or pull request; ones not assigned are ignored. Answers the issue. Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
+  "issues.assignees.remove": { input: IssuesAssigneesRemoveInput; output: IssuesAssigneesRemoveOutput };
+  /** Get an organization's default labels. Fyrden: the labels the organization's new repositories get, in order; GitHub's nine until its owners set them. For its members. */
+  "orgs.default_labels.get": { input: OrgsDefaultLabelsGetInput; output: OrgsDefaultLabelsGetOutput };
+  /** Set an organization's default labels. Fyrden: replaces the labels the organization's new repositories get (at most 100, names unique ignoring case); repositories made before keep theirs. For its owners. */
+  "orgs.default_labels.set": { input: OrgsDefaultLabelsSetInput; output: OrgsDefaultLabelsSetOutput };
+  /** List milestones. The repository's milestones by due date, then number; one without a due date counts as due after every date (last ascending, first descending). GitHub's `completeness` order is not offered. Takes the `issues:read` or `pull_requests:read` permission (milestones serve both). */
+  "milestones.list": { input: MilestonesListInput; output: MilestonesListOutput };
+  /** Get a milestone. One milestone, with its open and closed counts as they stand. Takes the `issues:read` or `pull_requests:read` permission (milestones serve both). */
+  "milestones.get": { input: MilestonesGetInput; output: MilestonesGetOutput };
+  /** Create a milestone. Creates a milestone; its title must be new. Takes write access, and the `issues:write` or `pull_requests:write` permission (milestones serve both). */
+  "milestones.create": { input: MilestonesCreateInput; output: MilestonesCreateOutput };
+  /** Update a milestone. Changes a milestone's title, description or due date, or closes or reopens it. Takes write access, and the `issues:write` or `pull_requests:write` permission (milestones serve both). */
+  "milestones.update": { input: MilestonesUpdateInput; output: MilestonesUpdateOutput };
+  /** Delete a milestone. Deletes a milestone; its issues and pull requests are in none from then on. Answers what was deleted (GitHub answers 204). Takes write access, and the `issues:write` or `pull_requests:write` permission (milestones serve both). */
+  "milestones.delete": { input: MilestonesDeleteInput; output: MilestonesDeleteOutput };
   /** List comments. An issue's or pull request's conversation comments, oldest first, for a caller that may read that kind (`issues:read` or `pull_requests:read`). */
   "issues.comments.list": { input: IssuesCommentsListInput; output: IssuesCommentsListOutput };
   /** Create a comment. Adds a comment to an issue's or pull request's conversation, open or closed. Anyone who can read the repository may comment, with the permission for that kind (`issues:write` or `pull_requests:write`); while the conversation is locked, only write access and above. */

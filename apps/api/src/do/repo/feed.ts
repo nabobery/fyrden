@@ -68,6 +68,7 @@ const ACTION_KINDS: ReadonlySet<FeedKind> = new Set([
   "changes_requested",
   "approved",
   "merge_conflict",
+  "assigned",
 ]);
 
 export class RepoFeed {
@@ -211,14 +212,23 @@ export class RepoFeed {
     const changes = (data.changes ?? {}) as Record<string, { from?: unknown }>;
     const before = typeof changes.body?.from === "string" ? changes.body.from : null;
     switch (type) {
-      case "issue.opened":
+      case "issue.opened": {
         if (!row) return undefined;
+        const assignees = this.#assigned(row.number as number);
         return {
           ...nothing(row.number as number, "opened"),
+          direct: assignees.map((who) => ({
+            ...settledAs(who, "assigned", "assignee"),
+            state: "open" as const,
+          })),
           member: `issue/${row.number}`,
           mentions: mentioned(mentionsIn(row.body as string | null)),
-          joins: authorsOf(row).map((who) => [who, "author"] as const),
+          joins: [
+            ...authorsOf(row).map((who) => [who, "author"] as const),
+            ...assignees.map((who) => [who, "assignee"] as const),
+          ],
         };
+      }
       case "issue.edited":
         if (!row || !("body" in changes)) return undefined;
         return {
@@ -227,12 +237,41 @@ export class RepoFeed {
           mentions: mentioned(newMentions(before, row.body as string | null)),
         };
       case "issue.closed":
-      case "issue.reopened":
+      case "issue.reopened": {
         if (!row) return undefined;
+        const closed = type === "issue.closed";
         return {
-          ...nothing(row.number as number, type === "issue.closed" ? "closed" : "reopened"),
+          ...nothing(row.number as number, closed ? "closed" : "reopened"),
+          // Nothing to act on while closed; the assignments stand again when reopened.
+          direct: this.#assigned(row.number as number).map((who) => ({
+            ...settledAs(who, "assigned", "assignee"),
+            state: closed ? ("resolved" as const) : ("open" as const),
+          })),
           activity: true,
         };
+      }
+      case "issue.assigned":
+      case "issue.unassigned":
+      case "pull_request.assigned":
+      case "pull_request.unassigned": {
+        if (!row) return undefined;
+        const assignee = {
+          id: String(data.assignee),
+          root: String(data.assignee_root ?? data.assignee),
+        };
+        const assigned = type.endsWith(".assigned");
+        return {
+          ...nothing(row.number as number, assigned ? "assigned" : "unassigned"),
+          direct: [
+            {
+              ...settledAs(assignee, "assigned", "assignee"),
+              // An assignment to a closed subject is nothing to act on until it reopens.
+              state: assigned && row.state === "open" ? "open" : "resolved",
+            },
+          ],
+          joins: assigned ? [[assignee, "assignee"]] : [],
+        };
+      }
       case "pull_request.opened": {
         if (!row) return undefined;
         return {
@@ -258,6 +297,9 @@ export class RepoFeed {
             ...this.#requested(row.number as number).map((who) =>
               settledAs(who, "review_requested", "requested_reviewer"),
             ),
+            ...this.#assigned(row.number as number).map((who) =>
+              settledAs(who, "assigned", "assignee"),
+            ),
             ...authorsOf(row).flatMap((who) =>
               (["approved", "changes_requested", "merge_conflict"] as const).map((kind) =>
                 settledAs(who, kind, "author"),
@@ -282,6 +324,10 @@ export class RepoFeed {
           direct: [
             ...this.#requested(number).map((who) => ({
               ...settledAs(who, "review_requested", "requested_reviewer"),
+              state: "open" as const,
+            })),
+            ...this.#assigned(number).map((who) => ({
+              ...settledAs(who, "assigned", "assignee"),
               state: "open" as const,
             })),
             ...this.#outcomes(number),
@@ -432,6 +478,15 @@ export class RepoFeed {
        FROM pull_requests WHERE number = ?`,
       number,
     )[0];
+  }
+
+  /** Who is assigned, with the root identities they were assigned as. */
+  #assigned(number: number): FeedPrincipal[] {
+    return this.#exec<{ id: string; root: string }>(
+      "feed.read",
+      "SELECT principal AS id, root FROM subject_assignees WHERE number = ? ORDER BY principal",
+      number,
+    );
   }
 
   /** The reviewers asked, with the root identities they joined the thread as. */

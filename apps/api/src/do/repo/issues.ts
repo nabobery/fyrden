@@ -13,9 +13,17 @@ import {
   type IssueStateRefusal,
   type LockReason,
   planIssueState,
+  type SubjectMetaField,
 } from "@fyrden/domain";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller, PullRecord, RepoPulls } from "./pulls.js";
+import type {
+  MetaPlan,
+  MetaSubject,
+  SnapshotMeta,
+  SubjectEvent,
+  SubjectMeta,
+} from "./subject-meta.js";
 
 /*
  * The repository's issues. They take their numbers from the sequence pull
@@ -29,8 +37,8 @@ import type { PullCaller, PullRecord, RepoPulls } from "./pulls.js";
 /** What a subject's number names: an issue or a pull request. */
 export type SubjectKind = FeedSubjectKind;
 
-/** An issue as the repository keeps it. */
-export interface IssueRecord extends IssueRow {
+/** An issue as the repository keeps it (its labels, assignees and milestone are read apart). */
+export interface IssueRecord extends Omit<IssueRow, SubjectMetaField> {
   /** The agents that opened it for `authorId`, the current one first; empty when it acted itself. */
   readonly authorAct: readonly string[];
   /** What `duplicateOf` names now: null when nothing (it was deleted, or there is none). */
@@ -70,10 +78,10 @@ export interface SubjectQuery {
   readonly limit: number;
 }
 
-/** A listed subject: an issue, or a pull request as the issue endpoints answer it. */
+/** A listed subject: an issue, or a pull request as the issue endpoints answer it, with its labels, assignees and milestone. */
 export type Subject =
-  | { readonly kind: "issue"; readonly issue: IssueRecord }
-  | { readonly kind: "pull"; readonly pull: PullRecord };
+  | { readonly kind: "issue"; readonly issue: IssueRecord; readonly meta: SubjectMeta }
+  | { readonly kind: "pull"; readonly pull: PullRecord; readonly meta: SubjectMeta };
 
 type Row = {
   number: number;
@@ -89,6 +97,7 @@ type Row = {
   author_act: string | null;
   closed_at: number | null;
   closed_by: string | null;
+  milestone: number | null;
   version: number;
   created_at: number;
   updated_at: number;
@@ -108,6 +117,12 @@ export class RepoIssues {
       readonly events: RepoEvents;
       readonly pulls: RepoPulls;
       readonly repoId: () => string;
+      /** What an issue's labels, assignees and milestone are: read into its snapshots, gone with it. */
+      readonly meta: {
+        readonly snapshot: (number: number) => SnapshotMeta;
+        readonly forget: (number: number) => void;
+        readonly ofMany: (subjects: readonly MetaSubject[]) => Map<number, SubjectMeta>;
+      };
     },
   ) {}
 
@@ -142,10 +157,16 @@ export class RepoIssues {
     return pull && { kind: "pull", locked: pull.locked, title: pull.title, state: pull.state };
   }
 
-  /** Opens an issue: its number, row, event and audit row in one transaction. */
+  /**
+   * Opens an issue: its number, row, what `meta` gives it (labels,
+   * assignees, a milestone: its opening event carries them), event and
+   * audit row in one transaction; `meta` gives the checked change for the
+   * number it takes.
+   */
   open(
     input: { readonly title: string; readonly body: string | null },
     caller: PullCaller,
+    meta?: (number: number) => MetaPlan,
   ): IssueRecord {
     const { storage } = this.deps.git.context;
     return storage.transactionSync(() => {
@@ -168,6 +189,7 @@ export class RepoIssues {
         now,
         now,
       );
+      meta?.(number).apply(false);
       const opened = this.#record(row as Row);
       this.#emit("opened", opened, caller.actor);
       this.deps.events.auditChange("issue.open", caller.actor, { number });
@@ -187,6 +209,8 @@ export class RepoIssues {
     patch: IssuePatch,
     caller: PullCaller,
     readable: readonly SubjectKind[],
+    /** A change of its labels, assignees or milestone, checked already, applied with the rest. */
+    meta?: MetaPlan,
   ): { ok: true; record: IssueRecord } | { ok: false; code: IssueChangeFailure } {
     const current = this.get(number);
     if (!current) return { ok: false, code: "not_found" };
@@ -216,7 +240,7 @@ export class RepoIssues {
       });
       if (!decision.ok) return { ok: false, code: decision.refusal };
     }
-    if (actions.length === 0) return { ok: true, record: current };
+    if (actions.length === 0 && !meta?.changes) return { ok: true, record: current };
     const changed = this.deps.git.context.storage.transactionSync(() => {
       let record = current;
       if (edits) {
@@ -258,9 +282,24 @@ export class RepoIssues {
           ...(record.duplicateOf !== null && { duplicate_of: record.duplicateOf }),
         });
       }
+      if (meta?.changes) {
+        meta.apply(true);
+        record = this.get(number) as IssueRecord;
+      }
       return record;
     });
     return { ok: true, record: changed };
+  }
+
+  /**
+   * In a change's transaction: the issue's labels, assignees or milestone
+   * changed; bumps its version and update time and emits `events` with its
+   * snapshot as it now stands.
+   */
+  touch(number: number, events: readonly SubjectEvent[], actor: RefActor): void {
+    const [row] = this.#update(number, this.deps.git.context.now(), "");
+    const record = this.#record(row as Row);
+    for (const { event, data } of events) this.#emit(event, record, actor, data);
   }
 
   /**
@@ -333,6 +372,7 @@ export class RepoIssues {
       const version = current.version + 1;
       this.#exec("DELETE FROM comments WHERE number = ?", number);
       this.#exec("DELETE FROM feed_participants WHERE number = ?", number);
+      this.deps.meta.forget(number);
       this.#exec("DELETE FROM issues WHERE number = ?", number);
       this.#exec(
         "INSERT INTO issue_tombstones (number, version, deleted_at, deleted_by) VALUES (?, ?, ?, ?)",
@@ -405,25 +445,35 @@ export class RepoIssues {
           : a.number - b.number,
     );
     const page = found.slice(0, limit);
+    const pulls = new Map<number, PullRecord>();
     const issues = new Map(
       this.#rows(
         "SELECT * FROM issues WHERE number IN (SELECT value FROM json_each(?))",
         JSON.stringify(page.filter((p) => p.kind === "issue").map((p) => p.number)),
       ).map((row) => [row.number, this.#record(row)]),
     );
+    const metas = this.deps.meta.ofMany([
+      ...issues.values(),
+      ...page.flatMap((p) => {
+        const pull = p.kind === "pull" ? this.deps.pulls.get(p.number) : undefined;
+        if (pull) pulls.set(p.number, pull);
+        return pull ? [pull] : [];
+      }),
+    ]);
     return page.flatMap((p): Subject[] => {
+      const meta = metas.get(p.number) as SubjectMeta;
       if (p.kind === "issue") {
         const issue = issues.get(p.number);
-        return issue ? [{ kind: "issue", issue }] : [];
+        return issue ? [{ kind: "issue", issue, meta }] : [];
       }
-      const pull = this.deps.pulls.get(p.number);
-      return pull ? [{ kind: "pull", pull }] : [];
+      const pull = pulls.get(p.number);
+      return pull ? [{ kind: "pull", pull, meta }] : [];
     });
   }
 
   #update(number: number, now: number, assignments: string, ...values: unknown[]): Row[] {
     return this.#rows(
-      `UPDATE issues SET ${assignments}, version = version + 1, updated_at = ?
+      `UPDATE issues SET ${assignments && `${assignments}, `}version = version + 1, updated_at = ?
        WHERE number = ? RETURNING *`,
       ...values,
       now,
@@ -438,7 +488,8 @@ export class RepoIssues {
     data: Record<string, unknown> | null = null,
     deleted = false,
   ): void {
-    const { authorAct: _act, duplicateKind: _kind, version, ...row } = issue;
+    const { authorAct: _act, duplicateKind: _kind, version, ...fields } = issue;
+    const row = deleted ? fields : { ...fields, ...this.deps.meta.snapshot(issue.number) };
     this.deps.events.emitEntity(
       `issue.${event}`,
       actor,
@@ -464,6 +515,7 @@ export class RepoIssues {
       authorAct: row.author_act ? (JSON.parse(row.author_act) as string[]) : [],
       closedAt: row.closed_at,
       closedBy: row.closed_by,
+      milestone: row.milestone,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       version: row.version,

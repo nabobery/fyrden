@@ -21,7 +21,9 @@ import {
   type RequestMeta,
 } from "@fyrden/adapters-cloudflare/obs";
 import {
+  decideMetadataAction,
   type Envelope,
+  type LabelSpec,
   type LockReason,
   protectsBranch,
   type RepoRole,
@@ -183,6 +185,14 @@ import { RepoReviews } from "./repo/reviews.js";
 import { RepoRulesets, type RuleSuite, type RulesetRecord } from "./repo/rulesets.js";
 import { StorageCharges } from "./repo/storage-charges.js";
 import {
+  type Assignee,
+  type MetaInput,
+  type MetaPatch,
+  type MilestoneQuery,
+  RepoSubjectMeta,
+  type SubjectMeta,
+} from "./repo/subject-meta.js";
+import {
   TemplateGeneration,
   type TemplateTree,
   type TemplateWriteInput,
@@ -285,6 +295,9 @@ export class RepoDO extends MigratingDO {
   /** Issues, numbered with pull requests. */
   readonly issues: RepoIssues;
 
+  /** Labels and milestones, and what issues and pull requests carry of them and who is assigned. */
+  readonly subjectMeta: RepoSubjectMeta;
+
   /** Conversation comments on issues and pull requests. */
   readonly comments: RepoComments;
 
@@ -347,10 +360,21 @@ export class RepoDO extends MigratingDO {
       },
     );
     this.changeLists = new ChangeLists(this.git);
+    this.subjectMeta = new RepoSubjectMeta({
+      git: this.git,
+      events: this.events,
+      repoId: () => this.#repoId(),
+      kindOf: (number) => this.issues.kindOf(number),
+      touch: (kind, number, events, actor) =>
+        kind === "issue"
+          ? this.issues.touch(number, events, actor)
+          : this.pulls.touch(number, events, actor),
+    });
     this.pulls = new RepoPulls({
       git: this.git,
       events: this.events,
       repoId: () => this.#repoId(),
+      snapshotMeta: (number) => this.subjectMeta.snapshot(number),
       stale: (number, open) => this.mergeability.stale(number, open),
       staleBase: (branch) => this.mergeability.staleBase(branch),
       follow: (pull) => this.#forkPulls.follow(pull),
@@ -437,6 +461,11 @@ export class RepoDO extends MigratingDO {
       events: this.events,
       pulls: this.pulls,
       repoId: () => this.#repoId(),
+      meta: {
+        snapshot: (number) => this.subjectMeta.snapshot(number),
+        forget: (number) => this.subjectMeta.forget(number),
+        ofMany: (numbers) => this.subjectMeta.ofMany(numbers),
+      },
     });
     this.comments = new RepoComments({
       git: this.git,
@@ -696,6 +725,8 @@ export class RepoDO extends MigratingDO {
     identity?: RepoIdentity & { readonly actor: string | null },
     /** The template this repository is generated from: it takes no other write until then. */
     templateId?: string,
+    /** The labels it starts with (its account's defaults); needs `identity`. */
+    labels: readonly LabelSpec[] = [],
   ): Promise<{ ok: true } | { ok: false; error: string }> {
     if (!isNetworkId(networkId)) return { ok: false, error: "not a network id" };
     try {
@@ -706,6 +737,7 @@ export class RepoDO extends MigratingDO {
       this.git.initialize(networkId, defaultBranch);
       if (identity) {
         this.events.init(identity, identity.actor);
+        this.subjectMeta.copyLabels(labels, null);
         this.#armOutbox();
       }
       return { ok: true };
@@ -929,16 +961,20 @@ export class RepoDO extends MigratingDO {
 
   /** The repository's pull requests, newest first, below `before` (a number) when given. */
   listPulls(state: PullRecord["state"] | "all", before: number | undefined, limit: number) {
-    return this.#measured("listPulls", () =>
-      this.#refusesReads()
-        ? null
-        : this.pulls.list(state, before, limit).map((p) => this.#viewed(p)),
-    );
+    return this.#measured("listPulls", () => {
+      if (this.#refusesReads()) return null;
+      const pulls = this.pulls.list(state, before, limit);
+      const metas = this.subjectMeta.ofMany(pulls);
+      return pulls.map((p) => this.#viewed(p, metas.get(p.number)));
+    });
   }
 
-  /** A pull request with whether it merges, as far as that is known now. */
-  #viewed(pull: PullRecord): PullView {
-    return { ...pull, ...this.mergeability.view(pull) };
+  /** A pull request with whether it merges, as far as that is known now, and its labels, assignees and milestone. */
+  #viewed(
+    pull: PullRecord,
+    meta: SubjectMeta = this.subjectMeta.ofMany([pull]).get(pull.number) as SubjectMeta,
+  ): PullView {
+    return { ...pull, ...this.mergeability.view(pull), meta };
   }
 
   /** One pull request; undefined when there is none with that number. */
@@ -1167,44 +1203,268 @@ export class RepoDO extends MigratingDO {
       if (this.#refusesReads()) return null;
       const kind = this.issues.kindOf(number);
       if (!kind || !kinds.includes(kind)) return undefined;
-      if (kind === "issue") {
-        const issue = this.issues.get(number);
-        return issue && { kind, issue };
-      }
-      const pull = this.pulls.get(number);
-      return pull && { kind, pull };
+      return this.#subject(number, kind);
     });
   }
 
-  /** Opens an issue as the caller, its root identity worked out here. */
-  createIssue(input: { readonly title: string; readonly body: string | null }, actor: RefActor) {
+  /** The issue or pull request numbered `number`, of kind `kind`, with what it is sorted by. */
+  #subject(number: number, kind: SubjectKind): Subject | undefined {
+    const meta = this.subjectMeta.of(number);
+    if (kind === "issue") {
+      const issue = this.issues.get(number);
+      return issue && { kind, issue, meta };
+    }
+    const pull = this.pulls.get(number);
+    return pull && { kind, pull, meta };
+  }
+
+  /**
+   * Opens an issue as the caller, its root identity worked out here, with
+   * the labels, assignees and milestone `meta` gives it (triage).
+   */
+  createIssue(
+    input: { readonly title: string; readonly body: string | null },
+    actor: RefActor,
+    meta: MetaInput = {},
+  ) {
     return this.#pullChange(
       "createIssue",
       actor,
-      (caller) =>
+      (caller, ceilings) => {
         // An object from before identities has no events to record an issue with.
-        this.events.hasIdentity()
-          ? { ok: true as const, record: this.issues.open(input, caller) }
-          : { ok: false as const, code: "repo_not_ready" as const },
-      undefined,
+        if (!this.events.hasIdentity())
+          return { ok: false as const, code: "repo_not_ready" as const };
+        const planned = hasMeta(meta)
+          ? this.subjectMeta.planNew(this.#metaPatch(meta, ceilings), caller)
+          : undefined;
+        if (planned && !planned.ok) return planned;
+        const record = this.issues.open(input, caller, planned?.plan);
+        return {
+          ok: true as const,
+          subject: {
+            kind: "issue" as const,
+            issue: record,
+            meta: this.subjectMeta.of(record.number),
+          },
+        };
+      },
+      () => this.#assigneeCeilings(meta),
       [input.body],
     );
   }
 
-  /** Changes an issue as the matrix allows (see `RepoIssues.change`); `readable`: kinds a duplicate may be. */
+  /**
+   * Changes an issue as the matrix allows (see `RepoIssues.change`), with
+   * its labels, assignees and milestone (`meta`), all of it or nothing;
+   * `readable`: the kinds a duplicate may be. A pull request's number (of
+   * `kinds`) takes only `meta`: its title, body and state change through
+   * `changePull`.
+   */
   changeIssue(
     number: number,
     patch: IssuePatch,
     actor: RefActor,
     readable: readonly SubjectKind[],
+    kinds: readonly SubjectKind[] = ["issue"],
+    meta: MetaInput = {},
   ) {
     return this.#pullChange(
       "changeIssue",
       actor,
-      (caller) => this.issues.change(number, patch, caller, readable),
-      undefined,
+      (caller, ceilings) => {
+        const kind = this.issues.kindOf(number);
+        if (!kind || !kinds.includes(kind))
+          return { ok: false as const, code: "not_found" as const };
+        const planned = hasMeta(meta)
+          ? this.subjectMeta.plan(number, this.#metaPatch(meta, ceilings), caller, kinds)
+          : undefined;
+        if (planned && !planned.ok) return planned;
+        if (kind === "pull") {
+          if (Object.keys(patch).length > 0)
+            return { ok: false as const, code: "pull_request_fields" as const };
+          if (planned?.plan.changes)
+            this.git.context.storage.transactionSync(() => planned.plan.apply(true));
+        } else {
+          const changed = this.issues.change(number, patch, caller, readable, planned?.plan);
+          if (!changed.ok) return changed;
+        }
+        return { ok: true as const, subject: this.#subject(number, kind) as Subject };
+      },
+      () => this.#assigneeCeilings(meta),
       [patch.body],
     );
+  }
+
+  /** An issue's or pull request's labels (of `kinds`); null when gone, undefined for none. */
+  subjectLabels(number: number, kinds: readonly SubjectKind[]) {
+    return this.#measured("subjectLabels", () => {
+      if (this.#refusesReads()) return null;
+      const kind = this.issues.kindOf(number);
+      if (!kind || !kinds.includes(kind)) return undefined;
+      return this.subjectMeta.of(number).labels;
+    });
+  }
+
+  /** Changes an issue's or pull request's labels or assignees (of `kinds`; triage). */
+  changeSubjectMeta(
+    number: number,
+    meta: MetaInput,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#pullChange(
+      "changeSubjectMeta",
+      actor,
+      (caller, ceilings) => {
+        const planned = this.subjectMeta.plan(
+          number,
+          this.#metaPatch(meta, ceilings),
+          caller,
+          kinds,
+        );
+        if (!planned.ok) return planned;
+        if (planned.plan.changes)
+          this.git.context.storage.transactionSync(() => planned.plan.apply(true));
+        return {
+          ok: true as const,
+          subject: this.#subject(number, planned.plan.kind) as Subject,
+        };
+      },
+      () => this.#assigneeCeilings(meta),
+    );
+  }
+
+  /** A page of the repository's labels by name, after `after`; null when gone. */
+  listLabels(after: string | null, limit: number) {
+    return this.#measured("listLabels", () =>
+      this.#refusesReads() ? null : this.subjectMeta.labels(after, limit),
+    );
+  }
+
+  /** The label named `name` (ignoring case); null when gone, undefined for none. */
+  getLabel(name: string) {
+    return this.#measured("getLabel", () =>
+      this.#refusesReads() ? null : this.subjectMeta.label(name),
+    );
+  }
+
+  /** Creates a label (write). */
+  createLabel(spec: LabelSpec, actor: RefActor) {
+    return this.#pullChange("createLabel", actor, (caller) =>
+      this.#withIdentity(() => this.subjectMeta.createLabel(spec, caller)),
+    );
+  }
+
+  /** Changes a label (write). */
+  updateLabel(
+    name: string,
+    patch: {
+      readonly name?: string;
+      readonly color?: string;
+      readonly description?: string | null;
+    },
+    actor: RefActor,
+  ) {
+    return this.#pullChange("updateLabel", actor, (caller) =>
+      this.#withIdentity(() => this.subjectMeta.updateLabel(name, patch, caller)),
+    );
+  }
+
+  /** Deletes a label (write). */
+  deleteLabel(name: string, actor: RefActor) {
+    return this.#pullChange("deleteLabel", actor, (caller) =>
+      this.#withIdentity(() => this.subjectMeta.deleteLabel(name, caller)),
+    );
+  }
+
+  /** Copies labels in (an account's defaults; write): names already here are kept. */
+  copyLabels(specs: readonly LabelSpec[], actor: RefActor) {
+    return this.#pullChange("copyLabels", actor, (caller) =>
+      this.#withIdentity(() =>
+        decideMetadataAction("manage_labels", caller.role).ok
+          ? { ok: true as const, labels: this.subjectMeta.copyLabels(specs, caller.actor) }
+          : { ok: false as const, code: "forbidden" as const },
+      ),
+    );
+  }
+
+  /** A page of the repository's milestones (see `RepoSubjectMeta.milestones`); null when gone. */
+  listMilestones(query: MilestoneQuery) {
+    return this.#measured("listMilestones", () =>
+      this.#refusesReads() ? null : this.subjectMeta.milestones(query),
+    );
+  }
+
+  /** One milestone; null when gone, undefined for none. */
+  getMilestone(number: number) {
+    return this.#measured("getMilestone", () =>
+      this.#refusesReads() ? null : this.subjectMeta.milestone(number),
+    );
+  }
+
+  /** Creates a milestone (write). */
+  createMilestone(input: Parameters<RepoSubjectMeta["createMilestone"]>[0], actor: RefActor) {
+    return this.#pullChange("createMilestone", actor, (caller) =>
+      this.#withIdentity(() => this.subjectMeta.createMilestone(input, caller)),
+    );
+  }
+
+  /** Changes a milestone (write). */
+  updateMilestone(
+    number: number,
+    patch: Parameters<RepoSubjectMeta["updateMilestone"]>[1],
+    actor: RefActor,
+  ) {
+    return this.#pullChange("updateMilestone", actor, (caller) =>
+      this.#withIdentity(() => this.subjectMeta.updateMilestone(number, patch, caller)),
+    );
+  }
+
+  /** Deletes a milestone (write). */
+  deleteMilestone(number: number, actor: RefActor) {
+    return this.#pullChange("deleteMilestone", actor, (caller) =>
+      this.#withIdentity(() => this.subjectMeta.deleteMilestone(number, caller)),
+    );
+  }
+
+  /** A change that records events, refused for an object from before identities (it has none to record them with). */
+  #withIdentity<R>(change: () => R): R | { ok: false; code: "repo_not_ready" } {
+    return this.events.hasIdentity() ? change() : { ok: false, code: "repo_not_ready" };
+  }
+
+  /** Before a change: the ceilings of the principals it assigns (an agent is capped by its owners). */
+  async #assigneeCeilings(meta: MetaInput): Promise<Map<string, string[]>> {
+    const ceilings = new Map<string, string[]>();
+    const op = meta.assignees;
+    if (!op || "remove" in op) return ceilings;
+    for (const id of new Set("add" in op ? op.add : op.set))
+      ceilings.set(id, await this.#authority.rolesPulled(id, null));
+    return ceilings;
+  }
+
+  /** In the change: what `meta` asks, each assignee with its root identity and role now. */
+  #metaPatch(meta: MetaInput, ceilings: ReadonlyMap<string, readonly string[]>): MetaPatch {
+    const op = meta.assignees;
+    const assignee = (id: string): Assignee => {
+      const owners = [...(ceilings.get(id) ?? [])];
+      return {
+        id,
+        root: rootIdentity({ principalId: id, grantId: null, ceilingIds: owners }),
+        role: this.#authority.roleNow(id, owners),
+      };
+    };
+    return {
+      ...(meta.labels && { labels: meta.labels }),
+      ...(op && {
+        assignees:
+          "remove" in op
+            ? { remove: op.remove }
+            : "add" in op
+              ? { add: op.add.map(assignee) }
+              : { set: op.set.map(assignee) },
+      }),
+      ...(meta.milestone !== undefined && { milestone: meta.milestone }),
+    };
   }
 
   /** Locks or unlocks an issue's or pull request's conversation, of `kinds`. */
@@ -2184,10 +2444,11 @@ export class RepoDO extends MigratingDO {
     return this.pullSource.exportRevision(input);
   }
 
-  /** A new fork's storage: its network, HEAD and borrowed packs. */
+  /** A new fork's storage: its network, HEAD and borrowed packs, and the labels it starts with (its account's defaults; needs `identity`). */
   initFork(
     input: { networkId: string; head: string | null; packs: readonly ViewPack[] },
     identity?: RepoIdentity & { readonly actor: string | null },
+    labels: readonly LabelSpec[] = [],
   ): void {
     if (identity) this.events.assertIdentity(identity);
     if (isNetworkId(input.networkId))
@@ -2195,6 +2456,7 @@ export class RepoDO extends MigratingDO {
     this.#network().initFork(input);
     if (identity) {
       this.events.init(identity, identity.actor);
+      this.subjectMeta.copyLabels(labels, null);
       this.#armOutbox();
     }
   }
@@ -2406,4 +2668,9 @@ export class RepoDO extends MigratingDO {
     createLogger({ ...meta, do: "RepoDO" }).debug("healthz probe", { ok });
     return ok;
   }
+}
+
+/** Whether a change asks anything of labels, assignees or the milestone. */
+function hasMeta(meta: MetaInput): boolean {
+  return meta.labels !== undefined || meta.assignees !== undefined || meta.milestone !== undefined;
 }

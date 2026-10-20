@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SubjectMetaRowShape } from "./metadata.js";
 
 /** Where an issue stands. */
 export const ISSUE_STATES = ["open", "closed"] as const;
@@ -42,5 +43,6 @@ export const IssueRowSchema = z.strictObject({
   closedBy: z.string().nullable(),
   createdAt: z.number().int().min(0),
   updatedAt: z.number().int().min(0),
+  ...SubjectMetaRowShape,
 });
 export type IssueRow = z.infer<typeof IssueRowSchema>;

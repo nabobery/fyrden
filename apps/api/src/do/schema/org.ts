@@ -23,6 +23,8 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   did (each once, with what a release handed over), and repositories
  *   that left it for another account, so a late grant, storage charge or
  *   confirmation is not taken here.
+ * - `default_labels` (v7): an organization's default labels, copied into
+ *   its new repositories; GitHub's set until `org_meta.default_labels_set`.
  * - `pending_audit`: audit rows of access changes, written in the change's
  *   transaction and delivered to the directory's `audit_log` (then
  *   deleted); the alarm retries what could not be delivered.
@@ -218,6 +220,23 @@ export const orgSchema: readonly DoMigration[] = [
         sent_at INTEGER
       ) STRICT;
       CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
+    `,
+  },
+  {
+    version: 7,
+    // An organization's default labels, in the order set; GitHub's until it
+    // sets its own (a user's repositories always get GitHub's).
+    name: "default_labels",
+    sql: `
+      ALTER TABLE org_meta ADD COLUMN default_labels_set INTEGER NOT NULL DEFAULT 0
+        CHECK (default_labels_set IN (0, 1));
+      CREATE TABLE default_labels (
+        position INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        color TEXT NOT NULL CHECK (length(color) = 6),
+        description TEXT
+      ) STRICT;
+      CREATE UNIQUE INDEX default_labels_name ON default_labels (name COLLATE NOCASE);
     `,
   },
 ];
