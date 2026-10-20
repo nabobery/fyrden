@@ -161,6 +161,14 @@ CREATE TABLE refresh_tokens (
   revoked_at INTEGER
 ) STRICT;
 
+-- table repo_deletion_cleanups
+CREATE TABLE repo_deletion_cleanups (
+  repo_id TEXT NOT NULL REFERENCES repo_deletions (repo_id),
+  cleanup TEXT NOT NULL,
+  done_at INTEGER NOT NULL,
+  PRIMARY KEY (repo_id, cleanup)
+) STRICT, WITHOUT ROWID;
+
 -- table repo_deletions
 CREATE TABLE repo_deletions (
   repo_id TEXT PRIMARY KEY REFERENCES repos (id),

@@ -194,7 +194,8 @@ async function materialize(env: Env, db: D1Database, planned: PlannedDeliveries)
               THEN 'too_many_outstanding' ELSE NULL END,
          0, ?8, ?8, ?8, ?9
        FROM json_each(?10) r
-       WHERE true
+       -- None of a deleted repository once its tombstone is in: its cleanups may have run.
+       WHERE NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = ?1 AND deleted = 1)
        ON CONFLICT (delivery_id) DO NOTHING`,
     )
     .bind(
@@ -220,6 +221,16 @@ async function materialize(env: Env, db: D1Database, planned: PlannedDeliveries)
   if (waiting.length === 0) return;
   // The body whenever one may still be waiting for it (stored again, it is the same bytes).
   await env.ASSETS.put(payloadKey, bytes, { httpMetadata: { contentType: "application/json" } });
+  // The repository's deletion may have listed its bodies before this one was stored: its
+  // tombstone comes before that, so either the cleanup saw the body or this sees the tombstone.
+  const deleted = await db
+    .prepare("SELECT 1 AS deleted FROM repos WHERE repo_id = ? AND deleted = 1")
+    .bind(planned.repoId)
+    .first();
+  if (deleted) {
+    await env.ASSETS.delete(payloadKey);
+    return;
+  }
   const results = waiting.filter((r) => r.enqueued_at === null);
   if (results.length === 0) return;
   await env.WEBHOOKS.sendBatch(

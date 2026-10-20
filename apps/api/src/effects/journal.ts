@@ -248,6 +248,8 @@ export function effectStatements(
            WHERE (e.value ->> 'epoch') >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?4)
              AND (e.value ->> 'ownerGen') >=
                  coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?4), 0)
+             -- Nothing of a deleted repository once its tombstone is in: its cleanups may have run.
+             AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = ?4 AND deleted = 1)
            RETURNING effect_id, sink`,
         )
         .bind(now + policy.sweepAfterMs, now, JSON.stringify(rows), sourceId),
