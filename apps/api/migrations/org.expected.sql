@@ -21,7 +21,7 @@ CREATE TABLE effects (
   lease_until INTEGER,
   created_at INTEGER NOT NULL,
   done_at INTEGER
-) STRICT;
+, source_id TEXT, epoch_gen INTEGER, owner_gen INTEGER, any_owner INTEGER NOT NULL DEFAULT 0 CHECK (any_owner IN (0, 1)), recover_at INTEGER NOT NULL DEFAULT 0) STRICT;
 
 -- table repos
 CREATE TABLE repos (
@@ -98,6 +98,9 @@ CREATE INDEX effects_due_order ON effects (next_attempt_at, effect_id) WHERE sta
 
 -- index effects_failed
 CREATE INDEX effects_failed ON effects (next_attempt_at) WHERE state = 'failed';
+
+-- index effects_recover
+CREATE INDEX effects_recover ON effects (recover_at, effect_id) WHERE state = 'pending';
 
 -- index repos_owner
 CREATE INDEX repos_owner ON repos (owner_id, name) WHERE deleted = 0;

@@ -60,6 +60,9 @@ describe("fyrden deploy", () => {
     ]);
     expect([...fake.state.queues].sort()).toEqual([
       "fyrden-ci-dispatch",
+      "fyrden-effects-feed",
+      "fyrden-effects-references",
+      "fyrden-effects-webhooks",
       "fyrden-events",
       "fyrden-events-dlq",
       "fyrden-indexing",
@@ -67,7 +70,7 @@ describe("fyrden deploy", () => {
     ]);
     expect([...fake.state.d1.keys()].sort()).toEqual(["fyrden-directory", "fyrden-org"]);
     expect([...fake.state.kv.values()]).toEqual(["fyrden-api-cache"]);
-    expect(result.created).toHaveLength(12);
+    expect(result.created).toHaveLength(15);
   });
 
   it("uploads the required secret with the first API deploy and reports a generated one", async () => {
@@ -540,17 +543,10 @@ describe("fyrden doctor", () => {
     // A deployment from before the checkout's latest org migration: as that migration found it.
     const applied = fake.state.d1Migrations.get("fyrden-org") ?? [];
     const latest = applied.at(-1) ?? "";
-    expect(latest).toBe("0006_effects_due_order.sql");
+    expect(latest).toBe("0007_effects_queues.sql");
     fake.state.d1Migrations.set("fyrden-org", applied.slice(0, -1));
     const org = fake.state.d1Schema.get("fyrden-org") ?? [];
-    fake.state.d1Schema.set("fyrden-org", [
-      ...org.filter((o) => o.name !== "effects_due_order"),
-      {
-        type: "index",
-        name: "effects_due",
-        sql: "CREATE INDEX effects_due ON effects (next_attempt_at) WHERE state = 'pending'",
-      },
-    ]);
+    fake.state.d1Schema.set("fyrden-org", [...org.filter((o) => o.name !== "effects_recover")]);
     let { report, lines } = await doctorLines(fake);
     expect(report.schemaDrift).toEqual([]);
     expect(lines).toContain(
@@ -561,11 +557,11 @@ describe("fyrden doctor", () => {
     );
 
     // A deployment from a later checkout than this one.
-    fake.state.d1Migrations.set("fyrden-org", [...applied, "0007_later.sql"]);
+    fake.state.d1Migrations.set("fyrden-org", [...applied, "0008_later.sql"]);
     ({ report, lines } = await doctorLines(fake));
     expect(report.schemaDrift).toEqual([]);
     expect(lines).toContain(
-      "WARN fyrden-org schema not compared: applied but not in this checkout: 0007_later.sql (check out the commit it runs)",
+      "WARN fyrden-org schema not compared: applied but not in this checkout: 0008_later.sql (check out the commit it runs)",
     );
 
     // A database no migration has been applied to yet.

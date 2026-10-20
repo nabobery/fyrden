@@ -3,10 +3,12 @@ import type { DomainEvent } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { RepoDO } from "../../src/do/RepoDO.js";
+import { deliverEffects, invocationBudget } from "../../src/effects/dispatcher.js";
 import { applyEnvelope } from "../../src/queues/events-consumer.js";
 import type { DeliveryDeps } from "../../src/webhooks/deliver.js";
 import { webhookSink } from "../../src/webhooks/sink.js";
 import { api, json, user, type Who } from "./api.js";
+import { recordingPublish } from "./effects.js";
 import { inRepo } from "./repo-git.js";
 
 /*
@@ -130,11 +132,15 @@ export class WebhookTest {
     );
   }
 
-  /** The environment with the stand-in queue. */
+  /** The environment with the stand-in queue (and effects queues that keep nothing). */
   testEnv(): Env {
     const sent = this.#sent;
+    const kept = { send: async () => {}, sendBatch: async () => {} };
     return {
       ...env,
+      EFFECTS_WEBHOOKS: kept,
+      EFFECTS_FEED: kept,
+      EFFECTS_REFERENCES: kept,
       WEBHOOKS: {
         send: async (body: { delivery: string }, options?: { delaySeconds?: number }) => {
           sent.push({
@@ -149,13 +155,27 @@ export class WebhookTest {
     } as unknown as Env;
   }
 
-  /** Makes the deliveries `events` call for (as the events consumer would). */
+  /**
+   * Makes the deliveries `events` call for, as the events consumer and the
+   * webhook effects' queue would: the consumer journals the effects and
+   * sends their ids, and the queue's consumer delivers them.
+   */
   async materialize(events: DomainEvent[]): Promise<void> {
+    const { publish, sent } = recordingPublish();
     await applyEnvelope(
       this.testEnv(),
       { sourceId: this.repo.id, events },
-      { sinks: [webhookSink] },
+      { sinks: [webhookSink], publish },
     );
+    for (let next = sent.shift(); next; next = sent.shift()) {
+      const now = Date.now();
+      await deliverEffects(
+        { db: env.ORG_READ, env: this.testEnv(), sinks: [webhookSink], now: () => now, publish },
+        next.sink,
+        next.ids,
+        invocationBudget(now),
+      );
+    }
   }
 
   /** This repository's deliveries, oldest first. */

@@ -12,7 +12,7 @@ import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effect
  * however many events name it. A feed applies an entry once however often
  * it comes, so a retried effect changes nothing it already changed. The
  * sink says how many calls an effect makes at most, so the events consumer
- * and the sweeper deliver only what their invocation's calls allow.
+ * and the feed queue's consumer deliver only what their invocation's calls allow.
  *
  * An account's `access.revoked` (principals no longer read some of its
  * repositories, at most 100 an event) becomes effects too, of at most 100
@@ -120,6 +120,9 @@ async function purgeCalls(effects: readonly Effect[], env: Env): Promise<FeedCal
 
 export const feedSink: EffectSink = {
   name: "feed",
+  // Delivered in one batch, a call per recipient (100 at most each): within an invocation's calls.
+  perMessage: 8,
+  inline: true,
 
   plan(event: DomainEvent): readonly PlannedEffect[] {
     if (event.type === "access.revoked") {

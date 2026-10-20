@@ -29,8 +29,8 @@ beforeAll(async () => {
 async function pendingEffect(): Promise<string> {
   const id = uniqueId("effect");
   await env.ORG_READ.prepare(
-    `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
-     VALUES (?, 'webhooks', 'hooks', '{}', 0, 0)`,
+    `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at, recover_at)
+     VALUES (?, 'webhooks', 'hooks', '{}', 0, 0, 0)`,
   )
     .bind(id)
     .run();
@@ -74,9 +74,9 @@ describe("effects that cannot be claimed", () => {
     expect(
       logs.entries().filter((e) => e.level === "error" && e.op === "cron.effects"),
     ).toMatchObject([
-      { task: "effects.sweep", error: { message: expect.stringMatching(/lease_token/) } },
+      { task: "effects.recover", error: { message: expect.stringMatching(/lease_token/) } },
     ]);
-    expect(counted(metrics.points, "effects.sweep")).toEqual({ error: 1 });
+    expect(counted(metrics.points, "effects.recover")).toEqual({ error: 1 });
     expect(counted(metrics.points, "webhooks.reconcile")).toEqual({ ok: 1 });
     expect(
       await env.ORG_READ.prepare("SELECT 1 FROM webhook_deliveries WHERE delivery_id = ?")
@@ -110,10 +110,13 @@ describe("effects that cannot be claimed", () => {
       data: { via: "push", refs: [] },
       stored: false,
     };
+    // Delivered inline, so the invocation claims it.
     const sink: EffectSink = {
       name: "test_hook",
+      inline: true,
       plan: () => [{ target: "hook_1", payload: {} }],
       deliver: async () => {},
+      deliverBatch: async (effects) => ({ delivered: effects.map((effect) => effect.id) }),
     };
     const points: string[] = [];
     const outcome = await applyEnvelope(
@@ -128,7 +131,7 @@ describe("effects that cannot be claimed", () => {
     expect(outcome).toBe("applied");
     expect(
       logs.entries().filter((e) => e.level === "error" && e.op === "effects.dispatch"),
-    ).toMatchObject([{ msg: "dispatching effects failed", sourceId: repoId }]);
+    ).toMatchObject([{ msg: "dispatching effects failed", sink: "test_hook" }]);
     expect(points.filter((p) => p.startsWith("effects.dispatch"))).toEqual([
       "effects.dispatch error",
     ]);
