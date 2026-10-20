@@ -102,14 +102,19 @@ The latest point of a group is its current value.
 
 | Metric | Dimensions | Value |
 |---|---|---|
-| `effects.sweep` | `outcome` (`ok`, `error`) | 1 per run of the effects cron's sweep (retrying due webhook and feed effects) |
+| `effects.recover` | `outcome` (`ok`, `error`) | 1 per run of the effects cron's recovery (sending overdue effects to their queue again, and deleting effects past retention) |
 | `webhooks.reconcile` | `outcome` (`ok`, `error`) | 1 per run of the effects cron's webhook reconciliation (late sends, dead claims, hooks to turn off, expired deliveries) |
-| `effects.dispatch` | `outcome` (`ok`, `error`) | 1 per events consumer message that delivered effects it journaled itself |
+| `effects.dispatch` | `outcome` (`ok`, `error`) | 1 per events consumer invocation that sent effects to their queues or delivered some itself |
+| `effects.consume` | `sink`, `outcome` (`ok`, `error`) | 1 per effects queue invocation (`error`: an outcome could not be recorded, or what was left could not be sent back; its messages are retried) |
+| `effects.recovered` | `sink` | Overdue effects the cron sent to their queue again (a message lost or never sent, or a claim that died) |
+| `effects.invalidated` | `sink` | Effects ended without delivery because their source was deleted, restored to an earlier state, or transferred since (unless the sink's effects stand across transfers) |
+| `effects.failed` | `sink` | Effects that failed for good: their attempts spent (a claim counts as one), or their sink gone |
 
-Any `error` means effects are not being claimed or delivered: the failure is
-logged at error level (`op` `cron.effects` or `effects.dispatch`), and the
-effects stay pending for a later run. `GET /healthz` reports how late the
-oldest pending effect is (`checks.effects.overdueS`).
+Any `error` means effects are not being sent, claimed or delivered: the
+failure is logged at error level (`op` `cron.effects`, `effects.dispatch`
+or `effects.consume`), and the effects stay pending; the effects cron sends
+them again once overdue. `GET /healthz` reports how late the oldest pending
+effect is (`checks.effects.overdueS`).
 
 ### Cost counters
 

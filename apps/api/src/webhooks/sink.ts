@@ -1,3 +1,4 @@
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { type DomainEvent, eventKey } from "@fyrden/domain";
 import type { Effect, EffectSink, PlannedEffect } from "../effects/journal.js";
 import { entityBody, webhookEventOf } from "./events.js";
@@ -124,6 +125,8 @@ export async function bodyKeyOf(repoId: string, eventKeyText: string): Promise<s
 
 export const webhookSink: EffectSink = {
   name: "webhooks",
+  // An event's deliveries to up to 20 hooks: the costliest effect to make (CPU time on Free).
+  perMessage: 2,
 
   /** One effect per event: every hook it goes to (20 at most) is made in one go. */
   plan(event: DomainEvent): readonly PlannedEffect[] {
@@ -156,8 +159,8 @@ export const webhookSink: EffectSink = {
     ];
   },
 
-  async deliver(effect: Effect, env: Env, db: D1Database): Promise<void> {
-    await materialize(env, db, effect.payload as unknown as PlannedDeliveries);
+  async deliver(effect: Effect, env: Env, db: D1Database, metrics?: Metrics): Promise<void> {
+    await materialize(env, db, effect.payload as unknown as PlannedDeliveries, metrics);
   },
 };
 
@@ -168,7 +171,12 @@ export const webhookSink: EffectSink = {
  * stores the body again (the same bytes) while any waits, and sends only
  * the messages not sent yet.
  */
-async function materialize(env: Env, db: D1Database, planned: PlannedDeliveries): Promise<void> {
+async function materialize(
+  env: Env,
+  db: D1Database,
+  planned: PlannedDeliveries,
+  metrics?: Metrics,
+): Promise<void> {
   const bytes = new TextEncoder().encode(JSON.stringify(planned.body));
   const payloadKey = await bodyKeyOf(planned.repoId, planned.eventKey);
   const now = Date.now();
@@ -180,6 +188,7 @@ async function materialize(env: Env, db: D1Database, planned: PlannedDeliveries)
   );
   const dropped = typeof planned.body.dropped === "string" ? planned.body.dropped : null;
   // One row per hook: each admitted against its own hook's count of waiting deliveries.
+  metrics?.count("d1.query", { db: "org", op: "webhooks_materialize" });
   await db
     .prepare(
       `INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, action, private,
@@ -211,6 +220,7 @@ async function materialize(env: Env, db: D1Database, planned: PlannedDeliveries)
       JSON.stringify(rows),
     )
     .run();
+  metrics?.count("d1.query", { db: "org", op: "webhooks_pending" });
   const { results: waiting } = await db
     .prepare(
       `SELECT delivery_id, enqueued_at FROM webhook_deliveries
@@ -220,22 +230,27 @@ async function materialize(env: Env, db: D1Database, planned: PlannedDeliveries)
     .all<{ delivery_id: string; enqueued_at: number | null }>();
   if (waiting.length === 0) return;
   // The body whenever one may still be waiting for it (stored again, it is the same bytes).
+  metrics?.count("r2.class_a", { bucket: "fyrden-assets", op: "webhook_body_put" });
   await env.ASSETS.put(payloadKey, bytes, { httpMetadata: { contentType: "application/json" } });
   // The repository's deletion may have listed its bodies before this one was stored: its
   // tombstone comes before that, so either the cleanup saw the body or this sees the tombstone.
+  metrics?.count("d1.query", { db: "org", op: "webhooks_tombstone" });
   const deleted = await db
     .prepare("SELECT 1 AS deleted FROM repos WHERE repo_id = ? AND deleted = 1")
     .bind(planned.repoId)
     .first();
   if (deleted) {
+    metrics?.count("r2.class_a", { bucket: "fyrden-assets", op: "webhook_body_delete" });
     await env.ASSETS.delete(payloadKey);
     return;
   }
   const results = waiting.filter((r) => r.enqueued_at === null);
   if (results.length === 0) return;
+  metrics?.count("queue.send", { queue: "webhooks" });
   await env.WEBHOOKS.sendBatch(
     results.map((r) => ({ body: { delivery: r.delivery_id } satisfies DeliveryMessage })),
   );
+  metrics?.count("d1.query", { db: "org", op: "webhooks_enqueued" });
   await db
     .prepare(
       `UPDATE webhook_deliveries SET enqueued_at = ?1

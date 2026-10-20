@@ -14,18 +14,31 @@ import {
 import { describe, expect, it } from "vitest";
 import { runEffectsCron } from "../src/cron/effects.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import { dispatchEffects, sweepEffects } from "../src/effects/dispatcher.js";
+import {
+  type DispatchDeps,
+  deliverEffects,
+  type EffectBudget,
+  invocationBudget,
+  pruneEffects,
+  recoverEffects,
+} from "../src/effects/dispatcher.js";
 import {
   EFFECT_POLICY,
   type Effect,
+  type EffectPolicy,
   type EffectSink,
-  INLINE_EFFECTS,
-  INLINE_EFFECTS_ALONE,
-  SINGLE_EFFECT_CALLS,
-  SWEEP_ROUND_CALLS,
+  MESSAGE_CALLS,
 } from "../src/effects/journal.js";
+import {
+  type EffectMessage,
+  effectMessages,
+  MESSAGE_BYTES,
+  type Publish,
+  publisher,
+} from "../src/effects/queues.js";
+import { consumeEffects } from "../src/queues/effects-consumer.js";
 import { applyEnvelope, consumeEvents, EVENTS_QUEUE } from "../src/queues/events-consumer.js";
-import { settleOthersDue } from "./helpers/effects.js";
+import { recordingPublish } from "./helpers/effects.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H7";
@@ -47,14 +60,14 @@ async function listedRepo(): Promise<string> {
   return id;
 }
 
-function pushEvent(repoId: string, seq: number, epochGen = 1): DomainEvent {
+function pushEvent(repoId: string, seq: number, epochGen = 1, ownerGen = 1): DomainEvent {
   return {
     id: { sourceId: repoId, epochGen, sourceSeq: seq },
     type: "refs.updated",
     at: T0,
     actor: OWNER,
     actChain: [],
-    ownerGen: 1,
+    ownerGen,
     entity: null,
     data: { via: "push", refs: [{ ref: "refs/heads/main", old: null, new: "a".repeat(40) }] },
     stored: false,
@@ -66,12 +79,14 @@ const envelope = (repoId: string, events: DomainEvent[]): Envelope => ({
   events,
 });
 
+const idOf = (repoId: string, seq: number, epochGen = 1) =>
+  `${repoId}:${epochGen}:${seq}:test_hook:hook_1`;
+
 /**
- * A sink with one target per push event, recording `repoId`'s deliveries as
- * a real destination would: deduped by effect id, with every attempt counted.
- * The sweep is global: other tests' effects are taken and not recorded.
+ * A sink with one target per push event, recording deliveries as a real
+ * destination would: deduped by effect id, with every attempt counted.
  */
-function recordingSink(repoId: string) {
+function recordingSink(extra: Partial<EffectSink> = {}) {
   const received = new Map<string, Effect>();
   const calls: string[] = [];
   let failing = 0;
@@ -80,7 +95,6 @@ function recordingSink(repoId: string) {
     plan: (event) =>
       event.type === "refs.updated" ? [{ target: "hook_1", payload: { event: event.type } }] : [],
     deliver: async (effect) => {
-      if (!effect.id.startsWith(`${repoId}:`)) return;
       calls.push(effect.id);
       if (failing > 0) {
         failing--;
@@ -88,6 +102,7 @@ function recordingSink(repoId: string) {
       }
       received.set(effect.id, effect);
     },
+    ...extra,
   };
   return { sink, received, calls, failNext: (n: number) => (failing = n) };
 }
@@ -101,212 +116,135 @@ async function effectRows(repoId: string) {
   return results;
 }
 
-const sweep = (sinks: readonly EffectSink[], now: number, db: D1Database = env.ORG_READ) =>
-  sweepEffects({ db, env, sinks, now: () => now });
+async function effectRow(id: string) {
+  return env.ORG_READ.prepare(
+    `SELECT state, attempts, next_attempt_at, recover_at, lease_token, last_error, source_id,
+       epoch_gen, owner_gen, any_owner FROM effects WHERE effect_id = ?`,
+  )
+    .bind(id)
+    .first<{
+      state: string;
+      attempts: number;
+      next_attempt_at: number;
+      recover_at: number | null;
+      lease_token: string | null;
+      last_error: string | null;
+      source_id: string | null;
+      epoch_gen: number | null;
+      owner_gen: number | null;
+      any_owner: number;
+    }>();
+}
 
-describe("effects journal", () => {
-  it("journals an event's effect with its projection and delivers it once", async () => {
+function depsOf(
+  sinks: readonly EffectSink[],
+  now: number | (() => number),
+  publish: Publish,
+  policy?: EffectPolicy,
+): DispatchDeps {
+  return {
+    db: env.ORG_READ,
+    env,
+    sinks,
+    now: typeof now === "number" ? () => now : now,
+    publish,
+    ...(policy && { policy }),
+  };
+}
+
+const budget = (now: number, policy: EffectPolicy = EFFECT_POLICY): EffectBudget =>
+  invocationBudget(now, policy);
+
+/**
+ * A recovery that takes every overdue effect in one run: other tests of
+ * this file (in any order) may leave more overdue than a page holds.
+ */
+const WHOLE_PAGE: EffectPolicy = { ...EFFECT_POLICY, recoverPage: 100_000 };
+
+/**
+ * The ids of `repoId`'s effects among those sent, in order: a recovery is
+ * global, and other tests of this file may leave effects overdue.
+ */
+const sentOf = (sent: { ids: string[] }[], repoId: string) =>
+  sent.flatMap((s) => s.ids).filter((id) => id.startsWith(`${repoId}:`));
+
+/** Journals `n` effects of `repoId` for the recording sink, due at `at`, each with `payload`. */
+async function dueEffects(
+  repoId: string,
+  n: number,
+  at: number,
+  payload = "{}",
+  recoverAt = at + EFFECT_POLICY.lateMs,
+): Promise<string[]> {
+  await env.ORG_READ.prepare(
+    `WITH RECURSIVE e(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM e WHERE i < ?2)
+     INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at, recover_at)
+     SELECT ?1 || ':1:' || i || ':test_hook:hook_1', 'test_hook', 'hook_1', ?4, ?3, ?3, ?5 FROM e`,
+  )
+    .bind(repoId, n, at, payload, recoverAt)
+    .run();
+  return Array.from({ length: n }, (_, i) => idOf(repoId, i + 1));
+}
+
+describe("journaling and sending effects", () => {
+  it("journals an event's effect with its projection, due at once, and sends its id to the sink's queue", async () => {
     const repoId = await listedRepo();
-    const { sink, received, calls } = recordingSink(repoId);
+    const { sink, calls } = recordingSink();
+    const { publish, sent } = recordingPublish();
     await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
       sinks: [sink],
+      publish,
       now: () => T0,
     });
+    expect(sent).toEqual([{ sink: "test_hook", ids: [idOf(repoId, 1)] }]);
+    // Not delivered by the events consumer: the queue's consumer does.
+    expect(calls).toEqual([]);
+    expect(await effectRow(idOf(repoId, 1))).toMatchObject({
+      state: "pending",
+      attempts: 0,
+      next_attempt_at: T0,
+      // Sent: overdue only once a queue's longest expected wait has passed.
+      recover_at: T0 + EFFECT_POLICY.lateMs,
+      source_id: repoId,
+      epoch_gen: 1,
+      owner_gen: 1,
+      any_owner: 0,
+    });
+
+    // A duplicate delivery of the event adds no effect and sends nothing: its message went out.
+    await deliverEffects(
+      depsOf([sink], T0 + 1, publish),
+      "test_hook",
+      [idOf(repoId, 1)],
+      budget(T0),
+    );
+    await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
+      sinks: [sink],
+      publish,
+      now: () => T0 + 2,
+    });
+    expect(sent).toHaveLength(1);
     expect(await effectRows(repoId)).toEqual([
-      { effect_id: `${repoId}:1:1:test_hook:hook_1`, state: "done", attempts: 0 },
+      { effect_id: idOf(repoId, 1), state: "done", attempts: 1 },
     ]);
-    expect([...received.keys()]).toEqual([`${repoId}:1:1:test_hook:hook_1`]);
-
-    // A duplicate delivery of the event adds no effect and delivers nothing again.
-    await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
-      sinks: [sink],
-      now: () => T0,
-    });
-    expect(await effectRows(repoId)).toHaveLength(1);
-    expect(calls).toHaveLength(1);
   });
 
-  it("retries a failed delivery from the sweeper, with backoff", async () => {
-    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
-    await settleOthersDue(T0 + 10 * EFFECT_POLICY.backoffMs);
+  it("sends again, when its event is delivered again, an effect whose message never went out", async () => {
     const repoId = await listedRepo();
-    const { sink, received, failNext } = recordingSink(repoId);
-    failNext(2);
-    await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
-      sinks: [sink],
-      now: () => T0,
-    });
-    expect(await effectRows(repoId)).toMatchObject([{ state: "pending", attempts: 1 }]);
-    // Not due yet: nothing happens.
-    await sweep([sink], T0 + 1);
-    expect(await effectRows(repoId)).toMatchObject([{ attempts: 1 }]);
-    await sweep([sink], T0 + EFFECT_POLICY.backoffMs);
-    expect(await effectRows(repoId)).toMatchObject([{ state: "pending", attempts: 2 }]);
-    await sweep([sink], T0 + 10 * EFFECT_POLICY.backoffMs);
-    expect(await effectRows(repoId)).toMatchObject([{ state: "done" }]);
-    expect(received.size).toBe(1);
-  });
-
-  it("delivers again with the same id after a crash between delivery and the mark, and the destination dedupes", async () => {
-    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
-    await settleOthersDue(T0 + EFFECT_POLICY.leaseMs);
-    const repoId = await listedRepo();
-    const { sink, received, calls } = recordingSink(repoId);
-    // The mark after the first delivery is lost.
-    let dropped = false;
-    const losingMark = new Proxy(env.ORG_READ, {
-      get(target, prop) {
-        if (prop === "prepare")
-          return (query: string) => {
-            if (!dropped && query.startsWith("UPDATE effects SET state = 'done'")) {
-              dropped = true;
-              throw new Error("crash");
-            }
-            return target.prepare(query);
-          };
-        const value = Reflect.get(target, prop);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    });
-    const crashing = new Proxy(env, {
-      get: (target, prop) => (prop === "ORG_READ" ? losingMark : Reflect.get(target, prop)),
-    });
-    await applyEnvelope(crashing, envelope(repoId, [pushEvent(repoId, 1)]), {
-      sinks: [sink],
-      now: () => T0,
-    });
-    expect(await effectRows(repoId)).toMatchObject([{ state: "pending" }]);
-    // Not while the lost delivery's claim lasts.
-    await sweep([sink], T0 + EFFECT_POLICY.sweepAfterMs);
-    expect(calls).toHaveLength(1);
-    await sweep([sink], T0 + EFFECT_POLICY.leaseMs);
-    expect(await effectRows(repoId)).toMatchObject([{ state: "done" }]);
-    expect(calls).toEqual([`${repoId}:1:1:test_hook:hook_1`, `${repoId}:1:1:test_hook:hook_1`]);
-    expect(received.size).toBe(1);
-  });
-
-  it("keeps a failed effect's backoff when its event is delivered again", async () => {
-    const repoId = await listedRepo();
-    const { sink, calls, failNext } = recordingSink(repoId);
+    const { sink } = recordingSink();
+    const { publish, sent, failNext } = recordingPublish();
     failNext(1);
     const body = envelope(repoId, [pushEvent(repoId, 1)]);
-    await applyEnvelope(env, body, { sinks: [sink], now: () => T0 });
-    await applyEnvelope(env, body, { sinks: [sink], now: () => T0 + 1 });
-    expect(calls).toHaveLength(1);
-    expect(await effectRows(repoId)).toMatchObject([{ state: "pending", attempts: 1 }]);
-  });
-
-  it("never lets the consumer and the sweeper deliver one effect at once", async () => {
-    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
-    await settleOthersDue(T0 + EFFECT_POLICY.sweepAfterMs);
-    const repoId = await listedRepo();
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
+    // The send fails after the batch committed: still applied, and overdue after the grace.
+    expect(await applyEnvelope(env, body, { sinks: [sink], publish, now: () => T0 })).toBe(
+      "applied",
+    );
+    expect(sent).toEqual([]);
+    expect(await effectRow(idOf(repoId, 1))).toMatchObject({
+      recover_at: T0 + EFFECT_POLICY.publishGraceMs,
     });
-    let started: () => void = () => {};
-    const delivering = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    const calls: string[] = [];
-    const slow: EffectSink = {
-      name: "test_hook",
-      plan: () => [{ target: "hook_1", payload: {} }],
-      // The sweep is global: only this repository's effect is held.
-      deliver: async (effect) => {
-        if (!effect.id.startsWith(`${repoId}:`)) return;
-        calls.push(effect.id);
-        started();
-        await gate;
-      },
-    };
-    const consuming = applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
-      sinks: [slow],
-      now: () => T0,
-    });
-    // While the consumer is delivering, sweep as if the effect were due.
-    await delivering;
-    await sweep([slow], T0 + EFFECT_POLICY.sweepAfterMs);
-    release();
-    await consuming;
-    expect(calls).toHaveLength(1);
-    expect(await effectRows(repoId)).toMatchObject([{ state: "done" }]);
-  });
-
-  it("lets the sweeper take over an expired claim, and ignores the late outcome of the old holder", async () => {
-    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
-    await settleOthersDue(T0 + EFFECT_POLICY.leaseMs);
-    const repoId = await listedRepo();
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let started: () => void = () => {};
-    const delivering = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    let first = true;
-    const sink: EffectSink = {
-      name: "test_hook",
-      plan: () => [{ target: "hook_1", payload: {} }],
-      deliver: async (effect) => {
-        if (!effect.id.startsWith(`${repoId}:`)) return;
-        if (!first) return;
-        first = false;
-        started();
-        await gate;
-        // The old holder fails, long after its claim expired.
-        throw new Error("too late");
-      },
-    };
-    const consuming = applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
-      sinks: [sink],
-      now: () => T0,
-    });
-    await delivering;
-    await sweep([sink], T0 + EFFECT_POLICY.leaseMs);
-    expect(await effectRows(repoId)).toMatchObject([{ state: "done", attempts: 0 }]);
-    release();
-    await consuming;
-    expect(await effectRows(repoId)).toMatchObject([{ state: "done", attempts: 0 }]);
-  });
-
-  it("does not deliver at once an effect the sweeper already tried", async () => {
-    const repoId = await listedRepo();
-    const { sink, calls } = recordingSink(repoId);
-    await env.ORG_READ.prepare(
-      `INSERT INTO effects (effect_id, sink, target, payload, attempts, next_attempt_at, created_at)
-       VALUES (?, 'test_hook', 'hook_1', '{}', 1, ?, ?)`,
-    )
-      .bind(`${repoId}:1:1:test_hook:hook_1`, T0 + 90_000, T0)
-      .run();
-    await dispatchEffects({ db: env.ORG_READ, env, sinks: [sink], now: () => T0 }, [
-      `${repoId}:1:1:test_hook:hook_1`,
-    ]);
-    expect(calls).toEqual([]);
-  });
-
-  it("gives sinks a stored event's data, fetched from the repository", async () => {
-    const repoId = await listedRepo();
-    const seen: unknown[] = [];
-    const sink: EffectSink = {
-      name: "test_hook",
-      plan: (event) => {
-        seen.push(event.data);
-        return [];
-      },
-      deliver: async () => {},
-    };
-    await runInDurableObject(env.REPO.getByName(repoId), (_: RepoDO, state) => {
-      state.storage.sql.exec(
-        "INSERT INTO event_payloads (event_key, payload, created_at) VALUES (?, ?, 0)",
-        `${repoId}:1:1`,
-        JSON.stringify({ row: null, data: { via: "push", refs: ["many"] } }),
-      );
-    });
-    const stored: DomainEvent = { ...pushEvent(repoId, 1), data: null, stored: true };
-    await applyEnvelope(env, envelope(repoId, [stored]), { sinks: [sink], now: () => T0 });
-    expect(seen).toEqual([{ via: "push", refs: ["many"] }]);
+    await applyEnvelope(env, body, { sinks: [sink], publish, now: () => T0 + 1 });
+    expect(sent).toEqual([{ sink: "test_hook", ids: [idOf(repoId, 1)] }]);
   });
 
   it("journals an effect in the same batch as its projection: both or neither", async () => {
@@ -335,6 +273,7 @@ describe("effects journal", () => {
       plan: () => [{ target: "hook_1", payload: {} }],
       deliver: async () => {},
     };
+    const { publish, sent } = recordingPublish();
     const failingBatch = new Proxy(env.ORG_READ, {
       get(target, prop) {
         if (prop === "batch")
@@ -348,336 +287,771 @@ describe("effects journal", () => {
       get: (target, prop) => (prop === "ORG_READ" ? failingBatch : Reflect.get(target, prop)),
     });
     await expect(
-      applyEnvelope(failing, envelope(repoId, [snapshot]), { sinks: [sink], now: () => T0 }),
+      applyEnvelope(failing, envelope(repoId, [snapshot]), {
+        sinks: [sink],
+        publish,
+        now: () => T0,
+      }),
     ).rejects.toThrow();
     const row = () =>
       env.ORG_READ.prepare("SELECT version FROM repos WHERE repo_id = ?").bind(repoId).first();
     expect(await row()).toBeNull();
     expect(await effectRows(repoId)).toEqual([]);
-    await applyEnvelope(env, envelope(repoId, [snapshot]), { sinks: [sink], now: () => T0 });
+    expect(sent).toEqual([]);
+    await applyEnvelope(env, envelope(repoId, [snapshot]), {
+      sinks: [sink],
+      publish,
+      now: () => T0,
+    });
     expect(await row()).toEqual({ version: 1 });
-    expect(await effectRows(repoId)).toMatchObject([{ state: "done" }]);
+    expect(await effectRows(repoId)).toMatchObject([{ state: "pending" }]);
+    expect(sent).toHaveLength(1);
   });
 
   it("journals nothing for an event of an older epoch", async () => {
     const repoId = await listedRepo();
-    const { sink } = recordingSink(repoId);
+    const { sink } = recordingSink();
+    const { publish } = recordingPublish();
     await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1, 2)]), {
       sinks: [sink],
+      publish,
       now: () => T0,
     });
     await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 9, 1)]), {
       sinks: [sink],
+      publish,
       now: () => T0,
     });
-    expect((await effectRows(repoId)).map((r) => r.effect_id)).toEqual([
-      `${repoId}:2:1:test_hook:hook_1`,
+    expect((await effectRows(repoId)).map((r) => r.effect_id)).toEqual([idOf(repoId, 1, 2)]);
+  });
+
+  it("gives sinks a stored event's data, fetched from the repository", async () => {
+    const repoId = await listedRepo();
+    const seen: unknown[] = [];
+    const sink: EffectSink = {
+      name: "test_hook",
+      plan: (event) => {
+        seen.push(event.data);
+        return [];
+      },
+      deliver: async () => {},
+    };
+    await runInDurableObject(env.REPO.getByName(repoId), (_: RepoDO, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO event_payloads (event_key, payload, created_at) VALUES (?, ?, 0)",
+        `${repoId}:1:1`,
+        JSON.stringify({ row: null, data: { via: "push", refs: ["many"] } }),
+      );
+    });
+    const stored: DomainEvent = { ...pushEvent(repoId, 1), data: null, stored: true };
+    await applyEnvelope(env, envelope(repoId, [stored]), {
+      sinks: [sink],
+      publish: recordingPublish().publish,
+      now: () => T0,
+    });
+    expect(seen).toEqual([{ via: "push", refs: ["many"] }]);
+  });
+
+  it("delivers an inline sink's share itself, after sending the rest, and sends what it leaves", async () => {
+    const repoId = await listedRepo();
+    const order: string[] = [];
+    const inline = recordingSink({
+      name: "test_feed",
+      inline: true,
+      deliverBatch: async (effects) => {
+        order.push("deliver");
+        return { delivered: effects.map((effect) => effect.id) };
+      },
+    });
+    const queued = recordingSink();
+    const { sent } = recordingPublish();
+    const publish: Publish = async (sink, ids) => {
+      order.push(`send ${sink}`);
+      sent.push({ sink, ids: [...ids] });
+    };
+    const events = Array.from({ length: 3 }, (_, i) => pushEvent(repoId, i + 1));
+    await applyEnvelope(env, envelope(repoId, events), {
+      sinks: [queued.sink, inline.sink],
+      publish,
+      inline: { batched: 2 },
+      now: () => T0,
+    });
+    // The queued sink's three and the inline sink's third go out before the inline delivery.
+    expect(order).toEqual(["send test_hook", "send test_feed", "deliver"]);
+    expect(sent).toEqual([
+      { sink: "test_hook", ids: [1, 2, 3].map((seq) => idOf(repoId, seq)) },
+      { sink: "test_feed", ids: [`${repoId}:1:3:test_feed:hook_1`] },
+    ]);
+    expect(
+      (await effectRows(repoId)).filter((row) => row.effect_id.includes(":test_feed:")),
+    ).toMatchObject([{ state: "done" }, { state: "done" }, { state: "pending" }]);
+  });
+
+  it("counts a failed send, still acknowledges, and leaves the effect for the cron after the grace", async () => {
+    const repoId = await listedRepo();
+    const { sink } = recordingSink();
+    const { publish, failNext } = recordingPublish();
+    failNext(1);
+    const points: string[] = [];
+    const batch = createMessageBatch(EVENTS_QUEUE, [
+      {
+        id: "m",
+        timestamp: new Date(),
+        attempts: 1,
+        body: envelope(repoId, [pushEvent(repoId, 1)]),
+      },
+    ]);
+    await consumeEvents(batch, env, {
+      sinks: [sink],
+      publish,
+      now: () => T0,
+      metrics: { count: (name, dims) => points.push(`${name} ${Object.values(dims)}`) },
+    });
+    expect(await getQueueResult(batch, createExecutionContext())).toMatchObject({
+      explicitAcks: ["m"],
+    });
+    expect(points.filter((p) => p.startsWith("effects.dispatch"))).toEqual([
+      "effects.dispatch error",
+    ]);
+    const recovery = recordingPublish();
+    const deps = depsOf([sink], T0 + EFFECT_POLICY.publishGraceMs, recovery.publish, WHOLE_PAGE);
+    await recoverEffects(deps);
+    expect(sentOf(recovery.sent, repoId)).toEqual([idOf(repoId, 1)]);
+  });
+});
+
+describe("delivering effects a message names", () => {
+  it("delivers each effect once, whatever messages name it, and the destination dedupes", async () => {
+    const repoId = await listedRepo();
+    const ids = await dueEffects(repoId, 2, T0);
+    const { sink, received, calls } = recordingSink();
+    const { publish, sent } = recordingPublish();
+    const deps = depsOf([sink], T0, publish);
+    expect(await deliverEffects(deps, "test_hook", ids, budget(T0))).toBe(2);
+    // A repeated message (the queue delivers at least once) finds them done.
+    expect(await deliverEffects(deps, "test_hook", [...ids, ...ids], budget(T0))).toBe(0);
+    expect(calls).toEqual(ids);
+    expect(received.size).toBe(2);
+    expect(sent).toEqual([]);
+    expect(await effectRows(repoId)).toMatchObject([
+      { state: "done", attempts: 1 },
+      { state: "done", attempts: 1 },
     ]);
   });
 
-  it("marks an effect failed after the last attempt, or when its sink is gone", async () => {
-    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
-    await settleOthersDue(T0 + EFFECT_POLICY.maxAttempts * EFFECT_POLICY.maxBackoffMs);
+  it("retries a failed delivery with backoff, as a message sent for when it is due", async () => {
     const repoId = await listedRepo();
-    const { sink, failNext } = recordingSink(repoId);
-    failNext(1_000);
-    await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
-      sinks: [sink],
-      now: () => T0,
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    const { sink, received, failNext } = recordingSink();
+    const { publish, sent } = recordingPublish();
+    failNext(2);
+    await deliverEffects(depsOf([sink], T0, publish), "test_hook", [id], budget(T0));
+    expect(await effectRow(id)).toMatchObject({
+      state: "pending",
+      attempts: 1,
+      next_attempt_at: T0 + EFFECT_POLICY.backoffMs,
+      recover_at: T0 + EFFECT_POLICY.backoffMs + EFFECT_POLICY.lateMs,
+      lease_token: null,
     });
-    let now = T0;
-    for (let i = 0; i < EFFECT_POLICY.maxAttempts; i++) {
-      now += EFFECT_POLICY.maxBackoffMs;
-      await sweep([sink], now);
-    }
-    expect(await effectRows(repoId)).toMatchObject([
-      { state: "failed", attempts: EFFECT_POLICY.maxAttempts },
+    expect(sent).toEqual([
+      { sink: "test_hook", ids: [id], delaySeconds: EFFECT_POLICY.backoffMs / 1000 },
     ]);
-
-    const other = await listedRepo();
-    await applyEnvelope(env, envelope(other, [pushEvent(other, 1)]), {
-      sinks: [sink],
-      now: () => T0,
+    // A message ahead of the schedule (clocks differ) sends it on for when it is due.
+    await deliverEffects(depsOf([sink], T0 + 1_000, publish), "test_hook", [id], budget(T0));
+    expect(sent.at(-1)).toEqual({
+      sink: "test_hook",
+      ids: [id],
+      delaySeconds: EFFECT_POLICY.backoffMs / 1000 - 1,
     });
-    await env.ORG_READ.prepare(
-      "UPDATE effects SET state = 'pending', next_attempt_at = 0 WHERE effect_id LIKE ?",
-    )
-      .bind(`${other}:%`)
+    expect(await effectRow(id)).toMatchObject({ attempts: 1 });
+    // The second attempt fails too: twice the delay.
+    const second = T0 + EFFECT_POLICY.backoffMs;
+    await deliverEffects(depsOf([sink], second, publish), "test_hook", [id], budget(second));
+    expect(await effectRow(id)).toMatchObject({
+      attempts: 2,
+      next_attempt_at: second + 2 * EFFECT_POLICY.backoffMs,
+    });
+    const third = second + 2 * EFFECT_POLICY.backoffMs;
+    await deliverEffects(depsOf([sink], third, publish), "test_hook", [id], budget(third));
+    expect(await effectRow(id)).toMatchObject({ state: "done", attempts: 3 });
+    expect(received.size).toBe(1);
+  });
+
+  it("makes a retried effect overdue at its due time when its message cannot be sent", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    const { sink, failNext: failDelivery } = recordingSink();
+    const { publish, failNext } = recordingPublish();
+    failDelivery(1);
+    failNext(1);
+    await deliverEffects(depsOf([sink], T0, publish), "test_hook", [id], budget(T0));
+    expect(await effectRow(id)).toMatchObject({
+      state: "pending",
+      recover_at: T0 + EFFECT_POLICY.backoffMs,
+    });
+  });
+
+  it("counts the claim as an attempt, so an effect whose runs keep dying ends failed", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    const policy = { ...WHOLE_PAGE, maxAttempts: 2 };
+    const crash = new Error("the invocation died");
+    const dying: EffectSink = {
+      name: "test_hook",
+      plan: () => [],
+      deliver: async () => {
+        throw crash;
+      },
+    };
+    // A run that dies mid-delivery: its claim is never released (the sink throws past the mark).
+    const deadMark = new Proxy(env.ORG_READ, {
+      get(target, prop) {
+        if (prop === "prepare")
+          return (query: string) => {
+            if (query.includes("RETURNING effect_id, state, next_attempt_at")) throw crash;
+            return target.prepare(query);
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const { publish, sent } = recordingPublish();
+    let now = T0;
+    for (let run = 0; run < 2; run++) {
+      await expect(
+        deliverEffects(
+          { ...depsOf([dying], now, publish, policy), db: deadMark },
+          "test_hook",
+          [id],
+          budget(now, policy),
+        ),
+      ).rejects.toThrow(crash);
+      // The claim lasts its lease; then the cron finds it overdue and sends it again.
+      now += policy.leaseMs;
+      await recoverEffects(depsOf([dying], now, publish, policy));
+    }
+    expect(await effectRow(id)).toMatchObject({
+      state: "failed",
+      attempts: 2,
+      last_error: "attempts spent",
+    });
+    // Sent again once (after the first death); the second recovery ended it.
+    expect(sentOf(sent, repoId)).toEqual([id]);
+  });
+
+  it("never lets two messages deliver one effect at once", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started: () => void = () => {};
+    const delivering = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const calls: string[] = [];
+    const slow: EffectSink = {
+      name: "test_hook",
+      plan: () => [],
+      deliver: async (effect) => {
+        calls.push(effect.id);
+        started();
+        await gate;
+      },
+    };
+    const { publish, sent } = recordingPublish();
+    const first = deliverEffects(depsOf([slow], T0, publish), "test_hook", [id], budget(T0));
+    await delivering;
+    // Another isolate takes the same message (or a recovery's) meanwhile.
+    expect(
+      await deliverEffects(depsOf([slow], T0 + 1, publish), "test_hook", [id], budget(T0)),
+    ).toBe(0);
+    release();
+    expect(await first).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(sent).toEqual([]);
+    expect(await effectRow(id)).toMatchObject({ state: "done" });
+  });
+
+  it("lets a later message take over an expired claim, and ignores the late outcome of the old holder", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started: () => void = () => {};
+    const delivering = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let first = true;
+    const sink: EffectSink = {
+      name: "test_hook",
+      plan: () => [],
+      deliver: async () => {
+        if (!first) return;
+        first = false;
+        started();
+        await gate;
+        // The old holder fails, long after its claim expired.
+        throw new Error("too late");
+      },
+    };
+    const { publish } = recordingPublish();
+    const old = deliverEffects(depsOf([sink], T0, publish), "test_hook", [id], budget(T0));
+    await delivering;
+    const later = T0 + EFFECT_POLICY.leaseMs;
+    expect(
+      await deliverEffects(depsOf([sink], later, publish), "test_hook", [id], budget(later)),
+    ).toBe(1);
+    expect(await effectRow(id)).toMatchObject({ state: "done", attempts: 2 });
+    release();
+    await old;
+    expect(await effectRow(id)).toMatchObject({ state: "done", attempts: 2 });
+  });
+
+  it("ends, without delivering, effects whose source was restored, transferred or deleted since", async () => {
+    const restored = await listedRepo();
+    const transferred = await listedRepo();
+    const deleted = await listedRepo();
+    const { sink, calls } = recordingSink();
+    const acrossTransfers = recordingSink({ name: "test_refs", acrossTransfers: true });
+    const { publish } = recordingPublish();
+    for (const repoId of [restored, transferred, deleted])
+      await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
+        sinks: [sink, acrossTransfers.sink],
+        publish,
+        now: () => T0,
+      });
+    // A restore: the read model saw a newer epoch. A transfer: a newer ownership generation.
+    await env.ORG_READ.prepare("UPDATE consumer_epochs SET epoch_gen = 2 WHERE source_id = ?")
+      .bind(restored)
       .run();
-    await sweep([], T0);
-    expect(await effectRows(other)).toMatchObject([{ state: "failed" }]);
+    await env.ORG_READ.prepare("INSERT INTO source_owner (source_id, owner_gen) VALUES (?, 2)")
+      .bind(transferred)
+      .run();
+    await env.ORG_READ.prepare(
+      `INSERT INTO repos (repo_id, deleted, epoch_gen, version, owner_gen, updated_seq, updated_at)
+       VALUES (?, 1, 1, 9, 1, 9, 0)`,
+    )
+      .bind(deleted)
+      .run();
+    const ids = [restored, transferred, deleted].map((repoId) => idOf(repoId, 1));
+    const deps = depsOf([sink, acrossTransfers.sink], T0, publish);
+    expect(await deliverEffects(deps, "test_hook", ids, budget(T0))).toBe(0);
+    expect(calls).toEqual([]);
+    const reasons = await Promise.all(ids.map(async (id) => (await effectRow(id))?.last_error));
+    expect(reasons).toEqual([
+      "invalidated: its source was restored to an earlier state",
+      "invalidated: its source was transferred",
+      "invalidated: its source was deleted",
+    ]);
+    // A sink whose effects stand across transfers still delivers the transferred source's.
+    const refs = [restored, transferred].map((repoId) => `${repoId}:1:1:test_refs:hook_1`);
+    expect(await deliverEffects(deps, "test_refs", refs, budget(T0))).toBe(1);
+    expect([...acrossTransfers.received.keys()]).toEqual([refs[1]]);
+  });
+
+  it("ends effects of a sink this deployment does not have", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    const { publish } = recordingPublish();
+    await deliverEffects(depsOf([], T0, publish), "test_hook", [id], budget(T0));
+    expect(await effectRow(id)).toMatchObject({
+      state: "failed",
+      last_error: "no sink named test_hook",
+    });
+  });
+
+  it("passes over an effect of another sink that a message names", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    const other = recordingSink({ name: "test_other" });
+    const { publish } = recordingPublish();
+    expect(
+      await deliverEffects(depsOf([other.sink], T0, publish), "test_other", [id], budget(T0)),
+    ).toBe(0);
+    expect(other.calls).toEqual([]);
+    expect(await effectRow(id)).toMatchObject({ state: "pending", attempts: 0 });
+  });
+});
+
+describe("an invocation's budget", () => {
+  it("delivers as many effects as the budget allows and sends the rest back", async () => {
+    const repoId = await listedRepo();
+    const ids = await dueEffects(repoId, 30, T0);
+    const { sink, received } = recordingSink();
+    const { publish, sent } = recordingPublish();
+    const shared = budget(T0);
+    expect(EFFECT_POLICY.invocation.effects).toBe(20);
+    // Two messages share one invocation's budget.
+    const deps = depsOf([sink], T0, publish);
+    expect(await deliverEffects(deps, "test_hook", ids.slice(0, 15), shared)).toBe(15);
+    expect(await deliverEffects(deps, "test_hook", ids.slice(15), shared)).toBe(5);
+    expect(received.size).toBe(20);
+    expect(sent).toEqual([{ sink: "test_hook", ids: ids.slice(20) }]);
+    // The ten sent back were never claimed.
+    const left = await Promise.all(ids.slice(20).map(effectRow));
+    expect(left.every((row) => row?.attempts === 0 && row.lease_token === null)).toBe(true);
+  });
+
+  it("claims a bounded number of payload bytes, the first effect whatever its size", async () => {
+    const repoId = await listedRepo();
+    const payload = JSON.stringify({ body: "x".repeat(200 * 1024) });
+    expect(EFFECT_POLICY.invocation.bytes).toBe(1024 * 1024);
+    expect(5 * payload.length).toBeLessThanOrEqual(EFFECT_POLICY.invocation.bytes);
+    expect(6 * payload.length).toBeGreaterThan(EFFECT_POLICY.invocation.bytes);
+    const ids = await dueEffects(repoId, 8, T0, payload);
+    const { sink, received } = recordingSink();
+    const { publish, sent } = recordingPublish();
+    expect(await deliverEffects(depsOf([sink], T0, publish), "test_hook", ids, budget(T0))).toBe(5);
+    expect(received.size).toBe(5);
+    expect(sent).toEqual([{ sink: "test_hook", ids: ids.slice(5) }]);
+
+    const tiny = { ...EFFECT_POLICY, invocation: { ...EFFECT_POLICY.invocation, bytes: 10 } };
+    const next = depsOf([sink], T0, publish, tiny);
+    expect(await deliverEffects(next, "test_hook", ids.slice(5), budget(T0, tiny))).toBe(1);
+    expect(sent.at(-1)).toEqual({ sink: "test_hook", ids: ids.slice(6) });
+  });
+
+  it("gives back what a batch sink's calls cannot cover, uncounted, and sends it back", async () => {
+    const repoId = await listedRepo();
+    const ids = await dueEffects(repoId, 4, T0, JSON.stringify({ calls: 40 }));
+    const delivered: string[] = [];
+    const sink: EffectSink = {
+      name: "test_hook",
+      plan: () => [],
+      deliver: async () => {},
+      deliverBatch: async (effects) => {
+        delivered.push(...effects.map((effect) => effect.id));
+        return { delivered: effects.map((effect) => effect.id) };
+      },
+      calls: (planned) => (planned.payload as { calls: number }).calls,
+    };
+    const { publish, sent } = recordingPublish();
+    const small = { ...EFFECT_POLICY, invocation: { ...EFFECT_POLICY.invocation, calls: 100 } };
+    // 100 calls: the message's own, then two effects of 40.
+    expect(MESSAGE_CALLS + 2 * 40).toBeLessThanOrEqual(100);
+    expect(
+      await deliverEffects(depsOf([sink], T0, publish, small), "test_hook", ids, budget(T0, small)),
+    ).toBe(2);
+    expect(delivered).toEqual(ids.slice(0, 2));
+    expect(sent).toEqual([{ sink: "test_hook", ids: ids.slice(2) }]);
+    for (const id of ids.slice(2))
+      expect(await effectRow(id)).toMatchObject({ attempts: 0, lease_token: null });
+  });
+
+  it("starts no delivery past its deadline: what is left goes back uncounted", async () => {
+    const repoId = await listedRepo();
+    const ids = await dueEffects(repoId, 3, T0);
+    let clock = T0;
+    const calls: string[] = [];
+    const slow: EffectSink = {
+      name: "test_hook",
+      plan: () => [],
+      deliver: async (effect) => {
+        calls.push(effect.id);
+        clock += EFFECT_POLICY.invocation.deadlineMs;
+      },
+    };
+    const { publish, sent } = recordingPublish();
+    const shared = budget(T0);
+    expect(
+      await deliverEffects(
+        depsOf([slow], () => clock, publish),
+        "test_hook",
+        ids,
+        shared,
+      ),
+    ).toBe(1);
+    expect(calls).toEqual(ids.slice(0, 1));
+    expect(sent).toEqual([{ sink: "test_hook", ids: ids.slice(1) }]);
+    for (const id of ids.slice(1))
+      expect(await effectRow(id)).toMatchObject({ attempts: 0, lease_token: null });
+    // A later message of the same invocation starts nothing either.
+    const [other = ""] = await dueEffects(await listedRepo(), 1, T0);
+    expect(
+      await deliverEffects(
+        depsOf([slow], () => clock, publish),
+        "test_hook",
+        [other],
+        shared,
+      ),
+    ).toBe(0);
+    expect(sent.at(-1)).toEqual({ sink: "test_hook", ids: [other] });
+  });
+  it("starts nothing when its deadline passed during the claim, unless it is the invocation's first", async () => {
+    const { publish, sent } = recordingPublish();
+    for (const batched of [false, true]) {
+      const repoId = await listedRepo();
+      const ids = await dueEffects(repoId, 2, T0);
+      const delivered: string[] = [];
+      const sink: EffectSink = {
+        name: "test_hook",
+        plan: () => [],
+        deliver: async (effect) => {
+          delivered.push(effect.id);
+        },
+        ...(batched && {
+          deliverBatch: async (effects: readonly Effect[]) => {
+            delivered.push(...effects.map((effect) => effect.id));
+            return { delivered: effects.map((effect) => effect.id) };
+          },
+        }),
+      };
+      let clock = T0;
+      // The claim takes until past the deadline.
+      const slowClaim = new Proxy(env.ORG_READ, {
+        get(target, prop) {
+          if (prop === "batch")
+            return async (statements: D1PreparedStatement[]) => {
+              const results = await target.batch(statements);
+              clock += EFFECT_POLICY.invocation.deadlineMs;
+              return results;
+            };
+          const value = Reflect.get(target, prop);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const deps = { ...depsOf([sink], () => clock, publish), db: slowClaim };
+      // An invocation that already delivered: nothing starts, and the claims are given back.
+      const started = { ...budget(T0), started: true };
+      expect(await deliverEffects(deps, "test_hook", ids, started)).toBe(0);
+      expect(delivered).toEqual([]);
+      expect(sent.at(-1)).toEqual({ sink: "test_hook", ids });
+      for (const id of ids)
+        expect(await effectRow(id)).toMatchObject({ attempts: 0, lease_token: null });
+      // Its first effect alone goes all the same; the other is given back.
+      clock = T0;
+      expect(await deliverEffects(deps, "test_hook", ids, budget(T0))).toBe(1);
+      expect(delivered).toEqual(ids.slice(0, 1));
+      expect(sent.at(-1)).toEqual({ sink: "test_hook", ids: ids.slice(1) });
+      expect(await effectRow(ids[1] ?? "")).toMatchObject({ attempts: 0, lease_token: null });
+    }
+  });
+});
+
+describe("effects queue messages", () => {
+  it("are split by count and by bytes, each under one queue operation's 64 KB", () => {
+    const ids = Array.from({ length: 25 }, (_, i) => `id_${i}`);
+    expect(effectMessages("feed", ids, 10).map((m) => m.ids.length)).toEqual([10, 10, 5]);
+    // References name their target repository: long ids, many to an event.
+    const long = Array.from({ length: 2_500 }, (_, i) => `${"r".repeat(70)}:${i}`);
+    const messages = effectMessages("references", long, 10_000);
+    expect(messages.length).toBeGreaterThan(1);
+    for (const message of messages)
+      expect(new TextEncoder().encode(JSON.stringify(message)).length).toBeLessThanOrEqual(
+        MESSAGE_BYTES,
+      );
+    expect(messages.flatMap((m) => m.ids)).toEqual(long);
+  });
+
+  it("go out in sendBatch calls of at most 100 messages, with their delay", async () => {
+    const batches: MessageSendRequest<EffectMessage>[][] = [];
+    const queue = {
+      send: async () => {},
+      sendBatch: async (messages: MessageSendRequest<EffectMessage>[]) => {
+        batches.push(messages);
+      },
+    } as unknown as Queue<EffectMessage>;
+    const { sink } = recordingSink({ perMessage: 1 });
+    const publish = publisher({ test_hook: queue }, [sink]);
+    await publish(
+      "test_hook",
+      Array.from({ length: 150 }, (_, i) => `id_${i}`),
+      90.5,
+    );
+    expect(batches.map((b) => b.length)).toEqual([100, 50]);
+    expect(batches[0]?.[0]).toEqual({
+      body: { v: 1, sink: "test_hook", ids: ["id_0"] },
+      contentType: "json",
+      delaySeconds: 91,
+    });
+    await expect(publish("no_such_sink", ["x"])).rejects.toThrow(/no queue/);
+  });
+
+  it("are acknowledged once delivered, retried when an outcome cannot be recorded, dropped when malformed", async () => {
+    const repoId = await listedRepo();
+    const ids = await dueEffects(repoId, 2, Date.now());
+    const { sink, received } = recordingSink();
+    const { publish } = recordingPublish();
+    const batch = createMessageBatch("fyrden-effects-webhooks", [
+      { id: "good", timestamp: new Date(), attempts: 1, body: { v: 1, sink: "webhooks", ids } },
+      { id: "bad", timestamp: new Date(), attempts: 1, body: { v: 2 } },
+      // Another sink's effects on this queue: dropped (the cron sends them where they belong).
+      { id: "other", timestamp: new Date(), attempts: 1, body: { v: 1, sink: "feed", ids } },
+    ]);
+    // This queue's sink, as the deployment names it, delivering like the recording sink.
+    const webhooks = { ...sink, name: "webhooks" };
+    await env.ORG_READ.prepare("UPDATE effects SET sink = 'webhooks' WHERE effect_id LIKE ?")
+      .bind(`${repoId}:%`)
+      .run();
+    await consumeEffects(batch, env, { sinks: [webhooks], publish });
+    expect(await getQueueResult(batch, createExecutionContext())).toMatchObject({
+      explicitAcks: ["good", "bad", "other"],
+      retryMessages: [],
+    });
+    expect(received.size).toBe(2);
+
+    // Marking the outcome fails: the message is retried, and its retry finds the effect claimed.
+    const [id = ""] = await dueEffects(await listedRepo(), 1, Date.now());
+    await env.ORG_READ.prepare("UPDATE effects SET sink = 'webhooks' WHERE effect_id = ?")
+      .bind(id)
+      .run();
+    const lostMark = new Proxy(env.ORG_READ, {
+      get(target, prop) {
+        if (prop === "prepare")
+          return (query: string) => {
+            if (query.startsWith("UPDATE effects SET state = 'done'")) throw new Error("D1 down");
+            return target.prepare(query);
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const failing = new Proxy(env, {
+      get: (target, prop) => (prop === "ORG_READ" ? lostMark : Reflect.get(target, prop)),
+    });
+    const retried = createMessageBatch("fyrden-effects-webhooks", [
+      {
+        id: "lost",
+        timestamp: new Date(),
+        attempts: 1,
+        body: { v: 1, sink: "webhooks", ids: [id] },
+      },
+    ]);
+    await consumeEffects(retried, failing, { sinks: [webhooks], publish });
+    expect(await getQueueResult(retried, createExecutionContext())).toMatchObject({
+      explicitAcks: [],
+      retryMessages: [{ msgId: "lost" }],
+    });
+  });
+});
+
+describe("recovering overdue effects", () => {
+  it("sends a message again for overdue effects only, a page a run, the longest overdue first", async () => {
+    const repoId = await listedRepo();
+    const now = 1_000;
+    // Overdue at 1, 2, ... (before anything other tests in this file leave).
+    const ids = await dueEffects(repoId, 5, 0, "{}", 1);
+    for (const [i, id] of ids.entries())
+      await env.ORG_READ.prepare("UPDATE effects SET recover_at = ? WHERE effect_id = ?")
+        .bind(i + 1, id)
+        .run();
+    const notYet = await dueEffects(await listedRepo(), 1, 0, "{}", 10_000_000);
+    const { sink, calls } = recordingSink();
+    const { publish, sent } = recordingPublish();
+    const policy = { ...EFFECT_POLICY, recoverPage: 3 };
+    const deps = depsOf([sink], now, publish, policy);
+    expect(await recoverEffects(deps)).toEqual({ sent: 3, ended: 0 });
+    expect(sentOf(sent, repoId)).toEqual(ids.slice(0, 3));
+    // Moved on: the next run reaches the others, not these again.
+    expect(await recoverEffects(deps)).toEqual({ sent: 2, ended: 0 });
+    expect(sentOf(sent, repoId)).toEqual(ids);
+    expect(await recoverEffects(deps)).toEqual({ sent: 0, ended: 0 });
+    expect(sent.flatMap((s) => s.ids)).not.toContain(notYet[0]);
+    // It delivers nothing itself.
+    expect(calls).toEqual([]);
+    expect(await effectRow(ids[0] ?? "")).toMatchObject({
+      state: "pending",
+      attempts: 0,
+      recover_at: now + policy.lateMs,
+    });
+  });
+
+  it("makes effects overdue again when their message cannot be sent", async () => {
+    const repoId = await listedRepo();
+    const now = 2_000;
+    const [id = ""] = await dueEffects(repoId, 1, 0, "{}", 1);
+    const { sink } = recordingSink();
+    const { publish, failNext, sent } = recordingPublish();
+    failNext(1);
+    await expect(recoverEffects(depsOf([sink], now, publish))).rejects.toThrow(/send/);
+    expect(await effectRow(id)).toMatchObject({ recover_at: now });
+    await recoverEffects(depsOf([sink], now, publish));
+    expect(sentOf(sent, repoId)).toEqual([id]);
+  });
+
+  it("recovers effects the Worker before this migration journals during a deploy", async () => {
+    const repoId = await listedRepo();
+    const id = idOf(repoId, 1);
+    // That Worker's insert: none of the new columns.
+    await env.ORG_READ.prepare(
+      `INSERT OR IGNORE INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
+       VALUES (?, 'test_hook', 'hook_1', '{}', ?, ?)`,
+    )
+      .bind(id, T0 + 60_000, T0)
+      .run();
+    expect(await effectRow(id)).toMatchObject({ recover_at: 0, source_id: null });
+    const { sink, received } = recordingSink();
+    const { publish, sent } = recordingPublish();
+    await recoverEffects(depsOf([sink], 4_000, publish));
+    expect(sentOf(sent, repoId)).toEqual([id]);
+    // Delivered unchecked once due, as it was before.
+    const due = T0 + 60_000;
+    await deliverEffects(depsOf([sink], due, publish), "test_hook", [id], budget(due));
+    expect([...received.keys()]).toEqual([id]);
+  });
+
+  it("reads overdue effects through their index, and only those", async () => {
+    const repoId = await listedRepo();
+    // Many pending effects not overdue: the recovery reads none of them.
+    await dueEffects(repoId, 500, 0, "{}", Number.MAX_SAFE_INTEGER);
+    const [id = ""] = await dueEffects(await listedRepo(), 1, 0, "{}", 1);
+    const statements: { query: string; args: unknown[]; rowsRead: number }[] = [];
+    const recording = new Proxy(env.ORG_READ, {
+      get(target, prop) {
+        if (prop === "prepare")
+          return (query: string) => {
+            const statement = target.prepare(query);
+            if (!query.includes("ORDER BY recover_at")) return statement;
+            return {
+              bind: (...args: unknown[]) => ({
+                all: async () => {
+                  const result = await statement.bind(...args).all();
+                  statements.push({ query, args, rowsRead: result.meta.rows_read });
+                  return result;
+                },
+              }),
+            };
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const { sink } = recordingSink();
+    const { publish, sent } = recordingPublish();
+    await recoverEffects({ ...depsOf([sink], 3_000, publish), db: recording });
+    expect(sent.flatMap((s) => s.ids)).toContain(id);
+    const [claim] = statements;
+    expect(claim?.rowsRead).toBeLessThan(50);
+    const select = claim?.query.match(/SELECT effect_id FROM effects WHERE[^)]*LIMIT \?3/)?.[0];
+    const { results } = await env.ORG_READ.prepare(`EXPLAIN QUERY PLAN ${select}`)
+      .bind(3_000, 0, 10)
+      .all<{ detail: string }>();
+    const plan = results.map((row) => row.detail).join("\n");
+    expect(plan).toMatch(/USING (COVERING )?INDEX effects_recover \(recover_at<\?\)/);
+    expect(plan).not.toMatch(/TEMP B-TREE/);
   });
 
   it("deletes delivered effects after the retention", async () => {
-    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
-    await settleOthersDue(T0 + EFFECT_POLICY.retentionMs);
     const repoId = await listedRepo();
-    const { sink } = recordingSink(repoId);
-    await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
-      sinks: [sink],
-      now: () => T0,
-    });
-    await sweep([sink], T0 + EFFECT_POLICY.retentionMs - 1);
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    const { sink } = recordingSink();
+    const { publish } = recordingPublish();
+    await deliverEffects(depsOf([sink], T0, publish), "test_hook", [id], budget(T0));
+    await pruneEffects(depsOf([sink], T0 + EFFECT_POLICY.retentionMs - 1, publish));
     expect(await effectRows(repoId)).toHaveLength(1);
-    await sweep([sink], T0 + EFFECT_POLICY.retentionMs);
+    await pruneEffects(depsOf([sink], T0 + EFFECT_POLICY.retentionMs, publish));
     expect(await effectRows(repoId)).toEqual([]);
   });
 });
 
-/** Journals `n` effects of `repoId` for the recording sink, due at `at`, each with `payload`. */
-async function dueEffects(repoId: string, n: number, at: number, payload = "{}"): Promise<void> {
-  await env.ORG_READ.prepare(
-    `WITH RECURSIVE e(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM e WHERE i < ?2)
-     INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
-     SELECT ?1 || ':1:' || i || ':test_hook:hook_1', 'test_hook', 'hook_1', ?4, ?3, ?3 FROM e`,
-  )
-    .bind(repoId, n, at, payload)
-    .run();
-}
-
-/** How many of `repoId`'s effects are left, each checked untouched: never tried, unclaimed. */
-async function untouched(repoId: string): Promise<number> {
-  const { results } = await env.ORG_READ.prepare(
-    `SELECT attempts, lease_token FROM effects WHERE effect_id LIKE ? AND state != 'done'`,
-  )
-    .bind(`${repoId}:%`)
-    .all<{ attempts: number; lease_token: string | null }>();
-  expect(results.every((r) => r.attempts === 0 && r.lease_token === null)).toBe(true);
-  return results.length;
-}
-
-/** A sweep's claim of due effects: its SQL, its arguments and the rows D1 read for it. */
-type Claim = { query: string; args: unknown[]; rowsRead: number };
-
-/** `db`, recording each claim of due effects a sweep makes through it. */
-function recordingClaims(db: D1Database): { db: D1Database; claims: Claim[] } {
-  const claims: Claim[] = [];
-  const recording = new Proxy(db, {
-    get(target, prop) {
-      if (prop === "prepare")
-        return (query: string) => {
-          const statement = target.prepare(query);
-          if (!query.includes("row_number() OVER")) return statement;
-          return {
-            bind: (...args: unknown[]) => {
-              const bound = statement.bind(...args);
-              return {
-                all: async () => {
-                  const result = await bound.all();
-                  claims.push({ query, args, rowsRead: result.meta.rows_read });
-                  return result;
-                },
-              };
-            },
-          };
-        };
-      const value = Reflect.get(target, prop);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  return { db: recording, claims };
-}
-
-describe("effects throughput", () => {
-  it("delivers a bounded number of effects a run, and the next runs go on from there", async () => {
-    const at = T0 + 1;
-    await settleOthersDue(at);
-    const repoId = await listedRepo();
-    const { sink, received } = recordingSink(repoId);
-    // A push moving 60 pull requests' heads leaves about this many webhook effects.
-    await dueEffects(repoId, 60, T0);
-    expect(EFFECT_POLICY.sweepLimit).toBe(20);
-    expect(await sweep([sink], at)).toBe(20);
-    expect(received.size).toBe(20);
-    expect(await untouched(repoId)).toBe(40);
-    expect(await sweep([sink], at)).toBe(20);
-    expect(await sweep([sink], at)).toBe(20);
-    expect((await effectRows(repoId)).every((row) => row.state === "done")).toBe(true);
-  });
-
-  it("claims a bounded number of payload bytes a run, and the next run goes on from there", async () => {
-    const at = T0 + 3;
-    await settleOthersDue(at);
-    const repoId = await listedRepo();
-    const { sink, received } = recordingSink(repoId);
-    // Webhook effects of large bodies: five of them fit a run's bytes, a sixth would not.
-    const payload = JSON.stringify({ body: "x".repeat(200 * 1024) });
-    expect(EFFECT_POLICY.sweepBytes).toBe(1024 * 1024);
-    expect(5 * payload.length).toBeLessThanOrEqual(EFFECT_POLICY.sweepBytes);
-    expect(6 * payload.length).toBeGreaterThan(EFFECT_POLICY.sweepBytes);
-    await dueEffects(repoId, 8, T0, payload);
-    expect(await sweep([sink], at)).toBe(5);
-    expect(received.size).toBe(5);
-    expect(await untouched(repoId)).toBe(3);
-    expect(await sweep([sink], at)).toBe(3);
-    expect(received.size).toBe(8);
-  });
-
-  it("delivers a run's first effect even when it alone is past the run's bytes", async () => {
-    const at = T0 + 4;
-    await settleOthersDue(at);
-    const repoId = await listedRepo();
-    const { sink, received } = recordingSink(repoId);
-    await dueEffects(repoId, 2, T0, JSON.stringify({ body: "x".repeat(100) }));
-    const policy = { ...EFFECT_POLICY, sweepBytes: 10 };
-    const run = () => sweepEffects({ db: env.ORG_READ, env, sinks: [sink], now: () => at, policy });
-    expect(await run()).toBe(1);
-    expect(await untouched(repoId)).toBe(1);
-    expect(await run()).toBe(1);
-    expect(received.size).toBe(2);
-  });
-
-  it("claims a burst due at one time by reading a page of it, oldest first and by id among equals", async () => {
-    const at = T0 + 7;
-    await settleOthersDue(at);
-    const repoId = await listedRepo();
-    const { sink, calls } = recordingSink(repoId);
-    const burst = 1000;
-    await dueEffects(repoId, burst, T0);
-    // Due before the burst: it goes first, though its id sorts after every one of the burst's.
-    const earlier = `${repoId}:2:1:test_hook:hook_1`;
-    await env.ORG_READ.prepare(
-      `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
-       VALUES (?1, 'test_hook', 'hook_1', '{}', ?2, ?2)`,
-    )
-      .bind(earlier, T0 - 1)
-      .run();
-    const { db, claims } = recordingClaims(env.ORG_READ);
-    const limit = EFFECT_POLICY.sweepLimit;
-    expect(await sweep([sink], at, db)).toBe(limit);
-
-    // The rows the claim always took: by due time, then by id (as text) among the burst's.
-    const byId = Array.from({ length: burst }, (_, i) => `${repoId}:1:${i + 1}:test_hook:hook_1`);
-    byId.sort();
-    expect([...calls].sort()).toEqual([earlier, ...byId.slice(0, limit - 1)].sort());
-    // One claim, reading in index order and stopping after its page, with no sort: a few rows
-    // read for each effect it claims (161 measured for 20, the same with a burst of 30 or
-    // 3,000), where reading and sorting the whole burst read 1,163.
-    expect(claims).toHaveLength(1);
-    const claim = claims[0] as Claim;
-    expect(claim.rowsRead).toBeLessThanOrEqual(10 * limit);
-    const { results } = await env.ORG_READ.prepare(`EXPLAIN QUERY PLAN ${claim.query}`)
-      .bind(...claim.args)
-      .all<{ detail: string }>();
-    const plan = results.map((row) => row.detail).join("\n");
-    expect(plan).toMatch(/SEARCH effects USING INDEX effects_due_order \(next_attempt_at<\?\)/);
-    expect(plan).not.toMatch(/TEMP B-TREE/);
-  });
-
-  it("gives each page a claim from when it is taken, so a slow sweep's later page is not taken over", async () => {
-    const at = T0 + 5;
-    const later = at + EFFECT_POLICY.leaseMs + 1;
-    await settleOthersDue(later);
-    const repoId = await listedRepo();
-    await dueEffects(repoId, 4, T0);
-    // The first page of two takes longer than a claim lasts to deliver; a sweep starting then
-    // overlaps the second page.
-    let clock = at;
-    const calls: string[] = [];
-    let overlapping: Promise<number> | undefined;
-    const policy = { ...EFFECT_POLICY, sweepPage: 2 };
-    const sink: EffectSink = {
-      name: "test_hook",
-      plan: () => [],
-      deliver: async (effect) => {
-        if (!effect.id.startsWith(`${repoId}:`)) return;
-        calls.push(effect.id);
-        if (calls.length === 2) clock = later;
-        if (calls.length === 3) {
-          overlapping = sweepEffects({
-            db: env.ORG_READ,
-            env,
-            sinks: [sink],
-            now: () => clock,
-            policy,
-          });
-          await overlapping;
-        }
-      },
-    };
-    await sweepEffects({ db: env.ORG_READ, env, sinks: [sink], now: () => clock, policy });
-    expect(await overlapping).toBe(0);
-    expect([...calls].sort()).toEqual([1, 2, 3, 4].map((i) => `${repoId}:1:${i}:test_hook:hook_1`));
-    expect((await effectRows(repoId)).every((row) => row.state === "done")).toBe(true);
-  });
-
-  it("delivers what the sweep's calls allow, a page at a time, and leaves the rest untouched", async () => {
-    const at = T0 + 2;
-    await settleOthersDue(at);
-    const repoId = await listedRepo();
-    const { sink, received } = recordingSink(repoId);
-    await dueEffects(repoId, 30, T0);
-    const policy = { ...EFFECT_POLICY, sweepPage: 4, sweepCalls: 100 };
-    const delivered = await sweepEffects({
-      db: env.ORG_READ,
-      env,
-      sinks: [sink],
-      now: () => at,
-      policy,
-    });
-    // Pages of 4 while their calls fit (each page's own calls first): 4, 4, then 3.
-    expect(SWEEP_ROUND_CALLS + 4 * SINGLE_EFFECT_CALLS).toBe(36);
-    expect(delivered).toBe(11);
-    expect(received.size).toBe(11);
-    const rows = await env.ORG_READ.prepare(
-      `SELECT state, attempts, lease_token FROM effects WHERE effect_id LIKE ? AND state != 'done'`,
-    )
-      .bind(`${repoId}:%`)
-      .all();
-    expect(rows.results).toHaveLength(19);
-    expect(rows.results.every((r) => r.attempts === 0 && r.lease_token === null)).toBe(true);
-    // The next run goes on from there.
-    await sweepEffects({ db: env.ORG_READ, env, sinks: [sink], now: () => at, policy });
-    expect(received.size).toBe(22);
-  });
-
-  it("delivers more effects inline when the consumer's batch is small", async () => {
-    const one = await listedRepo();
-    const single = recordingSink(one);
-    const events = Array.from({ length: 12 }, (_, i) => pushEvent(one, i + 1));
-    const alone = createMessageBatch(EVENTS_QUEUE, [
-      { id: "alone", timestamp: new Date(), attempts: 1, body: envelope(one, events) },
-    ]);
-    await consumeEvents(alone, env, { sinks: [single.sink], now: () => T0 });
-    expect(await getQueueResult(alone, createExecutionContext())).toMatchObject({
-      explicitAcks: ["alone"],
-    });
-    expect(single.received.size).toBe(INLINE_EFFECTS_ALONE);
-    expect(INLINE_EFFECTS_ALONE).toBe(5);
-
-    // A full batch of five messages shares the least.
-    const repos = await Promise.all(Array.from({ length: 5 }, () => listedRepo()));
-    const delivered: string[] = [];
-    const sink: EffectSink = {
-      name: "test_hook",
-      plan: single.sink.plan,
-      deliver: async (effect) => {
-        if (repos.some((repoId) => effect.id.startsWith(`${repoId}:`))) delivered.push(effect.id);
-      },
-    };
-    const full = createMessageBatch(
-      EVENTS_QUEUE,
-      repos.map((repoId, i) => ({
-        id: `m${i}`,
-        timestamp: new Date(),
-        attempts: 1,
-        body: envelope(
-          repoId,
-          [1, 2, 3].map((seq) => pushEvent(repoId, seq)),
-        ),
-      })),
-    );
-    await consumeEvents(full, env, { sinks: [sink], now: () => T0 });
-    expect(delivered).toHaveLength(INLINE_EFFECTS);
-  });
-});
-
 describe("the effects cron", () => {
-  it("reconciles webhook deliveries before its sweep, so a run cut short has reconciled", async () => {
-    const at = T0 + 6;
-    await settleOthersDue(at);
+  it("reconciles webhook deliveries, then recovers overdue effects without delivering them", async () => {
     const repoId = await listedRepo();
-    await dueEffects(repoId, 1, T0);
+    const [id = ""] = await dueEffects(repoId, 1, 0, "{}", 1);
     // A delivery past retention whose body was never stored: reconciling deletes it.
     const delivery = `${repoId}-delivery`;
     await env.ORG_READ.prepare(
@@ -687,21 +1061,20 @@ describe("the effects cron", () => {
     )
       .bind(delivery, repoId, `webhooks/${delivery}.json`)
       .run();
-    // What the invocation had done when the sweep began delivering, had it been stopped there.
-    let reconciledFirst: boolean | undefined;
-    const sink: EffectSink = {
-      name: "test_hook",
-      plan: () => [],
-      deliver: async (effect) => {
-        if (!effect.id.startsWith(`${repoId}:`)) return;
-        reconciledFirst =
-          (await env.ORG_READ.prepare("SELECT 1 FROM webhook_deliveries WHERE delivery_id = ?")
-            .bind(delivery)
-            .first()) === null;
-      },
-    };
-    await runEffectsCron(env, { metrics: { count: () => {} }, now: () => at, sinks: [sink] });
-    expect(reconciledFirst).toBe(true);
-    expect(await effectRows(repoId)).toMatchObject([{ state: "done" }]);
+    const { sink, calls } = recordingSink();
+    const { publish, sent } = recordingPublish();
+    await runEffectsCron(env, {
+      metrics: { count: () => {} },
+      now: () => 5_000,
+      sinks: [sink],
+      publish,
+    });
+    expect(
+      await env.ORG_READ.prepare("SELECT 1 FROM webhook_deliveries WHERE delivery_id = ?")
+        .bind(delivery)
+        .first(),
+    ).toBeNull();
+    expect(sent.flatMap((s) => s.ids)).toContain(id);
+    expect(calls).toEqual([]);
   });
 });

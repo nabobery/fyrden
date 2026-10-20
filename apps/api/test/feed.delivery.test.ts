@@ -21,13 +21,8 @@ import {
 } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import { sweepEffects } from "../src/effects/dispatcher.js";
-import {
-  EFFECT_POLICY,
-  type EffectSink,
-  INLINE_BATCH_EFFECTS,
-  INLINE_EFFECTS,
-} from "../src/effects/journal.js";
+import { deliverEffects, invocationBudget } from "../src/effects/dispatcher.js";
+import { EFFECT_POLICY, type EffectSink, INLINE_BATCH_EFFECTS } from "../src/effects/journal.js";
 import { EFFECT_SINKS } from "../src/effects/sinks.js";
 import { feedSink } from "../src/feed/sink.js";
 import {
@@ -36,7 +31,7 @@ import {
   EVENTS_QUEUE,
   INVOCATION_CALLS,
 } from "../src/queues/events-consumer.js";
-import { settleOthersDue } from "./helpers/effects.js";
+import { recordingPublish } from "./helpers/effects.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H8";
@@ -222,9 +217,7 @@ describe("the feed sink", () => {
     expect(await effectRows(repoId)).toMatchObject([{ state: "done" }, { state: "done" }]);
   });
 
-  it("retries only the effects naming a recipient that failed, and the sweeper delivers them", async () => {
-    // A sweep takes a bounded number of effects: settle what other tests left due by then first.
-    await settleOthersDue(T0 + EFFECT_POLICY.backoffMs);
+  it("retries only the effects naming a recipient that failed, and their queue delivers them", async () => {
     const repoId = await listedRepo();
     const [a, b, c] = ["usr_a", "usr_b", "usr_c"].map((p) => `${p}${repoId}`) as [
       string,
@@ -232,26 +225,36 @@ describe("the feed sink", () => {
       string,
     ];
     const { on, calls, failing } = recordingFeeds(new Set([c]));
+    const { publish, sent } = recordingPublish();
     await applyEnvelope(
       on,
       envelope(repoId, [
         commentEvent(repoId, 1, block(1, [a, b])),
         commentEvent(repoId, 2, block(2, [b, c])),
       ]),
-      { sinks: [feedSink], now: () => T0 },
+      { sinks: [feedSink], publish, now: () => T0 },
     );
     expect(await effectRows(repoId)).toEqual([
-      { effect_id: `${repoId}:1:1:feed:feed`, state: "done", attempts: 0 },
+      { effect_id: `${repoId}:1:1:feed:feed`, state: "done", attempts: 1 },
       { effect_id: `${repoId}:1:2:feed:feed`, state: "pending", attempts: 1 },
+    ]);
+    // Its retry: a message for when it is due.
+    expect(sent).toEqual([
+      {
+        sink: "feed",
+        ids: [`${repoId}:1:2:feed:feed`],
+        delaySeconds: EFFECT_POLICY.backoffMs / 1000,
+      },
     ]);
     failing.clear();
     calls.length = 0;
-    await sweepEffects({
-      db: env.ORG_READ,
-      env: on,
-      sinks: [feedSink],
-      now: () => T0 + EFFECT_POLICY.backoffMs,
-    });
+    const due = T0 + EFFECT_POLICY.backoffMs;
+    await deliverEffects(
+      { db: env.ORG_READ, env: on, sinks: [feedSink], now: () => due, publish },
+      "feed",
+      sent[0]?.ids ?? [],
+      invocationBudget(due),
+    );
     expect(await effectRows(repoId)).toMatchObject([{ state: "done" }, { state: "done" }]);
     // Only the failed effect again: its recipients get its entries once more (a feed applies
     // them once).
@@ -269,10 +272,12 @@ describe("the feed sink", () => {
     const repoId = await listedRepo();
     const reader = `usr_reader${repoId}`;
     const event = commentEvent(repoId, 1, block(1, [reader]));
-    await applyEnvelope(env, envelope(repoId, [event]), { sinks: [feedSink] });
+    const { publish } = recordingPublish();
+    await applyEnvelope(env, envelope(repoId, [event]), { sinks: [feedSink], publish });
     // The same entry again under another effect (as a retried one brings it): nothing changes.
     await applyEnvelope(env, envelope(repoId, [{ ...event, id: { ...event.id, sourceSeq: 2 } }]), {
       sinks: [feedSink],
+      publish,
     });
     const page = await env.USER.getByName(reader).listFeed(null, 50, {});
     expect(page).toMatchObject({
@@ -282,17 +287,18 @@ describe("the feed sink", () => {
     });
   });
 
-  it("delivers a batch sink's effects inline besides the other sinks' share", async () => {
+  it("delivers the feed's effects inline and sends the other sinks' to their queue", async () => {
     const repoId = await listedRepo();
     const { on, calls } = recordingFeeds();
     const single: string[] = [];
-    const oneByOne: EffectSink = {
+    const queued: EffectSink = {
       name: "test_hook",
       plan: () => [{ target: "hook_1", payload: {} }],
       deliver: async (effect) => {
         single.push(effect.id);
       },
     };
+    const { publish, sent } = recordingPublish();
     const count = { queries: 0 };
     const measured = {
       ...on,
@@ -305,33 +311,29 @@ describe("the feed sink", () => {
         repoId,
         [1, 2, 3].map((seq) => commentEvent(repoId, seq, block(seq, [`usr_r${repoId}`]))),
       ),
-      // Not T0: the effect left pending must not fall due in the global sweep below. The share
-      // of a full batch's invocation, so two effects are left.
-      {
-        sinks: [oneByOne, feedSink],
-        inline: { left: INLINE_EFFECTS, batched: INLINE_BATCH_EFFECTS },
-      },
+      { sinks: [queued, feedSink], publish },
     );
-    expect(single).toHaveLength(INLINE_EFFECTS);
+    expect(single).toEqual([]);
+    expect(sent).toEqual([
+      { sink: "test_hook", ids: [1, 2, 3].map((seq) => `${repoId}:1:${seq}:test_hook:hook_1`) },
+    ]);
     expect(calls.map((call) => call.entries.length)).toEqual([3]);
-    // A lookup, the batch, the claim, a mark per effect delivered alone, one for the feed's.
-    expect(count.queries).toBe(1 + 1 + 1 + INLINE_EFFECTS + 1);
-    expect(INLINE_EFFECTS).toBe(1);
+    // A lookup, the batch, marking the sent ones, the feed's claim and its mark.
+    expect(count.queries).toBe(5);
     expect((await effectRows(repoId)).map((row) => row.state).sort()).toEqual([
       "done",
       "done",
       "done",
-      "done",
+      "pending",
       "pending",
       "pending",
     ]);
   });
 
-  it("keeps a consumer invocation and a sweep to a few D1 queries", async () => {
-    // Its counts hold for its own effects: others due by its sweep are settled first.
-    await settleOthersDue(T0 + EFFECT_POLICY.sweepAfterMs);
+  it("keeps a consumer invocation and an effects queue's to a few D1 queries", async () => {
     const repos = await Promise.all(Array.from({ length: 5 }, () => listedRepo()));
     const { on, calls } = recordingFeeds();
+    const { publish, sent } = recordingPublish();
     const count = { queries: 0 };
     const measured = {
       ...on,
@@ -353,35 +355,35 @@ describe("the feed sink", () => {
       })),
     );
     const ctx = createExecutionContext();
-    await consumeEvents(batch, measured, { sinks: [feedSink], now: () => T0 });
+    await consumeEvents(batch, measured, { sinks: [feedSink], publish, now: () => T0 });
     expect((await getQueueResult(batch, ctx)).explicitAcks).toHaveLength(5);
-    // Per message a directory lookup and a read-model batch; the invocation's eight inline
-    // effects (three messages' worth), a claim and one mark per message.
+    // Per message a directory lookup and a read-model batch; for the invocation, one send of
+    // the seven effects left, marking them sent, and the eight inline effects' claim and mark.
     expect(INLINE_BATCH_EFFECTS).toBe(8);
-    expect(count.queries).toBe(5 * 2 + 3 * 2);
-    // Each message's inline effects went in one call per recipient: 3, 3, then 2 entries each.
-    expect(calls).toHaveLength(300);
-    expect(calls.map((call) => call.entries.length)).toEqual([
-      ...Array(200).fill(3),
-      ...Array(100).fill(2),
-    ]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.ids).toHaveLength(7);
+    expect(count.queries).toBe(5 * 2 + 1 + 2);
+    // The inline effects went in one call per recipient: 8 entries each.
+    expect(calls).toHaveLength(100);
+    expect(calls.every((call) => call.entries.length === 8)).toBe(true);
 
-    // The sweeper takes the other seven in one run, as its calls allow (100 each): a claim, a
-    // mark and the prune, and one call per recipient.
+    // The feed queue's consumer takes the other seven in one invocation, as its calls allow
+    // (100 each): a claim, a mark, and one call per recipient.
     count.queries = 0;
     calls.length = 0;
-    await sweepEffects({
-      db: measured.ORG_READ,
-      env: measured,
-      sinks: [feedSink],
-      now: () => T0 + EFFECT_POLICY.sweepAfterMs,
-    });
-    expect(count.queries).toBe(3);
+    await deliverEffects(
+      { db: measured.ORG_READ, env: measured, sinks: [feedSink], now: () => T0, publish },
+      "feed",
+      sent[0]?.ids ?? [],
+      invocationBudget(T0),
+    );
+    expect(count.queries).toBe(2);
     expect(calls).toHaveLength(100);
     expect(calls.every((call) => call.entries.length === 7)).toBe(true);
+    expect(sent).toHaveLength(1);
   });
 
-  it("keeps an invocation's calls within its allowance when events are stored, leaving the rest to the sweeper", async () => {
+  it("keeps an invocation's calls within its allowance when events are stored, sending the rest to the feed's queue", async () => {
     const repos = await Promise.all(Array.from({ length: 5 }, () => listedRepo()));
     const { on, calls } = recordingFeeds();
     const count = { queries: 0, payloads: 0 };
@@ -425,10 +427,12 @@ describe("the feed sink", () => {
       envelopes.map((body, i) => ({ id: `m${i}`, timestamp: new Date(), attempts: 1, body })),
     );
     const ctx = createExecutionContext();
-    await consumeEvents(batch, measured, { sinks: [feedSink], now: () => T0 });
+    const { publish, sent } = recordingPublish();
+    await consumeEvents(batch, measured, { sinks: [feedSink], publish, now: () => T0 });
     expect((await getQueueResult(batch, ctx)).explicitAcks).toHaveLength(5);
     expect(count.payloads).toBe(250);
-    // Six effects inline (three messages' two), the other four kept for the sweeper.
+    expect(sent.flatMap((s) => s.ids)).toHaveLength(4);
+    // Six effects inline (three messages' two), the other four sent to the feed's queue.
     expect(calls).toHaveLength(600);
     const total = count.queries + count.payloads + calls.length;
     expect(total).toBeLessThanOrEqual(INVOCATION_CALLS);

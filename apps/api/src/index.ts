@@ -4,6 +4,7 @@ import { archiveDirectoryAudit } from "./cron/directory-audit-archiver.js";
 import { runEffectsCron } from "./cron/effects.js";
 import { reapExpiredRepos } from "./cron/expiry-reaper.js";
 import { reapOAuth } from "./oauth/reaper.js";
+import { consumeEffects, sinkOfQueue } from "./queues/effects-consumer.js";
 import { consumeEvents, EVENTS_QUEUE } from "./queues/events-consumer.js";
 import { advanceDeletions } from "./repos/deletion.js";
 import { settleStaleGenerations } from "./repos/generate.js";
@@ -19,7 +20,7 @@ export { RunDO } from "./do/RunDO.js";
 export { UserDO } from "./do/UserDO.js";
 export { ApiRpc } from "./rpc.js";
 
-/** The cron trigger that retries effects and webhook deliveries (wrangler.jsonc). */
+/** The cron trigger that recovers effects and reconciles webhook deliveries (wrangler.jsonc). */
 const EFFECTS_CRON = "2-59/5 * * * *";
 
 export default {
@@ -35,6 +36,13 @@ export default {
       const metrics = createMetrics(env.METRICS);
       return measureInvocation(metrics, { where: "worker", op: "queue webhooks" }, () =>
         consumeWebhooks(batch as MessageBatch<DeliveryMessage>, env, { metrics }),
+      );
+    }
+    const sink = sinkOfQueue(batch.queue);
+    if (sink !== undefined) {
+      const metrics = createMetrics(env.METRICS);
+      return measureInvocation(metrics, { where: "worker", op: `queue effects ${sink}` }, () =>
+        consumeEffects(batch, env, { metrics }),
       );
     }
     // Nothing produces to the other queues yet; retrying keeps a message

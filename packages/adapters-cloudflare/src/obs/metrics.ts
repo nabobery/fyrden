@@ -68,11 +68,19 @@ export const METRICS = {
   "git.repo.packs": ["repo", "group"],
   "git.repo.bytes": ["repo", "group"],
   // The effects pipeline, one point per run by outcome = ok | error: the
-  // effects cron's sweep and its webhook reconciliation, and a consumer
-  // message's inline delivery of the effects it journaled.
-  "effects.sweep": ["outcome"],
+  // effects cron's recovery of overdue effects and its webhook
+  // reconciliation, an events consumer message's sending and inline
+  // delivery of the effects it journaled, and an effects queue message.
+  "effects.recover": ["outcome"],
   "webhooks.reconcile": ["outcome"],
   "effects.dispatch": ["outcome"],
+  "effects.consume": ["sink", "outcome"],
+  // Effects by sink (the value is the amount): sent again by the cron as
+  // overdue; ended because their source was deleted, restored or
+  // transferred since; failed for good (attempts spent, or no such sink).
+  "effects.recovered": ["sink"],
+  "effects.invalidated": ["sink"],
+  "effects.failed": ["sink"],
   // Calls one invocation made against one subrequest budget, written once
   // when it ends: where = worker | do; budget = internal (R2, D1, Durable
   // Object calls) | external (outbound fetch and Cache API); op = the route

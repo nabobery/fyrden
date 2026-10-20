@@ -18,9 +18,10 @@ async function timed(check: () => Promise<boolean>): Promise<HealthCheck> {
 
 /**
  * How late the oldest pending effect (a webhook delivery or feed entry to
- * make) may be before the effects check reports it: the effects cron
- * retries due ones every five minutes, so this is three runs that did not
- * get to it. Proposed.
+ * make) may be before the effects check reports it: its queue delivers it
+ * within seconds, and the effects cron sends a lost one's message again
+ * every five minutes, so this is a queue that does not deliver, or a
+ * recovery that does not work. Proposed.
  */
 export const EFFECTS_OVERDUE_MS = 15 * 60 * 1000;
 

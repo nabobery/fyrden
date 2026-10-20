@@ -50,6 +50,10 @@
     "producers": [
       { "binding": "EVENTS", "queue": "fyrden-events" },
       { "binding": "WEBHOOKS", "queue": "fyrden-webhooks" },
+      // Each effect sink's queue: the ids of effects the events consumer journaled.
+      { "binding": "EFFECTS_WEBHOOKS", "queue": "fyrden-effects-webhooks" },
+      { "binding": "EFFECTS_FEED", "queue": "fyrden-effects-feed" },
+      { "binding": "EFFECTS_REFERENCES", "queue": "fyrden-effects-references" },
       { "binding": "CI_DISPATCH", "queue": "fyrden-ci-dispatch" },
       { "binding": "INDEXING", "queue": "fyrden-indexing" }
     ],
@@ -59,22 +63,47 @@
       {
         "queue": "fyrden-events",
         "max_batch_size": 5,
-        "max_batch_timeout": 5,
+        // A second at most before a message is taken: notifications wait on it. Queues bill
+        // per message, not per batch, so a shorter wait costs no operations.
+        "max_batch_timeout": 1,
         "max_retries": 10,
         "dead_letter_queue": "fyrden-events-dlq"
       },
       // One delivery attempt per message, each acknowledged: the deliveries
       // table schedules retries (a new message each); the cron resends lost ones.
-      { "queue": "fyrden-webhooks", "max_batch_size": 5, "max_retries": 2 },
+      { "queue": "fyrden-webhooks", "max_batch_size": 5, "max_batch_timeout": 1, "max_retries": 2 },
+      // Effects: the journal decides and schedules (a retry is a new message), and the effects
+      // cron sends a message again for an effect overdue, so no dead-letter queue. Batch sizes
+      // keep an invocation's work within Free's CPU time: a message names up to 2 webhook
+      // effects (an event's deliveries each), 8 feed effects or 10 references.
+      {
+        "queue": "fyrden-effects-webhooks",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 3
+      },
+      {
+        "queue": "fyrden-effects-feed",
+        "max_batch_size": 2,
+        "max_batch_timeout": 1,
+        "max_retries": 3
+      },
+      {
+        "queue": "fyrden-effects-references",
+        "max_batch_size": 2,
+        "max_batch_timeout": 1,
+        "max_retries": 3
+      },
       { "queue": "fyrden-ci-dispatch" },
       { "queue": "fyrden-indexing" }
     ]
   },
 
   // Archives the directory's audit log to R2 and the other maintenance
-  // tasks; the second, offset, retries effects and webhook deliveries in an
-  // invocation of its own (each has its own 1,000 calls on Free). Proposed
-  // intervals; Free allows a few cron triggers per account.
+  // tasks; the second, offset, sends overdue effects again and reconciles
+  // webhook deliveries in an invocation of its own (each has its own 1,000
+  // calls on Free). Proposed intervals; Free allows a few cron triggers per
+  // account.
   "triggers": { "crons": ["*/5 * * * *", "2-59/5 * * * *"] },
 
   // Cache only; never an authoritative store.

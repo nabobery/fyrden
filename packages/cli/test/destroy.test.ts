@@ -26,12 +26,18 @@ afterEach(() => rm(repoRoot, { recursive: true, force: true }));
 const EVERY_RESOURCE = [
   "consumer:fyrden-events/fyrden-api",
   "consumer:fyrden-webhooks/fyrden-api",
+  "consumer:fyrden-effects-webhooks/fyrden-api",
+  "consumer:fyrden-effects-feed/fyrden-api",
+  "consumer:fyrden-effects-references/fyrden-api",
   "consumer:fyrden-ci-dispatch/fyrden-api",
   "consumer:fyrden-indexing/fyrden-api",
   "worker:fyrden-web",
   "worker:fyrden-api",
   "queue:fyrden-events",
   "queue:fyrden-webhooks",
+  "queue:fyrden-effects-webhooks",
+  "queue:fyrden-effects-feed",
+  "queue:fyrden-effects-references",
   "queue:fyrden-ci-dispatch",
   "queue:fyrden-indexing",
   "queue:fyrden-events-dlq",
@@ -140,7 +146,14 @@ describe("fyrden destroy", () => {
     await destroy(deps(fake.runner, { confirmed: true }).d);
     const args = fake.calls.map((c) => c.args.join(" "));
     const workerDelete = args.indexOf("delete --name fyrden-api --force");
-    for (const queue of ["fyrden-events", "fyrden-webhooks", "fyrden-ci-dispatch"]) {
+    for (const queue of [
+      "fyrden-events",
+      "fyrden-webhooks",
+      "fyrden-effects-webhooks",
+      "fyrden-effects-feed",
+      "fyrden-effects-references",
+      "fyrden-ci-dispatch",
+    ]) {
       const remove = args.indexOf(`queues consumer remove ${queue} fyrden-api`);
       expect(remove).toBeGreaterThanOrEqual(0);
       expect(remove).toBeLessThan(workerDelete);
