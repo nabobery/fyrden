@@ -251,6 +251,36 @@ describe("events consumer", () => {
     expect(await readRow(repoId)).toMatchObject({ version: 2 });
   });
 
+  it("keeps references' effects of an older ownership generation: they hold across a transfer", async () => {
+    const repoId = await listedRepo();
+    await env.ORG_READ.prepare("INSERT INTO source_owner (source_id, owner_gen) VALUES (?, 2)")
+      .bind(repoId)
+      .run();
+    const event: DomainEvent = {
+      id: { sourceId: repoId, epochGen: 1, sourceSeq: 1 },
+      type: "reference.sync",
+      at: Date.now(),
+      actor: OWNER,
+      actChain: [],
+      ownerGen: 1,
+      entity: null,
+      data: {
+        source_number: 1,
+        source_comment: 0,
+        source_kind: "issue",
+        repos: [{ repo_id: newId("rep"), numbers: [2] }],
+      },
+      stored: false,
+    };
+    await deliver([envelope(repoId, [event])]);
+    const journaled = await env.ORG_READ.prepare(
+      "SELECT sink FROM effects WHERE effect_id LIKE ? || '%'",
+    )
+      .bind(repoId)
+      .all<{ sink: string }>();
+    expect(journaled.results.map((r) => r.sink)).toEqual(["references"]);
+  });
+
   it("applies only the newest snapshot of an entity within one message", async () => {
     const repoId = await listedRepo();
     await deliver([

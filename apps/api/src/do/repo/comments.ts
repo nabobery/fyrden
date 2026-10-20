@@ -51,6 +51,13 @@ export class RepoComments {
       readonly repoId: () => string;
       /** In a comment's deletion: its reactions go with it. */
       readonly forgetReactions: (id: number) => void;
+      /** In a change's transaction: a comment's text now (null: deleted), for what it refers to. */
+      readonly described: (
+        comment: CommentRecord,
+        kind: SubjectKind,
+        text: string | null,
+        actor: RefActor,
+      ) => void;
     },
   ) {}
 
@@ -213,6 +220,8 @@ export class RepoComments {
       { ...data, parent },
       deleted,
     );
+    if (conversation && (event !== "edited" || "body" in ((data?.changes as object) ?? {})))
+      this.deps.described(comment, conversation.kind, deleted ? null : comment.body, actor);
   }
 
   #rows(query: string, ...bindings: SqlStorageValue[]): Row[] {

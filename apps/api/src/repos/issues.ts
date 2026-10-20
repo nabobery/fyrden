@@ -3,6 +3,7 @@ import type {
   deleteIssue,
   getIssue,
   Input,
+  listIssueReferences,
   listIssues,
   lockIssue,
   Output,
@@ -15,7 +16,7 @@ import type { SubjectMeta } from "../do/repo/subject-meta.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
-import type { RepoEntry } from "./directory.js";
+import { authorize, findReposById, type RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
 import { sortingFailure, sortingInput, sortingOutput } from "./sorting.js";
 import { subjectAccess, subjectNotFound, tokenKinds } from "./subjects.js";
@@ -331,4 +332,105 @@ export async function deleteIssueOperation(
   );
   if (!result.ok) throw issueFailure(entry, result.code, input.issue_number);
   return { number: input.issue_number, state: "deleted" };
+}
+
+/** Other repositories one page of references checks at most (an authorization each). */
+export const REFERENCE_REPOS_PER_PAGE = 10;
+
+const KIND_READ = { issue: "issues:read", pull: "pull_requests:read" } as const;
+
+/** Calls to the repository object one page of references makes at most (each passes a hidden group). */
+const REFERENCE_ROUNDS = 2 * REFERENCE_REPOS_PER_PAGE + 2;
+
+/**
+ * The `issues.references.list` operation: each reference only when the
+ * caller reads both ends (this issue's or pull request's kind, checked by
+ * the object; the source's repository and kind, checked here, at most
+ * `REFERENCE_REPOS_PER_PAGE` other repositories a page). A page holds only
+ * references the caller sees: one whose repository and kind it may not
+ * read is passed over with every other of that repository and kind, and a
+ * continuation follows only a reference shown (or, past the page's checks,
+ * the last group passed over: the page then ends early).
+ */
+export async function listIssueReferencesOperation(
+  ctx: OpContext,
+  input: Input<typeof listIssueReferences>,
+): Promise<Output<typeof listIssueReferences>> {
+  const { entry, kinds } = await subjectAccess(ctx, input.owner, input.repo, "read");
+  const object = repo(ctx, entry, "listReferences");
+  const found = new Map<string, RepoEntry>();
+  const readable = new Map<string, boolean>();
+  const mayRead = async (repoId: string, kind: SubjectKind): Promise<boolean> => {
+    if (repoId === entry.id) return kinds.includes(kind);
+    const other = found.get(repoId);
+    if (!other) return false;
+    const key = `${repoId}:${kind}`;
+    let allowed = readable.get(key);
+    if (allowed === undefined) {
+      allowed = await authorize(ctx.env, ctx.auth, other, KIND_READ[kind], ctx.metrics);
+      readable.set(key, allowed);
+    }
+    return allowed;
+  };
+  const checked = new Set<string>();
+  const page: Output<typeof listIssueReferences>["references"] = [];
+  let cursor = input.cursor ?? null;
+  // The position a continuation names: after the last reference shown, or group passed over.
+  let at: string | null = null;
+  let more = false;
+  rounds: for (let round = 0; ; round++) {
+    if (round === REFERENCE_ROUNDS) {
+      more = at !== null;
+      break;
+    }
+    const want = input.per_page + 1 - page.length;
+    const rows = await object.listReferences(input.issue_number, kinds, cursor, want);
+    if (rows === null) throw failure(entry, "repo_not_found");
+    if (!rows) throw subjectNotFound(input.issue_number);
+    if (rows === "invalid_cursor") throw invalidCursor();
+    const unknown = [
+      ...new Set(
+        rows
+          .map((r) => r.sourceRepo)
+          .filter((id) => id !== entry.id && !checked.has(id) && !found.has(id)),
+      ),
+    ].slice(0, REFERENCE_REPOS_PER_PAGE - checked.size);
+    for (const other of await findReposById(ctx.env, unknown, ctx.metrics))
+      found.set(other.id, other);
+    for (const row of rows) {
+      if (row.sourceRepo !== entry.id && !checked.has(row.sourceRepo)) {
+        // Past the repositories this page may check: the next page goes on from here.
+        if (checked.size >= REFERENCE_REPOS_PER_PAGE) {
+          more = at !== null;
+          break rounds;
+        }
+        checked.add(row.sourceRepo);
+      }
+      if (!(await mayRead(row.sourceRepo, row.sourceKind))) {
+        // Every reference of that repository and kind is passed over at once.
+        cursor = row.groupEnd;
+        at = row.groupEnd;
+        continue rounds;
+      }
+      if (page.length === input.per_page) {
+        more = true;
+        break rounds;
+      }
+      const source = row.sourceRepo === entry.id ? entry : (found.get(row.sourceRepo) as RepoEntry);
+      page.push({
+        source: {
+          repository: `${source.ownerHandle}/${source.name}`,
+          number: row.sourceNumber,
+          kind: row.sourceKind === "issue" ? "issue" : "pull_request",
+          comment_id: row.sourceComment === 0 ? null : row.sourceComment,
+        },
+        created_at: row.createdAt,
+      });
+      cursor = row.cursor;
+      at = row.cursor;
+    }
+    // Fewer than asked: nothing after them.
+    if (rows.length < want) break;
+  }
+  return { references: page, next_cursor: more ? at : null };
 }

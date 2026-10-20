@@ -170,6 +170,10 @@ export class RepoPulls {
       readonly follow?: (pull: PullRecord) => void;
       /** What a pull request's labels, assignees and milestone are, read into its snapshots. */
       readonly snapshotMeta?: (number: number) => SnapshotMeta;
+      /** In a change's transaction: its description now (opened, or edited), for what it refers to. */
+      readonly described?: (number: number, body: string | null, actor: RefActor | null) => void;
+      /** In a merge's transaction, once merged: what its description closes is closed. */
+      readonly merged?: (pull: PullRecord, actor: RefActor) => void;
     },
   ) {}
 
@@ -314,8 +318,10 @@ export class RepoPulls {
     );
     // The fence ran in this transaction: it is open.
     if (!row) throw new Error(`pull request ${number} is not open to merge`);
-    this.#emit(rule.event, record(row), actor);
+    const pull = record(row);
+    this.#emit(rule.event, pull, actor);
     this.deps.events.auditChange(rule.audit, actor, { number, sha: oidToHex(sha), method });
+    this.deps.merged?.(pull, actor);
   }
 
   /**
@@ -887,6 +893,11 @@ export class RepoPulls {
       { type: PULL_ENTITY, id: `${this.deps.repoId()}#${pull.number}`, version, row },
       data,
     );
+    if (
+      event === "opened" ||
+      (event === "edited" && data?.changes && "body" in (data.changes as object))
+    )
+      this.deps.described?.(pull.number, pull.body, actor);
   }
 
   /**

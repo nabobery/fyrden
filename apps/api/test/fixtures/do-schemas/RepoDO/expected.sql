@@ -10,6 +10,8 @@ CREATE INDEX audit_segments_to ON audit_segments (to_seq);
 CREATE INDEX comments_number ON comments (number, comment_id);
 CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
 CREATE INDEX import_commits_staged ON import_commits (staged_at);
+CREATE INDEX incoming_references_source
+        ON incoming_references (source_repo, source_number, source_comment);
 CREATE INDEX issues_state ON issues (state, number);
 CREATE INDEX issues_updated ON issues (state, updated_at, number);
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
@@ -35,6 +37,7 @@ CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
 CREATE INDEX refollow_bases_due ON refollow_bases (next_at);
 CREATE INDEX refs_oid ON refs (oid);
+CREATE INDEX resolved_repos_at ON resolved_repos (resolved_at);
 CREATE INDEX review_comments_pr ON review_comments (pr_number, comment_id);
 CREATE INDEX review_comments_thread ON review_comments (thread_id, comment_id);
 CREATE INDEX review_threads_pr ON review_threads (pr_number, thread_id);
@@ -151,6 +154,10 @@ CREATE TABLE commits (
     level INTEGER NOT NULL,
     signature TEXT
   ) STRICT, WITHOUT ROWID;
+CREATE TABLE cursor_keys (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        key BLOB NOT NULL CHECK (length(key) = 32)
+      ) STRICT;
 CREATE TABLE ended_transfers (
         transfer_id TEXT PRIMARY KEY,
         landed INTEGER NOT NULL CHECK (landed IN (0, 1)),
@@ -207,6 +214,15 @@ CREATE TABLE import_commits (
         staged_at INTEGER NOT NULL,
         PRIMARY KEY (import_id, oid)
       ) STRICT;
+CREATE TABLE incoming_references (
+        target INTEGER NOT NULL,
+        source_repo TEXT NOT NULL,
+        source_number INTEGER NOT NULL,
+        source_comment INTEGER NOT NULL,
+        source_kind TEXT NOT NULL CHECK (source_kind IN ('issue', 'pull')),
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (target, source_repo, source_kind, source_number, source_comment)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE issue_tombstones (
         number INTEGER PRIMARY KEY,
         version INTEGER NOT NULL,
@@ -361,6 +377,15 @@ CREATE TABLE outgoing_pulls (
         generation INTEGER NOT NULL, maintainer_can_modify INTEGER NOT NULL DEFAULT 0, author_root TEXT, consent_version INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (base_repo_id, pr_number)
       ) STRICT;
+CREATE TABLE outgoing_references (
+        source_number INTEGER NOT NULL,
+        source_comment INTEGER NOT NULL,
+        repo_id TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        closes INTEGER NOT NULL CHECK (closes IN (0, 1)),
+        name TEXT NOT NULL,
+        PRIMARY KEY (source_number, source_comment, repo_id, number, name)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE packs (
     pack_id TEXT PRIMARY KEY,
     network_id TEXT NOT NULL,
@@ -451,6 +476,19 @@ CREATE TABLE ref_state (
     nonff_version INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   ) STRICT;
+CREATE TABLE reference_closes (
+        effect_id TEXT PRIMARY KEY,
+        outcome TEXT NOT NULL CHECK (outcome IN ('closed', 'unchanged', 'refused')),
+        at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE reference_sources (
+        source_repo TEXT NOT NULL,
+        source_number INTEGER NOT NULL,
+        source_comment INTEGER NOT NULL,
+        epoch_gen INTEGER NOT NULL,
+        source_seq INTEGER NOT NULL,
+        PRIMARY KEY (source_repo, source_number, source_comment)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE reflog (
     seq INTEGER PRIMARY KEY,
     ref TEXT NOT NULL,
@@ -492,6 +530,11 @@ CREATE TABLE repo_meta (
         created_at INTEGER NOT NULL
       , epoch_uuid TEXT, source_seq INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, owner_id TEXT, name TEXT, visibility TEXT
         CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT, next_number INTEGER NOT NULL DEFAULT 1, next_label_id INTEGER NOT NULL DEFAULT 1, next_milestone INTEGER NOT NULL DEFAULT 1, next_reaction_id INTEGER NOT NULL DEFAULT 1) STRICT;
+CREATE TABLE resolved_repos (
+        name TEXT PRIMARY KEY,
+        repo_id TEXT,
+        resolved_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE review_comments (
         comment_id INTEGER PRIMARY KEY AUTOINCREMENT,
         pr_number INTEGER NOT NULL,
