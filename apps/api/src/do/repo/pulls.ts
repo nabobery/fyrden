@@ -15,6 +15,7 @@ import {
   type PullState,
   pullHeadRef,
   type RepoRole,
+  type SubjectMetaField,
 } from "@fyrden/domain";
 import {
   type Oid,
@@ -25,6 +26,7 @@ import {
   type RefUpdate,
 } from "@fyrden/git-core";
 import type { RepoEvents } from "./events.js";
+import type { SnapshotMeta, SubjectEvent } from "./subject-meta.js";
 
 const BRANCHES = "refs/heads/";
 const PULL_HEAD = /^refs\/pull\/([1-9][0-9]*)\/head$/;
@@ -38,8 +40,8 @@ export const LISTING_TTL_MS = 24 * 60 * 60 * 1000;
 /** Listings a repository keeps at most (the oldest go first). Proposed. */
 export const MAX_LISTINGS = 1_000;
 
-/** A pull request as the repository keeps it. */
-export interface PullRecord extends PullRequestRow {
+/** A pull request as the repository keeps it (its labels, assignees and milestone are read apart). */
+export interface PullRecord extends Omit<PullRequestRow, SubjectMetaField> {
   /** The agents that opened it for `authorId`, the current one first; empty when it acted itself. */
   readonly authorAct: readonly string[];
   /**
@@ -84,6 +86,7 @@ type Row = {
   merged_by: string | null;
   merged_at: number | null;
   generation: number;
+  milestone: number | null;
   version: number;
   closed_at: number | null;
   created_at: number;
@@ -165,6 +168,8 @@ export class RepoPulls {
        * repository must follow the branch for it, or no longer.
        */
       readonly follow?: (pull: PullRecord) => void;
+      /** What a pull request's labels, assignees and milestone are, read into its snapshots. */
+      readonly snapshotMeta?: (number: number) => SnapshotMeta;
     },
   ) {}
 
@@ -870,14 +875,33 @@ export class RepoPulls {
       lastPushAt: _at,
       headRefVersion: _headVersion,
       version,
-      ...row
+      ...fields
     } = pull;
+    const row = {
+      ...fields,
+      ...(this.deps.snapshotMeta?.(pull.number) ?? { labels: [], assignees: [], milestone: null }),
+    };
     this.deps.events.emitEntity(
       `pull_request.${event}`,
       actor,
       { type: PULL_ENTITY, id: `${this.deps.repoId()}#${pull.number}`, version, row },
       data,
     );
+  }
+
+  /**
+   * In a change's transaction: the pull request's labels, assignees or
+   * milestone changed; bumps its version and update time and emits
+   * `events` with its snapshot as it now stands.
+   */
+  touch(number: number, events: readonly SubjectEvent[], actor: RefActor): void {
+    const [row] = this.#rows(
+      "UPDATE pull_requests SET version = version + 1, updated_at = ? WHERE number = ? RETURNING *",
+      this.deps.git.context.now(),
+      number,
+    );
+    const pull = record(row as Row);
+    for (const { event, data } of events) this.#emit(event, pull, actor, data);
   }
 
   #rows<T extends Record<string, SqlStorageValue> = Row>(
@@ -949,6 +973,7 @@ function record(row: Row): PullRecord {
     mergedBy: row.merged_by,
     mergedAt: row.merged_at,
     generation: row.generation,
+    milestone: row.milestone,
     closedAt: row.closed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

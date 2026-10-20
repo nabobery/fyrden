@@ -895,4 +895,104 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX pull_requests_updated ON pull_requests (state, updated_at, number);
     `,
   },
+  {
+    version: 34,
+    // Labels, milestones and assignees of issues and pull requests (one
+    // number sequence, so kept by number). Label ids and milestone numbers
+    // come from counters and are never reused: deleting one is one row, and
+    // what pointed at it reads as nothing. Milestone counts, of issues and
+    // of pull requests apart (each shown only to a caller that reads that
+    // kind), are kept by triggers on both tables, so no change of state can
+    // miss them.
+    name: "labels_milestones_assignees",
+    sql: `
+      ALTER TABLE repo_meta ADD COLUMN next_label_id INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE repo_meta ADD COLUMN next_milestone INTEGER NOT NULL DEFAULT 1;
+      CREATE TABLE labels (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        color TEXT NOT NULL CHECK (length(color) = 6),
+        description TEXT,
+        is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE UNIQUE INDEX labels_name ON labels (name COLLATE NOCASE);
+      CREATE TABLE subject_labels (
+        number INTEGER NOT NULL,
+        label_id INTEGER NOT NULL,
+        PRIMARY KEY (number, label_id)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE subject_assignees (
+        number INTEGER NOT NULL,
+        principal TEXT NOT NULL,
+        root TEXT NOT NULL,
+        assigned_at INTEGER NOT NULL,
+        PRIMARY KEY (number, principal)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE milestones (
+        number INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+        due_on INTEGER,
+        closed_at INTEGER,
+        open_issues INTEGER NOT NULL DEFAULT 0,
+        closed_issues INTEGER NOT NULL DEFAULT 0,
+        open_pulls INTEGER NOT NULL DEFAULT 0,
+        closed_pulls INTEGER NOT NULL DEFAULT 0,
+        creator TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK ((state = 'closed') = (closed_at IS NOT NULL))
+      ) STRICT;
+      CREATE UNIQUE INDEX milestones_title ON milestones (title);
+      -- Listed by due date, those without one last.
+      CREATE INDEX milestones_due ON milestones (state, ifnull(due_on, 9007199254740991), number);
+      ALTER TABLE issues ADD COLUMN milestone INTEGER;
+      ALTER TABLE pull_requests ADD COLUMN milestone INTEGER;
+      CREATE TRIGGER issues_milestone_insert AFTER INSERT ON issues
+        WHEN NEW.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_issues = open_issues + (NEW.state = 'open'),
+          closed_issues = closed_issues + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+      CREATE TRIGGER issues_milestone_update AFTER UPDATE OF state, milestone ON issues
+        WHEN OLD.milestone IS NOT NEW.milestone OR OLD.state IS NOT NEW.state
+      BEGIN
+        UPDATE milestones SET open_issues = open_issues - (OLD.state = 'open'),
+          closed_issues = closed_issues - (OLD.state <> 'open') WHERE number = OLD.milestone;
+        UPDATE milestones SET open_issues = open_issues + (NEW.state = 'open'),
+          closed_issues = closed_issues + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+      CREATE TRIGGER issues_milestone_delete AFTER DELETE ON issues
+        WHEN OLD.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_issues = open_issues - (OLD.state = 'open'),
+          closed_issues = closed_issues - (OLD.state <> 'open') WHERE number = OLD.milestone;
+      END;
+      CREATE TRIGGER pull_requests_milestone_insert AFTER INSERT ON pull_requests
+        WHEN NEW.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_pulls = open_pulls + (NEW.state = 'open'),
+          closed_pulls = closed_pulls + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+      CREATE TRIGGER pull_requests_milestone_update AFTER UPDATE OF state, milestone ON pull_requests
+        WHEN OLD.milestone IS NOT NEW.milestone OR OLD.state IS NOT NEW.state
+      BEGIN
+        UPDATE milestones SET open_pulls = open_pulls - (OLD.state = 'open'),
+          closed_pulls = closed_pulls - (OLD.state <> 'open') WHERE number = OLD.milestone;
+        UPDATE milestones SET open_pulls = open_pulls + (NEW.state = 'open'),
+          closed_pulls = closed_pulls + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+      CREATE TRIGGER pull_requests_milestone_delete AFTER DELETE ON pull_requests
+        WHEN OLD.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_pulls = open_pulls - (OLD.state = 'open'),
+          closed_pulls = closed_pulls - (OLD.state <> 'open') WHERE number = OLD.milestone;
+      END;
+    `,
+  },
 ];

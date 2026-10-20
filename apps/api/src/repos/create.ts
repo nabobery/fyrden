@@ -58,7 +58,11 @@ export async function createRepository(
 ): Promise<Output<typeof getRepo>> {
   const { metrics } = request;
   const expiresAt = request.expiresAt ?? null;
-  const { maxRepos } = await accountLimits(env, owner.id, metrics);
+  metrics.count("do.request", { class: "OrgDO", method: "defaultLabels" });
+  const [{ maxRepos }, labels] = await Promise.all([
+    accountLimits(env, owner.id, metrics),
+    env.ORG.getByName(owner.id).defaultLabels(),
+  ]);
   await checkNewRepo(env, owner, name, maxRepos, metrics, request.createdBy);
 
   const id = newId("rep");
@@ -70,6 +74,7 @@ export async function createRepository(
     `refs/heads/${INITIAL_BRANCH}`,
     { ownerId: owner.id, name, visibility: "private", epochGen, actor: request.actorId },
     request.templateId,
+    labels,
   );
   if (!init.ok) throw new Error(`initializing repository storage failed: ${init.error}`);
 

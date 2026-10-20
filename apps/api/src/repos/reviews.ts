@@ -14,7 +14,7 @@ import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import type { RepoEntry } from "./directory.js";
-import { actorOf, failure, pullOutput } from "./pulls.js";
+import { actorOf, failure, pullOutput, readable } from "./pulls.js";
 
 type ReviewOutput = Output<typeof getReview>;
 
@@ -48,7 +48,7 @@ const repo = (ctx: OpContext, entry: RepoEntry, method: string) => {
  * Enabled ones only (an agent with its owner enabled too), unless
  * `includeDisabled` (to withdraw a request made of one disabled since).
  */
-async function principalsByLogin(
+export async function principalsByLogin(
   ctx: OpContext,
   logins: readonly string[],
   includeDisabled = false,
@@ -190,7 +190,7 @@ export async function requestReviewersOperation(
     actorOf(ctx),
   );
   if (!result.ok) throw failure(entry, result.code, input.pull_number);
-  return pullOutput(result.pull);
+  return pullOutput(result.pull, readable(ctx, entry));
 }
 
 /** The `pulls.requested_reviewers.remove` operation. */
@@ -207,5 +207,5 @@ export async function removeRequestedReviewersOperation(
     actorOf(ctx),
   );
   if (!result.ok) throw failure(entry, result.code, input.pull_number);
-  return pullOutput(result.pull);
+  return pullOutput(result.pull, readable(ctx, entry));
 }

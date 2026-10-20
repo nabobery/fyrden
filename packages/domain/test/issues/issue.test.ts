@@ -16,6 +16,9 @@ const row = {
   closedBy: null,
   createdAt: 1,
   updatedAt: 2,
+  labels: [4, 9],
+  assignees: ["usr_b"],
+  milestone: null,
 };
 
 describe("IssueRowSchema", () => {

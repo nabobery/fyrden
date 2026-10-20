@@ -9,6 +9,7 @@ import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { CommitObject } from "./browse.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
+import { SortingOutput } from "./subject-meta.js";
 
 const RepoInput = {
   owner: z
@@ -99,6 +100,7 @@ export const PullRequest = z.object({
     .object({ id: z.string() })
     .nullable()
     .describe("Who merged it (the user, when agents acted for one)."),
+  ...SortingOutput,
 });
 
 export const listPulls = defineOperation({

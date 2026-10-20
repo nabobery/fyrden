@@ -7,6 +7,7 @@ export * from "./events/snapshots.js";
 export * from "./ids.js";
 export * from "./issues/issue.js";
 export * from "./issues/lifecycle.js";
+export * from "./issues/metadata.js";
 export * from "./principals/commit-identity.js";
 export * from "./principals/principal.js";
 export * from "./principals/root.js";

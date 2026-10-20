@@ -2,13 +2,17 @@ import {
   HANDLE_SHAPE,
   ISSUE_STATE_REASONS,
   LOCK_REASONS,
+  MAX_ASSIGNEES,
   MAX_HANDLE_LENGTH,
   MAX_ISSUE_BODY_LENGTH,
   MAX_ISSUE_TITLE_LENGTH,
+  MAX_LABEL_NAME_LENGTH,
+  MAX_SUBJECT_LABELS,
 } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
+import { SortingOutput } from "./subject-meta.js";
 
 const RepoInput = {
   owner: z
@@ -26,6 +30,26 @@ const IssueNumber = z.coerce
   .describe("The issue's number (or a pull request's: they share one sequence).");
 const Title = z.string().trim().min(1).max(MAX_ISSUE_TITLE_LENGTH);
 const Body = z.string().max(MAX_ISSUE_BODY_LENGTH);
+/** What issues and pull requests are sorted by, as the issue endpoints set them. */
+const SortingInput = {
+  labels: z
+    .array(z.string().min(1).max(MAX_LABEL_NAME_LENGTH))
+    .max(MAX_SUBJECT_LABELS)
+    .optional()
+    .describe("Label names (ignoring case), each one the repository has; replaces its labels."),
+  assignees: z
+    .array(z.string().min(1).max(MAX_HANDLE_LENGTH).regex(HANDLE_SHAPE))
+    .max(MAX_ASSIGNEES)
+    .optional()
+    .describe("Handles of users and agents who can read the repository; replaces its assignees."),
+  milestone: z.coerce
+    .number()
+    .int()
+    .positive()
+    .nullable()
+    .optional()
+    .describe("A milestone's number; null takes it out of its milestone."),
+};
 
 export const Issue = z.object({
   id: z.number().int().describe("Fyrden: the number again (issues have no separate id space)."),
@@ -59,6 +83,7 @@ export const Issue = z.object({
   created_at: z.number().int().describe("Unix time in milliseconds."),
   updated_at: z.number().int().describe("Unix time in milliseconds."),
   closed_at: z.number().int().nullable().describe("Unix time in milliseconds."),
+  ...SortingOutput,
   pull_request: z
     .object({
       merged_at: z.number().int().nullable().describe("Unix time in milliseconds."),
@@ -117,8 +142,9 @@ export const createIssue = defineOperation({
   method: "POST",
   path: "/repos/{owner}/{repo}/issues",
   summary: "Create an issue",
-  description: "Opens an issue. Anyone who can read the repository may.",
-  input: z.object({ ...RepoInput, title: Title, body: Body.optional() }),
+  description:
+    "Opens an issue. Anyone who can read the repository may; giving it labels, assignees or a milestone takes triage (refused without it, where GitHub drops them).",
+  input: z.object({ ...RepoInput, title: Title, body: Body.optional(), ...SortingInput }),
   output: Issue,
   permission: "issues:write",
   principals: ["user", "agent"],
@@ -160,7 +186,7 @@ export const updateIssue = defineOperation({
   path: "/repos/{owner}/{repo}/issues/{issue_number}",
   summary: "Update an issue",
   description:
-    "Changes the title or body, closes or reopens it, or marks it a duplicate; fields left out are kept, and all of it happens or none. The author may edit, close and reopen its own issue; on anyone else's, triage closes and reopens, and write edits. Marking a duplicate (`state_reason: duplicate` with `duplicate_of`) takes triage, the author's own issue included. As GitHub's, `state_reason` alone changes nothing unless the state changes, except moving a closed issue to or from `duplicate`. Pull requests change through `pulls.update`.",
+    "Changes the title or body, closes or reopens it, marks it a duplicate, or sets its labels, assignees or milestone; fields left out are kept, and all of it happens or none. The author may edit, close and reopen its own issue; on anyone else's, triage closes and reopens, and write edits. Marking a duplicate (`state_reason: duplicate` with `duplicate_of`) and setting labels, assignees or the milestone take triage, the author's own issue included. As GitHub's, `state_reason` alone changes nothing unless the state changes, except moving a closed issue to or from `duplicate`. A pull request's number takes only labels, assignees and milestone (with `pull_requests:write`); its title, body and state change through `pulls.update`.",
   input: z.object({
     ...RepoInput,
     issue_number: IssueNumber,
@@ -180,9 +206,10 @@ export const updateIssue = defineOperation({
       .describe(
         "Fyrden: with `state_reason: duplicate`, the issue or pull request this one duplicates; the caller must be able to read it.",
       ),
+    ...SortingInput,
   }),
   output: Issue,
-  permission: "issues:write",
+  permission: "metadata:read",
   principals: ["user", "agent"],
   rateLimit: "write",
   idempotency: "key",

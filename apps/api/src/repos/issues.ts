@@ -11,11 +11,13 @@ import type {
 } from "@fyrden/api-contract";
 import type { IssueRecord, Subject, SubjectBoundary, SubjectKind } from "../do/repo/issues.js";
 import type { PullRecord } from "../do/repo/pulls.js";
+import type { SubjectMeta } from "../do/repo/subject-meta.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import type { RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
+import { sortingFailure, sortingInput, sortingOutput } from "./sorting.js";
 import { subjectAccess, subjectNotFound, tokenKinds } from "./subjects.js";
 
 type IssueOutput = Output<typeof getIssue>;
@@ -26,7 +28,11 @@ const repo = (ctx: OpContext, entry: RepoEntry, method: string) => {
 };
 
 /** An issue as the API answers it; its duplicate target only when the caller reads that kind. */
-function issueOutput(issue: IssueRecord, readable: readonly SubjectKind[]): IssueOutput {
+function issueOutput(
+  issue: IssueRecord,
+  readable: readonly SubjectKind[],
+  meta: SubjectMeta,
+): IssueOutput {
   return {
     id: issue.number,
     number: issue.number,
@@ -46,11 +52,16 @@ function issueOutput(issue: IssueRecord, readable: readonly SubjectKind[]): Issu
     created_at: issue.createdAt,
     updated_at: issue.updatedAt,
     closed_at: issue.closedAt,
+    ...sortingOutput(meta, readable),
   };
 }
 
 /** A pull request as the issue endpoints answer it (GitHub's shape: marked with `pull_request`). */
-function pullAsIssue(pull: PullRecord): IssueOutput {
+function pullAsIssue(
+  pull: PullRecord,
+  meta: SubjectMeta,
+  readable: readonly SubjectKind[],
+): IssueOutput {
   return {
     id: pull.number,
     number: pull.number,
@@ -67,12 +78,16 @@ function pullAsIssue(pull: PullRecord): IssueOutput {
     created_at: pull.createdAt,
     updated_at: pull.updatedAt,
     closed_at: pull.closedAt,
+    ...sortingOutput(meta, readable),
     pull_request: { merged_at: pull.mergedAt },
   };
 }
 
-const subjectOutput = (subject: Subject, readable: readonly SubjectKind[]) =>
-  subject.kind === "issue" ? issueOutput(subject.issue, readable) : pullAsIssue(subject.pull);
+/** An issue, or a pull request as the issue endpoints answer one. */
+export const subjectOutput = (subject: Subject, readable: readonly SubjectKind[]) =>
+  subject.kind === "issue"
+    ? issueOutput(subject.issue, readable, subject.meta)
+    : pullAsIssue(subject.pull, subject.meta, readable);
 
 /** The problem for an issue refusal; the codes issues share with pull requests map as theirs do. */
 function issueFailure(entry: RepoEntry, code: string, number: number): OperationError {
@@ -83,7 +98,7 @@ function issueFailure(entry: RepoEntry, code: string, number: number): Operation
       return new OperationError(
         403,
         "forbidden",
-        "Your role on the repository does not allow this on someone else's issue.",
+        "Your role on the repository does not allow this (on someone else's issue, or labels, assignees and milestones without triage).",
       );
     case "wrong_state":
       return new OperationError(422, "wrong_state", "The issue's state does not allow this.");
@@ -120,7 +135,7 @@ function issueFailure(entry: RepoEntry, code: string, number: number): Operation
         "duplicate_of names no issue or pull request you can read here.",
       );
     default:
-      return failure(entry, code, number);
+      return sortingFailure(code) ?? failure(entry, code, number);
   }
 }
 
@@ -239,9 +254,10 @@ export async function createIssueOperation(
   const result = await repo(ctx, entry, "createIssue").createIssue(
     { title: input.title, body: input.body ?? null },
     actorOf(ctx),
+    await sortingInput(ctx, input),
   );
   if (!result.ok) throw issueFailure(entry, result.code, 0);
-  return issueOutput(result.record, tokenKinds(ctx, entry, "read"));
+  return subjectOutput(result.subject, tokenKinds(ctx, entry, "read"));
 }
 
 /** The `issues.update` operation. */
@@ -249,8 +265,9 @@ export async function updateIssueOperation(
   ctx: OpContext,
   input: Input<typeof updateIssue>,
 ): Promise<Output<typeof updateIssue>> {
-  const entry = await repoFor(ctx, input.owner, input.repo, "issues:write");
-  // Its role was checked for writing issues: the kinds it reads differ by its token only.
+  // A pull request's number takes its labels, assignees and milestone here, with its kind's permission.
+  const { entry, kinds } = await subjectAccess(ctx, input.owner, input.repo, "write");
+  // Its role was checked for writing: the kinds it reads differ by its token only.
   const readable = tokenKinds(ctx, entry, "read");
   const result = await repo(ctx, entry, "changeIssue").changeIssue(
     input.issue_number,
@@ -263,9 +280,11 @@ export async function updateIssueOperation(
     },
     actorOf(ctx),
     readable,
+    kinds,
+    await sortingInput(ctx, input),
   );
   if (!result.ok) throw issueFailure(entry, result.code, input.issue_number);
-  return issueOutput(result.record, readable);
+  return subjectOutput(result.subject, readable);
 }
 
 async function setLock(

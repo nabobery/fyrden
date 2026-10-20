@@ -14,6 +14,7 @@ import type {
   updatePullBranch,
 } from "@fyrden/api-contract";
 import { MAX_REQUESTED_REVIEWERS } from "@fyrden/domain";
+import type { SubjectKind } from "../do/repo/issues.js";
 import type { PullView } from "../do/repo/mergeability.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, decodeCursor, encodeBytesCursor, encodeCursor } from "../ops/cursor.js";
@@ -21,11 +22,17 @@ import { type OpContext, OperationError } from "../ops/execute.js";
 import { resolveVerification } from "../signing/verification.js";
 import { authorize, findReposById, networkReposOf, type RepoEntry } from "./directory.js";
 import { commitIdentityFor, commitIdentityOf } from "./file-writes.js";
+import { sortingOutput } from "./sorting.js";
+import { tokenKinds } from "./subjects.js";
+
+/** The kinds the caller reads in `entry` (its token's limits; both take the same role). */
+export const readable = (ctx: OpContext, entry: RepoEntry) => tokenKinds(ctx, entry, "read");
 
 type PullOutput = Output<typeof getPull>;
 
 /** A pull request as the API returns it. */
-export function pullOutput(pull: PullView): PullOutput {
+/** A pull request as the API answers it, for a caller reading `readable` (its milestone's counts). */
+export function pullOutput(pull: PullView, readable: readonly SubjectKind[]): PullOutput {
   return {
     number: pull.number,
     state: pull.state === "open" ? "open" : "closed",
@@ -51,6 +58,7 @@ export function pullOutput(pull: PullView): PullOutput {
     merged_at: pull.mergedAt,
     merge_commit_sha: pull.mergeCommitSha,
     merged_by: pull.mergedBy === null ? null : { id: pull.mergedBy },
+    ...sortingOutput(pull.meta, readable),
   };
 }
 
@@ -207,7 +215,7 @@ export async function listPullsOperation(
   const page = pulls.slice(0, input.per_page);
   const last = page.at(-1);
   return {
-    pull_requests: page.map(pullOutput),
+    pull_requests: page.map((p) => pullOutput(p, readable(ctx, entry))),
     next_cursor: pulls.length > input.per_page && last ? encodeCursor(String(last.number)) : null,
   };
 }
@@ -222,7 +230,7 @@ export async function getPullOperation(
   const pull = await ctx.env.REPO.getByName(entry.id).getPull(input.pull_number);
   if (pull === null) throw repoNotFound(entry);
   if (!pull) throw pullNotFound(input.pull_number);
-  return pullOutput(pull);
+  return pullOutput(pull, readable(ctx, entry));
 }
 
 /** The `pulls.create` operation. */
@@ -254,7 +262,7 @@ export async function createPullOperation(
     );
   }
   if (!result.ok) throw failure(entry, result.code, "number" in result ? result.number : undefined);
-  return pullOutput(result.record);
+  return pullOutput(result.record, readable(ctx, entry));
 }
 
 /**
@@ -325,7 +333,7 @@ export async function updatePullOperation(
   );
   if (!result.ok)
     throw failure(entry, result.code, "number" in result ? result.number : input.pull_number);
-  return pullOutput(result.record);
+  return pullOutput(result.record, readable(ctx, entry));
 }
 
 /** The `pulls.merge` operation. */

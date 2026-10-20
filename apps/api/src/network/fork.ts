@@ -134,6 +134,9 @@ export async function forkRepository(
   let packsCompacted = 0;
   try {
     const epochGen = await allocateEpoch(env.DIRECTORY, forkId, request.metrics);
+    // A fork starts with its account's default labels, as a new repository does.
+    request.metrics?.count("do.request", { class: "OrgDO", method: "defaultLabels" });
+    const labels = await env.ORG.getByName(request.ownerId).defaultLabels();
     await fork.initFork(
       { networkId, head: exported.head, packs: exported.packs },
       {
@@ -143,6 +146,7 @@ export async function forkRepository(
         epochGen,
         actor: request.actorId ?? request.ownerId,
       },
+      labels,
     );
 
     let frontier = exported.tips.map(hex);
