@@ -148,6 +148,8 @@ export function applied(change: AclChange): Extract<AclChange, { ok: true }> {
       throw new OperationError(404, change.code, change.error);
     case "repo_gone":
       throw new OperationError(404, "repo_not_found", change.error);
+    case "principal_gone":
+      throw new OperationError(404, "user_not_found", change.error);
     case "not_a_member":
       throw new OperationError(422, change.code, change.error);
     default:

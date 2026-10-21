@@ -46,6 +46,8 @@ export async function createOrgOperation(
     owner: { id: admin.id, handle: admin.handle },
     epochGen,
   });
+  if (!init.ok && init.code === "owner_gone")
+    throw new OperationError(409, "user_changed", `The user ${input.admin} changed meanwhile.`);
   if (!init.ok) throw new Error(`initializing the organization failed: ${init.error}`);
   await orgHooks.beforePublish?.();
   const now = clock();
