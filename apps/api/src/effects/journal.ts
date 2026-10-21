@@ -70,7 +70,7 @@ export interface EffectSink {
   readonly acrossTransfers?: boolean;
   /**
    * Effects one queue message of the sink names at most (`PER_MESSAGE` when
-   * not said): about what one invocation delivers in its CPU time (see
+   * not said): about what one invocation delivers in good time (see
    * `EffectPolicy.invocation`), so messages are delivered side by side.
    */
   readonly perMessage?: number;
@@ -79,6 +79,8 @@ export interface EffectSink {
    * `INLINE_BATCH_EFFECTS`), sparing them a queue's wait; a batch sink only.
    */
   readonly inline?: boolean;
+  /** Whether this effect of an inline sink may be delivered inline (all of them when not said). */
+  inlineable?(planned: PlannedEffect): boolean;
 }
 
 /**
@@ -160,10 +162,12 @@ export const EFFECT_POLICY: EffectPolicy = {
   invocation: {
     // Free allows 1,000 calls an invocation (measured, docs/operations/limits.md), less a margin.
     calls: 900,
-    // CPU time, not calls, bounds an invocation: Free allows about 10 ms (verified,
-    // docs/operations/limits.md), and a cron run delivering 20 webhook effects took 42 to 86 ms
-    // on Free (measured, 2026-10-17). Each sink's messages carry fewer (`EffectSink.perMessage`),
-    // and its queue's batch size bounds how many messages an invocation takes; this caps a batch.
+    // Queue consumers get 30 s of CPU on Free as on Paid (Free's 10 ms is for requests and cron
+    // triggers: docs/operations/limits.md), so what bounds an invocation is its wall time, while
+    // its claims hold, and how long the effects behind it wait: a cron run delivering 20 webhook
+    // effects took 42 to 86 ms of CPU on Free (measured, 2026-10-17). Each sink's messages carry
+    // fewer (`EffectSink.perMessage`), and its queue's batch size bounds how many messages an
+    // invocation takes; this caps a batch.
     effects: 20,
     // A webhook effect's payload holds its body (up to 192 KiB): at most 5 of the largest.
     bytes: 1024 * 1024,
@@ -180,6 +184,15 @@ export const EFFECT_POLICY: EffectPolicy = {
  * rest go to their queue. Proposed.
  */
 export const INLINE_BATCH_EFFECTS = 8;
+
+/**
+ * Calls to recipients (a feed's, one each) one events consumer invocation
+ * makes delivering inline at most: about 30 ms of wall time each on Free
+ * (measured, 2026-10-21), and other sources' events wait behind them, so
+ * a larger audience goes to its sink's queue, whose consumers run side by
+ * side. Proposed.
+ */
+export const INLINE_RECIPIENTS = 50;
 
 /** Effects a queue message names at most, unless its sink says (`EffectSink.perMessage`). Proposed. */
 export const PER_MESSAGE = 10;
@@ -233,6 +246,8 @@ export interface JournalRow {
   readonly anyOwner: 0 | 1;
   /** The calls delivering it makes at most (see `effectCalls`). */
   readonly calls: number;
+  /** The events consumer may deliver it itself (`EffectSink.inline`, `inlineable`). */
+  readonly inline: boolean;
 }
 
 /** The effects `events` require of `sinks`, each sink asked once per event. */
@@ -256,6 +271,7 @@ export function planEffects(
           ownerGen: event.ownerGen,
           anyOwner: sink.acrossTransfers ? 1 : 0,
           calls: effectCalls(sink, planned),
+          inline: sink.inline === true && sink.inlineable?.(planned) !== false,
         });
       }
   }
@@ -270,10 +286,10 @@ export function journalStatements(
   now: number,
   policy: EffectPolicy = EFFECT_POLICY,
 ): D1PreparedStatement[] {
-  type Row = Omit<JournalRow, "calls">;
+  type Row = Omit<JournalRow, "calls" | "inline">;
   const chunks: Row[][] = [[]];
   let bytes = 0;
-  for (const { calls: _calls, ...row } of planned) {
+  for (const { calls: _calls, inline: _inline, ...row } of planned) {
     // The row as it is bound: UTF-8 JSON, its payload escaped once more.
     const size = encoder.encode(JSON.stringify(row)).length + 1;
     if (bytes + size > STATEMENT_BYTES && (chunks.at(-1)?.length ?? 0) > 0) {

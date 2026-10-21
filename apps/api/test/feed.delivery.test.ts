@@ -22,7 +22,12 @@ import {
 import { describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { deliverEffects, invocationBudget } from "../src/effects/dispatcher.js";
-import { EFFECT_POLICY, type EffectSink, INLINE_BATCH_EFFECTS } from "../src/effects/journal.js";
+import {
+  EFFECT_POLICY,
+  type EffectSink,
+  INLINE_BATCH_EFFECTS,
+  INLINE_RECIPIENTS,
+} from "../src/effects/journal.js";
 import { EFFECT_SINKS } from "../src/effects/sinks.js";
 import { feedSink } from "../src/feed/sink.js";
 import {
@@ -355,7 +360,13 @@ describe("the feed sink", () => {
       })),
     );
     const ctx = createExecutionContext();
-    await consumeEvents(batch, measured, { sinks: [feedSink], publish, now: () => T0 });
+    // Calls and queries are what this bounds: a recipients' share as large as the calls.
+    await consumeEvents(batch, measured, {
+      sinks: [feedSink],
+      publish,
+      now: () => T0,
+      inline: { batched: INLINE_BATCH_EFFECTS, recipients: INVOCATION_CALLS },
+    });
     expect((await getQueueResult(batch, ctx)).explicitAcks).toHaveLength(5);
     // Per message a directory lookup and a read-model batch; for the invocation, one send of
     // the seven effects left, marking them sent, and the eight inline effects' claim and mark.
@@ -428,7 +439,13 @@ describe("the feed sink", () => {
     );
     const ctx = createExecutionContext();
     const { publish, sent } = recordingPublish();
-    await consumeEvents(batch, measured, { sinks: [feedSink], publish, now: () => T0 });
+    // Calls are what this bounds: a recipients' share as large as the calls.
+    await consumeEvents(batch, measured, {
+      sinks: [feedSink],
+      publish,
+      now: () => T0,
+      inline: { batched: INLINE_BATCH_EFFECTS, recipients: INVOCATION_CALLS },
+    });
     expect((await getQueueResult(batch, ctx)).explicitAcks).toHaveLength(5);
     expect(count.payloads).toBe(250);
     expect(sent.flatMap((s) => s.ids)).toHaveLength(4);
@@ -438,5 +455,43 @@ describe("the feed sink", () => {
     expect(total).toBeLessThanOrEqual(INVOCATION_CALLS);
     const states = (await Promise.all(repos.map(effectRows))).flat().map((row) => row.state);
     expect(states.filter((state) => state === "pending")).toHaveLength(4);
+  });
+
+  it("shares the recipients delivered inline across an invocation's messages", async () => {
+    const repos = await Promise.all(Array.from({ length: 4 }, () => listedRepo()));
+    const { on, calls } = recordingFeeds();
+    const { publish, sent } = recordingPublish();
+    // Four messages, one event each, for 30, 30, 20 and 1 recipients of their own.
+    const sizes = [30, 30, 20, 1];
+    const batch = createMessageBatch(
+      EVENTS_QUEUE,
+      repos.map((repoId, i) => ({
+        id: `m${i}`,
+        timestamp: new Date(),
+        attempts: 1,
+        body: envelope(repoId, [
+          commentEvent(
+            repoId,
+            1,
+            block(
+              1,
+              Array.from({ length: sizes[i] as number }, (_, n) => `usr_${i}_${n}`),
+            ),
+          ),
+        ]),
+      })),
+    );
+    expect(INLINE_RECIPIENTS).toBe(50);
+    // The share left unsaid: the invocation's default, one for all its messages.
+    await consumeEvents(batch, on, {
+      sinks: [feedSink],
+      publish,
+      now: () => T0,
+      inline: { batched: INLINE_BATCH_EFFECTS },
+    });
+    // 30 and 20 fit the 50; the second 30, and then the 1, do not.
+    expect(calls).toHaveLength(50);
+    const queued = sent.flatMap((s) => s.ids).map((id) => id.split(":")[0]);
+    expect(queued).toEqual([repos[1], repos[3]]);
   });
 });
