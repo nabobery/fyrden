@@ -387,6 +387,71 @@ describe("journaling and sending effects", () => {
     ).toMatchObject([{ state: "done" }, { state: "done" }, { state: "pending" }]);
   });
 
+  it("takes an event whose feed block names further pages of its audience", async () => {
+    const repoId = await listedRepo();
+    const { sink } = recordingSink();
+    const paged: DomainEvent = {
+      ...pushEvent(repoId, 1),
+      feed: {
+        threadKey: "issue/1",
+        subject: { kind: "issue", number: 1, title: "T", version: 1 },
+        action: "comment",
+        actorRoot: OWNER,
+        actorTrust: "write",
+        member: null,
+        excerpt: null,
+        audience: [],
+        pages: [{ n: 1, count: 100, bytes: 20_000 }],
+        deadline: T0 + 1_000,
+      },
+    };
+    const batch = createMessageBatch(EVENTS_QUEUE, [
+      { id: "m", timestamp: new Date(), attempts: 1, body: envelope(repoId, [paged]) },
+    ]);
+    await consumeEvents(batch, env, {
+      sinks: [sink],
+      publish: recordingPublish().publish,
+      now: () => T0,
+    });
+    expect(await getQueueResult(batch, createExecutionContext())).toMatchObject({
+      explicitAcks: ["m"],
+    });
+    expect(await effectRows(repoId)).toHaveLength(1);
+  });
+
+  it("records each failed effect of a batch with its own error", async () => {
+    const repoId = await listedRepo();
+    const inline = recordingSink({
+      name: "test_feed",
+      inline: true,
+      deliverBatch: async (effects) => {
+        const [first, second, third] = effects.map((effect) => effect.id);
+        return {
+          delivered: [first as string],
+          failures: [
+            { ids: [second as string], error: new Error("page missing") },
+            { ids: [third as string], error: new Error("feed unavailable") },
+          ],
+        };
+      },
+    });
+    const events = Array.from({ length: 3 }, (_, i) => pushEvent(repoId, i + 1));
+    await applyEnvelope(env, envelope(repoId, events), {
+      sinks: [inline.sink],
+      publish: recordingPublish().publish,
+      inline: { batched: 3 },
+      now: () => T0,
+    });
+    const rows = await Promise.all(
+      [1, 2, 3].map((seq) => effectRow(`${repoId}:1:${seq}:test_feed:hook_1`)),
+    );
+    expect(rows.map((row) => [row?.state, row?.last_error])).toEqual([
+      ["done", null],
+      ["pending", "page missing"],
+      ["pending", "feed unavailable"],
+    ]);
+  });
+
   it("counts a failed send, still acknowledges, and leaves the effect for the cron after the grace", async () => {
     const repoId = await listedRepo();
     const { sink } = recordingSink();

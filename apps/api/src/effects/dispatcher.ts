@@ -349,7 +349,25 @@ async function deliverClaimed(
     }
     const delivered = new Set(outcome.delivered);
     done.push(...rows.filter((row) => delivered.has(row.effect_id)).map((row) => row.effect_id));
-    const rest = rows.filter((row) => !delivered.has(row.effect_id));
+    // The failures the sink told apart, each recorded with its own error: those of one error
+    // text together (a query each); the rest together.
+    const told = new Set<string>();
+    const byText = new Map<string, { rows: Row[]; error: unknown }>();
+    for (const failure of outcome.failures ?? []) {
+      const ids = new Set(failure.ids);
+      const failed = rows.filter(
+        (row) =>
+          ids.has(row.effect_id) && !delivered.has(row.effect_id) && !told.has(row.effect_id),
+      );
+      if (failed.length === 0) continue;
+      for (const row of failed) told.add(row.effect_id);
+      const text = errorText(failure.error);
+      const group = byText.get(text) ?? { rows: [], error: failure.error };
+      group.rows.push(...failed);
+      byText.set(text, group);
+    }
+    failures.push(...byText.values());
+    const rest = rows.filter((row) => !delivered.has(row.effect_id) && !told.has(row.effect_id));
     if (rest.length > 0)
       failures.push({ rows: rest, error: outcome.error ?? new Error("not delivered") });
   } else {
@@ -440,7 +458,7 @@ async function markFailed(
       policy.backoffMs,
       policy.maxBackoffMs,
       policy.lateMs,
-      (error instanceof Error ? error.message : String(error)).slice(0, 500),
+      errorText(error),
       policy.maxAttempts,
       JSON.stringify(rows.map((row) => row.effect_id)),
       token,
@@ -550,4 +568,9 @@ export async function pruneEffects(deps: DispatchDeps): Promise<void> {
     )
     .bind(deps.now() - policy.retentionMs)
     .run();
+}
+
+/** An error as an effect's `last_error` keeps it. */
+function errorText(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 500);
 }

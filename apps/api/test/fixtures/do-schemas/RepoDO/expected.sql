@@ -9,6 +9,7 @@ CREATE INDEX audit_segments_pending ON audit_segments (from_seq) WHERE state = '
 CREATE INDEX audit_segments_to ON audit_segments (to_seq);
 CREATE INDEX comments_number ON comments (number, comment_id);
 CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
+CREATE INDEX feed_participants_joined ON feed_participants (number, joined_seq);
 CREATE INDEX import_commits_staged ON import_commits (staged_at);
 CREATE INDEX incoming_references_source
         ON incoming_references (source_repo, source_number, source_comment);
@@ -177,6 +178,13 @@ CREATE TABLE feed_participants (
         reason TEXT NOT NULL,
         joined_seq INTEGER NOT NULL,
         PRIMARY KEY (number, principal)
+      ) STRICT;
+CREATE TABLE feed_participation (
+        number INTEGER PRIMARY KEY,
+        participants INTEGER NOT NULL,
+        next_seq INTEGER NOT NULL,
+        overflow INTEGER NOT NULL DEFAULT 0,
+        reclaimed TEXT
       ) STRICT;
 CREATE TABLE feed_threads (
         thread_key TEXT PRIMARY KEY,

@@ -411,6 +411,7 @@ export class RepoIssues {
       this.deps.meta.forgetReferences(number, caller.actor);
       this.#exec("DELETE FROM comments WHERE number = ?", number);
       this.#exec("DELETE FROM feed_participants WHERE number = ?", number);
+      this.#exec("DELETE FROM feed_participation WHERE number = ?", number);
       this.deps.meta.forget(number);
       this.#exec("DELETE FROM issues WHERE number = ?", number);
       this.#exec(

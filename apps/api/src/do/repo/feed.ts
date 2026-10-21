@@ -1,4 +1,5 @@
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
   atLeast,
   type FeedBlock,
@@ -43,27 +44,49 @@ export interface FeedActor {
   readonly mentioned: ReadonlyMap<string, FeedPrincipal>;
 }
 
+/** Who reads the repository, as a feed's audience is decided (see `RepoFeedDeps.readers`). */
+export interface Readers {
+  readonly mayRead: (principal: string) => boolean;
+  readonly key: string | null;
+}
+
 export interface RepoFeedDeps {
   readonly git: RepoGitStorage;
-  /** Whether `principal` reads the repository (its visibility, or its ACL as last pulled). */
-  readonly mayRead: (principal: string) => boolean;
+  /**
+   * Who reads the repository now (its visibility, or its ACL as last
+   * pulled), from one read of them, and a key that changes when they do
+   * (null when there is no ACL to go by).
+   */
+  readonly readers: () => Readers;
   /** The actor's role, when no caller said (from the ACL as last pulled). */
   readonly roleOf: (principal: string) => RepoRole | null;
-  /** Brings the ACL as `mayRead` and `roleOf` see it up to date (within its read TTL). */
+  /** Brings the ACL as `readers` and `roleOf` see it up to date (within its read TTL). */
   readonly refreshAccess: () => Promise<void>;
   /** Handles (lower-cased) to the active users and agents with them. */
   readonly resolveHandles: (handles: readonly string[]) => Promise<Map<string, FeedPrincipal>>;
   /** Before a change, with the texts it writes: what else they need resolved (other repositories). */
   readonly prepareTexts?: (texts: readonly (string | null | undefined)[]) => Promise<void>;
-  readonly metrics: { count(name: string, labels: Record<string, string>, n?: number): void };
+  readonly metrics: Metrics;
 }
 
 type Row = Record<string, unknown>;
 /** A recipient as a plan names it, with the root identity it counts as. */
 type Named = Omit<FeedRecipient, "silent"> & { readonly root: string };
 
-/** Participants of a thread kept at most (its author and the mentioned first come first). */
-const MAX_PARTICIPANTS = 100;
+/**
+ * Participants of a thread kept at most, the first to join kept. A join
+ * past it is counted (`feed_participation.overflow`,
+ * `feed.participants_overflow`); one named directly (mentioned, assigned,
+ * asked to review) is told whatever the cap. Proposed.
+ */
+export const MAX_PARTICIPANTS = 1_000;
+
+/** Participants read a page at a time, in the order they joined. */
+const PARTICIPANTS_PER_PAGE = 200;
+
+/** A page of a thread's participants after a join sequence (through its index). */
+export const PARTICIPANTS_PAGE = `SELECT principal, root, reason, joined_seq FROM feed_participants
+  WHERE number = ?1 AND joined_seq > ?2 ORDER BY joined_seq LIMIT ?3`;
 /** Kinds that are something to act on (the others: what happened). */
 const ACTION_KINDS: ReadonlySet<FeedKind> = new Set([
   "review_requested",
@@ -139,22 +162,27 @@ export class RepoFeed {
     const subject = this.#subject(plan.number);
     if (!subject) return undefined;
     const actorRoot = this.#actor?.root ?? actor;
+    const readers = this.deps.readers();
     const audience: FeedRecipient[] = [];
+    // One entry per principal and kind (a participant mentioned hears of both).
+    const named = new Set<string>();
     const add = (r: Named, exact = false) => {
       const self = exact
         ? r.principal === actor
         : r.principal === actor || r.principal === actorRoot || r.root === actorRoot;
       // No one hears of their own activity; what their action changes of their items, silently.
       if (self && !ACTION_KINDS.has(r.kind)) return;
-      if (audience.some((a) => a.principal === r.principal && a.kind === r.kind)) return;
-      if (!this.deps.mayRead(r.principal)) return;
+      const key = `${r.principal}|${r.kind}`;
+      if (named.has(key)) return;
+      if (!readers.mayRead(r.principal)) return;
+      named.add(key);
       const { root: _root, ...recipient } = r;
       audience.push({ ...recipient, silent: self });
     };
     for (const r of plan.direct) add(r, plan.exact);
     for (const who of plan.mentions) {
       // Those who cannot read the repository are neither told nor kept as participants.
-      if (!this.deps.mayRead(who.id)) continue;
+      if (!readers.mayRead(who.id)) continue;
       add({
         principal: who.id,
         root: who.root,
@@ -163,7 +191,7 @@ export class RepoFeed {
         priority: this.#trust(actor) === "write" ? "P0" : "P1",
         state: "open",
       });
-      this.#join(plan.number, who, "mentioned");
+      this.#join(plan.number, who, "mentioned", readers);
     }
     if (plan.activity)
       for (const p of this.#participants(plan.number))
@@ -175,7 +203,7 @@ export class RepoFeed {
           priority: "P1",
           state: "open",
         });
-    for (const [who, reason] of plan.joins) this.#join(plan.number, who, reason);
+    for (const [who, reason] of plan.joins) this.#join(plan.number, who, reason, readers);
     if (audience.length === 0) return undefined;
     // Things to act on first, when there are more than one event may name.
     audience.sort((a, b) => (a.priority === b.priority ? 0 : a.priority === "P0" ? -1 : 1));
@@ -502,16 +530,30 @@ export class RepoFeed {
     );
   }
 
+  /** The thread's participants in the order they joined, a page at a time. */
   #participants(number: number): { principal: string; root: string; reason: string }[] {
-    return this.#exec<{ principal: string; root: string; reason: string }>(
-      "feed.read",
-      "SELECT principal, root, reason FROM feed_participants WHERE number = ? ORDER BY joined_seq",
-      number,
-    );
+    const all: { principal: string; root: string; reason: string }[] = [];
+    for (let after = 0; ; ) {
+      const page = this.#exec<{
+        principal: string;
+        root: string;
+        reason: string;
+        joined_seq: number;
+      }>("feed.read", PARTICIPANTS_PAGE, number, after, PARTICIPANTS_PER_PAGE);
+      for (const { joined_seq: _, ...p } of page) all.push(p);
+      if (page.length < PARTICIPANTS_PER_PAGE) return all;
+      after = page[page.length - 1]?.joined_seq ?? after;
+    }
   }
 
-  /** `who` takes part in the thread from now on (the first reason kept), within the cap. */
-  #join(number: number, who: FeedPrincipal, reason: string): void {
+  /**
+   * `who` takes part in the thread from now on (the first reason kept),
+   * unless the thread has its cap of participants: then the refused join
+   * is counted. One already in is not joined again, nor counted. At the
+   * cap, participants who no longer read the repository give their places
+   * up first (looked for once each time its readers change).
+   */
+  #join(number: number, who: FeedPrincipal, reason: string, readers: Readers): void {
     // One known by its own id until now gets its real root identity (also past the cap).
     this.#exec(
       "feed.participants",
@@ -521,18 +563,82 @@ export class RepoFeed {
       who.id,
       who.root,
     );
+    const known = this.#exec(
+      "feed.read",
+      "SELECT 1 FROM feed_participants WHERE number = ? AND principal = ?",
+      number,
+      who.id,
+    );
+    if (known.length > 0) return;
+    let [count] = this.#exec<{ participants: number; next_seq: number; reclaimed: string | null }>(
+      "feed.read",
+      "SELECT participants, next_seq, reclaimed FROM feed_participation WHERE number = ?",
+      number,
+    );
+    if (
+      count &&
+      count.participants >= MAX_PARTICIPANTS &&
+      readers.key !== null &&
+      count.reclaimed !== readers.key
+    ) {
+      this.#reclaim(number, readers);
+      [count] = this.#exec<{ participants: number; next_seq: number; reclaimed: string | null }>(
+        "feed.read",
+        "SELECT participants, next_seq, reclaimed FROM feed_participation WHERE number = ?",
+        number,
+      );
+    }
+    if ((count?.participants ?? 0) >= MAX_PARTICIPANTS) {
+      this.#exec(
+        "feed.participants",
+        "UPDATE feed_participation SET overflow = overflow + 1 WHERE number = ?",
+        number,
+      );
+      this.deps.metrics.count("feed.participants_overflow", {});
+      return;
+    }
+    const seq = count?.next_seq ?? 1;
     this.#exec(
       "feed.participants",
       `INSERT INTO feed_participants (number, principal, root, reason, joined_seq)
-       SELECT ?1, ?2, ?3, ?4, coalesce(max(joined_seq), 0) + 1 FROM feed_participants
-       WHERE number = ?1
-       HAVING count(*) < ?5
-       ON CONFLICT (number, principal) DO NOTHING`,
+       VALUES (?, ?, ?, ?, ?)`,
       number,
       who.id,
       who.root,
       reason,
-      MAX_PARTICIPANTS,
+      seq,
+    );
+    this.#exec(
+      "feed.participants",
+      `INSERT INTO feed_participation (number, participants, next_seq) VALUES (?1, 1, ?2 + 1)
+       ON CONFLICT (number) DO UPDATE SET participants = participants + 1, next_seq = ?2 + 1`,
+      number,
+      seq,
+    );
+  }
+
+  /**
+   * Deletes the thread's participants who no longer read the repository,
+   * so their places can be taken, and notes which readers it looked with.
+   */
+  #reclaim(number: number, readers: Readers): void {
+    const gone = this.#participants(number)
+      .filter((p) => !readers.mayRead(p.principal))
+      .map((p) => p.principal);
+    if (gone.length > 0)
+      this.#exec(
+        "feed.participants",
+        `DELETE FROM feed_participants
+         WHERE number = ?1 AND principal IN (SELECT value FROM json_each(?2))`,
+        number,
+        JSON.stringify(gone),
+      );
+    this.#exec(
+      "feed.participants",
+      "UPDATE feed_participation SET participants = participants - ?2, reclaimed = ?3 WHERE number = ?1",
+      number,
+      gone.length,
+      readers.key,
     );
   }
 }

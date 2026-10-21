@@ -449,8 +449,12 @@ export class RepoDO extends MigratingDO {
     });
     this.feed = new RepoFeed({
       git: this.git,
-      mayRead: (principal) =>
-        this.events.visibility() === "public" || this.acl.lastRoleOf(principal) !== null,
+      readers: () => {
+        // Anyone reads a public repository: no participant's place is ever reclaimed there.
+        if (this.events.visibility() === "public") return { mayRead: () => true, key: "public" };
+        const { roleOf, key } = this.acl.lastRoles();
+        return { mayRead: (principal) => roleOf(principal) !== null, key };
+      },
       roleOf: (principal) => this.acl.lastRoleOf(principal),
       refreshAccess: () => this.acl.refresh(),
       resolveHandles: (handles) => this.#feedView.resolveHandles(handles),

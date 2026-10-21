@@ -28,8 +28,17 @@ export type FeedSubjectKind = (typeof FEED_SUBJECT_KINDS)[number];
 export const FEED_PRIORITIES = ["P0", "P1"] as const;
 export type FeedPriority = (typeof FEED_PRIORITIES)[number];
 
-/** Recipients one event names at most (the rest are dropped). */
+/** Recipients an event carries itself at most (and each page of the rest). */
 export const MAX_FEED_AUDIENCE = 100;
+/**
+ * Pages of further recipients an event may name, beyond those it carries:
+ * the recipients one event can have (a thread's 1,000 participants, the
+ * 50 it may mention and those it names directly, under 1,100) past the
+ * first 100.
+ */
+export const MAX_FEED_PAGES = 10;
+/** Bytes of one page of recipients, as JSON, at most. */
+export const MAX_FEED_PAGE_BYTES = 64 * 1024;
 /** Characters of an excerpt at most. */
 export const MAX_FEED_EXCERPT = 280;
 /** Characters of a subject's title kept in a feed item at most. */
@@ -77,9 +86,32 @@ export const FeedBlockSchema = z
     member: z.string().max(64).nullable(),
     excerpt: z.string().max(MAX_FEED_EXCERPT).nullable(),
     audience: z.array(FeedRecipientSchema).max(MAX_FEED_AUDIENCE),
+    /**
+     * The further recipients' pages, which the repository keeps (each
+     * recipient's entry frozen with the event): their numbers from 1, and
+     * how many entries and bytes each holds.
+     */
+    pages: z
+      .array(
+        z.strictObject({
+          n: z.number().int().min(1).max(MAX_FEED_PAGES),
+          count: z.number().int().min(1).max(MAX_FEED_AUDIENCE),
+          bytes: z.number().int().min(1).max(MAX_FEED_PAGE_BYTES),
+        }),
+      )
+      .max(MAX_FEED_PAGES)
+      .optional(),
+    /** When the pages stop being delivered (milliseconds since the epoch); with pages only. */
+    deadline: z.number().int().positive().optional(),
   })
   .refine((block) => block.threadKey === `${block.subject.kind}/${block.subject.number}`, {
     message: "the thread key names another subject than the block's",
+  })
+  .refine((block) => (block.pages ?? []).every((page, i) => page.n === i + 1), {
+    message: "the pages are not numbered from 1 in order",
+  })
+  .refine((block) => (block.pages === undefined) === (block.deadline === undefined), {
+    message: "pages come with a deadline, and a deadline with pages",
   });
 export type FeedBlock = z.infer<typeof FeedBlockSchema>;
 
