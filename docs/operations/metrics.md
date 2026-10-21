@@ -114,7 +114,9 @@ Any `error` means effects are not being sent, claimed or delivered: the
 failure is logged at error level (`op` `cron.effects`, `effects.dispatch`
 or `effects.consume`), and the effects stay pending; the effects cron sends
 them again once overdue. `GET /healthz` reports how late the oldest pending
-effect is (`checks.effects.overdueS`).
+effect is (`checks.effects.overdueS`), and whether one failed for good in
+the last hour (`checks.effects.failed`); either makes `checks.effects.ok`
+false.
 
 ### Cost counters
 

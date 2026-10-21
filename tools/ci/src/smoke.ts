@@ -38,13 +38,16 @@ async function expectOk(res: Response): Promise<Response> {
 
 /**
  * A health report passes only if every storage tier was checked and passed.
- * Late effects (webhook deliveries, feed entries) only warn: the API serves
- * without them, and a deployment that was down a while catches up.
+ * Late or failed effects (webhook deliveries, feed entries) only warn: the
+ * API serves without them, and a deployment that was down a while catches up.
  */
 function assertHealthy(body: unknown): Passed {
   const report = body as {
     ok?: unknown;
-    checks?: Record<string, { ok?: unknown; ms?: unknown; overdueS?: unknown; error?: unknown }>;
+    checks?: Record<
+      string,
+      { ok?: unknown; ms?: unknown; overdueS?: unknown; failed?: unknown; error?: unknown }
+    >;
   };
   const checks = report.checks ?? {};
   const problems = REQUIRED_CHECKS.filter((name) => {
@@ -56,11 +59,14 @@ function assertHealthy(body: unknown): Passed {
   const detail = REQUIRED_CHECKS.map((name) => `${name} ${checks[name]?.ms} ms`).join(", ");
   const effects = checks.effects;
   if (effects === undefined || effects.ok === true) return { detail };
-  const warning =
-    typeof effects.overdueS === "number"
-      ? `effects overdue by ${effects.overdueS} s`
-      : `effects check failed: ${String(effects.error ?? "unknown")}`;
-  return { detail, warning };
+  if (typeof effects.overdueS !== "number")
+    return { detail, warning: `effects check failed: ${String(effects.error ?? "unknown")}` };
+  const failed = effects.failed === true;
+  const warnings = [
+    ...(!failed || effects.overdueS > 0 ? [`effects overdue by ${effects.overdueS} s`] : []),
+    ...(failed ? ["an effect failed for good lately"] : []),
+  ];
+  return { detail, warning: warnings.join("; ") };
 }
 
 export function apiChecks(apiUrl: string, fetcher: typeof fetch = fetch): Check[] {

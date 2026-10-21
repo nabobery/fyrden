@@ -99,6 +99,10 @@ CREATE INDEX effects_due_order ON effects (next_attempt_at, effect_id) WHERE sta
 -- index effects_failed
 CREATE INDEX effects_failed ON effects (next_attempt_at) WHERE state = 'failed';
 
+-- index effects_failed_reportable
+CREATE INDEX effects_failed_reportable ON effects (next_attempt_at)
+  WHERE state = 'failed' AND coalesce(last_error, '') NOT LIKE 'invalidated:%';
+
 -- index effects_recover
 CREATE INDEX effects_recover ON effects (recover_at, effect_id) WHERE state = 'pending';
 

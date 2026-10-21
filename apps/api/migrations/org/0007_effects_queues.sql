@@ -32,3 +32,9 @@ UPDATE effects SET recover_at = next_attempt_at WHERE state = 'pending';
 -- recovery moves recover_at on, so only the due time shows an effect that
 -- is never delivered.)
 CREATE INDEX IF NOT EXISTS effects_recover ON effects (recover_at, effect_id) WHERE state = 'pending';
+
+-- Effects that failed for good, not those ended because their source went
+-- (invalidated): what the health check reports, read without passing over
+-- invalidations. `next_attempt_at` is when it failed.
+CREATE INDEX IF NOT EXISTS effects_failed_reportable ON effects (next_attempt_at)
+  WHERE state = 'failed' AND coalesce(last_error, '') NOT LIKE 'invalidated:%';

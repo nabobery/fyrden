@@ -16,6 +16,8 @@ import {
   effectStatements,
 } from "../src/effects/journal.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
+import { CLEANUP_POLICY } from "../src/repos/cleanups.js";
+import { advanceDeletion } from "../src/repos/deletion.js";
 import { ATTEMPT_POLICY, attemptDelivery, reconcileWebhooks } from "../src/webhooks/deliver.js";
 import { signature } from "../src/webhooks/secrets.js";
 import {
@@ -604,6 +606,15 @@ describe("webhooks", () => {
     const [ping] = await t.deliveries();
     const id = (ping as { delivery_id: string }).delivery_id;
     await api("DELETE", `/repos/${t.owner.handle}/${t.repo.name}`, t.owner.token);
+    // The deletion waits while the invocation that made the deliveries could still be running.
+    expect(await advanceDeletion(env, t.repo.id)).toBe("deleting");
+    expect(await t.deliveries()).toHaveLength(1);
+    await env.ORG_READ.prepare(
+      "UPDATE effects SET done_at = done_at - ?2 WHERE effect_id >= ?1 || ':' AND effect_id < ?1 || ';'",
+    )
+      .bind(t.repo.id, CLEANUP_POLICY.settleMs)
+      .run();
+    expect(await advanceDeletion(env, t.repo.id)).toBe("deleted");
     expect(await t.stub().eraseForDeletion()).toBe("erased");
     await attemptDelivery(t.deps(), id);
     expect(t.received).toHaveLength(0);

@@ -15,10 +15,12 @@ export interface HealthCheck {
 /**
  * Whether effects (webhook deliveries, feed entries) are on time: `ok` is
  * false when the oldest pending one has been due for longer than the
- * threshold, or the check failed. `overdueS`: how long it has been due.
+ * threshold, one failed for good lately, or the check failed. `overdueS`:
+ * how long it has been due; `failed`: whether one failed for good lately.
  */
 export interface EffectsCheck extends HealthCheck {
   overdueS?: number;
+  failed?: boolean;
 }
 
 /** `ok` covers the storage tiers only: late effects leave the API serving (degraded). */

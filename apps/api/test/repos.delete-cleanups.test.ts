@@ -69,9 +69,10 @@ async function deleteFully(repo: { id: string; name: string }): Promise<void> {
 async function leaveTraces(repoId: string, effects: number, deliveries: number): Promise<void> {
   await env.ORG_READ.prepare(
     `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
-     INSERT INTO effects (effect_id, sink, target, payload, state, next_attempt_at, created_at)
+     INSERT INTO effects (effect_id, sink, target, payload, state, next_attempt_at, created_at,
+       source_id)
      SELECT ?1 || ':1:' || i || ':webhooks:hooks', 'webhooks', 'hooks', '{}',
-       CASE WHEN i = 1 THEN 'done' ELSE 'pending' END, 0, 0 FROM n`,
+       CASE WHEN i = 1 THEN 'done' ELSE 'pending' END, 0, 0, ?1 FROM n`,
   )
     .bind(repoId, effects)
     .run();
@@ -198,22 +199,23 @@ describe("repository deletion cleanups", () => {
     await mark(repo);
     const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD };
 
-    expect(await runCleanups(env, target, { pages: 1 })).toBe(false);
-    // One page of effects and nothing else yet.
+    // The repository's webhook effects are settled (ended, a page at a time; none was
+    // claimed), then one page of effects and nothing else yet.
+    for (let i = 0; i < 3; i++) expect(await runCleanups(env, target, { pages: 1 })).toBe(false);
     expect(await traces(repo.id)).toMatchObject({
       effects: 1,
       deliveries: CLEANUP_POLICY.deliveriesPage + 1,
     });
-    expect(await cleanupsDone(repo.id)).toEqual([]);
+    expect(await cleanupsDone(repo.id)).toEqual(["webhook_effects"]);
 
-    let calls = 1;
+    let calls = 3;
     for (;;) {
       calls++;
       if (await runCleanups(env, target, { pages: 1 })) break;
     }
     expect(await traces(repo.id)).toEqual(NONE);
-    // Effects: two pages; deliveries: two; bodies: one listing of up to 1,000 keys.
-    expect(calls).toBe(5);
+    // Settling: two pages; effects: two; deliveries: two; bodies: one listing of up to 1,000 keys.
+    expect(calls).toBe(7);
     expect(await cleanupsDone(repo.id)).toEqual(REPO_CLEANUPS.map((c) => c.name).sort());
   });
 
@@ -230,7 +232,7 @@ describe("repository deletion cleanups", () => {
     const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD };
 
     expect(await runCleanups(env, target)).toBe(false);
-    expect(await traces(repo.id)).toEqual({ effects: 1, deliveries: 2, attempts: 2, bodies: 2 });
+    expect(await traces(repo.id)).toEqual({ effects: 2, deliveries: 2, attempts: 2, bodies: 2 });
     expect(await cleanupsDone(repo.id)).toEqual([]);
 
     // The delivery ended (its lease released or lapsed).
@@ -241,6 +243,98 @@ describe("repository deletion cleanups", () => {
       .run();
     expect(await runCleanups(env, target)).toBe(true);
     expect(await traces(repo.id)).toEqual(NONE);
+  });
+
+  it("waits until a webhook effect's deliveries could no longer be being made", async () => {
+    const repo = await createRepo();
+    await leaveTraces(repo.id, 3, 2);
+    const id = (i: number) => `${repo.id}:1:${i}:webhooks:hooks`;
+    // The first was made just now; the second was claimed, and its claim lapsed: whoever
+    // claimed it may still be making its deliveries. The third was never claimed.
+    const now = Date.now();
+    await env.ORG_READ.prepare(
+      `UPDATE effects SET attempts = 1, done_at = CASE WHEN effect_id = ?1 THEN ?3 END
+       WHERE effect_id IN (?1, ?2)`,
+    )
+      .bind(id(1), id(2), now)
+      .run();
+    await mark(repo);
+    const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD };
+
+    expect(await runCleanups(env, target)).toBe(false);
+    expect(await traces(repo.id)).toEqual({ effects: 3, deliveries: 2, attempts: 2, bodies: 2 });
+    // The claimed one is ended, as its next claim would end it.
+    const ended = await env.ORG_READ.prepare(
+      "SELECT state, last_error, next_attempt_at FROM effects WHERE effect_id = ?",
+    )
+      .bind(id(2))
+      .first<{ state: string; last_error: string; next_attempt_at: number }>();
+    expect(ended).toMatchObject({
+      state: "failed",
+      last_error: "invalidated: its source was deleted",
+    });
+    expect(ended?.next_attempt_at).toBeGreaterThanOrEqual(now);
+
+    // Once the queue's longest invocation has passed since each ended, the cleanups go on.
+    await env.ORG_READ.prepare(
+      `UPDATE effects SET done_at = done_at - ?2, next_attempt_at = next_attempt_at - ?2
+       WHERE effect_id IN (SELECT value FROM json_each(?1))`,
+    )
+      .bind(JSON.stringify([id(1), id(2)]), CLEANUP_POLICY.settleMs)
+      .run();
+    expect(await runCleanups(env, target)).toBe(true);
+    expect(await traces(repo.id)).toEqual(NONE);
+  });
+
+  it("ends the repository's pending webhook effects, and settles those journaled before claims were counted", async () => {
+    const repo = await createRepo();
+    await leaveTraces(repo.id, 3, 0);
+    const id = (i: number) => `${repo.id}:1:${i}:webhooks:hooks`;
+    // The second was journaled before claims counted as attempts or effects named their
+    // source: it may have been claimed, and no claim of it checks the deletion.
+    await env.ORG_READ.prepare(
+      "UPDATE effects SET source_id = CASE WHEN effect_id = ?2 THEN NULL ELSE ?1 END WHERE effect_id IN (?2, ?3)",
+    )
+      .bind(repo.id, id(2), id(3))
+      .run();
+    await mark(repo);
+    const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD };
+
+    expect(await runCleanups(env, target)).toBe(false);
+    const { results } = await env.ORG_READ.prepare(
+      "SELECT effect_id, state, last_error FROM effects WHERE effect_id IN (?, ?) ORDER BY effect_id",
+    )
+      .bind(id(2), id(3))
+      .all();
+    expect(results).toEqual([
+      { effect_id: id(2), state: "failed", last_error: "invalidated: its source was deleted" },
+      { effect_id: id(3), state: "failed", last_error: "invalidated: its source was deleted" },
+    ]);
+    // Only the one that may have been claimed is waited for.
+    await env.ORG_READ.prepare(
+      "UPDATE effects SET next_attempt_at = next_attempt_at - ? WHERE effect_id = ?",
+    )
+      .bind(CLEANUP_POLICY.settleMs, id(2))
+      .run();
+    expect(await runCleanups(env, target)).toBe(true);
+    expect(await traces(repo.id)).toEqual(NONE);
+  });
+
+  it("ends a repository's pending webhook effects a page at a time", async () => {
+    const repo = await createRepo();
+    await leaveTraces(repo.id, CLEANUP_POLICY.effectsPage + 2, 0);
+    await mark(repo);
+    const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD };
+    expect(await runCleanups(env, target, { pages: 1 })).toBe(false);
+    expect(
+      await count(
+        `SELECT count(*) AS n FROM effects
+         WHERE substr(effect_id, 1, length(?1) + 1) = ?1 || ':' AND state = 'pending'`,
+        repo.id,
+      ),
+    ).toBe(1);
+    expect(await cleanupsDone(repo.id)).toEqual([]);
+    expect(await runCleanups(env, target, { pages: 10 })).toBe(true);
   });
 
   it("retries a failed cleanup and keeps the ones already done", async () => {
