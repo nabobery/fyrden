@@ -30,6 +30,7 @@ import { handleFree } from "../accounts/handles.js";
 import { suspendUserOperation, unsuspendUserOperation } from "../accounts/lifecycle.js";
 import { createOrgRepoOperation, listOrgReposOperation } from "../accounts/org-repos.js";
 import {
+  addOrgOwnerOperation,
   createOrgOperation,
   listMembersOperation,
   removeMembershipOperation,
@@ -384,6 +385,7 @@ export const handlers: Handlers = {
   "repos.delete_many": deleteReposOperation,
 
   "admin.orgs.create": createOrgOperation,
+  "admin.orgs.owners.add": addOrgOwnerOperation,
   "orgs.memberships.set": setMembershipOperation,
   "orgs.memberships.remove": removeMembershipOperation,
   "orgs.members.list": listMembersOperation,

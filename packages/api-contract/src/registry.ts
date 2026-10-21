@@ -89,7 +89,14 @@ import {
   listMilestones,
   updateMilestone,
 } from "../ops/milestones.js";
-import { createOrg, listMembers, removeMembership, setMembership, updateOrg } from "../ops/orgs.js";
+import {
+  addOrgOwner,
+  createOrg,
+  listMembers,
+  removeMembership,
+  setMembership,
+  updateOrg,
+} from "../ops/orgs.js";
 import {
   createPull,
   getPull,
@@ -317,6 +324,7 @@ export const registry = defineRegistry([
   createFileCommit,
   setMembership,
   removeMembership,
+  addOrgOwner,
   listMembers,
   createOrgRepo,
   listOrgRepos,

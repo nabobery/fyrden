@@ -1,5 +1,6 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
 import type {
+  addOrgOwner,
   createOrg,
   Input,
   listMembers,
@@ -123,6 +124,34 @@ export async function setMembershipOperation(
   ctx.waitUntil(stub.deliverAudit());
   await invalidateChange(env, org.id, change, metrics);
   return { org: org.handle, user: user.handle, role: input.role, state: "active" };
+}
+
+/**
+ * The `admin.orgs.owners.add` operation: an instance administrator (the
+ * permission checked) makes an active user an owner of the organization,
+ * whoever its owners are; the organization's object adds them as any
+ * addition is (never a user being deleted), audited `org.owner_handoff`.
+ */
+export async function addOrgOwnerOperation(
+  ctx: OpContext,
+  input: Input<typeof addOrgOwner>,
+): Promise<null> {
+  const { env, auth, requestId, metrics } = ctx;
+  const org = await findAccount(env, input.org, { metrics });
+  if (org?.type !== "org")
+    throw new OperationError(404, "org_not_found", `No organization ${input.org} was found.`);
+  const user = await userFor(ctx, input.username);
+  const stub = env.ORG.getByName(org.id);
+  metrics.count("do.request", { class: "OrgDO", method: "handOwnership" });
+  const change = applied(
+    await stub.handOwnership(
+      { principalId: auth.principalId, requestId },
+      { id: user.id, handle: user.handle },
+    ),
+  );
+  ctx.waitUntil(stub.deliverAudit());
+  await invalidateChange(env, org.id, change, metrics);
+  return null;
 }
 
 /** The `orgs.memberships.remove` operation; removing a user who is not a member answers the same. */
