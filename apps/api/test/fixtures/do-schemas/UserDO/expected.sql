@@ -46,6 +46,10 @@ CREATE TABLE feed_meta (
         low_watermark INTEGER NOT NULL,
         items INTEGER NOT NULL
       ) STRICT;
+CREATE TABLE feed_retired (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE purge_marks (
         repo_id TEXT PRIMARY KEY,
         until_at INTEGER NOT NULL,
