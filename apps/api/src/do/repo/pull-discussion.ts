@@ -4,6 +4,7 @@ import {
   type CommentSide,
   checkAnchor,
   lineCount,
+  MAX_REQUESTED_REVIEWERS,
   type MergeContext,
   rootIdentity,
 } from "@fyrden/domain";
@@ -174,30 +175,45 @@ export class PullDiscussion {
    * Worker); each one's access is checked here, an agent's capped by its
    * owner's, before the change.
    */
-  requestReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
+  async requestReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
     const { authority } = this.deps;
-    return this.deps.pullChange(
-      "requestReviewers",
-      actor,
-      (caller, ceilings) =>
-        this.#withView(
-          this.deps.reviews.request(
-            number,
-            [...ceilings].map(([id, owners]) => ({
-              id,
-              root: rootIdentity({ principalId: id, grantId: null, ceilingIds: owners }),
-              role: authority.roleNow(id, owners),
-            })),
-            caller,
+    // Whether an attempt read the reviewers being deleted.
+    let read = false;
+    const attempt = (readDeleted: boolean) =>
+      this.deps.pullChange(
+        "requestReviewers",
+        actor,
+        (caller, prepared) =>
+          this.#withView(
+            this.deps.reviews.request(
+              number,
+              [...prepared.ceilings].map(([id, owners]) => ({
+                id,
+                root: rootIdentity({ principalId: id, grantId: null, ceilingIds: owners }),
+                role: authority.roleNow(id, owners),
+              })),
+              caller,
+              prepared.deleted,
+            ),
           ),
-        ),
-      async () => {
-        const ceilings = new Map<string, string[]>();
-        for (const id of new Set(reviewerIds))
-          ceilings.set(id, await authority.rolesPulled(id, null));
-        return ceilings;
-      },
-    );
+        async () => {
+          const ceilings = new Map<string, string[]>();
+          for (const id of new Set(reviewerIds))
+            ceilings.set(id, await authority.rolesPulled(id, null));
+          // Past the limit, the requested reviewers being deleted (their places are given up).
+          const requested = this.deps.reviews.requested(number);
+          const asked = new Set(requested);
+          const adding = [...ceilings.keys()].filter((id) => !asked.has(id)).length;
+          read = readDeleted || requested.length + adding > MAX_REQUESTED_REVIEWERS;
+          const deleted = read ? await authority.deletedOf(requested) : new Set<string>();
+          return { ceilings, deleted };
+        },
+      );
+    const first = await attempt(false);
+    // Others were requested meanwhile, past the limit this one judged by: once more, with the
+    // reviewers being deleted read.
+    if (!first.ok && first.code === "too_many_reviewers" && !read) return attempt(true);
+    return first;
   }
 
   /** Withdraws review requests. */

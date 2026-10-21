@@ -24792,7 +24792,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "post": {
-        "description": "Requests a review of users or agents who can read the repository (not the author). The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once; a request ends when that reviewer submits a review.",
+        "description": "Requests a review of users or agents who can read the repository (not the author). The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once; a request ends when that reviewer submits a review. Past the limit, requests of users or agents being deleted give up their places first, with no event.",
         "operationId": "pulls.requested_reviewers.add",
         "parameters": [
           {

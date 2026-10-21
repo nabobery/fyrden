@@ -317,12 +317,15 @@ export class RepoReviews {
   /**
    * Requests reviews of `reviewers`, each of whom must read the repository
    * and not be the author (by root identity). Already requested ones are
-   * left as they are.
+   * left as they are. Past the limit, the requests of `deleted` reviewers
+   * (being deleted: no one can withdraw them by name) give up their places
+   * first, quietly (audited; no event, as no one is told).
    */
   request(
     number: number,
     reviewers: readonly RequestedReviewer[],
     caller: PullCaller,
+    deleted: ReadonlySet<string> = new Set(),
   ): { ok: true; pull: PullRecord } | { ok: false; code: ReviewFailure } {
     const pull = this.#requestable(number, caller);
     if (!pull.ok) return pull;
@@ -332,10 +335,25 @@ export class RepoReviews {
     }
     const already = new Set(this.requested(number));
     const added = [...new Set(reviewers.map((r) => r.id))].filter((id) => !already.has(id));
-    if (already.size + added.length > MAX_REQUESTED_REVIEWERS)
+    const freed =
+      already.size + added.length > MAX_REQUESTED_REVIEWERS
+        ? [...already].filter((id) => deleted.has(id))
+        : [];
+    if (already.size - freed.length + added.length > MAX_REQUESTED_REVIEWERS)
       return { ok: false, code: "too_many_reviewers" };
     this.deps.git.context.storage.transactionSync(() => {
       const now = this.deps.git.context.now();
+      for (const id of freed)
+        this.#run(
+          "DELETE FROM review_requests WHERE pr_number = ? AND reviewer_id = ?",
+          number,
+          id,
+        );
+      if (freed.length > 0)
+        this.deps.events.auditChange("pull_request.prune_review_requests", caller.actor, {
+          number,
+          reviewers: freed,
+        });
       for (const id of added) {
         this.#run(
           `INSERT INTO review_requests (pr_number, reviewer_id, requested_by, requested_at,

@@ -6677,7 +6677,7 @@ export interface Operations {
   "pulls.reviews.dismiss": { input: PullsReviewsDismissInput; output: PullsReviewsDismissOutput };
   /** List requested reviewers. Who a review of the pull request is requested of and has not reviewed yet. */
   "pulls.requested_reviewers.list": { input: PullsRequestedReviewersListInput; output: PullsRequestedReviewersListOutput };
-  /** Request reviewers. Requests a review of users or agents who can read the repository (not the author). The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once; a request ends when that reviewer submits a review. */
+  /** Request reviewers. Requests a review of users or agents who can read the repository (not the author). The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once; a request ends when that reviewer submits a review. Past the limit, requests of users or agents being deleted give up their places first, with no event. */
   "pulls.requested_reviewers.add": { input: PullsRequestedReviewersAddInput; output: PullsRequestedReviewersAddOutput };
   /** Remove requested reviewers. Withdraws review requests; reviewers not requested are ignored. */
   "pulls.requested_reviewers.remove": { input: PullsRequestedReviewersRemoveInput; output: PullsRequestedReviewersRemoveOutput };

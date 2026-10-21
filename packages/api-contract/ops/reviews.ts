@@ -183,7 +183,7 @@ export const requestReviewers = defineOperation({
   method: "POST",
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers",
   summary: "Request reviewers",
-  description: `Requests a review of users or agents who can read the repository (not the author). The author may request reviews; on someone else's pull request it needs triage access. At most ${MAX_REQUESTED_REVIEWERS} at once; a request ends when that reviewer submits a review.`,
+  description: `Requests a review of users or agents who can read the repository (not the author). The author may request reviews; on someone else's pull request it needs triage access. At most ${MAX_REQUESTED_REVIEWERS} at once; a request ends when that reviewer submits a review. Past the limit, requests of users or agents being deleted give up their places first, with no event.`,
   input: z.object({ ...PullInput, reviewers: Logins, team_reviewers: NoTeams }),
   output: PullRequest,
   permission: "pull_requests:write",
@@ -194,7 +194,7 @@ export const requestReviewers = defineOperation({
   mcp: {
     tool: "request_reviewers",
     title: "Request reviewers",
-    description: `Ask users or agents who can read the repository to review an open pull request (not its author; at most ${MAX_REQUESTED_REVIEWERS} at once). The author may ask; on someone else's pull request it needs triage access.`,
+    description: `Ask users or agents who can read the repository to review an open pull request (not its author; at most ${MAX_REQUESTED_REVIEWERS} at once; past that, requests of users or agents being deleted give up their places first, with no event). The author may ask; on someone else's pull request it needs triage access.`,
     readOnly: false,
   },
 });

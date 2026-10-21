@@ -462,6 +462,119 @@ describe("requesting reviews", () => {
     expect(await requested()).toEqual([]);
   });
 
+  it("gives a place a reviewer being deleted holds to another at the limit, quietly", async () => {
+    const asked: Who[] = [];
+    for (let i = 0; i < 15; i++) asked.push(await collaborator("pull"));
+    const request = (who: Who[]) =>
+      api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
+        reviewers: who.map((w) => w.handle),
+      });
+    expect((await request(asked)).status).toBe(201);
+    const next = await collaborator("pull");
+    expect(await json<{ code: string }>(request([next]))).toMatchObject({
+      status: 422,
+      body: { code: "too_many_reviewers" },
+    });
+    // One of them is being deleted (their handle released, as the deletion leaves it).
+    const gone = asked[3] as Who;
+    await env.DIRECTORY.prepare(
+      `UPDATE principals SET lifecycle = 'deleting', disabled_at = 1, handle = id,
+         lifecycle_gen = lifecycle_gen + 1 WHERE id = ?`,
+    )
+      .bind(gone.principalId)
+      .run();
+    // What the repository emits from here on stays in its outbox, to look at.
+    const stub = env.REPO.getByName(repo.id);
+    await inRepo(stub, (instance) => {
+      instance.sendEvents = () => Promise.reject(new Error("held for the test"));
+    });
+    const outbox = () =>
+      inRepo(stub, (r) =>
+        r.git.context.storage.sql
+          .exec<{ event: string }>("SELECT event FROM outbox ORDER BY source_seq")
+          .toArray()
+          .map((row) => row.event)
+          .join("\n"),
+      );
+    const before = (await outbox()).length;
+    expect((await request([next])).status).toBe(201);
+    const now = await requested();
+    expect(now).toContain(next.principalId);
+    expect(now).not.toContain(gone.principalId);
+    expect(now.length).toBe(15);
+    // No one is told of it; the new request is.
+    const emitted = (await outbox()).slice(before);
+    expect(emitted).toContain("review_requested");
+    expect(emitted).not.toContain("review_request_removed");
+  });
+
+  it("gives that place up too when others reach the limit while a request is being made", async () => {
+    const asked: Who[] = [];
+    for (let i = 0; i < 14; i++) asked.push(await collaborator("pull"));
+    expect(
+      (
+        await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
+          reviewers: asked.map((w) => w.handle),
+        })
+      ).status,
+    ).toBe(201);
+    const gone = asked[0] as Who;
+    await env.DIRECTORY.prepare(
+      `UPDATE principals SET lifecycle = 'deleting', disabled_at = 1, handle = id,
+         lifecycle_gen = lifecycle_gen + 1 WHERE id = ?`,
+    )
+      .bind(gone.principalId)
+      .run();
+    const [mine, theirs] = [await collaborator("pull"), await collaborator("pull")];
+    // Prepared with 14 requested (one more makes 15: nothing to give up); then another request
+    // lands first, making 15.
+    await inRepo(env.REPO.getByName(repo.id), (r) => {
+      r.changeHooks.beforeChange = async (method) => {
+        if (method !== "requestReviewers") return;
+        r.changeHooks = {};
+        const added = r.reviews.request(
+          1,
+          [{ id: theirs.principalId, root: theirs.principalId, role: "read" }],
+          {
+            actor: { principal: owner.principalId, via: "api" },
+            root: owner.principalId,
+            role: "admin",
+          },
+        );
+        if (!added.ok) throw new Error(added.code);
+      };
+    });
+    const added = await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
+      reviewers: [mine.handle],
+    });
+    expect(added.status).toBe(201);
+    const now = await requested();
+    expect(now).toEqual(expect.arrayContaining([mine.principalId, theirs.principalId]));
+    expect(now).not.toContain(gone.principalId);
+    expect(now.length).toBe(15);
+  });
+
+  it("keeps a request of a reviewer being deleted below the limit, as history", async () => {
+    const [gone, other] = [await collaborator("pull"), await collaborator("pull")];
+    await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
+      reviewers: [gone.handle],
+    });
+    await env.DIRECTORY.prepare(
+      `UPDATE principals SET lifecycle = 'deleting', disabled_at = 1, handle = id,
+         lifecycle_gen = lifecycle_gen + 1 WHERE id = ?`,
+    )
+      .bind(gone.principalId)
+      .run();
+    expect(
+      (
+        await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
+          reviewers: [other.handle],
+        })
+      ).status,
+    ).toBe(201);
+    expect(await requested()).toEqual([gone.principalId, other.principalId].sort());
+  });
+
   it("withdraws a request made of someone disabled since", async () => {
     const reader = await collaborator("pull");
     await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
