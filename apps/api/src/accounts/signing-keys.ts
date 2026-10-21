@@ -1,3 +1,4 @@
+import { issuerHolds } from "@fyrden/adapters-cloudflare/auth";
 import type {
   createSshSigningKey,
   deleteSshSigningKey,
@@ -10,6 +11,7 @@ import { parseSshPublicKey, SshSignatureError, sshFingerprint } from "@fyrden/gi
 import { decodeSeekCursor, encodeSeekCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock, newId } from "../services.js";
+import { issuerRefused } from "./lifecycle.js";
 
 /** SSH signing keys one user or agent may have. Proposed. */
 export const MAX_SIGNING_KEYS = 100;
@@ -67,20 +69,25 @@ export async function createSshSigningKeyOperation(
   const db = ctx.env.DIRECTORY;
   const principal = keyOwner(ctx);
   ctx.metrics.count("d1.query", { db: "directory", op: "signing_key_create" }, 3);
-  let refused: "key_in_use" | "too_many_keys" | undefined;
+  let refused: "issuer" | "key_in_use" | "too_many_keys" | undefined;
   try {
     const [seen, insert] = await db.batch([
       // What the insert below sees, for why it held back.
       db
-        .prepare("SELECT EXISTS (SELECT 1 FROM ssh_signing_keys WHERE fingerprint = ?) AS taken")
-        .bind(row.fingerprint),
-      // Only while the user has fewer than the limit; checked in the batch.
+        .prepare(
+          `SELECT EXISTS (SELECT 1 FROM ssh_signing_keys WHERE fingerprint = ?1) AS taken,
+             ${issuerHolds("?2", "?3")} AS holds`,
+        )
+        .bind(row.fingerprint, ctx.auth.principalId, ctx.auth.lifecycleGen),
+      // Only while the caller holds (see `issuerHolds`) and the user has fewer than the limit;
+      // checked in the batch.
       db
         .prepare(
           `INSERT INTO ssh_signing_keys (id, principal_id, title, key, fingerprint, created_at)
            SELECT ?1, ?2, ?3, ?4, ?5, ?6
            WHERE (SELECT count(*) FROM ssh_signing_keys WHERE principal_id = ?2) < ?7
-             AND NOT EXISTS (SELECT 1 FROM ssh_signing_keys WHERE fingerprint = ?5)`,
+             AND NOT EXISTS (SELECT 1 FROM ssh_signing_keys WHERE fingerprint = ?5)
+             AND ${issuerHolds("?8", "?9")}`,
         )
         .bind(
           row.id,
@@ -90,6 +97,8 @@ export async function createSshSigningKeyOperation(
           row.fingerprint,
           row.created_at,
           MAX_SIGNING_KEYS,
+          ctx.auth.principalId,
+          ctx.auth.lifecycleGen,
         ),
       db
         .prepare(
@@ -99,15 +108,15 @@ export async function createSshSigningKeyOperation(
         )
         .bind(row.created_at, principal, row.id, row.fingerprint, ctx.requestId ?? null),
     ]);
+    const why = seen?.results[0] as { taken: number; holds: number } | undefined;
     if ((insert?.meta.changes ?? 0) === 0)
-      refused = (seen?.results[0] as { taken: number } | undefined)?.taken
-        ? "key_in_use"
-        : "too_many_keys";
+      refused = why?.holds !== 1 ? "issuer" : why.taken ? "key_in_use" : "too_many_keys";
   } catch (error) {
     // Lost a race with another add of the same key.
     if (!(error instanceof Error && /UNIQUE constraint failed/i.test(error.message))) throw error;
     refused = "key_in_use";
   }
+  if (refused === "issuer") throw issuerRefused();
   if (refused === "key_in_use")
     throw new OperationError(
       422,

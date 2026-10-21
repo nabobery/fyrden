@@ -106,9 +106,10 @@ export class PullDiscussion {
 
   /**
    * What the rulesets judge a merge by, from the repository's own records:
-   * the pull request's reviews, whose of them count (write access now),
-   * its last push and threads; `then` stamps them as read (before any
-   * wait), `stamps` as they are when called (in the commit's transaction).
+   * the pull request's reviews, whose of them count (active reviewers'
+   * with write access now), its last push and threads; `then` stamps them
+   * as read (before any wait), `stamps` as they are when called (in the
+   * commit's transaction).
    */
   async standing(
     number: number,
@@ -119,8 +120,9 @@ export class PullDiscussion {
     const { reviews, reviewComments, authority } = this.deps;
     const standing = reviews.standing(number);
     const threadsThen = reviewComments.stamp(number);
-    // Whose reviews count: write access now, checked again in the commit's transaction.
-    const reviewerOwners = await authority.ownersPulled([
+    // Whose reviews count: an active reviewer's (read once, here) with write access now (checked
+    // again in the commit's transaction).
+    const reviewerOwners = await authority.activeOwnersPulled([
       ...new Set(standing.reviews.map((r) => r.reviewerRoot)),
     ]);
     const eligible = () =>

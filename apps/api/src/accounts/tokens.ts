@@ -1,5 +1,6 @@
 import {
   type MintInput,
+  MintRefusedError,
   parseTokenRestrictions,
   TokenExpiredError,
 } from "@fyrden/adapters-cloudflare/auth";
@@ -15,6 +16,7 @@ import { isPermission, scopesAllow } from "@fyrden/domain";
 import { decodeSeekCursor, encodeSeekCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { tokenStore } from "../services.js";
+import { issuerRefused } from "./lifecycle.js";
 
 /** A user's own personal access and git tokens: listed, minted (never wider than the caller's), revoked. */
 
@@ -98,19 +100,23 @@ export async function createUserTokenOperation(
   const scopes = input.scopes.length === 0 ? own : input.scopes;
   if (!scopes.every((scope) => isPermission(scope) && scopesAllow(own, scope)))
     throw new OperationError(403, "scope_exceeds_token", "The scopes exceed your token's.");
-  const minted = await mintOrExpired(ctx, {
-    principalId: ctx.auth.principalId,
-    type: input.type,
-    scopes,
-    repoIds: ctx.auth.repoIds,
-    ttlMs: input.expires_in_days * DAY_MS,
-    // Never past the token making it (a session is the user itself, signed in).
-    ...(ctx.auth.type !== "ses" && { notAfter: ctx.auth.expiresAt }),
-    audit: {
-      actorId: ctx.auth.principalId,
-      ...(ctx.requestId !== undefined && { requestId: ctx.requestId }),
+  const minted = await mintAs(
+    ctx,
+    {
+      principalId: ctx.auth.principalId,
+      type: input.type,
+      scopes,
+      repoIds: ctx.auth.repoIds,
+      ttlMs: input.expires_in_days * DAY_MS,
+      // Never past the token making it (a session is the user itself, signed in).
+      ...(ctx.auth.type !== "ses" && { notAfter: ctx.auth.expiresAt }),
+      audit: {
+        actorId: ctx.auth.principalId,
+        ...(ctx.requestId !== undefined && { requestId: ctx.requestId }),
+      },
     },
-  });
+    issuerRefused,
+  );
   return {
     id: minted.id,
     token: minted.token,
@@ -120,16 +126,29 @@ export async function createUserTokenOperation(
   };
 }
 
-/** Mints a token; one whose minting token expired meanwhile answers as an expired token. */
-async function mintOrExpired(
+/**
+ * Mints a token `ctx` authorizes: only while the principal it was
+ * authenticated as (its issuer) still holds (see `issuerHolds`), so a
+ * user's request checked before their suspension mints nothing after it.
+ * One whose minting token expired or whose issuer moved on meanwhile
+ * answers as the token's own refusal would; one whose principal was
+ * disabled meanwhile, `disabled`.
+ */
+export async function mintAs(
   ctx: OpContext,
-  input: MintInput,
+  input: Omit<MintInput, "issuer">,
+  disabled: () => OperationError,
 ): Promise<{ token: string; id: string; expiresAt: number }> {
   try {
-    return await tokenStore(ctx.env, { metrics: ctx.metrics }).mint(input);
+    return await tokenStore(ctx.env, { metrics: ctx.metrics }).mint({
+      ...input,
+      issuer: { principalId: ctx.auth.principalId, gen: ctx.auth.lifecycleGen },
+    });
   } catch (error) {
     if (error instanceof TokenExpiredError)
       throw new OperationError(401, "token_expired", "Your token expired.");
+    if (error instanceof MintRefusedError && error.who === "issuer") throw issuerRefused();
+    if (error instanceof MintRefusedError) throw disabled();
     throw error;
   }
 }
@@ -152,25 +171,29 @@ export async function createGitTokenOperation(
   if (ctx.auth.type === "git")
     throw new OperationError(403, "forbidden", "A git token cannot mint another token.");
   const delegated = ctx.auth.grantId !== null;
-  const minted = await mintOrExpired(ctx, {
-    principalId: ctx.auth.principalId,
-    type: "git",
-    scopes,
-    repoIds: ctx.auth.repoIds,
-    ttlMs: input.expires_in_minutes * 60_000,
-    ...(ctx.auth.type !== "ses" && { notAfter: ctx.auth.expiresAt }),
-    // The grant and the agents acting stay: revoking the grant stops it.
-    ...(delegated && {
-      delegation: { grantId: ctx.auth.grantId as string, act: ctx.auth.act },
-    }),
-    // So does revoking the token minting it (a session ends on its own).
-    ...(ctx.auth.type !== "ses" && { sourceId: ctx.auth.id }),
-    audit: {
-      actorId: delegated ? (ctx.auth.act[0] as string) : ctx.auth.principalId,
-      ...(delegated && { act: ctx.auth.act }),
-      ...(ctx.requestId !== undefined && { requestId: ctx.requestId }),
+  const minted = await mintAs(
+    ctx,
+    {
+      principalId: ctx.auth.principalId,
+      type: "git",
+      scopes,
+      repoIds: ctx.auth.repoIds,
+      ttlMs: input.expires_in_minutes * 60_000,
+      ...(ctx.auth.type !== "ses" && { notAfter: ctx.auth.expiresAt }),
+      // The grant and the agents acting stay: revoking the grant stops it.
+      ...(delegated && {
+        delegation: { grantId: ctx.auth.grantId as string, act: ctx.auth.act },
+      }),
+      // So does revoking the token minting it (a session ends on its own).
+      ...(ctx.auth.type !== "ses" && { sourceId: ctx.auth.id }),
+      audit: {
+        actorId: delegated ? (ctx.auth.act[0] as string) : ctx.auth.principalId,
+        ...(delegated && { act: ctx.auth.act }),
+        ...(ctx.requestId !== undefined && { requestId: ctx.requestId }),
+      },
     },
-  });
+    issuerRefused,
+  );
   return {
     id: minted.id,
     token: minted.token,

@@ -50,6 +50,7 @@ import {
   createGitTokenOperation,
   createUserTokenOperation,
   listUserTokensOperation,
+  mintAs,
   revokeUserTokenOperation,
 } from "../accounts/tokens.js";
 import { ackFeedItemOperation, getFeedOperation, syncFeedOperation } from "../feed/operations.js";
@@ -194,7 +195,7 @@ import {
 import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "../repos/stars.js";
 import { transferRepoOperation } from "../repos/transfer.js";
 import { updateRepoOperation } from "../repos/update.js";
-import { clock, newId, tokenStore } from "../services.js";
+import { clock, newId } from "../services.js";
 import { platformKeys } from "../signing/platform-key.js";
 import { type Handlers, OperationError } from "./execute.js";
 
@@ -305,14 +306,17 @@ export const handlers: Handlers = {
     if (user.disabled_at !== null)
       throw new OperationError(409, "user_disabled", "The user is disabled.");
 
-    const store = tokenStore(env, { defer: (p) => ctx.waitUntil(p), metrics });
-    const minted = await store.mint({
-      principalId: input.user_id,
-      type: input.type,
-      scopes: input.scopes,
-      ttlMs: input.expires_in_days * DAY_MS,
-      audit: { actorId: auth.principalId, requestId },
-    });
+    const minted = await mintAs(
+      ctx,
+      {
+        principalId: input.user_id,
+        type: input.type,
+        scopes: input.scopes,
+        ttlMs: input.expires_in_days * DAY_MS,
+        audit: { actorId: auth.principalId, requestId },
+      },
+      () => new OperationError(409, "user_disabled", "The user is disabled."),
+    );
     return {
       id: minted.id,
       token: minted.token,
