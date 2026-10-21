@@ -54,9 +54,10 @@ export interface EffectSink {
     metrics?: Metrics,
   ): Promise<BatchDelivery>;
   /**
-   * Calls to other services (Durable Objects, D1) delivering a planned
-   * effect of a batch sink makes at most, so an invocation can bound what
-   * it delivers itself. One when not said.
+   * Calls to other services (Durable Objects, D1, R2, queues) delivering a
+   * planned effect makes at most, so an invocation can bound what it
+   * delivers. When not said: one for a batch sink's (its share of the
+   * batch), `SINGLE_EFFECT_CALLS` for another's.
    */
   calls?(planned: PlannedEffect): number;
   /**
@@ -178,8 +179,7 @@ const MAX_TARGET = 256;
 
 /** The calls delivering `effect` makes at most, as its sink says (`EffectSink.calls`). */
 export function effectCalls(sink: EffectSink | undefined, effect: PlannedEffect): number {
-  if (!sink?.deliverBatch) return SINGLE_EFFECT_CALLS;
-  return sink.calls?.(effect) ?? 1;
+  return sink?.calls?.(effect) ?? (sink?.deliverBatch ? 1 : SINGLE_EFFECT_CALLS);
 }
 
 /** The effect's id: the event key, the sink and the target. */

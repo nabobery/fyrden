@@ -1,6 +1,7 @@
-import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { type DomainEvent, eventKey } from "@fyrden/domain";
 import type { Effect, EffectSink, PlannedEffect } from "../effects/journal.js";
+import { ATTEMPT_POLICY, attemptDelivery, type DeliveryDeps } from "./deliver.js";
 import { entityBody, webhookEventOf } from "./events.js";
 
 /*
@@ -10,9 +11,10 @@ import { entityBody, webhookEventOf } from "./events.js";
  * the event alone, bounded in size) and the hooks. Delivering the effect
  * makes the event's deliveries: their rows (each admitted only while its
  * hook has fewer than its cap of outstanding deliveries), the body they
- * share in R2, and a queue message for each one's first attempt. Every
- * step is keyed by the delivery's id, a hash of the event and the hook,
- * so doing one again changes nothing.
+ * share in R2, the first attempt of a few of them, and a queue message
+ * for each other one's first attempt. Every step is keyed by the
+ * delivery's id, a hash of the event and the hook, so doing one again
+ * changes nothing.
  */
 
 /** Limits of webhook deliveries. Proposed. */
@@ -123,60 +125,107 @@ export async function bodyKeyOf(repoId: string, eventKeyText: string): Promise<s
   return `webhooks/${repoId}/${await hash(eventKeyText)}.json`;
 }
 
-export const webhookSink: EffectSink = {
-  name: "webhooks",
-  // An event's deliveries to up to 20 hooks: the costliest effect to make (CPU time on Free).
-  perMessage: 2,
+/**
+ * Deliveries whose first attempt the sink makes itself, an effect: the
+ * rest go to the webhooks queue for it. Each saves a queue hop (a batch
+ * wait) and its three queue operations, at the CPU time of an attempt
+ * (signing the body, the request): on Free, an invocation of the webhooks
+ * queue making up to 5 attempts took 12 ms of CPU at the median (measured,
+ * 2026-10-18). Proposed.
+ */
+export const FIRST_ATTEMPTS = 2;
 
-  /** One effect per event: every hook it goes to (20 at most) is made in one go. */
-  plan(event: DomainEvent): readonly PlannedEffect[] {
-    const routing = event.webhooks;
-    const made = bodyOf(event);
-    if (!routing || !made) return [];
-    // Not sent as it is: too large, or its stored data could not be read (a body made from it
-    // would leave out what happened). A small stand-in, its deliveries made `dropped`.
-    const dropped = event.stored
-      ? "payload_missing"
-      : encoder.encode(JSON.stringify(JSON.stringify(made))).length > DELIVERY_POLICY.maxBodyBytes
-        ? "payload_too_large"
-        : undefined;
-    const body = dropped
-      ? { event: made.event, ...(made.action !== undefined && { action: made.action }), dropped }
-      : made;
-    return [
-      {
-        target: "hooks",
-        payload: {
-          repoId: event.id.sourceId,
-          eventKey: eventKey(event.id),
-          event: body.event as string,
-          action: typeof made.action === "string" ? made.action : null,
-          private: routing.repo.private,
-          body,
-          hooks: routing.hooks,
-        } satisfies PlannedDeliveries,
-      },
-    ];
-  },
+/** Calls making an event's deliveries costs besides their first attempts (counted from the code). */
+const MATERIALIZE_CALLS = 8;
+/**
+ * Calls one first attempt costs at most: its claim, the hook's
+ * configuration, the body, its record, a retry's message, turning off a
+ * hook whose receiver answered 410 (three), or else, when it could not be
+ * made, reading its row and queuing it instead (three).
+ */
+const ATTEMPT_CALLS = 8;
 
-  async deliver(effect: Effect, env: Env, db: D1Database, metrics?: Metrics): Promise<void> {
-    await materialize(env, db, effect.payload as unknown as PlannedDeliveries, metrics);
-  },
-};
+export interface WebhookSinkOptions {
+  /** First attempts made per event (`FIRST_ATTEMPTS`). */
+  readonly firstAttempts?: number;
+  /** The SSRF guard's resolver (tests replace it). */
+  readonly resolver?: DeliveryDeps["resolver"];
+}
+
+export const webhookSink: EffectSink = createWebhookSink();
+
+/** The webhook sink, making `firstAttempts` first attempts per event. */
+export function createWebhookSink(options: WebhookSinkOptions = {}): EffectSink {
+  const firstAttempts = options.firstAttempts ?? FIRST_ATTEMPTS;
+  return {
+    name: "webhooks",
+    // An event's deliveries to up to 20 hooks: the costliest effect to make (CPU time on Free).
+    perMessage: 2,
+    plan: planDeliveries,
+    async deliver(effect: Effect, env: Env, db: D1Database, metrics?: Metrics): Promise<void> {
+      await materialize(env, db, effect.payload as unknown as PlannedDeliveries, {
+        firstAttempts,
+        ...(metrics && { metrics }),
+        ...(options.resolver && { resolver: options.resolver }),
+      });
+    },
+    calls(planned: PlannedEffect): number {
+      const hooks = (planned.payload as unknown as PlannedDeliveries).hooks.length;
+      return MATERIALIZE_CALLS + ATTEMPT_CALLS * Math.min(hooks, firstAttempts);
+    },
+  };
+}
+
+/** One effect per event: every hook it goes to (20 at most) is made in one go. */
+function planDeliveries(event: DomainEvent): readonly PlannedEffect[] {
+  const routing = event.webhooks;
+  const made = bodyOf(event);
+  if (!routing || !made) return [];
+  // Not sent as it is: too large, or its stored data could not be read (a body made from it
+  // would leave out what happened). A small stand-in, its deliveries made `dropped`.
+  const dropped = event.stored
+    ? "payload_missing"
+    : encoder.encode(JSON.stringify(JSON.stringify(made))).length > DELIVERY_POLICY.maxBodyBytes
+      ? "payload_too_large"
+      : undefined;
+  const body = dropped
+    ? { event: made.event, ...(made.action !== undefined && { action: made.action }), dropped }
+    : made;
+  return [
+    {
+      target: "hooks",
+      payload: {
+        repoId: event.id.sourceId,
+        eventKey: eventKey(event.id),
+        event: body.event as string,
+        action: typeof made.action === "string" ? made.action : null,
+        private: routing.repo.private,
+        body,
+        hooks: routing.hooks,
+      } satisfies PlannedDeliveries,
+    },
+  ];
+}
 
 /**
  * Makes the deliveries an event's effect names: their rows (one statement
- * admits them all, each against its hook's cap), the body they share, and
- * a message for each one's first attempt. Done again, it finds the rows,
- * stores the body again (the same bytes) while any waits, and sends only
- * the messages not sent yet.
+ * admits them all, each against its hook's cap), the body they share, the
+ * first attempt of up to `firstAttempts` of them, and a message for each
+ * other one's first attempt. Done again, it finds the rows, stores the
+ * body again (the same bytes) while any waits, and attempts or sends only
+ * those whose first attempt was neither made nor sent.
  */
 async function materialize(
   env: Env,
   db: D1Database,
   planned: PlannedDeliveries,
-  metrics?: Metrics,
+  options: {
+    readonly firstAttempts: number;
+    readonly metrics?: Metrics;
+    readonly resolver?: DeliveryDeps["resolver"];
+  },
 ): Promise<void> {
+  const { metrics } = options;
   const bytes = new TextEncoder().encode(JSON.stringify(planned.body));
   const payloadKey = await bodyKeyOf(planned.repoId, planned.eventKey);
   const now = Date.now();
@@ -244,11 +293,72 @@ async function materialize(
     await env.ASSETS.delete(payloadKey);
     return;
   }
-  const results = waiting.filter((r) => r.enqueued_at === null);
-  if (results.length === 0) return;
+  const unsent = waiting.filter((r) => r.enqueued_at === null).map((r) => r.delivery_id);
+  // The others' messages first: an attempt can take its receiver's whole deadline.
+  const own = unsent.slice(0, options.firstAttempts);
+  await enqueue(env, db, unsent.slice(own.length), metrics);
+  const deps: DeliveryDeps = {
+    env,
+    db,
+    now: () => Date.now(),
+    ...(metrics && { metrics }),
+    ...(options.resolver && { resolver: options.resolver }),
+  };
+  for (const delivery of own) {
+    try {
+      // Claimed by its row, as a queued attempt is: made once, whoever else tries.
+      await attemptDelivery(deps, delivery);
+    } catch (error) {
+      // Not made, or not recorded: queued instead.
+      createLogger({ op: "webhooks.deliver" }).warn("a first attempt failed to run; queued", {
+        delivery,
+        error,
+      });
+      await enqueueWhenClaimable(env, db, delivery, metrics);
+    }
+  }
+}
+
+/**
+ * Queues a delivery whose first attempt failed to run, for when its row
+ * lets an attempt claim it: a claim taken before the failure holds it for
+ * its lease, and a retry recorded before a failed send is due later. None
+ * for a delivery no longer waiting.
+ */
+async function enqueueWhenClaimable(
+  env: Env,
+  db: D1Database,
+  delivery: string,
+  metrics?: Metrics,
+): Promise<void> {
+  metrics?.count("d1.query", { db: "org", op: "webhooks_claimable" });
+  const row = await db
+    .prepare(
+      "SELECT next_attempt_at, lease_until FROM webhook_deliveries WHERE delivery_id = ? AND state = 'pending'",
+    )
+    .bind(delivery)
+    .first<{ next_attempt_at: number; lease_until: number | null }>();
+  if (!row) return;
+  const at = Math.max(row.next_attempt_at, row.lease_until ?? 0);
+  const delay = Math.min(Math.max(0, at - Date.now()), ATTEMPT_POLICY.maxQueueDelayMs);
+  await enqueue(env, db, [delivery], metrics, Math.ceil(delay / 1000));
+}
+
+/** Sends a message for each delivery's first attempt (after `delaySeconds`), and marks them sent. */
+async function enqueue(
+  env: Env,
+  db: D1Database,
+  deliveries: readonly string[],
+  metrics?: Metrics,
+  delaySeconds = 0,
+): Promise<void> {
+  if (deliveries.length === 0) return;
   metrics?.count("queue.send", { queue: "webhooks" });
   await env.WEBHOOKS.sendBatch(
-    results.map((r) => ({ body: { delivery: r.delivery_id } satisfies DeliveryMessage })),
+    deliveries.map((delivery) => ({
+      body: { delivery } satisfies DeliveryMessage,
+      ...(delaySeconds > 0 && { delaySeconds }),
+    })),
   );
   metrics?.count("d1.query", { db: "org", op: "webhooks_enqueued" });
   await db
@@ -256,6 +366,6 @@ async function materialize(
       `UPDATE webhook_deliveries SET enqueued_at = ?1
        WHERE delivery_id IN (SELECT value FROM json_each(?2)) AND enqueued_at IS NULL`,
     )
-    .bind(Date.now(), JSON.stringify(results.map((r) => r.delivery_id)))
+    .bind(Date.now(), JSON.stringify(deliveries))
     .run();
 }

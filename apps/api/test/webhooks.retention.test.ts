@@ -7,7 +7,7 @@ import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
 import { HOOK_POLICY } from "../src/do/repo/hooks.js";
 import { ATTEMPT_POLICY, reconcileWebhooks } from "../src/webhooks/deliver.js";
-import { webhookSink } from "../src/webhooks/sink.js";
+import { createWebhookSink } from "../src/webhooks/sink.js";
 
 /** Runs of the effects cron a day (wrangler.jsonc: `2-59/5 * * * *`, every 5 minutes). */
 const CRON_RUNS_A_DAY = (24 * 60) / 5;
@@ -123,7 +123,9 @@ describe("webhook retention", () => {
 
   it("keep an event's body while any of its deliveries is left, a batch ending inside it or not", async () => {
     const repoId = uniqueId("rep");
-    // The deliveries' messages are kept here, not sent: no consumer attempts them.
+    // The deliveries' messages are kept here, not sent, and the sink makes no first attempt:
+    // nothing attempts them.
+    const webhookSink = createWebhookSink({ firstAttempts: 0 });
     const quiet = {
       ...env,
       WEBHOOKS: { send: async () => {}, sendBatch: async () => {} },

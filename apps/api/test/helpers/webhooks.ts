@@ -6,7 +6,7 @@ import type { RepoDO } from "../../src/do/RepoDO.js";
 import { deliverEffects, invocationBudget } from "../../src/effects/dispatcher.js";
 import { applyEnvelope } from "../../src/queues/events-consumer.js";
 import type { DeliveryDeps } from "../../src/webhooks/deliver.js";
-import { webhookSink } from "../../src/webhooks/sink.js";
+import { createWebhookSink } from "../../src/webhooks/sink.js";
 import { api, json, user, type Who } from "./api.js";
 import { recordingPublish } from "./effects.js";
 import { inRepo } from "./repo-git.js";
@@ -148,8 +148,12 @@ export class WebhookTest {
             ...(options?.delaySeconds !== undefined && { delaySeconds: options.delaySeconds }),
           });
         },
-        sendBatch: async (messages: { body: { delivery: string } }[]) => {
-          for (const m of messages) sent.push(m.body);
+        sendBatch: async (messages: { body: { delivery: string }; delaySeconds?: number }[]) => {
+          for (const m of messages)
+            sent.push({
+              ...m.body,
+              ...(m.delaySeconds !== undefined && { delaySeconds: m.delaySeconds }),
+            });
         },
       },
     } as unknown as Env;
@@ -158,19 +162,25 @@ export class WebhookTest {
   /**
    * Makes the deliveries `events` call for, as the events consumer and the
    * webhook effects' queue would: the consumer journals the effects and
-   * sends their ids, and the queue's consumer delivers them.
+   * sends their ids, and the queue's consumer delivers them. The sink makes
+   * `firstAttempts` first attempts per event itself (none unless said: a
+   * test makes them, as the webhooks queue's consumer would).
    */
-  async materialize(events: DomainEvent[]): Promise<void> {
+  async materialize(events: DomainEvent[], firstAttempts = 0): Promise<void> {
     const { publish, sent } = recordingPublish();
+    const sink = createWebhookSink({
+      firstAttempts,
+      resolver: () => async () => ["93.184.216.34"],
+    });
     await applyEnvelope(
       this.testEnv(),
       { sourceId: this.repo.id, events },
-      { sinks: [webhookSink], publish },
+      { sinks: [sink], publish },
     );
     for (let next = sent.shift(); next; next = sent.shift()) {
       const now = Date.now();
       await deliverEffects(
-        { db: env.ORG_READ, env: this.testEnv(), sinks: [webhookSink], now: () => now, publish },
+        { db: env.ORG_READ, env: this.testEnv(), sinks: [sink], now: () => now, publish },
         next.sink,
         next.ids,
         invocationBudget(now),
