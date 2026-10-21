@@ -38,6 +38,13 @@ import {
  *
  * The request that deletes advances the job as far as it can; the cron
  * advances the rest, oldest first.
+ *
+ * An object restored from a backup taken before its deletion froze or
+ * erased it is frozen again by its first call (it takes the directory's
+ * restore generation before any work, see `RepoDO.checkEpoch`), which also
+ * reopens the job at `prepare` in a new generation (`gen`), once a restore:
+ * every step runs again, cleanups included, and a checkpoint of an earlier
+ * generation's run is refused.
  */
 
 export type DeletionStep = "prepare" | "purge" | "cleanup" | "erase" | "done";
@@ -96,6 +103,8 @@ export const DELETION_POLICY = {
 type Deletion = {
   repo_id: string;
   step: DeletionStep;
+  /** Counts reopenings (a restore from before the deletion): checkpoints name the one they ran in. */
+  gen: number;
   requested_by: string | null;
   act_chain: string | null;
   request_id: string | null;
@@ -212,7 +221,8 @@ export async function advanceDeletion(
   metrics?.count("d1.query", { db: "directory", op: "deletion_read" });
   const deletion = await db
     .prepare(
-      `SELECT d.repo_id, d.step, d.requested_by, d.act_chain, d.request_id, r.org_shard FROM repo_deletions d
+      `SELECT d.repo_id, d.step, d.gen, d.requested_by, d.act_chain, d.request_id, r.org_shard
+       FROM repo_deletions d
        JOIN repos r ON r.id = d.repo_id WHERE d.repo_id = ?`,
     )
     .bind(repoId)
@@ -231,7 +241,8 @@ export async function advanceDeletion(
           .run();
         break;
       }
-      if (!(await saveStep(env, repoId, step, next, metrics))) break;
+      await deletionHooks.beforeSave?.(step, next);
+      if (!(await saveStep(env, repoId, deletion.gen, step, next, metrics))) break;
       step = next;
     }
   } catch (error) {
@@ -283,7 +294,7 @@ async function runStep(
       return "cleanup";
     }
     case "cleanup": {
-      const target = { repoId: deletion.repo_id, shard: deletion.org_shard };
+      const target = { repoId: deletion.repo_id, shard: deletion.org_shard, gen: deletion.gen };
       return (await runCleanups(env, target, options)) ? "erase" : "cleanup";
     }
     case "erase": {
@@ -296,10 +307,19 @@ async function runStep(
   }
 }
 
-/** Records the next step, unless another run moved the job meanwhile; `done` also frees the name. */
+/** Hooks into a deletion's run. For tests. */
+export const deletionHooks: {
+  beforeSave?: (from: DeletionStep, to: DeletionStep) => Promise<void>;
+} = {};
+
+/**
+ * Records the next step, unless another run moved the job meanwhile or it
+ * was reopened since this run read it (`gen`); `done` also frees the name.
+ */
 async function saveStep(
   env: Env,
   repoId: string,
+  gen: number,
   from: DeletionStep,
   to: DeletionStep,
   metrics?: Metrics,
@@ -309,9 +329,9 @@ async function saveStep(
   const move = db
     .prepare(
       `UPDATE repo_deletions SET step = ?3, last_error = NULL, updated_at = ?4
-       WHERE repo_id = ?1 AND step = ?2`,
+       WHERE repo_id = ?1 AND step = ?2 AND gen = ?5`,
     )
-    .bind(repoId, from, to, now);
+    .bind(repoId, from, to, now, gen);
   if (to !== "done") {
     metrics?.count("d1.query", { db: "directory", op: "deletion_step" });
     return ((await move.run()).meta.changes ?? 0) > 0;
@@ -322,9 +342,9 @@ async function saveStep(
     db
       .prepare(
         `UPDATE repos SET state = 'deleted', updated_at = ?2 WHERE id = ?1 AND state = 'deleting'
-         AND EXISTS (SELECT 1 FROM repo_deletions WHERE repo_id = ?1 AND step = 'done')`,
+         AND EXISTS (SELECT 1 FROM repo_deletions WHERE repo_id = ?1 AND step = 'done' AND gen = ?3)`,
       )
-      .bind(repoId, now),
+      .bind(repoId, now, gen),
   ]);
   return (moved?.meta.changes ?? 0) > 0;
 }

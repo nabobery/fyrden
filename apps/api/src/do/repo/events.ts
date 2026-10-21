@@ -67,6 +67,11 @@ export interface EpochCheck {
     readonly ownerFence: number;
     readonly transfer: { readonly id: string; readonly from: string; readonly to: string } | null;
   };
+  /**
+   * Read with `owner`: the directory has the repository deleted or being
+   * deleted (the object was restored from before its deletion froze it).
+   */
+  readonly deleted?: boolean;
 }
 
 export interface RepoIdentity {
@@ -314,7 +319,7 @@ export class RepoEvents {
   }
 
   async #checkEpoch(read: (recorded: number) => Promise<EpochCheck>): Promise<void> {
-    const { epochGen: current, owner } = await read(this.#meta()?.epoch_gen ?? 0);
+    const { epochGen: current, owner, deleted } = await read(this.#meta()?.epoch_gen ?? 0);
     this.#storage.transactionSync(() => {
       const meta = this.#meta();
       if (meta && current !== null && current > meta.epoch_gen) {
@@ -354,8 +359,17 @@ export class RepoEvents {
             owner.nameGen,
           );
         }
+        // Deleted (or being deleted) since the backup: frozen again, taking no work as the
+        // repository it was; its reopened deletion runs from the start.
+        if (deleted)
+          this.#exec(
+            "events.epoch_deleted",
+            `UPDATE repo_meta SET write_frozen = 1, deleting_at = coalesce(deleting_at, ?)
+             WHERE id = 1`,
+            this.git.context.now(),
+          );
         this.#emit("repo.updated", { actor: null, actChain: [], data: null }, true);
-        this.restored();
+        if (!deleted) this.restored();
       }
     });
     this.#epochChecked = true;
