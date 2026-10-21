@@ -1,4 +1,4 @@
-import { type OperationDef, openApiDocument, registry } from "@fyrden/api-contract";
+import { answersNothing, type OperationDef, openApiDocument, registry } from "@fyrden/api-contract";
 import type { Context, Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
@@ -118,6 +118,8 @@ function respond(c: AppContext, op: OperationDef, result: OpResult): Response | 
     return problemResponse(c, result.problem, { ...retry, ...replayed });
   }
   if (op.etag) return respondWithEtag(c, result.output, result.status ?? op.successStatus ?? 200);
+  // Nothing to answer: no body (a replay of it too).
+  if (answersNothing(op)) return c.body(null, 204, replayed);
   // A secret (a new token) is shown once: no cache keeps it.
   return c.json(
     result.output as Record<string, unknown>,

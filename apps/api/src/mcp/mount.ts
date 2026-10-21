@@ -1,4 +1,10 @@
-import { makeProblem, mcpAnnotations, type OperationDef, registry } from "@fyrden/api-contract";
+import {
+  answersNothing,
+  makeProblem,
+  mcpAnnotations,
+  type OperationDef,
+  registry,
+} from "@fyrden/api-contract";
 import {
   type CallToolResult,
   createMcpHandler,
@@ -46,6 +52,8 @@ function toolResult(result: Awaited<ReturnType<typeof executeOperation>>): CallT
     // Same problem document as REST, so agents see one error shape.
     return { isError: true, content: [{ type: "text", text: JSON.stringify(result.problem) }] };
   }
+  // An operation that answers nothing: a short text, no structured content (it has no schema).
+  if (result.output === null) return { content: [{ type: "text", text: "Done." }] };
   const output = result.output as Record<string, unknown>;
   return { content: [{ type: "text", text: JSON.stringify(output) }], structuredContent: output };
 }
@@ -235,7 +243,7 @@ function buildServer(ctx: OpContext): McpServer {
         title: op.mcp.title,
         description: op.mcp.description,
         inputSchema: withConvertedJsonSchema(op.input),
-        outputSchema: withConvertedJsonSchema(op.output),
+        ...(!answersNothing(op) && { outputSchema: withConvertedJsonSchema(op.output) }),
         annotations: mcpAnnotations(op),
       },
       (args: unknown) => runTool(op, ctx, args),

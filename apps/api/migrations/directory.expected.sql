@@ -126,6 +126,18 @@ CREATE TABLE passkeys (
   last_used_at INTEGER
 ) STRICT;
 
+-- table principal_lifecycle
+CREATE TABLE principal_lifecycle (
+  principal_id TEXT NOT NULL REFERENCES principals (id),
+  gen INTEGER NOT NULL,
+  from_state TEXT NOT NULL,
+  to_state TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  actor_id TEXT,
+  request_id TEXT,
+  PRIMARY KEY (principal_id, gen)
+) STRICT, WITHOUT ROWID;
+
 -- table principals
 CREATE TABLE principals (
   id TEXT PRIMARY KEY,
@@ -137,7 +149,9 @@ CREATE TABLE principals (
   is_instance_admin INTEGER NOT NULL DEFAULT 0 CHECK (is_instance_admin IN (0, 1)),
   created_at INTEGER NOT NULL,
   disabled_at INTEGER, require_dpop INTEGER NOT NULL DEFAULT 0
-  CHECK (require_dpop IN (0, 1)),
+  CHECK (require_dpop IN (0, 1)), lifecycle TEXT NOT NULL DEFAULT 'active'
+  CHECK (lifecycle IN ('active', 'suspended', 'deleting', 'deleted')), lifecycle_gen INTEGER NOT NULL DEFAULT 0, lifecycle_claim TEXT, suspended_at INTEGER, suspended_by TEXT, suspended_reason TEXT
+  CHECK (suspended_reason IS NULL OR length(suspended_reason) <= 200),
   CHECK ((type IN ('agent', 'installation')) = (owner_id IS NOT NULL)),
   CHECK (type = 'installation' OR handle IS NOT NULL)
 ) STRICT;
@@ -326,6 +340,9 @@ CREATE INDEX oauth_requests_expiry ON oauth_requests (expires_at);
 -- index oauth_requests_pending
 CREATE INDEX oauth_requests_pending ON oauth_requests (user_id, expires_at) WHERE code_hash IS NULL;
 
+-- index oauth_requests_unconsumed_user
+CREATE INDEX oauth_requests_unconsumed_user ON oauth_requests (user_id) WHERE used_at IS NULL;
+
 -- index passkeys_user
 CREATE INDEX passkeys_user ON passkeys (user_id);
 
@@ -409,3 +426,19 @@ CREATE INDEX tokens_principal ON tokens (principal_id);
 
 -- index webauthn_challenges_expiry
 CREATE INDEX webauthn_challenges_expiry ON webauthn_challenges (expires_at);
+
+-- trigger principals_lifecycle_insert
+CREATE TRIGGER principals_lifecycle_insert BEFORE INSERT ON principals
+WHEN (NEW.lifecycle <> 'active' AND NEW.disabled_at IS NULL)
+  OR (NEW.type = 'user' AND NEW.lifecycle = 'active' AND NEW.disabled_at IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'a principal''s lifecycle and disabled_at disagree');
+END;
+
+-- trigger principals_lifecycle_update
+CREATE TRIGGER principals_lifecycle_update BEFORE UPDATE OF lifecycle, disabled_at ON principals
+WHEN (NEW.lifecycle <> 'active' AND NEW.disabled_at IS NULL)
+  OR (NEW.type = 'user' AND NEW.lifecycle = 'active' AND NEW.disabled_at IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'a principal''s lifecycle and disabled_at disagree');
+END;

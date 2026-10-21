@@ -18,11 +18,12 @@ import { ACL_POLICY } from "../src/do/repo/acl.js";
 import { FEED_POLICY } from "../src/do/user/feed.js";
 import { decodeFeedCursor, encodeFeedCursor, FEED_POLL } from "../src/feed/operations.js";
 import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
-import { SESSION_COOKIE, startSession } from "../src/oauth/session.js";
+import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { DAY, type EntryInit, entry } from "./helpers/feed.js";
 import { ORIGIN } from "./helpers/git-http.js";
+import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
 
 /**
@@ -233,7 +234,7 @@ describe("the feed operations", () => {
     expect(feedNames(res.body)).toEqual([repo.fullName, other.fullName]);
     expect(res.body.next_cursor).toBe(res.body.head_cursor);
     expect(res.body.poll_after_ms).toBeGreaterThan(0);
-    const { cookie } = await startSession(env, owner.principalId, { via: "test" });
+    const { cookie } = await testSession(owner.principalId);
     const session = await feedFetch("/feed", {
       Cookie: `${SESSION_COOKIE}=${cookie}`,
       "X-Fyrden-Session": "1",

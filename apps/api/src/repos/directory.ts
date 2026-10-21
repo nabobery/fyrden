@@ -104,14 +104,14 @@ export async function resolveRepo(
       .prepare(
         `SELECT ${REPO_COLUMNS}, 0 AS redirected
          FROM principals p JOIN repos r ON r.owner_id = p.id
-         WHERE p.handle = ?1 COLLATE NOCASE AND p.disabled_at IS NULL
+         WHERE p.handle = ?1 COLLATE NOCASE AND p.lifecycle IN ('active', 'suspended')
            AND r.name = ?2 COLLATE NOCASE AND r.state <> 'deleted' AND r.state = 'active'
          UNION ALL
          SELECT ${REPO_COLUMNS}, 1
          FROM principals o JOIN repo_redirects d ON d.owner_id = o.id
            JOIN repos r ON r.id = d.repo_id JOIN principals p ON p.id = r.owner_id
-         WHERE o.handle = ?1 COLLATE NOCASE AND o.disabled_at IS NULL
-           AND d.name = ?2 AND r.state = 'active' AND p.disabled_at IS NULL
+         WHERE o.handle = ?1 COLLATE NOCASE AND o.lifecycle IN ('active', 'suspended')
+           AND d.name = ?2 AND r.state = 'active' AND p.lifecycle IN ('active', 'suspended')
          ORDER BY redirected LIMIT 1`,
       )
       .bind(owner, name)
@@ -170,7 +170,7 @@ export async function listOwnedForks(
       `SELECT ${REPO_COLUMNS}
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.parent_id = ? AND r.owner_id = ? AND r.state = 'active'
-         AND p.disabled_at IS NULL
+         AND p.lifecycle IN ('active', 'suspended')
          AND (r.created_at, r.id) > (?, ?)
          AND (? IS NULL OR r.id IN (SELECT value FROM json_each(?)))
        ORDER BY r.created_at, r.id LIMIT ?`,
@@ -219,7 +219,7 @@ export async function findReposById(
       `SELECT ${REPO_COLUMNS}
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.id IN (SELECT value FROM json_each(?)) AND r.state = 'active'
-         AND p.disabled_at IS NULL`,
+         AND p.lifecycle IN ('active', 'suspended')`,
     )
     .bind(JSON.stringify(ids))
     .all<RepoRow>();
@@ -249,7 +249,7 @@ export async function networkReposOf(
       `SELECT ${REPO_COLUMNS}
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.network_id = ? AND p.handle = ? COLLATE NOCASE AND r.state = 'active'
-         AND p.disabled_at IS NULL AND (?3 IS NULL OR r.name = ?3 COLLATE NOCASE)
+         AND p.lifecycle IN ('active', 'suspended') AND (?3 IS NULL OR r.name = ?3 COLLATE NOCASE)
        ORDER BY r.name LIMIT ?4`,
     )
     .bind(networkId, handle, name ?? null, MAX_HEAD_CANDIDATES)
@@ -268,7 +268,7 @@ export async function findNetworkSource(
     `SELECT ${REPO_COLUMNS}
      FROM repos r JOIN principals p ON p.id = r.owner_id
      WHERE r.network_id = ? AND r.parent_id IS NULL AND r.state = 'active'
-       AND p.disabled_at IS NULL
+       AND p.lifecycle IN ('active', 'suspended')
      LIMIT 1`,
   )
     .bind(networkId)

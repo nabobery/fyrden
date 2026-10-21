@@ -445,7 +445,9 @@ describe("requesting reviews", () => {
     const owner_ = await env.DIRECTORY.prepare("SELECT owner_id FROM principals WHERE id = ?")
       .bind(helper.principalId)
       .first<{ owner_id: string }>();
-    await env.DIRECTORY.prepare("UPDATE principals SET disabled_at = 1 WHERE id = ?")
+    await env.DIRECTORY.prepare(
+      "UPDATE principals SET disabled_at = 1, lifecycle = CASE WHEN type = 'user' THEN 'suspended' ELSE lifecycle END WHERE id = ?",
+    )
       .bind(owner_?.owner_id)
       .run();
     const asked = await json<{ code: string; detail: string }>(
@@ -465,7 +467,9 @@ describe("requesting reviews", () => {
     await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
       reviewers: [reader.handle],
     });
-    await env.DIRECTORY.prepare("UPDATE principals SET disabled_at = 1 WHERE id = ?")
+    await env.DIRECTORY.prepare(
+      "UPDATE principals SET disabled_at = 1, lifecycle = CASE WHEN type = 'user' THEN 'suspended' ELSE lifecycle END WHERE id = ?",
+    )
       .bind(reader.principalId)
       .run();
     const removed = await api("DELETE", `${path}/pulls/1/requested_reviewers`, owner.token, {

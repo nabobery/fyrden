@@ -128,7 +128,7 @@ async function listStars(
     .prepare(
       `SELECT ${REPO_COLUMNS}, s.created_at AS starred_at
        FROM stars s JOIN repos r ON r.id = s.repo_id JOIN principals p ON p.id = r.owner_id
-       WHERE s.user_id = ? AND r.state = 'active' AND p.disabled_at IS NULL
+       WHERE s.user_id = ? AND r.state = 'active' AND p.lifecycle IN ('active', 'suspended')
          AND (s.created_at, s.repo_id) < (?, ?)
          AND (? IS NULL OR s.repo_id IN (SELECT value FROM json_each(?)))
        ORDER BY s.created_at DESC, s.repo_id DESC LIMIT ?`,

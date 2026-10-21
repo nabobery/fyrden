@@ -69,6 +69,7 @@ async function sessionCredential(
         principalType: "user",
         principalHandle: user.handle,
         isInstanceAdmin: user.isInstanceAdmin,
+        lifecycleGen: user.lifecycleGen,
         scopes: [],
         repoIds: null,
         expiresAt: user.expiresAt,

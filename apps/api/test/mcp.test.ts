@@ -93,8 +93,10 @@ describe("MCP endpoint", () => {
         description: want.description,
         annotations: want.annotations,
         inputSchema: want.inputSchema,
-        outputSchema: want.outputSchema,
+        ...(want.outputSchema !== undefined && { outputSchema: want.outputSchema }),
       });
+      // A tool that answers nothing declares no output schema.
+      if (want.outputSchema === undefined) expect(tool).not.toHaveProperty("outputSchema");
     }
   });
 

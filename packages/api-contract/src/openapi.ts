@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type OperationDef, openApiPath, pathParams, type Registry } from "./op.js";
+import { answersNothing, type OperationDef, openApiPath, pathParams, type Registry } from "./op.js";
 import { Problem } from "./problem.js";
 
 type JsonSchema = Record<string, unknown>;
@@ -53,12 +53,14 @@ function operationObject(op: OperationDef): JsonSchema {
       },
     }),
     responses: {
-      [String(op.successStatus ?? 200)]: {
-        description:
-          op.successStatus === 201 ? "Created" : op.successStatus === 202 ? "Accepted" : "OK",
-        content: { "application/json": { schema: stripMeta(toSchema(op.output, "output")) } },
-        ...(op.etag && { headers: { ETag: { schema: { type: "string" } } } }),
-      },
+      [String(op.successStatus ?? 200)]: answersNothing(op)
+        ? { description: "No Content" }
+        : {
+            description:
+              op.successStatus === 201 ? "Created" : op.successStatus === 202 ? "Accepted" : "OK",
+            content: { "application/json": { schema: stripMeta(toSchema(op.output, "output")) } },
+            ...(op.etag && { headers: { ETag: { schema: { type: "string" } } } }),
+          },
       ...(op.etag && { "304": { description: "Not Modified: the If-None-Match ETag matches" } }),
       default: {
         description: "Error",
