@@ -15,6 +15,7 @@ import {
   EFFECT_POLICY,
   type EffectSink,
   INLINE_BATCH_EFFECTS,
+  INLINE_RECIPIENTS,
   journalStatements,
   MESSAGE_CALLS,
   planEffects,
@@ -104,10 +105,11 @@ export interface ConsumerOptions {
   /** The effect sinks (default: the deployment's). */
   readonly sinks?: readonly EffectSink[];
   /**
-   * Effects of inline sinks the invocation may still deliver itself, shared
-   * by its messages (default: its own).
+   * Effects of inline sinks the invocation may still deliver itself, and
+   * calls to their recipients (`INLINE_RECIPIENTS` when not said), shared by
+   * its messages (default: its own).
    */
-  readonly inline?: { batched: number };
+  readonly inline?: { batched: number; recipients?: number };
   /** Where effects are sent (default: each sink's queue). */
   readonly publish?: Publish;
   /**
@@ -140,7 +142,7 @@ export async function consumeEvents(
   // One share of inline deliveries and of calls for the whole invocation.
   options = {
     ...options,
-    inline: options.inline ?? { batched: INLINE_BATCH_EFFECTS },
+    inline: options.inline ?? { batched: INLINE_BATCH_EFFECTS, recipients: INLINE_RECIPIENTS },
     calls: options.calls ?? {
       left: INVOCATION_CALLS - DISPATCH_CALLS,
       reserved: 0,
@@ -369,20 +371,29 @@ export async function applyEnvelope(
   const planned = new Map(plan.map((row) => [row.id, row]));
   const unsent = await unsentEffects(db, fresh, planned, options.metrics);
   // A share of the inline sinks' effects is delivered by this invocation (a call per recipient, and
-  // no queue's wait), within the calls left once the later messages' share is kept; the rest go
-  // to their sink's queue.
+  // no queue's wait), within the calls left once the later messages' share is kept and within its
+  // recipients' share; the rest go to their sink's queue.
   const inline = options.inline ?? { batched: INLINE_BATCH_EFFECTS };
+  inline.recipients ??= INLINE_RECIPIENTS;
   const dispatching = options.dispatching ?? new Dispatching();
   const model = dispatching.of(db);
   const spare = () => Math.max(0, calls.left - calls.reserved);
   for (const row of [...fresh, ...unsent]) {
     const sink = sinks.find((s) => s.name === row.sink);
-    const cost = planned.get(row.effect_id)?.calls ?? 1;
+    const effect = planned.get(row.effect_id);
+    const cost = effect?.calls ?? 1;
     // Each inline sink's share costs a message's calls besides its deliveries.
     const extra = model.own.has(row.sink) ? 0 : MESSAGE_CALLS;
-    if (sink?.inline && inline.batched > 0 && extra + cost <= spare()) {
+    if (
+      sink?.inline &&
+      effect?.inline !== false &&
+      inline.batched > 0 &&
+      cost <= inline.recipients &&
+      extra + cost <= spare()
+    ) {
       append(model.own, row.sink, row.effect_id);
       inline.batched--;
+      inline.recipients -= cost;
       model.owned++;
       model.calls += extra + cost;
       calls.left -= extra + cost;

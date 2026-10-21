@@ -149,6 +149,8 @@ export const feedSink: EffectSink = {
   // Delivered in one batch, a call per recipient (100 at most each): within an invocation's calls.
   perMessage: 8,
   inline: true,
+  // A page goes to the queue: an event carrying one has more recipients than an invocation's share.
+  inlineable: (planned: PlannedEffect) => !("page" in planned.payload),
 
   plan(event: DomainEvent): readonly PlannedEffect[] {
     if (event.type === "access.revoked") {

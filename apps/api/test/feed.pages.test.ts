@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { FEED_PAGE_GRACE_MS } from "../src/do/repo/feed.js";
 import { deliverEffects, invocationBudget } from "../src/effects/dispatcher.js";
-import { effectCalls } from "../src/effects/journal.js";
+import { effectCalls, INLINE_RECIPIENTS } from "../src/effects/journal.js";
 import { feedSink } from "../src/feed/sink.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { api, json, user, type Who } from "./helpers/api.js";
@@ -394,5 +394,50 @@ describe("audience pages", () => {
       { pruned: 10, nextAt: 110 },
       { pruned: 2, nextAt: real?.expires_at },
     ]);
+  });
+
+  describe("delivered by the events consumer itself", () => {
+    /** Applies the comment's envelope as the events consumer would; the effects it sent on. */
+    async function applied(event: DomainEvent, recipients?: number) {
+      const { publish, sent } = recordingPublish();
+      const now = Date.now();
+      await applyEnvelope(
+        env,
+        { sourceId: repo.id, events: [event] },
+        {
+          publish,
+          now: () => now,
+          ...(recipients !== undefined && { inline: { batched: 8, recipients } }),
+        },
+      );
+      return sent.filter((m) => m.sink === feedSink.name).flatMap((m) => m.ids);
+    }
+
+    it("only when its recipients fit the invocation's share, and never its pages", async () => {
+      expect(INLINE_RECIPIENTS).toBe(50);
+      await participants(250);
+      const sent = await applied(await commentEvent());
+      // 100 carried: past the share, so queued, as every page is.
+      expect(sent.map((id) => id.slice(id.indexOf(":feed:") + 6))).toEqual([
+        "feed",
+        "page:1",
+        "page:2",
+      ]);
+      expect((await effects()).every((e) => e.state === "pending")).toBe(true);
+    });
+
+    it("never its pages, whatever the share", async () => {
+      await participants(250);
+      const sent = await applied(await commentEvent(), 900);
+      expect(sent.map((id) => id.slice(id.indexOf(":feed:") + 6))).toEqual(["page:1", "page:2"]);
+      expect((await effects()).find((e) => e.target === "feed")?.state).toBe("done");
+    });
+
+    it("a small audience at once, sparing it a queue's wait", async () => {
+      await participants(INLINE_RECIPIENTS - 1);
+      expect(await applied(await commentEvent())).toEqual([]);
+      expect((await effects()).map((e) => [e.target, e.state])).toEqual([["feed", "done"]]);
+      expect(await items(names[0] as string)).toEqual(["issue/1"]);
+    });
   });
 });
