@@ -125,6 +125,33 @@ export class RepoAuthority {
     return owners;
   }
 
+  /**
+   * Of `principals`, those being deleted or deleted (a review requested of
+   * one holds a place no one can take back by name: their handle is gone),
+   * from the directory's primary in batches.
+   */
+  async deletedOf(principals: readonly string[]): Promise<Set<string>> {
+    const deleted = new Set<string>();
+    const unique = [...new Set(principals)];
+    const db = this.deps.env().DIRECTORY.withSession("first-primary");
+    for (let at = 0; at < unique.length; at += OWNER_BATCH) {
+      const batch = unique.slice(at, at + OWNER_BATCH);
+      this.deps.git.context.metrics.count("d1.query", {
+        db: "directory",
+        op: "deleted_principals",
+      });
+      const { results } = await db
+        .prepare(
+          `SELECT id FROM principals WHERE id IN (${batch.map(() => "?").join(", ")})
+             AND lifecycle IN ('deleting', 'deleted')`,
+        )
+        .bind(...batch)
+        .all<{ id: string }>();
+      for (const row of results) deleted.add(row.id);
+    }
+    return deleted;
+  }
+
   /** A write's ceilings, with the principal's and their roles pulled fresh (one snapshot serves all). */
   async rolesPulled(principal: string, grantId: string | null): Promise<string[]> {
     const ceilings = await this.ceilingsOf(principal, grantId);
