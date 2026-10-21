@@ -1,4 +1,5 @@
 CREATE INDEX collaborators_handle ON collaborators (repo_id, handle COLLATE NOCASE);
+CREATE INDEX collaborators_principal ON collaborators (principal_id);
 CREATE UNIQUE INDEX default_labels_name ON default_labels (name COLLATE NOCASE);
 CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
 CREATE INDEX members_handle ON members (handle COLLATE NOCASE);

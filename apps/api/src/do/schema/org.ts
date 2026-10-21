@@ -239,4 +239,13 @@ export const orgSchema: readonly DoMigration[] = [
       CREATE UNIQUE INDEX default_labels_name ON default_labels (name COLLATE NOCASE);
     `,
   },
+  {
+    version: 8,
+    // A principal's collaborator grants, for a user deletion's retirement
+    // (members and team members are keyed by principal already).
+    name: "collaborators_principal",
+    sql: `
+      CREATE INDEX collaborators_principal ON collaborators (principal_id);
+    `,
+  },
 ];
