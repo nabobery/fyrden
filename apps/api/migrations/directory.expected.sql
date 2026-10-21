@@ -291,6 +291,37 @@ CREATE TABLE "tokens" (
   CHECK ((grant_id IS NULL) = (act_chain IS NULL))
 ) STRICT;
 
+-- table user_deletions
+CREATE TABLE user_deletions (
+  user_id TEXT PRIMARY KEY REFERENCES principals (id),
+  step TEXT NOT NULL
+    CHECK (step IN ('repositories', 'accounts', 'stars', 'feeds', 'finalize', 'done')),
+  requested_by TEXT,
+  request_id TEXT,
+  scan_until INTEGER NOT NULL,
+  account_cursor INTEGER NOT NULL DEFAULT 0,
+  batch_cursor INTEGER NOT NULL DEFAULT 0,
+  feed_cursor INTEGER NOT NULL DEFAULT 0,
+  blocked TEXT,
+  next_attempt_at INTEGER NOT NULL,
+  rearm_after INTEGER NOT NULL DEFAULT 0,
+  lease_id TEXT,
+  lease_until INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  released_handles TEXT NOT NULL CHECK (json_valid(released_handles)),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+-- table user_retirements
+CREATE TABLE user_retirements (
+  user_id TEXT NOT NULL REFERENCES user_deletions (user_id),
+  principal_id TEXT NOT NULL,
+  ord INTEGER NOT NULL,
+  PRIMARY KEY (user_id, principal_id)
+) STRICT, WITHOUT ROWID;
+
 -- table webauthn_challenges
 CREATE TABLE webauthn_challenges (
   id TEXT PRIMARY KEY,
@@ -398,6 +429,9 @@ CREATE INDEX repos_generating ON repos (generating_since)
 -- index repos_network
 CREATE INDEX repos_network ON repos (network_id);
 
+-- index repos_owner
+CREATE INDEX repos_owner ON repos (owner_id, id);
+
 -- index repos_owner_name
 CREATE UNIQUE INDEX repos_owner_name ON repos (owner_id, name COLLATE NOCASE) WHERE state <> 'deleted';
 
@@ -430,6 +464,12 @@ CREATE INDEX tokens_oat_expiry ON tokens (expires_at) WHERE type = 'oat';
 
 -- index tokens_principal
 CREATE INDEX tokens_principal ON tokens (principal_id);
+
+-- index user_deletions_rearm
+CREATE INDEX user_deletions_rearm ON user_deletions (rearm_after, user_id) WHERE step <> 'done';
+
+-- index user_retirements_principal
+CREATE INDEX user_retirements_principal ON user_retirements (principal_id);
 
 -- index webauthn_challenges_expiry
 CREATE INDEX webauthn_challenges_expiry ON webauthn_challenges (expires_at);

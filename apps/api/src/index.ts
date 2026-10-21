@@ -1,4 +1,5 @@
 import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
+import { rearmDeletions } from "./accounts/deletion-runner.js";
 import { app } from "./app-instance.js";
 import { archiveDirectoryAudit } from "./cron/directory-audit-archiver.js";
 import { runEffectsCron } from "./cron/effects.js";
@@ -13,6 +14,7 @@ import { reapIdempotencyKeys } from "./rest/idempotency.js";
 import { consumeWebhooks, WEBHOOKS_QUEUE } from "./webhooks/deliver.js";
 import type { DeliveryMessage } from "./webhooks/sink.js";
 
+export { DeletionDO } from "./do/DeletionDO.js";
 export { NetworkDO } from "./do/NetworkDO.js";
 export { OrgDO } from "./do/OrgDO.js";
 export { RepoDO } from "./do/RepoDO.js";
@@ -22,6 +24,8 @@ export { ApiRpc } from "./rpc.js";
 
 /** The cron trigger that recovers effects and reconciles webhook deliveries (wrangler.jsonc). */
 const EFFECTS_CRON = "2-59/5 * * * *";
+/** The user deletions' recovery: re-arms one job whose alarm was lost, a run. */
+const DELETIONS_CRON = "4-59/5 * * * *";
 
 export default {
   fetch: app.fetch,
@@ -52,6 +56,10 @@ export default {
   async scheduled(controller, env) {
     const metrics = createMetrics(env.METRICS);
     // Effects and webhook deliveries: an invocation of their own, its D1 queries their budget.
+    if (controller.cron === DELETIONS_CRON)
+      return measureInvocation(metrics, { where: "worker", op: "cron deletions" }, () =>
+        rearmDeletions(env, { metrics }).then(() => {}),
+      );
     if (controller.cron === EFFECTS_CRON)
       return measureInvocation(metrics, { where: "worker", op: "cron effects" }, () =>
         runEffectsCron(env, { metrics }),

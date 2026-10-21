@@ -30,7 +30,7 @@ import { clock } from "../services.js";
  * authorized may finish (a push holds its decision for up to a minute).
  */
 
-type Lifecycle = "active" | "suspended" | "deleting" | "deleted";
+export type Lifecycle = "active" | "suspended" | "deleting" | "deleted";
 
 /**
  * A write that grants authority was refused because the caller no longer

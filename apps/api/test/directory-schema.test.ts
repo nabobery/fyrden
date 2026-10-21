@@ -45,6 +45,8 @@ describe("D1 directory schema", () => {
       "ssh_signing_keys",
       "stars",
       "tokens",
+      "user_deletions",
+      "user_retirements",
       "webauthn_challenges",
     ]);
   });
