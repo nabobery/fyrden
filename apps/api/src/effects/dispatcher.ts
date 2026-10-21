@@ -419,7 +419,7 @@ async function markFailed(
   const backoff = "min(?2 << (attempts - 1), ?3)";
   const { results } = await deps.db
     .prepare(
-      `UPDATE effects SET next_attempt_at = ?1 + ${backoff},
+      `UPDATE effects SET next_attempt_at = CASE WHEN attempts >= ?6 THEN ?1 ELSE ?1 + ${backoff} END,
          recover_at = ?1 + ${backoff} + ?4,
          last_error = ?5, lease_token = NULL, lease_until = NULL,
          state = CASE WHEN attempts >= ?6 THEN 'failed' ELSE 'pending' END

@@ -477,6 +477,27 @@ describe("delivering effects a message names", () => {
     expect(received.size).toBe(1);
   });
 
+  it("records when an effect failed for good, not when its next attempt would have been", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    const { sink, failNext } = recordingSink();
+    const { publish, sent } = recordingPublish();
+    failNext(1);
+    const policy = { ...EFFECT_POLICY, maxAttempts: 1 };
+    await deliverEffects(
+      depsOf([sink], T0, publish, policy),
+      "test_hook",
+      [id],
+      budget(T0, policy),
+    );
+    expect(await effectRow(id)).toMatchObject({
+      state: "failed",
+      attempts: 1,
+      next_attempt_at: T0,
+    });
+    expect(sentOf(sent, repoId)).toEqual([]);
+  });
+
   it("makes a retried effect overdue at its due time when its message cannot be sent", async () => {
     const repoId = await listedRepo();
     const [id = ""] = await dueEffects(repoId, 1, T0);

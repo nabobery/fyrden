@@ -238,7 +238,8 @@ describe("diffSchema", () => {
 
   it("still reports a rebuilt table whose definition is not the expected one", () => {
     const retyped = effects.sql.replace("attempts INTEGER", "attempts TEXT");
-    const withoutColumn = effects.sql.replace(/\n {2}last_error TEXT,/, "");
+    // A column no index reads, so the rebuilt table takes the committed indexes.
+    const withoutColumn = effects.sql.replace(/\n {2}lease_token TEXT,/, "");
     const relabelled = effects.sql.replace("'failed'))", "'dead'))");
     for (const definition of [retyped, withoutColumn, relabelled]) {
       expect(definition).not.toBe(effects.sql);

@@ -17,7 +17,9 @@ import { clock } from "../services.js";
  * sink makes no delivery of it (and removes a body it stored as the
  * tombstone arrived). Effects being delivered when the cleanups start are
  * waited for, so no delivery is still being made when its rows and bodies
- * are removed.
+ * are removed: first until no invocation that claimed one of its webhook
+ * effects can still be running (a claim can outlive its lease), then until
+ * no effect of it is claimed.
  */
 
 /** Proposed values. */
@@ -25,7 +27,7 @@ export const CLEANUP_POLICY = {
   /**
    * Pages one deletion call works through: each takes up to three internal
    * calls (D1 or R2), plus one to read what is done and one to record each
-   * cleanup finished: at most 16 calls a deletion, 160 for the cron's ten,
+   * cleanup finished: at most 17 calls a deletion, 170 for the cron's ten,
    * of an invocation's 1,000.
    */
   pagesPerCall: 4,
@@ -35,6 +37,13 @@ export const CLEANUP_POLICY = {
   deliveriesPage: 200,
   /** Webhook bodies deleted a page (one R2 delete takes up to 1,000 keys). */
   bodiesPage: 1_000,
+  /**
+   * How long after a webhook effect ended (made, failed or ended by the
+   * deletion) the invocation that claimed it may still be running: a queue
+   * consumer invocation's wall-time limit, 15 minutes
+   * (https://developers.cloudflare.com/queues/platform/limits/).
+   */
+  settleMs: 15 * 60_000,
 };
 
 export interface CleanupTarget {
@@ -56,6 +65,54 @@ export interface RepoCleanup {
 const pageOutcome = (removed: number, page: number): PageOutcome =>
   removed < page ? "done" : "more";
 
+/** The repository's effects, through the primary key: `<repo>:` up to, not including, `<repo>;`. */
+const OURS = "effect_id >= ?1 || ':' AND effect_id < ?1 || ';'";
+
+/**
+ * The repository's webhook effects, settled: none can still be making
+ * deliveries or storing bodies. Pending ones are ended (a page at a time),
+ * as their next claim would end them, so none is claimed again; one claimed
+ * now is waited for until it ends. Whoever claimed one did so before it
+ * ended, and is stopped within `settleMs` of its claim, so the wait lasts
+ * until `settleMs` after the last of those ever claimed ended. Effects
+ * journaled before claims were counted as attempts (no source recorded) are
+ * taken as claimed. Most repositories have none claimed lately and do not
+ * wait. Reads all the repository's webhook effects a call while it waits.
+ */
+const webhookEffects: RepoCleanup = {
+  name: "webhook_effects",
+  async page(env, { repoId, shard }, metrics) {
+    const db = readModelFor(env, shard);
+    const now = clock();
+    const ours = `${OURS} AND sink = 'webhooks'`;
+    const claimed = `${ours} AND (attempts > 0 OR source_id IS NULL)`;
+    metrics?.count("d1.query", { db: "org", op: "cleanup_settle_effects" }, 2);
+    const [ending, settled] = await db.batch<{ held: number; ended: number | null }>([
+      db
+        .prepare(
+          `UPDATE effects SET state = 'failed', next_attempt_at = ?2, lease_token = NULL,
+             lease_until = NULL, last_error = 'invalidated: its source was deleted'
+           WHERE effect_id IN (SELECT effect_id FROM effects WHERE ${ours} AND state = 'pending'
+             AND (lease_until IS NULL OR lease_until <= ?2) LIMIT ?3)`,
+        )
+        .bind(repoId, now, CLEANUP_POLICY.effectsPage),
+      db
+        .prepare(
+          `SELECT EXISTS (SELECT 1 FROM effects WHERE ${ours} AND state = 'pending') AS held,
+             (SELECT max(CASE state WHEN 'done' THEN done_at ELSE next_attempt_at END)
+                FROM effects WHERE ${claimed} AND state <> 'pending') AS ended`,
+        )
+        .bind(repoId),
+    ]);
+    const invalidated = ending?.meta.changes ?? 0;
+    if (invalidated > 0) metrics?.count("effects.invalidated", { sink: "webhooks" }, invalidated);
+    if (invalidated === CLEANUP_POLICY.effectsPage) return "more";
+    const { held, ended } = settled?.results[0] ?? { held: 0, ended: null };
+    if (held === 1) return "wait";
+    return ended !== null && ended + CLEANUP_POLICY.settleMs > now ? "wait" : "done";
+  },
+};
+
 /**
  * The repository's journaled effects, whatever their state (their ids
  * start with its event keys). One a delivery holds (leased) is waited for:
@@ -65,19 +122,17 @@ const journaledEffects: RepoCleanup = {
   name: "effects",
   async page(env, { repoId, shard }, metrics) {
     const db = readModelFor(env, shard);
-    // Through the primary key: `<repo>:` up to, not including, `<repo>;`.
-    const ours = "effect_id >= ?1 || ':' AND effect_id < ?1 || ';'";
     const unleased = "(lease_until IS NULL OR lease_until <= ?3)";
     metrics?.count("d1.query", { db: "org", op: "cleanup_effects" }, 2);
     const [deleted, rest] = await db.batch<{ remaining: number }>([
       db
         .prepare(
           `DELETE FROM effects WHERE effect_id IN
-             (SELECT effect_id FROM effects WHERE ${ours} AND ${unleased} LIMIT ?2)`,
+             (SELECT effect_id FROM effects WHERE ${OURS} AND ${unleased} LIMIT ?2)`,
         )
         .bind(repoId, CLEANUP_POLICY.effectsPage, clock()),
       // After a page that was not full, any effect left is leased.
-      db.prepare(`SELECT EXISTS (SELECT 1 FROM effects WHERE ${ours}) AS remaining`).bind(repoId),
+      db.prepare(`SELECT EXISTS (SELECT 1 FROM effects WHERE ${OURS}) AS remaining`).bind(repoId),
     ]);
     const outcome = pageOutcome(deleted?.meta.changes ?? 0, CLEANUP_POLICY.effectsPage);
     return outcome === "done" && rest?.results[0]?.remaining === 1 ? "wait" : outcome;
@@ -135,6 +190,7 @@ const webhookBodies: RepoCleanup = {
 
 /** In order: effects first, so none makes a delivery while its deliveries are removed. */
 export const REPO_CLEANUPS: readonly RepoCleanup[] = [
+  webhookEffects,
   journaledEffects,
   webhookDeliveries,
   webhookBodies,
