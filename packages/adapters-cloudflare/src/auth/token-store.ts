@@ -431,7 +431,7 @@ export class D1TokenStore {
           principalId: input.principalId,
           ...(delegation && { grantId: delegation.grantId, act: delegation.act }),
         },
-        true,
+        "tokens",
       ),
     ]);
     if ((stored?.meta.changes ?? 0) === 0) throw new MintRefusedError(await this.refusedBy(issuer));
@@ -582,14 +582,15 @@ export function auditStatement(
   action: string,
   targetId: string | null,
   details: Record<string, unknown> | null,
-  /** Written only if the token `targetId` is stored (by a statement before it in the batch). */
-  ifTokenStored = false,
+  /** Written only if the `targetId` row of this table is stored (by a statement before it in the batch). */
+  ifStored?: "tokens" | "principals",
 ): D1PreparedStatement {
   return db
     .prepare(
       `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
-       WHERE ?8 = 0 OR EXISTS (SELECT 1 FROM tokens WHERE id = ?5)`,
+       WHERE ?8 IS NULL OR (?8 = 'tokens' AND EXISTS (SELECT 1 FROM tokens WHERE id = ?5))
+         OR (?8 = 'principals' AND EXISTS (SELECT 1 FROM principals WHERE id = ?5))`,
     )
     .bind(
       at,
@@ -599,6 +600,6 @@ export function auditStatement(
       targetId,
       details ? JSON.stringify(details) : null,
       audit.requestId ?? null,
-      ifTokenStored ? 1 : 0,
+      ifStored ?? null,
     );
 }

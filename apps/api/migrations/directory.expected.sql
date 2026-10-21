@@ -51,6 +51,13 @@ CREATE TABLE grants (
   CHECK ((depth = 1) = (root_id = id))
 ) STRICT;
 
+-- table handle_reservations
+CREATE TABLE handle_reservations (
+  handle TEXT PRIMARY KEY COLLATE NOCASE,
+  principal_id TEXT NOT NULL,
+  until INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+
 -- table idempotency_keys
 CREATE TABLE idempotency_keys (
   token_id TEXT NOT NULL,

@@ -15,6 +15,7 @@ import { type OpContext, OperationError } from "../ops/execute.js";
 import { heldRepos } from "../repos/directory.js";
 import { clock, newId } from "../services.js";
 import { applied, findAccount, invalidateChange, orgFor, userFor } from "./account.js";
+import { handleFree } from "./handles.js";
 
 // D1 reports a unique-index violation in the error message.
 const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
@@ -22,6 +23,9 @@ const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
 /** GitHub's membership role names: an `admin` is an owner. */
 const toOrgRole = (role: "admin" | "member"): OrgRole => (role === "admin" ? "owner" : "member");
 const toApiRole = (role: OrgRole): "admin" | "member" => (role === "owner" ? "admin" : "member");
+
+/** Hooks into organization creation. For tests. */
+export const orgHooks: { beforePublish?: () => Promise<void> } = {};
 
 /** The `admin.orgs.create` operation: the organization's object first, then its directory rows. */
 export async function createOrgOperation(
@@ -43,23 +47,52 @@ export async function createOrgOperation(
     epochGen,
   });
   if (!init.ok) throw new Error(`initializing the organization failed: ${init.error}`);
+  await orgHooks.beforePublish?.();
   const now = clock();
   const db = env.DIRECTORY;
-  metrics.count("d1.query", { db: "directory", op: "org_create" }, 2);
+  metrics.count("d1.query", { db: "directory", op: "org_create" }, 3);
+  let seen: D1Result | undefined;
+  let made: D1Result | undefined;
   try {
-    await db.batch([
+    [seen, made] = await db.batch([
+      // What the insert below sees, for why it held back.
       db
-        .prepare("INSERT INTO principals (id, type, handle, created_at) VALUES (?, 'org', ?, ?)")
-        .bind(id, input.login, now),
-      auditStatement(db, now, { actorId: auth.principalId, requestId }, "org.create", id, {
-        login: input.login,
-        admin: admin.id,
-      }),
+        .prepare(
+          `SELECT ${handleFree("?1", "?2")} AS free,
+             EXISTS (SELECT 1 FROM principals WHERE id = ?3 AND lifecycle = 'active') AS owner`,
+        )
+        .bind(input.login, now, admin.id),
+      // Only while its first owner is active (a deletion of theirs may have begun since they
+      // were found) and no deletion holds the handle.
+      db
+        .prepare(
+          `INSERT INTO principals (id, type, handle, created_at)
+           SELECT ?1, 'org', ?2, ?3
+           WHERE ${handleFree("?2", "?3")}
+             AND EXISTS (SELECT 1 FROM principals WHERE id = ?4 AND lifecycle = 'active')`,
+        )
+        .bind(id, input.login, now, admin.id),
+      auditStatement(
+        db,
+        now,
+        { actorId: auth.principalId, requestId },
+        "org.create",
+        id,
+        { login: input.login, admin: admin.id },
+        "principals",
+      ),
     ]);
   } catch (error) {
     if (error instanceof Error && UNIQUE_VIOLATION.test(error.message))
       throw new OperationError(409, "handle_taken", `The handle ${input.login} is already taken.`);
     throw error;
+  }
+  // Held back, the initialized object stays unreachable, as when the rows fail.
+  if ((made?.meta.changes ?? 0) === 0) {
+    const why = seen?.results[0] as { free: number; owner: number } | undefined;
+    if (why?.free !== 1)
+      throw new OperationError(409, "handle_taken", `The handle ${input.login} is already taken.`);
+    throw new OperationError(409, "user_changed", `The user ${input.admin} changed meanwhile.`);
   }
   return { id, login: input.login, created_at: now };
 }

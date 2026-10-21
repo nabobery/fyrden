@@ -142,6 +142,14 @@ function withinRepos(repoIds: readonly string[] | null, limit: readonly string[]
   return repoIds?.every((id) => limit.includes(id)) ?? false;
 }
 
+/** Hooks into grant creation. For tests. */
+export const grantHooks: { beforeInsert?: () => Promise<void> } = {};
+
+/** An SQL condition: the agent bound at `agent` and its owner are enabled. */
+const agentEnabled = (agent: string) =>
+  `EXISTS (SELECT 1 FROM principals a LEFT JOIN principals ao ON ao.id = a.owner_id
+    WHERE a.id = ${agent} AND a.disabled_at IS NULL AND ao.disabled_at IS NULL)`;
+
 /** The `grants.create` operation. */
 export async function createGrantOperation(
   ctx: OpContext,
@@ -224,15 +232,17 @@ export async function createGrantOperation(
     );
   const id = newId("grt");
   const db = ctx.env.DIRECTORY;
+  await grantHooks.beforeInsert?.();
   ctx.metrics.count("d1.query", { db: "directory", op: "grant_create" }, 3);
   const [held] = await db.batch([
     // What the insert below sees, for why it held back.
     db
       .prepare(
         `SELECT ${issuerHolds("?1", "?2")} AS holds,
-           EXISTS (SELECT 1 FROM principals WHERE id = ?3 AND disabled_at IS NULL) AS grantor`,
+           EXISTS (SELECT 1 FROM principals WHERE id = ?3 AND disabled_at IS NULL) AS grantor,
+           ${agentEnabled("?4")} AS agent`,
       )
-      .bind(auth.principalId, auth.lifecycleGen, grantor),
+      .bind(auth.principalId, auth.lifecycleGen, grantor, agent.id),
     // Only while the caller holds (see `issuerHolds`) and the grantor is enabled (a suspended
     // user's grants are kept, but none is passed down), and a sub-grant only while its parent
     // still holds (checked in the batch).
@@ -243,7 +253,8 @@ export async function createGrantOperation(
          SELECT ?1, ?2, ?3, ?4, coalesce(?5, ?1), ?6, ?7, ?8, ?9, ?10, ?11
          WHERE (?4 IS NULL OR EXISTS (SELECT 1 FROM grants WHERE id = ?4 AND revoked_at IS NULL
            AND expires_at > ?11)) AND ${issuerHolds("?10", "?12")}
-           AND EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND disabled_at IS NULL)`,
+           AND EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND disabled_at IS NULL)
+           AND ${agentEnabled("?3")}`,
       )
       .bind(
         id,
@@ -277,9 +288,11 @@ export async function createGrantOperation(
         ctx.requestId ?? null,
       ),
   ]);
-  const seen = held?.results[0] as { holds: number; grantor: number } | undefined;
+  const seen = held?.results[0] as { holds: number; grantor: number; agent: number } | undefined;
   if (seen?.holds !== 1) throw issuerRefused();
   const made = await grantById(ctx.env, id);
+  if (!made && seen.agent !== 1)
+    throw new OperationError(404, "agent_not_found", `No enabled agent ${agent.handle} was found.`);
   if (!made && seen.grantor !== 1)
     throw new OperationError(409, "grant_inactive", "The grant's user is suspended or disabled.");
   if (!made)
