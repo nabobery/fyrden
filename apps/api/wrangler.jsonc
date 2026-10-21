@@ -19,11 +19,14 @@
       { "name": "NETWORK", "class_name": "NetworkDO" },
       { "name": "ORG", "class_name": "OrgDO" },
       { "name": "USER", "class_name": "UserDO" },
-      { "name": "RUN", "class_name": "RunDO" }
+      { "name": "RUN", "class_name": "RunDO" },
+      // One user deletion's runner (its alarm advances the job).
+      { "name": "DELETION", "class_name": "DeletionDO" }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["RepoDO", "NetworkDO", "OrgDO", "UserDO", "RunDO"] }
+    { "tag": "v1", "new_sqlite_classes": ["RepoDO", "NetworkDO", "OrgDO", "UserDO", "RunDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["DeletionDO"] }
   ],
 
   // Database ids are filled in per deployment by `fyrden deploy`.
@@ -105,7 +108,9 @@
   // webhook deliveries in an invocation of its own (each has its own 1,000
   // calls on Free). Proposed intervals; Free allows a few cron triggers per
   // account.
-  "triggers": { "crons": ["*/5 * * * *", "2-59/5 * * * *"] },
+  // Maintenance, effects, and the user deletions' recovery (each on its own, so none shares
+  // another's CPU time).
+  "triggers": { "crons": ["*/5 * * * *", "2-59/5 * * * *", "4-59/5 * * * *"] },
 
   // Cache only; never an authoritative store.
   "kv_namespaces": [{ "binding": "CACHE" }],
