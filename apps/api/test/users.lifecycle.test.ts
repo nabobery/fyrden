@@ -4,11 +4,19 @@
 // once unsuspended; their repositories stay their collaborators'. Each change
 // is one transaction, recorded with its generation.
 import { env, exports } from "cloudflare:workers";
+import { D1TokenStore, type TokenRecord } from "@fyrden/adapters-cloudflare/auth";
+import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
+import { ed25519FromSeed, ed25519PublicKeyBlob } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, it } from "vitest";
+import { createAgentOperation, createAgentTokenOperation } from "../src/accounts/agents.js";
+import { createGrantOperation } from "../src/accounts/delegation.js";
 import { suspendUserOperation } from "../src/accounts/lifecycle.js";
+import { createSshSigningKeyOperation } from "../src/accounts/signing-keys.js";
+import { createGitTokenOperation, createUserTokenOperation } from "../src/accounts/tokens.js";
 import { passkeyHooks } from "../src/auth/login.js";
 import { authorizeHooks } from "../src/oauth/authorize.js";
+import { ACCESS_TOKEN_TYPE, exchangeHooks, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { issueHooks } from "../src/oauth/issue.js";
 import { SESSION_COOKIE, startSession } from "../src/oauth/session.js";
 import type { OpContext } from "../src/ops/execute.js";
@@ -389,5 +397,166 @@ describe("work under way when a user is suspended", () => {
       delete passkeyHooks.beforeInsert;
     }
     expect(await count("SELECT count(*) AS n FROM passkeys WHERE user_id = ?")).toBe(0);
+  });
+});
+
+describe("authority granted by a request checked before a suspension", () => {
+  /**
+   * The target's token as a request checks it now; then the target is
+   * suspended and unsuspended, as if while the request awaited something.
+   */
+  const checkedThenCycled = async (): Promise<OpContext> => {
+    const store = new D1TokenStore(env.DIRECTORY, {
+      clock: () => Date.now(),
+      newId: createIdFactory(() => Date.now(), secureRandomBytes),
+      randomBytes: secureRandomBytes,
+    });
+    const checked = await store.verify(target.token, "write");
+    if (!checked.ok) throw new Error(`the target's token is refused: ${checked.reason}`);
+    expect((await suspend(target)).status).toBe(204);
+    expect((await unsuspend(target)).status).toBe(204);
+    return {
+      env,
+      auth: checked.record satisfies TokenRecord,
+      metrics: { count() {} },
+      requestId: uniqueId("req"),
+      waitUntil() {},
+    } as unknown as OpContext;
+  };
+  const refused = { status: 401, code: "invalid_token" };
+  const count = async (sql: string) =>
+    (await env.DIRECTORY.prepare(sql).bind(target.principalId).first<{ n: number }>())?.n;
+
+  it("mints no token, makes no agent, grant or signing key, and audits none", async () => {
+    const agent = await json<{ handle: string }>(
+      api("POST", "/agents", target.token, { handle: uniqueId("bot").slice(0, 39) }),
+    );
+    expect(agent.status).toBe(201);
+    const audited = () =>
+      count(
+        `SELECT count(*) AS n FROM audit_log WHERE actor_id = ?
+           AND action IN ('token.mint', 'agent.create', 'grant.create', 'ssh_signing_key.create')`,
+      );
+    const tokensBefore = await count("SELECT count(*) AS n FROM tokens WHERE principal_id = ?");
+    const auditedBefore = await audited();
+    const ctx = await checkedThenCycled();
+    const key = `ssh-ed25519 ${btoa(
+      String.fromCharCode(
+        ...ed25519PublicKeyBlob(
+          (await ed25519FromSeed(crypto.getRandomValues(new Uint8Array(32)))).publicKey,
+        ),
+      ),
+    )}`;
+    const attempts: [string, () => Promise<unknown>][] = [
+      [
+        "personal access token",
+        () => createUserTokenOperation(ctx, { type: "pat", scopes: [], expires_in_days: 30 }),
+      ],
+      ["git token", () => createGitTokenOperation(ctx, { expires_in_minutes: 10 })],
+      ["agent", () => createAgentOperation(ctx, { handle: uniqueId("bot").slice(0, 39) })],
+      [
+        "agent token",
+        () =>
+          createAgentTokenOperation(ctx, {
+            agent: agent.body.handle,
+            type: "pat",
+            scopes: [],
+            expires_in_days: 30,
+          }),
+      ],
+      [
+        "delegation grant",
+        () =>
+          createGrantOperation(ctx, {
+            agent: agent.body.handle,
+            scopes: ["metadata:read"],
+            expires_in_days: 30,
+          }),
+      ],
+      ["signing key", () => createSshSigningKeyOperation(ctx, { title: "laptop", key })],
+    ];
+    for (const [what, attempt] of attempts)
+      await expect(attempt(), what).rejects.toMatchObject(refused);
+    expect(await count("SELECT count(*) AS n FROM tokens WHERE principal_id = ?")).toBe(
+      tokensBefore,
+    );
+    expect(
+      await count("SELECT count(*) AS n FROM principals WHERE owner_id = ? AND type = 'agent'"),
+    ).toBe(1);
+    expect(await count("SELECT count(*) AS n FROM grants WHERE grantor_id = ?")).toBe(0);
+    expect(await count("SELECT count(*) AS n FROM ssh_signing_keys WHERE principal_id = ?")).toBe(
+      0,
+    );
+    expect(await audited()).toBe(auditedBefore);
+
+    // A request checked after the unsuspension is the user's again.
+    const fresh = await api("POST", "/user/tokens", target.token, { type: "pat" });
+    expect(fresh.status).toBe(201);
+  });
+
+  it("exchanges no agent token for one of a grantor suspended meanwhile", async () => {
+    const agent = await json<{ handle: string }>(
+      api("POST", "/agents", target.token, { handle: uniqueId("bot").slice(0, 39) }),
+    );
+    const own = await json<{ token: string }>(
+      api("POST", `/agents/${agent.body.handle}/tokens`, target.token, {}),
+    );
+    const granted = await json<{ id: string }>(
+      api("POST", "/grants", target.token, { agent: agent.body.handle, scopes: ["metadata:read"] }),
+    );
+    expect(granted.status).toBe(201);
+    const oats = () =>
+      count("SELECT count(*) AS n FROM tokens WHERE principal_id = ? AND type = 'oat'");
+    exchangeHooks.beforeMint = async () => {
+      expect((await suspend(target)).status).toBe(204);
+      expect((await unsuspend(target)).status).toBe(204);
+    };
+    try {
+      const res = await form("/oauth/token", {
+        grant_type: TOKEN_EXCHANGE,
+        subject_token: own.body.token,
+        subject_token_type: ACCESS_TOKEN_TYPE,
+        grant_id: granted.body.id,
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "invalid_grant" });
+    } finally {
+      delete exchangeHooks.beforeMint;
+    }
+    expect(await oats()).toBe(0);
+  });
+
+  it("passes down no grant of a user suspended since", async () => {
+    // The target grants to another user's agent, which may pass it down to its sibling.
+    const bob = await user();
+    const agentOf = async () => {
+      const made = await json<{ handle: string }>(
+        api("POST", "/agents", bob.token, { handle: uniqueId("bot").slice(0, 39) }),
+      );
+      const own = await json<{ token: string }>(
+        api("POST", `/agents/${made.body.handle}/tokens`, bob.token, {}),
+      );
+      return { handle: made.body.handle, token: own.body.token };
+    };
+    const first = await agentOf();
+    const second = await agentOf();
+    const root = await json<{ id: string }>(
+      api("POST", "/grants", target.token, { agent: first.handle, scopes: ["metadata:read"] }),
+    );
+    expect(root.status).toBe(201);
+    const passDown = () =>
+      json<{ code?: string }>(
+        api("POST", "/grants", first.token, {
+          agent: second.handle,
+          scopes: ["metadata:read"],
+          parent: root.body.id,
+        }),
+      );
+    expect((await suspend(target)).status).toBe(204);
+    expect(await passDown()).toMatchObject({ status: 409, body: { code: "grant_inactive" } });
+    expect(await count("SELECT count(*) AS n FROM grants WHERE grantor_id = ?")).toBe(1);
+    // Kept, as the user's own grants are: passed down again once the user is unsuspended.
+    expect((await unsuspend(target)).status).toBe(204);
+    expect((await passDown()).status).toBe(201);
   });
 });

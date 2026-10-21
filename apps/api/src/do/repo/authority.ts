@@ -93,24 +93,32 @@ export class RepoAuthority {
   }
 
   /**
-   * The owners capping each of `principals` (an agent's own owner; none for
-   * a user), from the directory's primary in batches, with all their roles
-   * pulled fresh: a few queries however many principals there are.
+   * Which of `principals` are active (not disabled, nor, for an agent, its
+   * owner: a suspended user's approvals stop counting at once), each with
+   * the owners capping it (an agent's own owner; none for a user), from the
+   * directory's primary in batches, with all their roles pulled fresh: a
+   * few queries however many principals there are.
    */
-  async ownersPulled(principals: readonly string[]): Promise<Map<string, string[]>> {
-    const owners = new Map<string, string[]>(principals.map((id) => [id, []]));
-    const agents = principals.filter((id) => principalTypeOf(id) === "agent");
+  async activeOwnersPulled(principals: readonly string[]): Promise<Map<string, string[]>> {
+    const owners = new Map<string, string[]>();
+    const unique = [...new Set(principals)];
     const db = this.deps.env().DIRECTORY.withSession("first-primary");
-    for (let at = 0; at < agents.length; at += OWNER_BATCH) {
-      const batch = agents.slice(at, at + OWNER_BATCH);
-      this.deps.git.context.metrics.count("d1.query", { db: "directory", op: "agent_owner" });
+    for (let at = 0; at < unique.length; at += OWNER_BATCH) {
+      const batch = unique.slice(at, at + OWNER_BATCH);
+      this.deps.git.context.metrics.count("d1.query", { db: "directory", op: "active_owners" });
       const { results } = await db
         .prepare(
-          `SELECT id, owner_id FROM principals WHERE id IN (${batch.map(() => "?").join(", ")})`,
+          `SELECT p.id, p.owner_id FROM principals p LEFT JOIN principals o ON o.id = p.owner_id
+           WHERE p.id IN (${batch.map(() => "?").join(", ")}) AND p.disabled_at IS NULL
+             AND o.disabled_at IS NULL`,
         )
         .bind(...batch)
         .all<{ id: string; owner_id: string | null }>();
-      for (const row of results) if (row.owner_id) owners.set(row.id, [row.owner_id]);
+      for (const row of results)
+        owners.set(
+          row.id,
+          principalTypeOf(row.id) === "agent" && row.owner_id ? [row.owner_id] : [],
+        );
     }
     for (const id of new Set([...owners.keys(), ...[...owners.values()].flat()]))
       await this.deps.acl.roleOf(id, "write");

@@ -17,11 +17,27 @@ import { clock } from "../services.js";
  * tokens, git tokens and delegations, and their agents', are kept:
  * authentication refuses them while the user is disabled, and they work
  * again after an unsuspension, as GitHub Enterprise's do. Checks that
- * begin after the suspension commits refuse; work already authorized may
- * finish (a push holds its decision for up to a minute).
+ * begin after the suspension commits refuse. A write that grants authority
+ * (a session, a token, an agent, a delegation grant, a signing key) is
+ * admitted only while the principal its request was authenticated as is
+ * at the generation it was authenticated at (a session by `startSession`,
+ * the rest by `issuerHolds`): one begun by the user before a suspension
+ * lands nothing after it, even once lifted. An agent's generation never
+ * moves, so its own token (kept) may land such a write once its owner is
+ * unsuspended, as a request of its made then could; nothing the user is
+ * the grantor of is passed down while they are suspended. A suspended
+ * reviewer's approvals stop counting toward a merge. Other work already
+ * authorized may finish (a push holds its decision for up to a minute).
  */
 
 type Lifecycle = "active" | "suspended" | "deleting" | "deleted";
+
+/**
+ * A write that grants authority was refused because the caller no longer
+ * holds (see `issuerHolds`): answered as the token's own refusal would be.
+ */
+export const issuerRefused = () =>
+  new OperationError(401, "invalid_token", "The token is invalid, expired or revoked.");
 
 interface Target {
   readonly id: string;

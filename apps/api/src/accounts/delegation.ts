@@ -1,3 +1,4 @@
+import { issuerHolds } from "@fyrden/adapters-cloudflare/auth";
 import type {
   createGrant,
   getAgent,
@@ -11,6 +12,7 @@ import { decodeSeekCursor, encodeSeekCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { authorize, resolveRepo } from "../repos/directory.js";
 import { clock, newId } from "../services.js";
+import { issuerRefused } from "./lifecycle.js";
 
 /**
  * Delegation grants: a user lets an agent act for it (RFC 8693 token
@@ -222,16 +224,26 @@ export async function createGrantOperation(
     );
   const id = newId("grt");
   const db = ctx.env.DIRECTORY;
-  ctx.metrics.count("d1.query", { db: "directory", op: "grant_create" }, 2);
-  await db.batch([
-    // A sub-grant only while its parent still holds (checked in the batch).
+  ctx.metrics.count("d1.query", { db: "directory", op: "grant_create" }, 3);
+  const [held] = await db.batch([
+    // What the insert below sees, for why it held back.
+    db
+      .prepare(
+        `SELECT ${issuerHolds("?1", "?2")} AS holds,
+           EXISTS (SELECT 1 FROM principals WHERE id = ?3 AND disabled_at IS NULL) AS grantor`,
+      )
+      .bind(auth.principalId, auth.lifecycleGen, grantor),
+    // Only while the caller holds (see `issuerHolds`) and the grantor is enabled (a suspended
+    // user's grants are kept, but none is passed down), and a sub-grant only while its parent
+    // still holds (checked in the batch).
     db
       .prepare(
         `INSERT INTO grants (id, grantor_id, agent_id, parent_id, root_id, depth, scopes, repo_ids,
            expires_at, created_by, created_at)
          SELECT ?1, ?2, ?3, ?4, coalesce(?5, ?1), ?6, ?7, ?8, ?9, ?10, ?11
-         WHERE ?4 IS NULL OR EXISTS (SELECT 1 FROM grants WHERE id = ?4 AND revoked_at IS NULL
-           AND expires_at > ?11)`,
+         WHERE (?4 IS NULL OR EXISTS (SELECT 1 FROM grants WHERE id = ?4 AND revoked_at IS NULL
+           AND expires_at > ?11)) AND ${issuerHolds("?10", "?12")}
+           AND EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND disabled_at IS NULL)`,
       )
       .bind(
         id,
@@ -245,6 +257,7 @@ export async function createGrantOperation(
         expiresAt,
         auth.principalId,
         now,
+        auth.lifecycleGen,
       ),
     db
       .prepare(
@@ -264,7 +277,11 @@ export async function createGrantOperation(
         ctx.requestId ?? null,
       ),
   ]);
+  const seen = held?.results[0] as { holds: number; grantor: number } | undefined;
+  if (seen?.holds !== 1) throw issuerRefused();
   const made = await grantById(ctx.env, id);
+  if (!made && seen.grantor !== 1)
+    throw new OperationError(409, "grant_inactive", "The grant's user is suspended or disabled.");
   if (!made)
     throw new OperationError(
       409,

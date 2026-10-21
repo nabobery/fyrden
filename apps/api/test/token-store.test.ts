@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import {
   D1TokenStore,
   LAST_USED_INTERVAL_MS,
+  MintRefusedError,
   TokenCache,
   TokenExpiredError,
   type TokenRecord,
@@ -428,10 +429,10 @@ describe("D1TokenStore", () => {
     expect(await store.verify(token, "write")).toEqual({ ok: false, reason: "revoked" });
   });
 
-  it("rejects tokens of a disabled principal", async () => {
+  it("rejects tokens of a principal disabled since", async () => {
     const { store } = setup();
     await env.DIRECTORY.prepare(
-      "INSERT INTO principals (id, type, handle, created_at, disabled_at, lifecycle) VALUES ('usr_gone', 'user', 'gone', 0, 1, 'suspended')",
+      "INSERT INTO principals (id, type, handle, created_at) VALUES ('usr_gone', 'user', 'gone', 0)",
     ).run();
     const { token } = await store.mint({
       principalId: "usr_gone",
@@ -440,6 +441,62 @@ describe("D1TokenStore", () => {
       ttlMs: HOUR,
       audit,
     });
+    await env.DIRECTORY.prepare(
+      "UPDATE principals SET disabled_at = 1, lifecycle = 'suspended' WHERE id = 'usr_gone'",
+    ).run();
     expect(await store.verify(token, "write")).toEqual({ ok: false, reason: "disabled" });
+  });
+
+  it("mints nothing, and audits nothing, for a disabled principal or an agent of a disabled owner", async () => {
+    const { store } = setup();
+    await env.DIRECTORY.batch([
+      env.DIRECTORY.prepare(
+        `INSERT INTO principals (id, type, handle, created_at, disabled_at, lifecycle)
+         VALUES ('usr_off', 'user', 'off', 0, 1, 'suspended')`,
+      ),
+      env.DIRECTORY.prepare(
+        `INSERT INTO principals (id, type, handle, owner_id, created_at)
+         VALUES ('agt_offs', 'agent', 'offs-bot', 'usr_off', 0)`,
+      ),
+    ]);
+    const audits = async () =>
+      (await env.DIRECTORY.prepare("SELECT count(*) AS n FROM audit_log").first<{ n: number }>())
+        ?.n;
+    const before = await audits();
+    for (const principalId of ["usr_off", "agt_offs"]) {
+      const minting = store.mint({ principalId, type: "pat", scopes: [], ttlMs: HOUR, audit });
+      await expect(minting).rejects.toBeInstanceOf(MintRefusedError);
+      await expect(minting).rejects.toMatchObject({ who: "principal" });
+    }
+    const { n } = (await env.DIRECTORY.prepare(
+      "SELECT count(*) AS n FROM tokens WHERE principal_id IN ('usr_off', 'agt_offs')",
+    ).first<{ n: number }>()) ?? { n: -1 };
+    expect(n).toBe(0);
+    expect(await audits()).toBe(before);
+  });
+
+  it("mints only while its issuer is enabled and at the generation it was checked at", async () => {
+    const { store } = setup();
+    await env.DIRECTORY.prepare(
+      `INSERT INTO principals (id, type, handle, created_at, lifecycle_gen)
+       VALUES ('usr_issuer', 'user', 'issuer', 0, 2)`,
+    ).run();
+    const mint = (gen: number) =>
+      store.mint({
+        principalId: "usr_owner",
+        type: "pat",
+        scopes: [],
+        ttlMs: HOUR,
+        audit,
+        issuer: { principalId: "usr_issuer", gen },
+      });
+    // Checked before a suspension and its lifting (two generations ago).
+    await expect(mint(0)).rejects.toMatchObject({ who: "issuer" });
+    await expect(mint(2)).resolves.toMatchObject({ id: expect.any(String) });
+    await env.DIRECTORY.prepare(
+      `UPDATE principals SET disabled_at = 1, lifecycle = 'suspended', lifecycle_gen = 3
+       WHERE id = 'usr_issuer'`,
+    ).run();
+    await expect(mint(3)).rejects.toMatchObject({ who: "issuer" });
   });
 });
