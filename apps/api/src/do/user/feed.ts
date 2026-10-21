@@ -1,4 +1,4 @@
-import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
+import { FEED_HORIZON_MS, type FeedEntry, type FeedKind, type FeedPriority } from "@fyrden/domain";
 
 /*
  * A principal's activity feed: one item per repository, thread and kind,
@@ -27,7 +27,7 @@ import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
 /** Proposed values. */
 export const FEED_POLICY = {
   /** Items whose last change is older are deleted; older entries are dropped on arrival. */
-  retentionMs: 7 * 24 * 60 * 60 * 1000,
+  retentionMs: FEED_HORIZON_MS,
   /** Items a feed keeps at most; the ones changed longest ago go first. */
   maxItems: 5_000,
   /**

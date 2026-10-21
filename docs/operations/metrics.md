@@ -108,8 +108,8 @@ The latest point of a group is its current value.
 | `effects.consume` | `sink`, `outcome` (`ok`, `error`) | 1 per effects queue invocation (`error`: an outcome could not be recorded, or what was left could not be sent back; its messages are retried) |
 | `effects.recovered` | `sink` | Overdue effects the cron sent to their queue again (a message lost or never sent, or a claim that died) |
 | `effects.invalidated` | `sink` | Effects ended without delivery because their source was deleted, restored to an earlier state, or transferred since (unless the sink's effects stand across transfers) |
-| `effects.failed` | `sink` | Effects that failed for good: their attempts spent (a claim counts as one), or their sink gone |
-| `feed.audience_dropped` | — | Recipients an event named past the 100 it carries (the value is the amount) |
+| `effects.failed` | `sink` | Effects that failed for good: their attempts spent (a claim counts as one), their sink gone, or ended by their sink (a feed page past its delivery deadline, gone, or not what its event names) |
+| `feed.audience_dropped` | — | Recipients an event named past the 100 it carries and its 10 pages (the value is the amount) |
 | `feed.participants_overflow` | — | Joins a thread refused at its cap of 1,000 participants, by principals not already participating |
 | `webhooks.stage_ms` | `stage` (`rows`, `body`, `claim`, `hooks`, `hook`, `body_read`, `post`, `record`) | Wall time of one stage of making webhook deliveries, in milliseconds, one point each. An event's effect writes `rows` (its deliveries' rows and which wait), `body` (storing it), `claim` (the tombstone and its first attempts' claims) and `hooks` (their hooks, in one call) once, then `post` (address lookup, request and the answer's excerpt) and `record` per first attempt; a queued attempt writes `claim`, `hook`, `body_read`, `post` and `record`. First attempts run side by side, so their stages overlap. The runtime's clock advances only on I/O. The effect also logs these times in one line (`webhooks.materialize`), with how long it took in all |
 
