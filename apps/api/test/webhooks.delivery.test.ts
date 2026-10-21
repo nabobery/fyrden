@@ -9,16 +9,34 @@ import { env } from "cloudflare:workers";
 import { type DomainEvent, eventKey } from "@fyrden/domain";
 import { describe, expect, it, vi } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import { effectStatements } from "../src/effects/journal.js";
+import {
+  type Effect,
+  type EffectSink,
+  effectCalls,
+  effectStatements,
+} from "../src/effects/journal.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { ATTEMPT_POLICY, attemptDelivery, reconcileWebhooks } from "../src/webhooks/deliver.js";
 import { signature } from "../src/webhooks/secrets.js";
-import { bodyOf, deliveryIdOf, webhookSink } from "../src/webhooks/sink.js";
+import {
+  bodyOf,
+  createWebhookSink,
+  deliveryIdOf,
+  FIRST_ATTEMPTS,
+  webhookSink,
+} from "../src/webhooks/sink.js";
 import { api, json } from "./helpers/api.js";
 import { inRepo } from "./helpers/repo-git.js";
 import { type HookOut, RECEIVER, webhookTest } from "./helpers/webhooks.js";
 
 const t = webhookTest();
+
+/** The effect `sink` plans for `event`, as the journal hands it over. */
+function effectOf(sink: EffectSink, event: DomainEvent): Effect {
+  const [planned] = sink.plan(event);
+  if (!planned) throw new Error("the event makes no webhook effect");
+  return { id: `effect_${eventKey(event.id)}`, sink: sink.name, ...planned, attempts: 1 };
+}
 
 describe("webhooks", () => {
   it("are delivered: one row, its body, a message; signed as Standard Webhooks says", async () => {
@@ -591,5 +609,137 @@ describe("webhooks", () => {
     expect(t.received).toHaveLength(0);
     expect(await t.deliveries()).toEqual([]);
     expect(await t.stub().disableHook(hook.id, 1, "gone")).toBe(false);
+  });
+
+  it("make their first attempts themselves, two an event, and queue the others'", async () => {
+    for (let i = 0; i < 3; i++) await t.createHook({ events: ["push"] });
+    await api("POST", `${t.path}/file-commits`, t.owner.token, {
+      message: "first",
+      changes: [{ path: "a.txt", content: "a\n" }],
+    });
+    const push = (await t.outbox()).filter((e) => e.type === "refs.updated" && e.webhooks);
+    expect(push).toHaveLength(1);
+    expect(FIRST_ATTEMPTS).toBe(2);
+    // The first receiver is busy: its retry is a message for later.
+    let answers = 0;
+    t.answer = () => (++answers === 1 ? new Response("busy", { status: 503 }) : new Response("ok"));
+    await t.materialize(push, FIRST_ATTEMPTS);
+    const rows = await t.deliveries();
+    expect(rows.map((r) => r.state).sort()).toEqual(["done", "pending", "pending"]);
+    expect(t.received).toHaveLength(2);
+    // The third's first attempt is queued (at once), the busy one's retry delayed.
+    const unattempted = rows.find((r) => r.state === "pending" && r.attempts === 0);
+    const retried = rows.find((r) => r.state === "pending" && r.attempts === 1);
+    expect(t.sent).toEqual([
+      { delivery: unattempted?.delivery_id },
+      { delivery: retried?.delivery_id, delaySeconds: expect.any(Number) },
+    ]);
+    // The effect delivered again (its mark lost): no attempt and no message more.
+    const sink = createWebhookSink({ resolver: () => async () => ["93.184.216.34"] });
+    const effect = effectOf(sink, push[0] as DomainEvent);
+    await sink.deliver(effect, t.testEnv(), env.ORG_READ);
+    expect(t.received).toHaveLength(2);
+    expect(t.sent).toHaveLength(2);
+  });
+
+  it("keep making an event's deliveries within the calls the sink counts for it", async () => {
+    for (let i = 0; i < 3; i++) await t.createHook({ events: ["push"] });
+    await api("POST", `${t.path}/file-commits`, t.owner.token, {
+      message: "first",
+      changes: [{ path: "a.txt", content: "a\n" }],
+    });
+    const [push] = (await t.outbox()).filter((e) => e.type === "refs.updated" && e.webhooks);
+    // The costliest answer: gone, so each attempt also turns its hook off.
+    t.answer = () => new Response("gone", { status: 410 });
+    const sink = createWebhookSink({ resolver: () => async () => ["93.184.216.34"] });
+    const effect = effectOf(sink, push as DomainEvent);
+    const calls = { n: 0 };
+    const counted = <T extends object>(target: T, methods: readonly string[]): T =>
+      new Proxy(target, {
+        get(object, prop) {
+          const value = Reflect.get(object, prop);
+          if (typeof value !== "function") return value;
+          return (...args: unknown[]) => {
+            if (methods.includes(String(prop))) calls.n++;
+            const result = value.apply(object, args);
+            // A prepared statement counts when it runs (bound or not).
+            if (prop === "prepare" || prop === "bind")
+              return counted(result, ["run", "first", "all", "raw"]);
+            return result;
+          };
+        },
+      });
+    const base = t.testEnv();
+    const measured = {
+      ...base,
+      ORG_READ: counted(env.ORG_READ, ["batch"]),
+      ASSETS: counted(base.ASSETS, ["put", "get", "delete", "head"]),
+      WEBHOOKS: counted(base.WEBHOOKS, ["send", "sendBatch"]),
+      // A repository object's stub only by the calls an attempt makes.
+      REPO: {
+        getByName: (name: string) => {
+          const stub = base.REPO.getByName(name);
+          return {
+            hookForDelivery: (...args: Parameters<typeof stub.hookForDelivery>) => {
+              calls.n++;
+              return stub.hookForDelivery(...args);
+            },
+            disableHook: (...args: Parameters<typeof stub.disableHook>) => {
+              calls.n++;
+              return stub.disableHook(...args);
+            },
+          };
+        },
+      },
+    } as unknown as Env;
+    await sink.deliver(effect, measured, measured.ORG_READ);
+    expect(t.received).toHaveLength(2);
+    expect((await t.deliveries()).map((d) => d.reason)).toEqual(["gone", "gone", null]);
+    // Measured: 20 (two attempts turning their hooks off, and the third queued).
+    expect(calls.n).toBeGreaterThan(15);
+    expect(calls.n).toBeLessThanOrEqual(
+      effectCalls(sink, { target: effect.target, payload: effect.payload }),
+    );
+  });
+
+  it("queue a first attempt that could not be made, for when its delivery can be claimed", async () => {
+    await t.createHook({ events: ["push"] });
+    await api("POST", `${t.path}/file-commits`, t.owner.token, {
+      message: "first",
+      changes: [{ path: "a.txt", content: "a\n" }],
+    });
+    const [event] = (await t.outbox()).filter((e) => e.type === "refs.updated" && e.webhooks);
+    const sink = createWebhookSink({ resolver: () => async () => ["93.184.216.34"] });
+    const effect = effectOf(sink, event as DomainEvent);
+    // The attempt is made, 2 s after its claim, but its outcome cannot be
+    // recorded: its claim holds the delivery.
+    const claimedAt = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(claimedAt);
+    const lostRecord = new Proxy(env.ORG_READ, {
+      get(target, prop) {
+        if (prop === "batch")
+          return async () => {
+            vi.setSystemTime(claimedAt + 2_000);
+            throw new Error("D1 overloaded");
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    try {
+      await sink.deliver(effect, t.testEnv(), lostRecord);
+    } finally {
+      vi.useRealTimers();
+    }
+    const [row] = await t.deliveries();
+    expect(row).toMatchObject({ state: "pending", attempts: 1 });
+    expect(t.received).toHaveLength(1);
+    // Queued for when the claim ends, not at once (an attempt then would find it claimed).
+    expect(t.sent).toEqual([
+      { delivery: row?.delivery_id, delaySeconds: ATTEMPT_POLICY.leaseMs / 1000 - 2 },
+    ]);
+    await attemptDelivery(t.deps(claimedAt + ATTEMPT_POLICY.leaseMs), row?.delivery_id ?? "");
+    expect(await t.deliveries()).toMatchObject([{ state: "done", attempts: 2 }]);
   });
 });

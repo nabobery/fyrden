@@ -11,7 +11,8 @@ import { signature } from "./secrets.js";
 import type { DeliveryMessage } from "./sink.js";
 
 /*
- * Webhook delivery attempts. Each attempt is one queue message: its
+ * Webhook delivery attempts. Each attempt is one queue message (or, for a
+ * few of an event's first attempts, the webhook sink's own call): its
  * consumer claims the delivery (a lease and a token), reads the hook's
  * current configuration and secrets from the repository object, signs the
  * stored body (Standard Webhooks) and posts it through the SSRF guard,
