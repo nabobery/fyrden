@@ -545,7 +545,7 @@ the cron finishes any it does not.
 | One runner at a time | A runner holds a transfer for 60 seconds; one that dies frees it after that |
 | Caches | Other Workers may resolve the old path to the old owner for up to 30 seconds; access is decided by the repository, which knows its owner, and changes authorized for the old owner are refused |
 | Read model | Events from before the transfer are refused once it lands (a new owner generation) |
-| Restore | A repository object restored from before a transfer or rename takes, with its new epoch, the owner and name the directory names now, in an owner generation no older than the read model's; if the directory has a transfer under way, the object rejoins it, frozen, and the transfer lands it |
+| Restore | A repository object restored from before a transfer or rename takes, with its new epoch, the owner and name the directory names now, in an owner generation no older than the read model's; if the directory has a transfer under way, the object rejoins it, frozen, and the transfer lands it. One restored from before its deletion (under way or finished) is frozen again and answers as deleted, and its deletion starts over from the beginning, once a restore, every step and cleanup run again (an earlier run's late progress is ignored). An object takes its epoch before any call or alarm does any work, once an instance: while the directory cannot be read, its first calls fail and its alarm waits a minute (Proposed) and tries again |
 | Transfers one cron run finishes | 10 |
 
 ## Agents and delegation

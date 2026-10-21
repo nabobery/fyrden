@@ -214,6 +214,8 @@ import { repoSchema } from "./schema/repo.js";
  * of CPU an alarm gets (measured on Workers Free, 2026-10-10).
  */
 const ALARM_BUDGET_MS = 5_000;
+/** When an alarm that could not take the restore generation tries again. Proposed. */
+const EPOCH_RETRY_MS = 60_000;
 /** How long an archive request builds before it answers "building". Proposed. */
 const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
 
@@ -746,7 +748,13 @@ export class RepoDO extends MigratingDO {
     return measureInvocation(
       this.git.context.metrics,
       { where: "do", op: method, doClass: "RepoDO" },
-      fn,
+      // The restore generation first (once an instance): a restored object learns from the
+      // directory what happened since its backup, its deletion included, before any work. An
+      // erasing or erased object has nothing left to learn it for.
+      async () => {
+        if (!this.#closed) await this.checkEpoch();
+        return fn();
+      },
     ).finally(() => {
       this.#inFlight--;
     });
@@ -973,7 +981,7 @@ export class RepoDO extends MigratingDO {
   /** What a delivery attempt needs of the hook now (its open secrets included); `gone` once deleted. */
   hookForDelivery(id: number): Promise<HookForDelivery> {
     // Erased (or being erased): gone for good, not unavailable.
-    if (this.#refusesReads()) return Promise.resolve({ kind: "gone" as const });
+    if (this.#gone()) return Promise.resolve({ kind: "gone" as const });
     return this.#measured("hookForDelivery", async () => {
       if (this.#refusesReads()) return { kind: "gone" as const };
       return this.hooks.forDelivery(id, this.events.visibility() !== "public");
@@ -982,7 +990,7 @@ export class RepoDO extends MigratingDO {
 
   /** `hookForDelivery` for several hooks in one call (an event's first attempts), in `ids`' order. */
   hooksForDelivery(ids: readonly number[]): Promise<HookForDelivery[]> {
-    if (this.#refusesReads()) return Promise.resolve(ids.map(() => ({ kind: "gone" as const })));
+    if (this.#gone()) return Promise.resolve(ids.map(() => ({ kind: "gone" as const })));
     return this.#measured("hooksForDelivery", async () => {
       if (this.#refusesReads()) return ids.map(() => ({ kind: "gone" as const }));
       const repoPrivate = this.events.visibility() !== "public";
@@ -999,7 +1007,7 @@ export class RepoDO extends MigratingDO {
    * read).
    */
   feedAudiencePage(ask: FeedPageAsk): Promise<FeedPageRead> {
-    if (this.#refusesReads()) return Promise.resolve({ missing: "deleted" as const });
+    if (this.#gone()) return Promise.resolve({ missing: "deleted" as const });
     return this.#measured("feedAudiencePage", async () => {
       await this.checkEpoch();
       if (this.#refusesReads()) return { missing: "deleted" as const };
@@ -1011,8 +1019,10 @@ export class RepoDO extends MigratingDO {
   }
 
   /** Turns the hook off after its receiver answered 410 Gone (unless it changed since). */
-  disableHook(id: number, configVersion: number, reason: string): boolean {
+  async disableHook(id: number, configVersion: number, reason: string): Promise<boolean> {
     // Erased: no hook left to turn off.
+    if (this.#gone()) return false;
+    await this.checkEpoch();
     if (this.#refusesReads()) return false;
     return this.hooks.disable(id, configVersion, reason);
   }
@@ -1091,7 +1101,9 @@ export class RepoDO extends MigratingDO {
    * page) are followed again, as when opened. Answers the number to go on
    * after, or null when there are no more.
    */
-  followHeadAgain(headRepoId: string, after: number): number | null {
+  async followHeadAgain(headRepoId: string, after: number): Promise<number | null> {
+    if (this.#gone()) return null;
+    await this.checkEpoch();
     if (this.#refusesReads()) return null;
     return this.#forkPulls.followAgain(headRepoId, after);
   }
@@ -2098,8 +2110,11 @@ export class RepoDO extends MigratingDO {
 
   /** The trees and files of the default branch, for a repository generated from this one. */
   templateTree(): Promise<Browsed<TemplateTree>> {
-    if (this.#refusesReads()) return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
-    return this.#browse("templateTree", (b) => templateTree(b));
+    // Called by id (a generation's source): what the restore generation says decides.
+    if (this.#gone()) return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
+    return this.#browse("templateTree", (b) =>
+      this.#refusesReads() ? fail(404, "repo_not_found", REPO_DELETED) : templateTree(b),
+    );
   }
 
   /**
@@ -2433,7 +2448,8 @@ export class RepoDO extends MigratingDO {
    * The row and data of an event too large for its queue message, as the
    * JSON `{ row, data }`, by event key; null once its retention has passed.
    */
-  eventPayload(key: string): string | null {
+  async eventPayload(key: string): Promise<string | null> {
+    await this.#epochFirst();
     const stored = this.ctx.storage.sql
       .exec<{ payload: string }>("SELECT payload FROM event_payloads WHERE event_key = ?", key)
       .toArray()[0];
@@ -2452,14 +2468,19 @@ export class RepoDO extends MigratingDO {
 
   /** Runs due background jobs; the job queue re-arms the alarm for the next one. */
   override async alarm(): Promise<void> {
+    // Nothing runs before the restore generation is taken: a restored object may be one the
+    // directory deleted since. Unknown (the directory unreachable): tried again later.
+    try {
+      await this.checkEpoch();
+    } catch (error) {
+      this.#log().warn("checking the repository's epoch failed", { error });
+      await this.ctx.storage.setAlarm(this.git.context.now() + EPOCH_RETRY_MS);
+      return;
+    }
     await this.#measured("alarm", async () => {
       // Maintenance changes the packs without a commit.
       this.#recordStorage();
       try {
-        // Background jobs may commit (an import).
-        await this.checkEpoch().catch((error: unknown) =>
-          this.#log().warn("checking the repository's epoch failed", { error }),
-        );
         await this.#drainOutbox();
         this.#parkJobs();
         await this.#runJobs();
@@ -2656,14 +2677,16 @@ export class RepoDO extends MigratingDO {
   }
 
   /** A parent's half of fork creation: branches, tags, tips and live packs, read-leased by `holder`. */
-  exportForFork(holder: string, ttlMs: number): Promise<ForkExport> {
+  async exportForFork(holder: string, ttlMs: number): Promise<ForkExport> {
+    await this.#epochFirst();
     // Its packs are about to be erased: a fork must not borrow them.
     if (this.events.isDeleted()) throw new Error(REPO_DELETED);
     return this.#network().exportForFork(holder, ttlMs);
   }
 
   /** One page of the commit-graph closure from `frontier` (a fork's graph copy). */
-  forkCommitPage(frontier: readonly string[], limit: number): CommitPage {
+  async forkCommitPage(frontier: readonly string[], limit: number): Promise<CommitPage> {
+    await this.#epochFirst();
     return this.#network().commitPage(frontier, limit);
   }
 
@@ -2706,6 +2729,8 @@ export class RepoDO extends MigratingDO {
 
   /** Whether `principalId` may read this repository (public, or a role here). */
   async readableBy(principalId: string): Promise<boolean> {
+    if (this.#gone()) return false;
+    await this.checkEpoch();
     if (this.#refusesReads()) return false;
     if (this.events.visibility() === "public") return true;
     const ceilings = await this.#authority.rolesPulled(principalId, null);
@@ -2737,12 +2762,18 @@ export class RepoDO extends MigratingDO {
   }
 
   /** A pull request of `baseRepoId` no longer follows a branch here (as of `generation`). */
-  unregisterOutgoingPull(baseRepoId: string, number: number, generation: number): void {
+  async unregisterOutgoingPull(baseRepoId: string, number: number, generation: number) {
+    await this.#epochFirst();
     this.pullSource.unregister(baseRepoId, number, generation);
   }
 
   /** A revision a pull request's base imports: the live packs, leased, if `sha` is a commit here. */
-  exportRevision(input: { readonly sha: string; readonly holder: string; readonly ttlMs: number }) {
+  async exportRevision(input: {
+    readonly sha: string;
+    readonly holder: string;
+    readonly ttlMs: number;
+  }) {
+    await this.#epochFirst();
     return this.pullSource.exportRevision(input);
   }
 
@@ -2781,10 +2812,25 @@ export class RepoDO extends MigratingDO {
    */
   async checkEpoch(): Promise<void> {
     await this.events.checkEpoch((recorded) =>
-      readDirectoryEpoch(this.env, this.git.context.metrics, this.#repoId(), recorded),
+      readDirectoryEpoch(
+        this.env,
+        this.git.context.metrics,
+        this.#repoId(),
+        recorded,
+        this.git.context.now(),
+      ),
     );
     // A new epoch's snapshot goes out even if nothing else is written.
     this.#armOutbox();
+  }
+
+  /**
+   * The restore generation, taken before an entry other objects call by id
+   * does any work (they reach it without the directory, which would have
+   * missed a deleted repository); not for an erasing or erased object.
+   */
+  async #epochFirst(): Promise<void> {
+    if (!this.#gone()) await this.checkEpoch();
   }
 
   /** The repository's current snapshot for a read-model rebuild (null without an identity). */
@@ -2793,7 +2839,10 @@ export class RepoDO extends MigratingDO {
   }
 
   /** The tombstone the deletion puts into the read model (null without an identity). */
-  deletionTombstone(): RepoExport | "not_frozen" | null {
+  async deletionTombstone(): Promise<RepoExport | "not_frozen" | null> {
+    // Erased (or being erased) here: nothing left to put in.
+    if (this.#closed) return null;
+    await this.checkEpoch();
     return this.events.deletionTombstone();
   }
 
@@ -2808,6 +2857,9 @@ export class RepoDO extends MigratingDO {
     actor: JobActor | string | null,
     budgetMs: number,
   ): Promise<{ ready: boolean; events: number; auditRows: number }> {
+    // Erased (or being erased) here, by a run of the deletion before it was reopened: nothing
+    // left to send or archive.
+    if (this.#closed) return Promise.resolve({ ready: true, events: 0, auditRows: 0 });
     return this.#measured("prepareDeletion", async () => {
       await this.checkEpoch();
       this.events.markDeleted(actor);
@@ -2896,6 +2948,15 @@ export class RepoDO extends MigratingDO {
     return undefined;
   }
 
+  /**
+   * Erased, or being erased, here: what an entry may answer before taking
+   * the restore generation (anything else may be an object restored from
+   * before its deletion, which only the generation tells).
+   */
+  #gone(): boolean {
+    return this.#closed || !this.#hasGitStorage();
+  }
+
   /** No read: the repository is gone or going (a transfer does not stop reads). */
   #refusesReads(): boolean {
     return this.#closed || !this.#hasGitStorage() || this.events.isDeleted();
@@ -2913,12 +2974,14 @@ export class RepoDO extends MigratingDO {
   }
 
   /** One slice of compacting borrowed packs to keep the view under the cap. */
-  compactViewSlice(input: CompactSliceInput) {
+  async compactViewSlice(input: CompactSliceInput) {
+    await this.#epochFirst();
     return this.#network().compactSlice(input);
   }
 
   /** Swaps a finished view compaction in. */
-  swapCompactedView(output: string, sources: readonly string[]): ViewPack {
+  async swapCompactedView(output: string, sources: readonly string[]): Promise<ViewPack> {
+    await this.#epochFirst();
     return this.#network().swapCompacted(output, sources);
   }
 
@@ -2926,10 +2989,11 @@ export class RepoDO extends MigratingDO {
    * The registry rows of packs under `networkId` (the network collection's
    * snapshot), which it claims at `claimSeq`.
    */
-  networkSnapshot(networkId: string, claimSeq: number): MemberPack[] {
+  async networkSnapshot(networkId: string, claimSeq: number): Promise<MemberPack[]> {
     // An erased object restarted with empty storage holds nothing: it says
     // so by failing, and the network checks the directory.
     if (!this.#hasGitStorage()) throw new Error("git storage is not initialized");
+    await this.#epochFirst();
     return this.#network().networkSnapshot(networkId, claimSeq);
   }
 
@@ -2938,20 +3002,28 @@ export class RepoDO extends MigratingDO {
    * when leases on them end; refuses for packs its view holds, which the
    * network then claims again at `claim.seq`.
    */
-  condemnShared(
+  async condemnShared(
     packIds: readonly string[],
     claim: { readonly networkId: string; readonly seq: number },
-  ): CondemnAnswer {
+  ): Promise<CondemnAnswer> {
+    await this.#epochFirst();
     return this.#network().condemnShared(packIds, claim);
   }
 
   /** Of `packIds`, those this registry names (the network's orphan sweep asks every member). */
-  registeredPacks(packIds: readonly string[]): string[] {
+  async registeredPacks(packIds: readonly string[]): Promise<string[]> {
+    await this.#epochFirst();
     return this.#network().registeredPacks(packIds);
   }
 
   /** Starts a detach into `newNetworkId` (the network object calls this); it runs in the alarm. */
-  beginDetach(newNetworkId: string): { ok: true } | { ok: false; error: string } {
+  async beginDetach(newNetworkId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    // Refused, not thrown: the network undoes its own step for an answer.
+    try {
+      await this.#epochFirst();
+    } catch {
+      return { ok: false, error: "the repository's restore generation could not be read" };
+    }
     const now = this.git.context.now();
     // The one it leaves too (an object older than the history has no record of it).
     if (this.#hasGitStorage()) recordNetwork(this.ctx.storage, this.git.networkId(), now);

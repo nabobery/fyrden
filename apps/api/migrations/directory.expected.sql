@@ -179,7 +179,7 @@ CREATE TABLE refresh_tokens (
 CREATE TABLE repo_deletion_cleanups (
   repo_id TEXT NOT NULL REFERENCES repo_deletions (repo_id),
   cleanup TEXT NOT NULL,
-  done_at INTEGER NOT NULL,
+  done_at INTEGER NOT NULL, gen INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (repo_id, cleanup)
 ) STRICT, WITHOUT ROWID;
 
@@ -189,7 +189,7 @@ CREATE TABLE repo_deletions (
   step TEXT NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
-, requested_by TEXT, last_error TEXT, act_chain TEXT CHECK (act_chain IS NULL OR json_valid(act_chain)), request_id TEXT, tombstone TEXT CHECK (tombstone IS NULL OR json_valid(tombstone))) STRICT;
+, requested_by TEXT, last_error TEXT, act_chain TEXT CHECK (act_chain IS NULL OR json_valid(act_chain)), request_id TEXT, tombstone TEXT CHECK (tombstone IS NULL OR json_valid(tombstone)), gen INTEGER NOT NULL DEFAULT 0, reopened_epoch INTEGER) STRICT;
 
 -- table repo_redirects
 CREATE TABLE repo_redirects (

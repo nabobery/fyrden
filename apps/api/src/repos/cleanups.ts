@@ -50,6 +50,8 @@ export interface CleanupTarget {
   readonly repoId: string;
   /** The org shard its read model, effects and deliveries are in. */
   readonly shard: string;
+  /** The deletion's generation: a cleanup done in an earlier one runs again (see `repo_deletions`). */
+  readonly gen: number;
 }
 
 /** After a page: nothing is left, more is, or what is left cannot go yet. */
@@ -208,9 +210,9 @@ export async function runCleanups(
   const { metrics } = options;
   metrics?.count("d1.query", { db: "directory", op: "cleanups_done" });
   const { results } = await env.DIRECTORY.prepare(
-    "SELECT cleanup FROM repo_deletion_cleanups WHERE repo_id = ?",
+    "SELECT cleanup FROM repo_deletion_cleanups WHERE repo_id = ? AND gen = ?",
   )
-    .bind(target.repoId)
+    .bind(target.repoId, target.gen)
     .all<{ cleanup: string }>();
   const done = new Set(results.map((r) => r.cleanup));
   let pages = options.pages ?? CLEANUP_POLICY.pagesPerCall;
@@ -224,10 +226,11 @@ export async function runCleanups(
     }
     metrics?.count("d1.query", { db: "directory", op: "cleanup_done" });
     await env.DIRECTORY.prepare(
-      `INSERT INTO repo_deletion_cleanups (repo_id, cleanup, done_at) VALUES (?, ?, ?)
-       ON CONFLICT DO NOTHING`,
+      `INSERT INTO repo_deletion_cleanups (repo_id, cleanup, done_at, gen) VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT (repo_id, cleanup) DO UPDATE SET done_at = excluded.done_at, gen = excluded.gen
+         WHERE excluded.gen > repo_deletion_cleanups.gen`,
     )
-      .bind(target.repoId, cleanup.name, clock())
+      .bind(target.repoId, cleanup.name, clock(), target.gen)
       .run();
   }
   return true;

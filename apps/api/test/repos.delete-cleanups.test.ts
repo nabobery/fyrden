@@ -197,7 +197,7 @@ describe("repository deletion cleanups", () => {
     // More than a page of each kind.
     await leaveTraces(repo.id, CLEANUP_POLICY.effectsPage + 1, CLEANUP_POLICY.deliveriesPage + 1);
     await mark(repo);
-    const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD };
+    const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD, gen: 0 };
 
     // The repository's webhook effects are settled (ended, a page at a time; none was
     // claimed), then one page of effects and nothing else yet.
@@ -229,7 +229,7 @@ describe("repository deletion cleanups", () => {
       .bind(`${repo.id}:1:2:webhooks:hooks`)
       .run();
     await mark(repo);
-    const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD };
+    const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD, gen: 0 };
 
     expect(await runCleanups(env, target)).toBe(false);
     expect(await traces(repo.id)).toEqual({ effects: 2, deliveries: 2, attempts: 2, bodies: 2 });
@@ -259,7 +259,7 @@ describe("repository deletion cleanups", () => {
       .bind(id(1), id(2), now)
       .run();
     await mark(repo);
-    const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD };
+    const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD, gen: 0 };
 
     expect(await runCleanups(env, target)).toBe(false);
     expect(await traces(repo.id)).toEqual({ effects: 3, deliveries: 2, attempts: 2, bodies: 2 });
@@ -298,7 +298,7 @@ describe("repository deletion cleanups", () => {
       .bind(repo.id, id(2), id(3))
       .run();
     await mark(repo);
-    const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD };
+    const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD, gen: 0 };
 
     expect(await runCleanups(env, target)).toBe(false);
     const { results } = await env.ORG_READ.prepare(
@@ -324,7 +324,7 @@ describe("repository deletion cleanups", () => {
     const repo = await createRepo();
     await leaveTraces(repo.id, CLEANUP_POLICY.effectsPage + 2, 0);
     await mark(repo);
-    const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD };
+    const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD, gen: 0 };
     expect(await runCleanups(env, target, { pages: 1 })).toBe(false);
     expect(
       await count(
