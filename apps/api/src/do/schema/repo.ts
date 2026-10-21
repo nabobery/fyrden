@@ -1126,4 +1126,26 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX feed_participants_joined ON feed_participants (number, joined_seq);
     `,
   },
+  {
+    version: 38,
+    // Activity feed recipients past those an event carries
+    // (`feed_audience_pages`): each page's entries frozen with the event
+    // (keyed by its full id), with the restore and ownership generations it
+    // was made in and when it may go (a day after the event's delivery
+    // deadline). Only the event's feed effects read them.
+    name: "feed_audience_pages",
+    sql: `
+      CREATE TABLE feed_audience_pages (
+        event_key TEXT NOT NULL,
+        page INTEGER NOT NULL CHECK (page >= 1),
+        epoch_gen INTEGER NOT NULL,
+        owner_gen INTEGER NOT NULL,
+        recipients TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (event_key, page)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX feed_audience_pages_expiry ON feed_audience_pages (expires_at);
+    `,
+  },
 ];

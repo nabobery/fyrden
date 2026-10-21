@@ -22,6 +22,7 @@ import repoV34 from "./fixtures/do-schemas/RepoDO/v34.sql?raw";
 import repoV35 from "./fixtures/do-schemas/RepoDO/v35.sql?raw";
 import repoV36 from "./fixtures/do-schemas/RepoDO/v36.sql?raw";
 import repoV37 from "./fixtures/do-schemas/RepoDO/v37.sql?raw";
+import repoV38 from "./fixtures/do-schemas/RepoDO/v38.sql?raw";
 
 // One fixture per released schema version: an object last migrated by any
 // released build must reach the same schema as a fresh one. The latest
@@ -49,6 +50,7 @@ const fixtures: Record<
       35: repoV35,
       36: repoV36,
       37: repoV37,
+      38: repoV38,
     },
   },
 };

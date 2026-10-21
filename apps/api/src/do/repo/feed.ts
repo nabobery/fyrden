@@ -2,11 +2,16 @@ import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
   atLeast,
+  type EventId,
+  eventKey,
+  FEED_HORIZON_MS,
   type FeedBlock,
   type FeedKind,
   type FeedRecipient,
   MAX_FEED_AUDIENCE,
   MAX_FEED_EXCERPT,
+  MAX_FEED_PAGE_BYTES,
+  MAX_FEED_PAGES,
   MAX_FEED_TITLE,
   mentionsIn,
   newMentions,
@@ -44,6 +49,25 @@ export interface FeedActor {
   readonly mentioned: ReadonlyMap<string, FeedPrincipal>;
 }
 
+/** How long a page of recipients is kept past its event's delivery deadline. Proposed. */
+export const FEED_PAGE_GRACE_MS = 24 * 60 * 60 * 1000;
+
+const encoder = new TextEncoder();
+
+/** A feed effect's request for a page of its event's further recipients. */
+export interface FeedPageAsk {
+  readonly eventKey: string;
+  readonly page: number;
+  /** The restore and ownership generations the event was made in. */
+  readonly epochGen: number;
+  readonly ownerGen: number;
+}
+
+/** The page's entries and bytes, or why it is not to be delivered. */
+export type FeedPageRead =
+  | { readonly recipients: readonly FeedRecipient[]; readonly bytes: number }
+  | { readonly missing: "deleted" | "restored" | "transferred" | "absent" };
+
 /** Who reads the repository, as a feed's audience is decided (see `RepoFeedDeps.readers`). */
 export interface Readers {
   readonly mayRead: (principal: string) => boolean;
@@ -60,6 +84,8 @@ export interface RepoFeedDeps {
   readonly readers: () => Readers;
   /** The actor's role, when no caller said (from the ACL as last pulled). */
   readonly roleOf: (principal: string) => RepoRole | null;
+  /** Queues the pruning of audience pages for `at` (or keeps it sooner). */
+  readonly prunePagesAt: (at: number) => void;
   /** Brings the ACL as `readers` and `roleOf` see it up to date (within its read TTL). */
   readonly refreshAccess: () => Promise<void>;
   /** Handles (lower-cased) to the active users and agents with them. */
@@ -156,6 +182,7 @@ export class RepoFeed {
     actor: string | null,
     data: Row | null,
     row: Row | null,
+    event: { readonly id: EventId; readonly at: number; readonly ownerGen: number },
   ): FeedBlock | undefined {
     const plan = this.#plan(type, data ?? {}, row);
     if (!plan) return undefined;
@@ -207,8 +234,7 @@ export class RepoFeed {
     if (audience.length === 0) return undefined;
     // Things to act on first, when there are more than one event may name.
     audience.sort((a, b) => (a.priority === b.priority ? 0 : a.priority === "P0" ? -1 : 1));
-    if (audience.length > MAX_FEED_AUDIENCE)
-      this.deps.metrics.count("feed.audience_dropped", {}, audience.length - MAX_FEED_AUDIENCE);
+    const pages = this.#keepPages(audience.slice(MAX_FEED_AUDIENCE), event);
     const threadKey = `${subject.kind}/${plan.number}`;
     const [bumped] = this.#exec<{ version: number }>(
       "feed.version",
@@ -231,7 +257,113 @@ export class RepoFeed {
       // Read live from `member` when a feed is shown (an edit or deletion shows at once).
       excerpt: null,
       audience: audience.slice(0, MAX_FEED_AUDIENCE),
+      ...(pages.length > 0 && { pages, deadline: event.at + FEED_HORIZON_MS }),
     };
+  }
+
+  /**
+   * Keeps `rest` (the recipients past those the event carries) as pages of
+   * up to 100 entries and `MAX_FEED_PAGE_BYTES`, frozen with the event, and
+   * queues their pruning; their manifest. Past `MAX_FEED_PAGES`, recipients
+   * are counted, not kept (the caps keep an event's recipients within it).
+   */
+  #keepPages(
+    rest: readonly FeedRecipient[],
+    event: { readonly id: EventId; readonly at: number; readonly ownerGen: number },
+  ): { n: number; count: number; bytes: number }[] {
+    const pages: { n: number; count: number; bytes: number }[] = [];
+    if (rest.length === 0) return pages;
+    const key = eventKey(event.id);
+    const expiresAt = event.at + FEED_HORIZON_MS + FEED_PAGE_GRACE_MS;
+    let page: FeedRecipient[] = [];
+    // Bytes of the page as a JSON array: its brackets, and each entry with a comma.
+    let bytes = 1;
+    let dropped = 0;
+    const keep = () => {
+      if (page.length === 0) return;
+      const json = JSON.stringify(page);
+      const n = pages.length + 1;
+      const size = encoder.encode(json).length;
+      this.#exec(
+        "feed.pages",
+        `INSERT INTO feed_audience_pages (event_key, page, epoch_gen, owner_gen, recipients, bytes,
+           expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        key,
+        n,
+        event.id.epochGen,
+        event.ownerGen,
+        json,
+        size,
+        expiresAt,
+      );
+      pages.push({ n, count: page.length, bytes: size });
+      page = [];
+      bytes = 1;
+    };
+    for (const recipient of rest) {
+      const size = encoder.encode(JSON.stringify(recipient)).length + 1;
+      if (page.length >= MAX_FEED_AUDIENCE || bytes + size > MAX_FEED_PAGE_BYTES) keep();
+      if (pages.length >= MAX_FEED_PAGES) {
+        dropped++;
+        continue;
+      }
+      page.push(recipient);
+      bytes += size;
+    }
+    keep();
+    if (dropped > 0) this.deps.metrics.count("feed.audience_dropped", {}, dropped);
+    if (pages.length > 0) this.deps.prunePagesAt(expiresAt);
+    return pages;
+  }
+
+  /**
+   * A page of an event's further recipients, while the event is still the
+   * repository's: made in its current restore generation and under its
+   * current owner (`current`); `missing` with why otherwise.
+   */
+  readPage(
+    ask: FeedPageAsk,
+    current: { readonly epochGen: number; readonly ownerGen: number },
+  ): FeedPageRead {
+    if (ask.epochGen !== current.epochGen) return { missing: "restored" };
+    if (ask.ownerGen !== current.ownerGen) return { missing: "transferred" };
+    const [row] = this.#exec<{ recipients: string; bytes: number }>(
+      "feed.read",
+      `SELECT recipients, bytes FROM feed_audience_pages
+       WHERE event_key = ? AND page = ? AND epoch_gen = ? AND owner_gen = ?`,
+      ask.eventKey,
+      ask.page,
+      ask.epochGen,
+      ask.ownerGen,
+    );
+    if (!row) return { missing: "absent" };
+    return { recipients: JSON.parse(row.recipients) as FeedRecipient[], bytes: row.bytes };
+  }
+
+  /**
+   * Deletes up to `limit` pages whose time is up at `now`; how many, and
+   * when the next goes (null for none left).
+   */
+  prunePages(now: number, limit: number): { pruned: number; nextAt: number | null } {
+    const cursor = this.#sql.exec(
+      `DELETE FROM feed_audience_pages WHERE (event_key, page) IN (
+         SELECT event_key, page FROM feed_audience_pages WHERE expires_at <= ?
+         ORDER BY expires_at LIMIT ?)`,
+      now,
+      limit,
+    );
+    const pruned = cursor.rowsWritten;
+    if (pruned > 0)
+      this.deps.metrics.count(
+        "do.rows_written",
+        { class: this.deps.git.context.doClass, op: "feed.pages_prune" },
+        pruned,
+      );
+    const [next] = this.#exec<{ at: number | null }>(
+      "feed.read",
+      "SELECT min(expires_at) AS at FROM feed_audience_pages",
+    );
+    return { pruned, nextAt: next?.at ?? null };
   }
 
   /** What an event means, before its audience is filtered; undefined for nothing. */

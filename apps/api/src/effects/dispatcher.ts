@@ -343,15 +343,31 @@ async function deliverClaimed(
   if (sink.deliverBatch) {
     let outcome: Awaited<ReturnType<NonNullable<EffectSink["deliverBatch"]>>>;
     try {
-      outcome = await sink.deliverBatch(rows.map(effectOf), deps.env, deps.db, deps.metrics);
+      outcome = await sink.deliverBatch(
+        rows.map(effectOf),
+        deps.env,
+        deps.db,
+        deps.metrics,
+        deps.now(),
+      );
     } catch (error) {
       outcome = { delivered: [], error };
     }
     const delivered = new Set(outcome.delivered);
     done.push(...rows.filter((row) => delivered.has(row.effect_id)).map((row) => row.effect_id));
+    // Those it ended, for good (a query per reason).
+    const told = new Set<string>();
+    for (const end of outcome.ended ?? []) {
+      const ids = new Set(end.ids);
+      const gone = rows.filter(
+        (row) =>
+          ids.has(row.effect_id) && !delivered.has(row.effect_id) && !told.has(row.effect_id),
+      );
+      for (const row of gone) told.add(row.effect_id);
+      if (gone.length > 0) await markEnded(deps, sink, gone, token, end.reason);
+    }
     // The failures the sink told apart, each recorded with its own error: those of one error
     // text together (a query each); the rest together.
-    const told = new Set<string>();
     const byText = new Map<string, { rows: Row[]; error: unknown }>();
     for (const failure of outcome.failures ?? []) {
       const ids = new Set(failure.ids);
@@ -468,6 +484,32 @@ async function markFailed(
     if (row.state === "failed")
       deps.metrics?.count("effects.failed", { sink: rows[0]?.sink ?? "" });
   return results.filter((row) => row.state === "pending");
+}
+
+/**
+ * Ends claimed effects for good with `reason`, in one query: no attempt is
+ * left to them. Only this claim's holder writes.
+ */
+async function markEnded(
+  deps: DispatchDeps,
+  sink: EffectSink,
+  rows: readonly Row[],
+  token: string,
+  reason: string,
+): Promise<void> {
+  deps.log?.warn("an effect was ended", { effectIds: rows.map((row) => row.effect_id), reason });
+  deps.metrics?.count("d1.query", { db: "org", op: "effects_end" });
+  const { results } = await deps.db
+    .prepare(
+      `UPDATE effects SET state = 'failed', next_attempt_at = ?1, last_error = ?2,
+         lease_token = NULL, lease_until = NULL
+       WHERE effect_id IN (SELECT value FROM json_each(?3)) AND lease_token = ?4
+       RETURNING effect_id`,
+    )
+    .bind(deps.now(), reason.slice(0, 500), JSON.stringify(rows.map((row) => row.effect_id)), token)
+    .all();
+  const metric = reason.startsWith("invalidated:") ? "effects.invalidated" : "effects.failed";
+  deps.metrics?.count(metric, { sink: sink.name }, results.length);
 }
 
 /** Marks delivered effects done, in one query; only this claim's holder writes. */

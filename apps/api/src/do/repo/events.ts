@@ -4,7 +4,13 @@ import {
   type RefActor,
   type RepoGitStorage,
 } from "@fyrden/adapters-cloudflare/git";
-import { type EntitySnapshot, type FeedBlock, REPO_ENTITY, type RepoRow } from "@fyrden/domain";
+import {
+  type EntitySnapshot,
+  type EventId,
+  type FeedBlock,
+  REPO_ENTITY,
+  type RepoRow,
+} from "@fyrden/domain";
 import { oidToHex } from "@fyrden/git-core";
 import type { NewEvent, Outbox } from "../base/outbox.js";
 
@@ -14,12 +20,17 @@ export type HookRouter = (
   data: Record<string, unknown> | null,
 ) => readonly { readonly id: number; readonly v: number }[];
 
-/** What an event means for activity feeds (in its transaction), or undefined for nothing. */
+/**
+ * What an event means for activity feeds (in its transaction), or
+ * undefined for nothing; `event` is the event's id, time and ownership
+ * generation.
+ */
 export type FeedRouter = (
   type: string,
   actor: string | null,
   data: Record<string, unknown> | null,
   row: Record<string, unknown> | null,
+  event: { readonly id: EventId; readonly at: number; readonly ownerGen: number },
 ) => FeedBlock | undefined;
 
 /** A repository's snapshot as a read-model rebuild takes it. */
@@ -797,6 +808,8 @@ export class RepoEvents {
     );
     const hooks =
       meta.owner_id !== null && meta.name !== null ? this.#hooksFor(type, event.data) : [];
+    const id = { sourceId: meta.repo_id, epochGen: meta.epoch_gen, sourceSeq: meta.source_seq };
+    const at = this.git.context.now();
     const feed =
       meta.owner_id === null
         ? undefined
@@ -805,40 +818,38 @@ export class RepoEvents {
             event.actor,
             event.data,
             typeof snapshot === "object" ? (snapshot.row as Record<string, unknown> | null) : null,
+            { id, at, ownerGen: meta.owner_gen },
           );
-    this.outbox.append(
-      { sourceId: meta.repo_id, epochGen: meta.epoch_gen, sourceSeq: meta.source_seq },
-      {
-        ...event,
-        // What a delivery says of the repository is what it was now.
-        ...(hooks.length > 0 && {
-          webhooks: {
-            hooks: [...hooks],
-            repo: {
-              name: meta.name as string,
-              ownerId: meta.owner_id as string,
-              private: meta.visibility !== "public",
-            },
+    this.outbox.append(id, {
+      ...event,
+      // What a delivery says of the repository is what it was now.
+      ...(hooks.length > 0 && {
+        webhooks: {
+          hooks: [...hooks],
+          repo: {
+            name: meta.name as string,
+            ownerId: meta.owner_id as string,
+            private: meta.visibility !== "public",
           },
-        }),
-        ...(feed && { feed }),
-        type,
-        at: this.git.context.now(),
-        ownerGen: meta.owner_gen,
-        entity:
-          typeof snapshot === "object"
-            ? snapshot
-            : snapshot
-              ? {
-                  type: REPO_ENTITY,
-                  id: meta.repo_id,
-                  version: meta.version,
-                  deleted: meta.deleting_at !== null,
-                  row: meta.deleting_at === null ? this.#row(meta) : null,
-                }
-              : null,
-      },
-    );
+        },
+      }),
+      ...(feed && { feed }),
+      type,
+      at,
+      ownerGen: meta.owner_gen,
+      entity:
+        typeof snapshot === "object"
+          ? snapshot
+          : snapshot
+            ? {
+                type: REPO_ENTITY,
+                id: meta.repo_id,
+                version: meta.version,
+                deleted: meta.deleting_at !== null,
+                row: meta.deleting_at === null ? this.#row(meta) : null,
+              }
+            : null,
+    });
     return meta;
   }
 

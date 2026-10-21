@@ -140,7 +140,7 @@ import {
   type RepoIdentity,
   type RepoUpdate,
 } from "./repo/events.js";
-import { RepoFeed } from "./repo/feed.js";
+import { type FeedPageAsk, type FeedPageRead, RepoFeed } from "./repo/feed.js";
 import { type FeedViewAnswer, RepoFeedView } from "./repo/feed-view.js";
 import {
   type FileWriteDeps,
@@ -216,6 +216,10 @@ import { repoSchema } from "./schema/repo.js";
 const ALARM_BUDGET_MS = 5_000;
 /** How long an archive request builds before it answers "building". Proposed. */
 const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
+
+/** The job that prunes feed audience pages past their time, and how many a slice deletes. */
+const FEED_PAGES_JOB = "feed_pages_prune";
+const FEED_PAGES_PRUNE_BATCH = 500;
 
 /** The job the deletion runs the audit archiver's slices as (they read no job state). */
 const DELETION_SLICE = {
@@ -456,12 +460,15 @@ export class RepoDO extends MigratingDO {
         return { mayRead: (principal) => roleOf(principal) !== null, key };
       },
       roleOf: (principal) => this.acl.lastRoleOf(principal),
+      prunePagesAt: (at) => this.git.jobs.ensure("feed_pages_prune", FEED_PAGES_JOB, { runAt: at }),
       refreshAccess: () => this.acl.refresh(),
       resolveHandles: (handles) => this.#feedView.resolveHandles(handles),
       prepareTexts: (texts) => this.references.prepare(texts),
       metrics: this.git.context.metrics,
     });
-    this.events.routeFeed((type, actor, data, row) => this.feed.blockFor(type, actor, data, row));
+    this.events.routeFeed((type, actor, data, row, event) =>
+      this.feed.blockFor(type, actor, data, row, event),
+    );
     this.rebases = new RebaseSagas(
       {
         writeDeps: () => this.#writeDeps(),
@@ -982,6 +989,24 @@ export class RepoDO extends MigratingDO {
       const hooks: HookForDelivery[] = [];
       for (const id of ids) hooks.push(await this.hooks.forDelivery(id, repoPrivate));
       return hooks;
+    });
+  }
+
+  /**
+   * A page of an event's further feed recipients, for its feed effect: only
+   * while the event is still this repository's (the restore generation
+   * taken first, then deletion, restore and ownership checked with the
+   * read).
+   */
+  feedAudiencePage(ask: FeedPageAsk): Promise<FeedPageRead> {
+    if (this.#refusesReads()) return Promise.resolve({ missing: "deleted" as const });
+    return this.#measured("feedAudiencePage", async () => {
+      await this.checkEpoch();
+      if (this.#refusesReads()) return { missing: "deleted" as const };
+      return this.feed.readPage(ask, {
+        epochGen: this.events.epochGen(),
+        ownerGen: this.events.account()?.ownerGen ?? 0,
+      });
     });
   }
 
@@ -2542,6 +2567,15 @@ export class RepoDO extends MigratingDO {
       import: this.#imports().handler(),
       archive: this.#archives().handler(),
       audit_archive: this.#auditArchiver(),
+      feed_pages_prune: {
+        runSlice: async () => {
+          const now = this.git.context.now();
+          const { nextAt } = this.feed.prunePages(now, FEED_PAGES_PRUNE_BATCH);
+          return nextAt === null
+            ? { done: true }
+            : { done: false, cursor: null, runAfterMs: Math.max(0, nextAt - now) };
+        },
+      },
       reap_orphans: orphanReaperHandler(this.git, {
         sweepNetwork: () => soleNetworkMember(this.env, this.git.networkId(), this.#repoId()),
       }),

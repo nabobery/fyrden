@@ -45,13 +45,15 @@ export interface EffectSink {
    * better than one at a time (one call per destination they share): the
    * dispatcher then hands it every effect of the sink it claimed. Returns
    * the ids delivered and why the others were not; those are retried as a
-   * failed `deliver` is. Idempotent per effect id, as `deliver`.
+   * failed `deliver` is, and those it ended. Idempotent per effect id, as
+   * `deliver`. `now` is the dispatcher's time.
    */
   deliverBatch?(
     effects: readonly Effect[],
     env: Env,
     db: D1Database,
     metrics?: Metrics,
+    now?: number,
   ): Promise<BatchDelivery>;
   /**
    * Calls to other services (Durable Objects, D1, R2, queues) delivering a
@@ -80,12 +82,15 @@ export interface EffectSink {
 }
 
 /**
- * What a batch delivery did: the effects delivered, the failures it can
- * tell apart (each with the effects it stopped), and the first failure of
- * any other effect not delivered.
+ * What a batch delivery did: the effects delivered, those it ended for
+ * good (nothing could deliver them any more: no attempt is left to them),
+ * the failures it can tell apart (each with the effects it stopped), and
+ * the first failure of any other effect not delivered. An ended effect's
+ * reason starting `invalidated:` says its source moved on, as the claim's.
  */
 export interface BatchDelivery {
   readonly delivered: readonly string[];
+  readonly ended?: readonly { readonly ids: readonly string[]; readonly reason: string }[];
   readonly failures?: readonly { readonly ids: readonly string[]; readonly error: unknown }[];
   readonly error?: unknown;
 }

@@ -39,6 +39,11 @@ export const MAX_FEED_AUDIENCE = 100;
 export const MAX_FEED_PAGES = 10;
 /** Bytes of one page of recipients, as JSON, at most. */
 export const MAX_FEED_PAGE_BYTES = 64 * 1024;
+/**
+ * How long after its change an event's entries may still reach feeds:
+ * feeds keep items this long, and drop older entries on arrival. Proposed.
+ */
+export const FEED_HORIZON_MS = 7 * 24 * 60 * 60 * 1000;
 /** Characters of an excerpt at most. */
 export const MAX_FEED_EXCERPT = 280;
 /** Characters of a subject's title kept in a feed item at most. */

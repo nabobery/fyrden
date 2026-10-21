@@ -30,6 +30,7 @@ export const JOB_KINDS = [
   "view_compact",
   "pull_refollow",
   "network_reclaim",
+  "feed_pages_prune",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 

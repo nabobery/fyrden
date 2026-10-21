@@ -9,6 +9,7 @@ CREATE INDEX audit_segments_pending ON audit_segments (from_seq) WHERE state = '
 CREATE INDEX audit_segments_to ON audit_segments (to_seq);
 CREATE INDEX comments_number ON comments (number, comment_id);
 CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
+CREATE INDEX feed_audience_pages_expiry ON feed_audience_pages (expires_at);
 CREATE INDEX feed_participants_joined ON feed_participants (number, joined_seq);
 CREATE INDEX import_commits_staged ON import_commits (staged_at);
 CREATE INDEX incoming_references_source
@@ -170,6 +171,16 @@ CREATE TABLE event_payloads (
         payload TEXT NOT NULL CHECK (json_valid(payload)),
         created_at INTEGER NOT NULL
       , sent_at INTEGER) STRICT;
+CREATE TABLE feed_audience_pages (
+        event_key TEXT NOT NULL,
+        page INTEGER NOT NULL CHECK (page >= 1),
+        epoch_gen INTEGER NOT NULL,
+        owner_gen INTEGER NOT NULL,
+        recipients TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (event_key, page)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE feed_participants (
         number INTEGER NOT NULL,
         principal TEXT NOT NULL,

@@ -39,6 +39,18 @@ interface PlannedFeed {
   readonly feed: FeedBlock;
 }
 
+/**
+ * A page of an event's further recipients, as its effect carries it: the
+ * event (its block without recipients), the page as the manifest names it,
+ * the ownership generation it was made under, and its deadline.
+ */
+interface PlannedPage extends Omit<PlannedFeed, "feed"> {
+  readonly ownerGen: number;
+  readonly deadline: number;
+  readonly page: { readonly n: number; readonly count: number; readonly bytes: number };
+  readonly feed: Omit<FeedBlock, "audience" | "pages" | "deadline">;
+}
+
 const RevokedSchema = z.object({
   principals: z.array(z.string().min(1)).min(1),
   repos: z.array(z.string().min(1)),
@@ -58,6 +70,22 @@ interface PlannedPurge {
 }
 
 const isPurge = (effect: Effect) => "purge" in effect.payload;
+const isPage = (effect: Effect) => "page" in effect.payload;
+
+/** An effect's entries to apply: the event, its block, and the recipients it names. */
+interface Entries {
+  readonly id: string;
+  readonly event: Omit<PlannedFeed, "feed">;
+  readonly feed: Omit<FeedBlock, "audience" | "pages" | "deadline">;
+  readonly audience: readonly FeedEntry["recipient"][];
+}
+
+/** An event's effect's entries (the recipients it carries). */
+function entriesOf(effect: Effect): Entries {
+  const { feed: block, ...event } = effect.payload as unknown as PlannedFeed;
+  const { audience, pages: _pages, deadline: _deadline, ...feed } = block;
+  return { id: effect.id, event, feed, audience };
+}
 
 /** One call to a feed, and the effects it delivers part of. */
 interface FeedCall {
@@ -66,16 +94,14 @@ interface FeedCall {
 }
 
 /** Each recipient's entries across the effects: one call each. */
-function entryCalls(effects: readonly Effect[], env: Env): FeedCall[] {
+function entryCalls(effects: readonly Entries[], env: Env): FeedCall[] {
   const recipients = new Map<string, { entries: FeedEntry[]; effects: Set<string> }>();
-  for (const effect of effects) {
-    const { feed: block, ...event } = effect.payload as unknown as PlannedFeed;
-    const { audience, ...feed } = block;
+  for (const { id, event, feed, audience } of effects) {
     for (const recipient of audience) {
       const group = recipients.get(recipient.principal) ?? { entries: [], effects: new Set() };
       recipients.set(recipient.principal, group);
       group.entries.push({ ...event, feed, recipient });
-      group.effects.add(effect.id);
+      group.effects.add(id);
     }
   }
   return [...recipients].map(([principal, group]) => ({
@@ -155,32 +181,54 @@ export const feedSink: EffectSink = {
     // delivers the recipients the event carries, so it is no version to go back to once
     // events with pages are made.
     if (!event.feed || event.feed.audience.length === 0) return [];
+    const about = {
+      repoId: event.id.sourceId,
+      eventKey: eventKey(event.id),
+      occurredAt: event.at,
+      actor: event.actor,
+      epochGen: event.id.epochGen,
+    };
+    const { audience: _audience, pages = [], deadline, ...feed } = event.feed;
     return [
-      {
-        target: "feed",
-        payload: {
-          repoId: event.id.sourceId,
-          eventKey: eventKey(event.id),
-          occurredAt: event.at,
-          actor: event.actor,
-          epochGen: event.id.epochGen,
-          feed: event.feed,
-        } satisfies PlannedFeed,
-      },
+      { target: "feed", payload: { ...about, feed: event.feed } satisfies PlannedFeed },
+      // Each further page an effect of its own: its own attempts, its own outcome.
+      ...(deadline === undefined
+        ? []
+        : pages.map((page) => ({
+            target: `page:${page.n}`,
+            payload: {
+              ...about,
+              ownerGen: event.ownerGen,
+              deadline,
+              page,
+              feed,
+            } satisfies PlannedPage,
+          }))),
     ];
   },
 
   async deliver(effect: Effect, env: Env): Promise<void> {
-    const { error, delivered } = await deliverFeeds([effect], env);
-    if (delivered.length === 0) throw error;
+    const { error, delivered, ended } = await deliverFeeds([effect], env, Date.now());
+    if (delivered.length === 0) throw error ?? new Error(ended?.[0]?.reason ?? "not delivered");
   },
 
-  deliverBatch: (effects: readonly Effect[], env: Env) => deliverFeeds(effects, env),
+  deliverBatch: (
+    effects: readonly Effect[],
+    env: Env,
+    _db: D1Database,
+    _metrics?: unknown,
+    now = Date.now(),
+  ) => deliverFeeds(effects, env, now),
 
-  /** One call per recipient of an event, or per principal a purge names. */
+  /**
+   * One call per recipient of an event, or per principal a purge names; a
+   * page's, one more to read it.
+   */
   calls(planned: PlannedEffect): number {
-    const payload = planned.payload as unknown as PlannedFeed | PlannedPurge;
-    return "purge" in payload ? payload.purge.principals.length : payload.feed.audience.length;
+    const payload = planned.payload as unknown as PlannedFeed | PlannedPurge | PlannedPage;
+    if ("purge" in payload) return payload.purge.principals.length;
+    if ("page" in payload) return 1 + payload.page.count;
+    return payload.feed.audience.length;
   },
 };
 
@@ -188,12 +236,19 @@ export const feedSink: EffectSink = {
  * The effects' calls to feeds, a few at once. An effect is delivered when
  * every call it takes part in succeeded.
  */
-async function deliverFeeds(effects: readonly Effect[], env: Env): Promise<BatchDelivery> {
-  // Each failed effect with the first error that stopped it.
+async function deliverFeeds(
+  effects: readonly Effect[],
+  env: Env,
+  now: number,
+): Promise<BatchDelivery> {
+  // Each failed effect with the first error that stopped it; those ended, with why.
   const failed = new Map<string, unknown>();
+  const ended = new Map<string, string>();
   let error: unknown;
+  const pages = await readPages(effects.filter(isPage), env, now, failed, ended);
+  error = [...failed.values()][0];
   const calls = entryCalls(
-    effects.filter((effect) => !isPurge(effect)),
+    [...effects.filter((effect) => !isPurge(effect) && !isPage(effect)).map(entriesOf), ...pages],
     env,
   );
   const purges = effects.filter(isPurge);
@@ -213,8 +268,77 @@ async function deliverFeeds(effects: readonly Effect[], env: Env): Promise<Batch
     });
   }
   return {
-    delivered: effects.map((effect) => effect.id).filter((id) => !failed.has(id)),
+    delivered: effects.map((effect) => effect.id).filter((id) => !failed.has(id) && !ended.has(id)),
+    ended: [...ended].map(([id, reason]) => ({ ids: [id], reason })),
     failures: [...failed].map(([id, cause]) => ({ ids: [id], error: cause })),
     ...(error !== undefined && { error }),
   };
+}
+
+/**
+ * The page effects' recipients, read from their repositories a few at
+ * once. A page past its deadline is ended unread (entries that old are
+ * dropped on arrival); one its repository no longer holds as the event's
+ * (deleted, restored or transferred since: `invalidated:`; or gone) or
+ * that is not what the manifest names, ended; one that could not be read,
+ * failed (tried again).
+ */
+async function readPages(
+  effects: readonly Effect[],
+  env: Env,
+  now: number,
+  failed: Map<string, unknown>,
+  ended: Map<string, string>,
+): Promise<Entries[]> {
+  const read: Entries[] = [];
+  const due = effects.filter((effect) => {
+    const { deadline } = effect.payload as unknown as PlannedPage;
+    if (now <= deadline) return true;
+    ended.set(effect.id, "expired: past the feed's delivery deadline");
+    return false;
+  });
+  for (let at = 0; at < due.length; at += PARALLEL_FEEDS) {
+    const slice = due.slice(at, at + PARALLEL_FEEDS);
+    const results = await Promise.allSettled(
+      slice.map((effect) => {
+        const p = effect.payload as unknown as PlannedPage;
+        return env.REPO.getByName(p.repoId).feedAudiencePage({
+          eventKey: p.eventKey,
+          page: p.page.n,
+          epochGen: p.epochGen,
+          ownerGen: p.ownerGen,
+        });
+      }),
+    );
+    results.forEach((result, i) => {
+      const effect = slice[i] as Effect;
+      const {
+        page,
+        deadline: _deadline,
+        ownerGen: _ownerGen,
+        feed,
+        ...event
+      } = effect.payload as unknown as PlannedPage;
+      if (result.status === "rejected") {
+        failed.set(effect.id, result.reason);
+        return;
+      }
+      const answer = result.value;
+      if ("missing" in answer) {
+        ended.set(
+          effect.id,
+          answer.missing === "absent"
+            ? "page missing: absent"
+            : `invalidated: page missing: its source was ${answer.missing}`,
+        );
+        return;
+      }
+      if (answer.recipients.length !== page.count || answer.bytes !== page.bytes) {
+        ended.set(effect.id, "page missing: not the page its manifest names");
+        return;
+      }
+      read.push({ id: effect.id, event, feed, audience: answer.recipients });
+    });
+  }
+  return read;
 }
