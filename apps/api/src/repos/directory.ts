@@ -341,6 +341,16 @@ export interface NewRepoRow {
   readonly createdBy?: { readonly agentId: string; readonly maxRepos: number } | null;
 }
 
+/** Hooks into repository publication (a create, generation or fork). For tests. */
+export const publishHooks: { before?: () => Promise<void> } = {};
+
+/**
+ * An SQL condition: the account bound at `owner` may own repositories (not
+ * a user being deleted or deleted: a deletion that began meanwhile wins).
+ */
+export const OWNER_REMAINS = (owner: string) =>
+  `EXISTS (SELECT 1 FROM principals WHERE id = ${owner} AND lifecycle IN ('active', 'suspended'))`;
+
 /**
  * The statements of one directory batch that publishes a new repository:
  * its row, taking the name from any redirect holding it, and its audit
@@ -348,7 +358,7 @@ export interface NewRepoRow {
  * repositories and none of that name (checked in the batch, so concurrent
  * creates cannot pass the limit or take the name twice). Pass the batch's
  * results to `heldBack` for why it was held back, read in the same
- * transaction.
+ * transaction. Never for an owner being deleted (`OWNER_REMAINS`).
  */
 export function newRepoStatements(
   db: D1Database,
@@ -374,7 +384,8 @@ export function newRepoStatements(
                 (SELECT count(*) FROM repos WHERE owner_id = ?1 AND state <> 'deleted'
                   AND state = 'active') AS repos,
                 (SELECT count(*) FROM repos WHERE created_by = ?3 AND state = 'active')
-                  AS agent_repos`,
+                  AS agent_repos,
+                ${OWNER_REMAINS("?1")} AS owner`,
       )
       .bind(row.ownerId, row.name, agent?.agentId ?? null),
     db
@@ -387,7 +398,8 @@ export function newRepoStatements(
            AND NOT EXISTS (SELECT 1 FROM repos WHERE owner_id = ?2 AND name = ?3 COLLATE NOCASE
              AND state <> 'deleted')
            AND (?12 IS NULL
-             OR (SELECT count(*) FROM repos WHERE created_by = ?12 AND state = 'active') < ?13)`,
+             OR (SELECT count(*) FROM repos WHERE created_by = ?12 AND state = 'active') < ?13)
+           AND ${OWNER_REMAINS("?2")}`,
       )
       .bind(
         row.id,
@@ -426,17 +438,21 @@ export function newRepoStatements(
 }
 
 /**
- * Why a `newRepoStatements` batch did not publish its repository (the
- * name was taken, or the quota full), or undefined when it did.
+ * Why a `newRepoStatements` batch did not publish its repository (its
+ * owner is being deleted, the name was taken, or the quota full), or
+ * undefined when it did.
  */
 export function heldBack(
   results: readonly D1Result[],
   /** The creating agent's limit, when an agent creates it. */
   agentMaxRepos?: number,
-): "name_taken" | "quota_exceeded" | "agent_quota_exceeded" | undefined {
+): "owner_gone" | "name_taken" | "quota_exceeded" | "agent_quota_exceeded" | undefined {
   if ((results[1]?.meta.changes ?? 0) > 0) return undefined;
-  const seen = results[0]?.results[0] as { taken: number; agent_repos: number } | undefined;
-  if (seen?.taken) return "name_taken";
+  const seen = results[0]?.results[0] as
+    | { taken: number; agent_repos: number; owner: number }
+    | undefined;
+  if (seen?.owner !== 1) return "owner_gone";
+  if (seen.taken) return "name_taken";
   return agentMaxRepos !== undefined && (seen?.agent_repos ?? 0) >= agentMaxRepos
     ? "agent_quota_exceeded"
     : "quota_exceeded";
@@ -473,6 +489,9 @@ export async function checkNewRepo(
   if (createdBy && (row?.agent_repos ?? 0) >= createdBy.maxRepos)
     throw agentRepoQuotaError(createdBy.maxRepos);
 }
+
+export const ownerGoneError = (handle: string) =>
+  new OperationError(404, "owner_not_found", `No account ${handle} was found.`);
 
 export const nameTakenError = (handle: string, name: string) =>
   new OperationError(409, "name_taken", `${handle} already has a repository named ${name}.`);

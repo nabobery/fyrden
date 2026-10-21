@@ -12,6 +12,7 @@ import {
   heldBack,
   type NewRepoRow,
   newRepoStatements,
+  publishHooks,
   type RepoEntry,
 } from "../repos/directory.js";
 import { clock, newId } from "../services.js";
@@ -213,6 +214,7 @@ export async function forkRepository(
     createdBy: request.createdBy ?? null,
   };
   request.metrics?.count("d1.query", { db: "directory", op: "repo_create" }, 6);
+  await publishHooks.before?.();
   const refused = heldBack(
     await env.DIRECTORY.batch([
       ...newRepoStatements(
@@ -235,6 +237,13 @@ export async function forkRepository(
     await advanceDeletion(env, forkId, request.metrics ? { metrics: request.metrics } : {}).catch(
       () => "deleting",
     );
+    if (refused === "owner_gone")
+      return {
+        ok: false,
+        status: 404,
+        code: "owner_not_found",
+        error: `No account ${request.ownerHandle} was found.`,
+      };
     if (refused === "agent_quota_exceeded") {
       const { message } = agentRepoQuotaError(request.createdBy?.maxRepos ?? 0);
       return { ok: false, status: 403, code: "quota_exceeded", error: message };

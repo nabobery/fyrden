@@ -26,6 +26,7 @@ describe("D1 directory schema", () => {
       "audit_segments",
       "dpop_proofs",
       "grants",
+      "handle_reservations",
       "idempotency_keys",
       "memberships",
       "oauth_clients",

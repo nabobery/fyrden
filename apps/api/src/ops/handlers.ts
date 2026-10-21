@@ -26,6 +26,7 @@ import {
   setTeamMembershipOperation,
   setTeamRepoOperation,
 } from "../accounts/grants.js";
+import { handleFree } from "../accounts/handles.js";
 import { suspendUserOperation, unsuspendUserOperation } from "../accounts/lifecycle.js";
 import { createOrgRepoOperation, listOrgReposOperation } from "../accounts/org-repos.js";
 import {
@@ -271,15 +272,26 @@ export const handlers: Handlers = {
     const id = newId("usr");
     const now = clock();
     metrics.count("d1.query", { db: "directory", op: "user_create" }, 2);
+    let created: D1Result | undefined;
     try {
-      // The user and its audit row are written together or not at all.
-      await db.batch([
+      // The user and its audit row are written together or not at all; never with a handle a
+      // deletion still holds.
+      [created] = await db.batch([
         db
-          .prepare("INSERT INTO principals (id, type, handle, created_at) VALUES (?, 'user', ?, ?)")
+          .prepare(
+            `INSERT INTO principals (id, type, handle, created_at)
+             SELECT ?1, 'user', ?2, ?3 WHERE ${handleFree("?2", "?3")}`,
+          )
           .bind(id, handle, now),
-        auditStatement(db, now, { actorId: auth.principalId, requestId }, "user.create", id, {
-          handle,
-        }),
+        auditStatement(
+          db,
+          now,
+          { actorId: auth.principalId, requestId },
+          "user.create",
+          id,
+          { handle },
+          "principals",
+        ),
       ]);
     } catch (error) {
       // Handles are unique ignoring case, across users, orgs and agents.
@@ -287,6 +299,8 @@ export const handlers: Handlers = {
         throw new OperationError(409, "handle_taken", `The handle ${handle} is already taken.`);
       throw error;
     }
+    if ((created?.meta.changes ?? 0) === 0)
+      throw new OperationError(409, "handle_taken", `The handle ${handle} is already taken.`);
     return { id, handle, type: "user" as const, created_at: now };
   },
 

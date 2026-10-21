@@ -17,6 +17,8 @@ import {
   type NewRepoRow,
   nameTakenError,
   newRepoStatements,
+  ownerGoneError,
+  publishHooks,
   repoQuotaError,
 } from "./directory.js";
 import { repoOutput } from "./output.js";
@@ -82,6 +84,7 @@ export async function createRepository(
   const db = env.DIRECTORY;
   metrics.count("d1.query", { db: "directory", op: "repo_create" }, 4);
   let refused: ReturnType<typeof heldBack>;
+  await publishHooks.before?.();
   try {
     refused = heldBack(
       await db.batch(
@@ -120,6 +123,7 @@ export async function createRepository(
   }
   // Lost a race with another create of the name or of the last repository the
   // quota allows; the new object stays unreachable and empty.
+  if (refused === "owner_gone") throw ownerGoneError(owner.handle);
   if (refused === "name_taken") throw nameTakenError(owner.handle, name);
   if (refused === "agent_quota_exceeded")
     throw agentRepoQuotaError(request.createdBy?.maxRepos ?? 0);

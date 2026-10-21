@@ -12,6 +12,7 @@ import {
   defaultBranchOf,
   findReposById,
   forgetResolved,
+  OWNER_REMAINS,
   type RepoEntry,
 } from "./directory.js";
 import { readModelDetails } from "./listing.js";
@@ -182,6 +183,12 @@ function failure(reason: string | null): OperationError {
         409,
         "transfer_in_progress",
         "The repository changed owner meanwhile.",
+      );
+    case "owner_deleted":
+      return new OperationError(
+        404,
+        "owner_not_found",
+        "The new account is being deleted; the repository stays where it was.",
       );
     default:
       return new OperationError(404, "repo_not_found", "The repository is gone.");
@@ -386,6 +393,9 @@ async function runStep(
   }
 }
 
+/** Hooks into a transfer's directory move. For tests. */
+export const transferHooks: { beforeMove?: () => Promise<void> } = {};
+
 /**
  * Moves the repository in the directory and advances the job in one
  * batch, while this runner holds the job at this step: its owner and name
@@ -400,6 +410,7 @@ async function moveInDirectory(
   lease: string,
   metrics: Metrics | undefined,
 ): Promise<"moved" | { cancelled: string }> {
+  await transferHooks.beforeMove?.();
   const db = env.DIRECTORY;
   // Last chance to call it off: the new account makes room for it (its storage, settled now
   // that it is frozen, and its collaborators), held for this transfer alone.
@@ -411,7 +422,8 @@ async function moveInDirectory(
   // ?7 the transfer, ?8 this runner's lease.
   const holds = `EXISTS (SELECT 1 FROM repo_transfers WHERE repo_id = ?1 AND transfer_id = ?7
       AND step = 'directory' AND lease_id = ?8)`;
-  const eligible = `id = ?1 AND owner_id = ?4 AND state = 'active' AND ${holds}
+  // Never to a user being deleted (a deletion that began after the transfer wins).
+  const eligible = `id = ?1 AND owner_id = ?4 AND state = 'active' AND ${holds} AND ${OWNER_REMAINS("?2")}
     AND NOT EXISTS (SELECT 1 FROM repos WHERE owner_id = ?2 AND name = ?3 COLLATE NOCASE
       AND state <> 'deleted' AND id <> ?1)
     AND (SELECT count(*) FROM repos WHERE owner_id = ?2 AND state <> 'deleted'
@@ -434,6 +446,7 @@ async function moveInDirectory(
       .prepare(
         `SELECT
            (SELECT state FROM repos WHERE id = ?1) AS state,
+           ${OWNER_REMAINS("?2")} AS owner,
            EXISTS (SELECT 1 FROM repos WHERE owner_id = ?2 AND name = ?3 COLLATE NOCASE
              AND state <> 'deleted' AND id <> ?1) AS taken`,
       )
@@ -476,8 +489,11 @@ async function moveInDirectory(
       .bind(...args),
   ]);
   if ((saved?.meta.changes ?? 0) > 0) return "moved";
-  const before = seen?.results[0] as { state: string | null; taken: number } | undefined;
+  const before = seen?.results[0] as
+    | { state: string | null; owner: number; taken: number }
+    | undefined;
   if (before?.state !== "active") return { cancelled: "repo_deleted" };
+  if (before.owner !== 1) return { cancelled: "owner_deleted" };
   return { cancelled: before.taken ? "name_taken" : "quota_exceeded" };
 }
 
