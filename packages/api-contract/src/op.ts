@@ -6,7 +6,7 @@ import {
   type PrincipalType,
   permissionDef,
 } from "@fyrden/domain";
-import type { z } from "zod";
+import { z } from "zod";
 
 export { AUTHENTICATED };
 
@@ -50,9 +50,10 @@ export interface OperationDef<
   idempotency: "none" | "key";
   /**
    * HTTP status of a successful response; 201 when the operation creates a
-   * resource, 202 where GitHub answers it.
+   * resource, 202 where GitHub answers it, 204 (with `NoContent` as the
+   * output) where GitHub answers nothing.
    */
-  successStatus?: 200 | 201 | 202;
+  successStatus?: 200 | 201 | 202 | 204;
   /** The response carries a secret, so idempotent replays omit it. */
   secretResponse?: boolean;
   /**
@@ -74,6 +75,17 @@ export interface OperationDef<
         idempotent?: boolean;
       };
 }
+
+/**
+ * The output of an operation that answers nothing (`successStatus: 204`):
+ * `null` to its handler, idempotency replays and the SDK; REST sends no
+ * body, MCP a short text.
+ */
+export const NoContent = z.null().describe("No content.");
+
+/** Whether `def` answers no content. */
+export const answersNothing = (def: Pick<OperationDef, "output">): boolean =>
+  def.output === NoContent;
 
 export type Input<D extends OperationDef> = z.infer<D["input"]>;
 export type Output<D extends OperationDef> = z.infer<D["output"]>;
@@ -118,6 +130,9 @@ function validate(def: OperationDef): void {
   if (def.method !== "GET" && def.idempotency !== "key")
     fail("non-GET operations require an Idempotency-Key");
   if (def.method === "GET" && def.successStatus === 201) fail("a GET operation cannot answer 201");
+  if ((def.successStatus === 204) !== answersNothing(def))
+    fail("an operation answers 204 exactly when its output is NoContent");
+  if (def.etag && answersNothing(def)) fail("an operation answering nothing has no ETag");
   if (def.etag && def.method !== "GET") fail("only a GET operation answers with an ETag");
   if (def.mcp && !TOOL.test(def.mcp.tool)) fail(`MCP tool name ${def.mcp.tool} is invalid`);
   if (def.mcp && def.mcp.readOnly !== (def.method === "GET"))

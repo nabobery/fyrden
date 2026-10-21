@@ -297,8 +297,9 @@ describe("diffSchema", () => {
   }
 
   const columns = "id, type, handle, display_name, owner_id, is_instance_admin, created_at";
+  // Its indexes and triggers, which dropping it drops.
   const indexes = directory
-    .filter((o) => o.type === "index" && o.sql.includes(" ON principals "))
+    .filter((o) => (o.type === "index" || o.type === "trigger") && / ON principals\b/.test(o.sql))
     .map((o) => o.sql);
 
   it("rebuilds a table other tables reference by the repair steps docs/operations/d1-schema.md gives", () => {

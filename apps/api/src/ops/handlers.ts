@@ -26,6 +26,7 @@ import {
   setTeamMembershipOperation,
   setTeamRepoOperation,
 } from "../accounts/grants.js";
+import { suspendUserOperation, unsuspendUserOperation } from "../accounts/lifecycle.js";
 import { createOrgRepoOperation, listOrgReposOperation } from "../accounts/org-repos.js";
 import {
   createOrgOperation,
@@ -287,6 +288,9 @@ export const handlers: Handlers = {
     }
     return { id, handle, type: "user" as const, created_at: now };
   },
+
+  "admin.users.suspend": suspendUserOperation,
+  "admin.users.unsuspend": unsuspendUserOperation,
 
   "admin.tokens.create": async (ctx, input) => {
     const { env, auth, requestId, metrics } = ctx;

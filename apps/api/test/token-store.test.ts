@@ -431,7 +431,7 @@ describe("D1TokenStore", () => {
   it("rejects tokens of a disabled principal", async () => {
     const { store } = setup();
     await env.DIRECTORY.prepare(
-      "INSERT INTO principals (id, type, handle, created_at, disabled_at) VALUES ('usr_gone', 'user', 'gone', 0, 1)",
+      "INSERT INTO principals (id, type, handle, created_at, disabled_at, lifecycle) VALUES ('usr_gone', 'user', 'gone', 0, 1, 'suspended')",
     ).run();
     const { token } = await store.mint({
       principalId: "usr_gone",

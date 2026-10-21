@@ -32503,6 +32503,126 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/users/{username}/suspended": {
+      "delete": {
+        "description": "Lifts a user's suspension: they can sign in again, and their tokens and their agents' work again (sessions and OAuth tokens revoked by the suspension stay revoked). Unsuspending a user who is not suspended changes nothing. Instance administrators only.",
+        "operationId": "admin.users.unsuspend",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "username",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "reason": {
+                    "maxLength": 200,
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Unsuspend a user",
+        "x-fyrden-permission": "instance:admin",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "put": {
+        "description": "Suspends a user, as GitHub Enterprise does: the user can no longer sign in, and none of their tokens, nor those of the agents they own, work while suspended; their sessions and OAuth tokens are revoked for good. Their repositories stay available to their collaborators. Suspending a suspended user changes nothing. Instance administrators only; not yourself, nor the last active administrator.",
+        "operationId": "admin.users.suspend",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "username",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "reason": {
+                    "maxLength": 200,
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Suspend a user",
+        "x-fyrden-permission": "instance:admin",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
   },
 }
 `;

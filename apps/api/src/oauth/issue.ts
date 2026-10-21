@@ -266,6 +266,7 @@ export async function codeGrant(c: OAuthContext, params: Map<string, string>): P
     },
     `EXISTS (SELECT 1 FROM oauth_requests WHERE used_by = ?10)`,
   );
+  await issueHooks.beforeClaim?.();
   const [claimed] = await db.batch([
     db
       .prepare(
@@ -288,6 +289,9 @@ export async function codeGrant(c: OAuthContext, params: Map<string, string>): P
   }
   return tokenResponse(c, issued);
 }
+
+/** Hooks into the code grant. For tests. */
+export const issueHooks: { beforeClaim?: () => Promise<void> } = {};
 
 /** `grant_type=refresh_token`. */
 export async function refreshGrant(

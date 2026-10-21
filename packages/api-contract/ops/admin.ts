@@ -5,7 +5,7 @@ import {
   PERMISSION_NAMES,
 } from "@fyrden/domain";
 import { z } from "zod";
-import { defineOperation, INSTANCE_ADMIN } from "../src/op.js";
+import { defineOperation, INSTANCE_ADMIN, NoContent } from "../src/op.js";
 
 /** A new user's, organization's or agent's handle: valid, and not one the web origin's paths take. */
 export const NewHandle = z
@@ -88,4 +88,59 @@ export const createToken = defineOperation({
   secretResponse: true,
   // Not an MCP tool: a minted credential would land in a model's context.
   mcp: false,
+});
+
+/** Why an administrator suspends or unsuspends a user: kept with the change, shown to administrators. */
+const Reason = z.string().max(200).optional();
+
+export const suspendUser = defineOperation({
+  id: "admin.users.suspend",
+  method: "PUT",
+  path: "/users/{username}/suspended",
+  summary: "Suspend a user",
+  description:
+    "Suspends a user, as GitHub Enterprise does: the user can no longer sign in, and none of their tokens, nor those of the agents they own, work while suspended; their sessions and OAuth tokens are revoked for good. Their repositories stay available to their collaborators. Suspending a suspended user changes nothing. Instance administrators only; not yourself, nor the last active administrator.",
+  input: z.object({
+    username: z.string().min(1).max(64),
+    reason: Reason,
+  }),
+  output: NoContent,
+  permission: INSTANCE_ADMIN,
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  successStatus: 204,
+  mcp: {
+    tool: "suspend_user",
+    title: "Suspend a user",
+    description:
+      "Suspend a user on this Fyrden instance: they cannot sign in and their tokens stop working until unsuspended. Requires an instance administrator.",
+    readOnly: false,
+  },
+});
+
+export const unsuspendUser = defineOperation({
+  id: "admin.users.unsuspend",
+  method: "DELETE",
+  path: "/users/{username}/suspended",
+  summary: "Unsuspend a user",
+  description:
+    "Lifts a user's suspension: they can sign in again, and their tokens and their agents' work again (sessions and OAuth tokens revoked by the suspension stay revoked). Unsuspending a user who is not suspended changes nothing. Instance administrators only.",
+  input: z.object({
+    username: z.string().min(1).max(64),
+    reason: Reason,
+  }),
+  output: NoContent,
+  permission: INSTANCE_ADMIN,
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  successStatus: 204,
+  mcp: {
+    tool: "unsuspend_user",
+    title: "Unsuspend a user",
+    description:
+      "Lift a user's suspension on this Fyrden instance. Requires an instance administrator.",
+    readOnly: false,
+  },
 });

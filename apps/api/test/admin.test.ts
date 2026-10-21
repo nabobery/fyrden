@@ -168,7 +168,9 @@ describe("admin.tokens.create", () => {
 
   it("refuses a disabled user", async () => {
     const userId = await newUser();
-    await env.DIRECTORY.prepare("UPDATE principals SET disabled_at = 1 WHERE id = ?")
+    await env.DIRECTORY.prepare(
+      "UPDATE principals SET disabled_at = 1, lifecycle = CASE WHEN type = 'user' THEN 'suspended' ELSE lifecycle END WHERE id = ?",
+    )
       .bind(userId)
       .run();
     const res = await call(`/admin/users/${userId}/tokens`, adminToken, {});

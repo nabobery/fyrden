@@ -234,6 +234,24 @@ export type AdminTokensCreateOutput = {
   expires_at: number;
 };
 
+/** Input of `admin.users.suspend`: Suspend a user. */
+export type AdminUsersSuspendInput = {
+  username: string;
+  reason?: string;
+};
+
+/** Output of `admin.users.suspend`. */
+export type AdminUsersSuspendOutput = null;
+
+/** Input of `admin.users.unsuspend`: Unsuspend a user. */
+export type AdminUsersUnsuspendInput = {
+  username: string;
+  reason?: string;
+};
+
+/** Output of `admin.users.unsuspend`. */
+export type AdminUsersUnsuspendOutput = null;
+
 /** Input of `agents.create`: Create an agent. */
 export type AgentsCreateInput = {
   /** 1-39 letters, digits and single inner hyphens; unique among all handles, ignoring case; not reserved. */
@@ -6346,6 +6364,8 @@ export const OPERATIONS = {
   "users.git_tokens.create": { method: "POST", path: "/user/git-tokens", pathParams: [], idempotent: true },
   "admin.users.create": { method: "POST", path: "/admin/users", pathParams: [], idempotent: true },
   "admin.tokens.create": { method: "POST", path: "/admin/users/{user_id}/tokens", pathParams: ["user_id"], idempotent: true },
+  "admin.users.suspend": { method: "PUT", path: "/users/{username}/suspended", pathParams: ["username"], idempotent: true },
+  "admin.users.unsuspend": { method: "DELETE", path: "/users/{username}/suspended", pathParams: ["username"], idempotent: true },
   "agents.create": { method: "POST", path: "/agents", pathParams: [], idempotent: true },
   "agents.list": { method: "GET", path: "/agents", pathParams: [], idempotent: false, items: "agents" },
   "agents.get": { method: "GET", path: "/agents/{agent}", pathParams: ["agent"], idempotent: false },
@@ -6525,6 +6545,10 @@ export interface Operations {
   "admin.users.create": { input: AdminUsersCreateInput; output: AdminUsersCreateOutput };
   /** Create a token for a user. Mints a personal access token (`pat`) or git token (`git`) for a user and returns it once. Instance administrators only. */
   "admin.tokens.create": { input: AdminTokensCreateInput; output: AdminTokensCreateOutput };
+  /** Suspend a user. Suspends a user, as GitHub Enterprise does: the user can no longer sign in, and none of their tokens, nor those of the agents they own, work while suspended; their sessions and OAuth tokens are revoked for good. Their repositories stay available to their collaborators. Suspending a suspended user changes nothing. Instance administrators only; not yourself, nor the last active administrator. */
+  "admin.users.suspend": { input: AdminUsersSuspendInput; output: AdminUsersSuspendOutput };
+  /** Unsuspend a user. Lifts a user's suspension: they can sign in again, and their tokens and their agents' work again (sessions and OAuth tokens revoked by the suspension stay revoked). Unsuspending a user who is not suspended changes nothing. Instance administrators only. */
+  "admin.users.unsuspend": { input: AdminUsersUnsuspendInput; output: AdminUsersUnsuspendOutput };
   /** Create an agent. Creates an agent principal owned by you, or by an organization you own (`org`). An agent acts with its own tokens and collaborator roles, or for a user under a delegation grant; either way it never exceeds its owner. */
   "agents.create": { input: AgentsCreateInput; output: AgentsCreateOutput };
   /** List agents. Your agents, or those of an organization you own (`org`), oldest first. */

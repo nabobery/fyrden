@@ -31,6 +31,7 @@ describe("D1 directory schema", () => {
       "oauth_clients",
       "oauth_requests",
       "passkeys",
+      "principal_lifecycle",
       "principals",
       "refresh_tokens",
       "repo_deletion_cleanups",

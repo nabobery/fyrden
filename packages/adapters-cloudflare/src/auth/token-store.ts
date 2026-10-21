@@ -23,6 +23,12 @@ export interface TokenRecord {
   principalType: PrincipalType;
   principalHandle: string | null;
   isInstanceAdmin: boolean;
+  /**
+   * The principal's lifecycle generation when the token was checked: what
+   * it issues (a session) is admitted only while it is still at it, so a
+   * suspension in between, even one lifted since, stops it.
+   */
+  lifecycleGen: number;
   scopes: string[];
   /** Repos the token is limited to; null means every repo the principal can reach. */
   repoIds: string[] | null;
@@ -164,6 +170,7 @@ interface TokenRow {
   principal_type: PrincipalType;
   handle: string | null;
   is_instance_admin: number;
+  lifecycle_gen: number;
   disabled_at: number | null;
   owner_id: string | null;
   owner_disabled_at: number | null;
@@ -234,6 +241,7 @@ function toRecord(
     principalHandle: row.handle,
     // Never delegated.
     isInstanceAdmin: !delegation && row.is_instance_admin === 1,
+    lifecycleGen: row.lifecycle_gen,
     ...restrictions,
     expiresAt: row.expires_at,
     lastUsedAt: row.last_used_at,
@@ -395,7 +403,7 @@ export class D1TokenStore {
     const row = await source
       .prepare(
         `SELECT t.id, t.type, t.principal_id, p.type AS principal_type, p.handle, p.is_instance_admin,
-                p.disabled_at, p.owner_id, o.disabled_at AS owner_disabled_at,
+                p.lifecycle_gen, p.disabled_at, p.owner_id, o.disabled_at AS owner_disabled_at,
                 o.require_dpop AS owner_require_dpop, t.scopes,
                 t.repo_ids, t.expires_at, t.last_used_at,
                 coalesce(t.revoked_at, s.revoked_at, f.revoked_at) AS revoked_at, t.grant_id,

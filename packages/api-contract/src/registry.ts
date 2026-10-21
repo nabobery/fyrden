@@ -9,7 +9,7 @@ import {
   setTeamMembership,
   setTeamRepo,
 } from "../ops/access.js";
-import { createToken, createUser } from "../ops/admin.js";
+import { createToken, createUser, suspendUser, unsuspendUser } from "../ops/admin.js";
 import {
   createAgent,
   createAgentToken,
@@ -181,6 +181,8 @@ export const registry = defineRegistry([
   createGitToken,
   createUser,
   createToken,
+  suspendUser,
+  unsuspendUser,
   createAgent,
   listAgents,
   getAgent,

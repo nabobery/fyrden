@@ -13,6 +13,8 @@ function fake(responses: { status?: number; body: unknown }[]) {
       ...(init?.body !== undefined && { body: String(init.body) }),
     });
     const next = responses.shift() ?? { body: {} };
+    // A 204 has no body.
+    if (next.status === 204) return new Response(null, { status: 204 });
     return new Response(JSON.stringify(next.body), { status: next.status ?? 200 });
   }) as unknown as typeof fetch;
   return { sent, fetchFn };
@@ -26,6 +28,16 @@ describe("FyrdenClient", () => {
     expect(
       () => new FyrdenClient({ baseUrl: `https://f.test/${"/".repeat(200_000)}x`, fetch: fetchFn }),
     ).not.toThrow();
+  });
+
+  it("gives null for an operation that answers nothing", async () => {
+    const { sent, fetchFn } = fake([{ status: 204, body: null }]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test/api", token: "t", fetch: fetchFn });
+    expect(await client.call("admin.users.suspend", { username: "someone" })).toBeNull();
+    expect(sent[0]).toMatchObject({
+      method: "PUT",
+      url: "https://f.test/api/users/someone/suspended",
+    });
   });
 
   it("sends path parameters in the path, the rest in the body, with a token and an idempotency key", async () => {

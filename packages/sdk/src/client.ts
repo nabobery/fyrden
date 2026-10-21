@@ -146,6 +146,8 @@ export class FyrdenClient {
         typeof problem.resync === "string" ? problem.resync : undefined,
       );
     }
+    // An operation that answers nothing (204) gives null, as its output type says.
+    if (response.status === 204) return null as unknown as OutputOf<K>;
     return (text ? JSON.parse(text) : {}) as OutputOf<K>;
   }
 

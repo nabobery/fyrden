@@ -1,12 +1,13 @@
 import { z } from "zod";
-import type { OperationDef, Registry } from "./op.js";
+import { answersNothing, type OperationDef, type Registry } from "./op.js";
 
 export interface McpToolDefinition {
   name: string;
   title: string;
   description: string;
   inputSchema: Record<string, unknown>;
-  outputSchema: Record<string, unknown>;
+  /** Absent for a tool that answers nothing (its result is a short text). */
+  outputSchema?: Record<string, unknown>;
   annotations: McpAnnotations;
   /** The registry operation that serves this tool. */
   operationId: string;
@@ -53,7 +54,7 @@ export function mcpTools(registry: Registry): McpToolDefinition[] {
       title: op.mcp.title,
       description: op.mcp.description,
       inputSchema: jsonSchema(op.input, "input"),
-      outputSchema: jsonSchema(op.output, "output"),
+      ...(!answersNothing(op) && { outputSchema: jsonSchema(op.output, "output") }),
       annotations: mcpAnnotations(op),
       operationId: op.id,
     }));
