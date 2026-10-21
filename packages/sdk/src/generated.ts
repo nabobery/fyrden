@@ -5867,6 +5867,17 @@ export type OrgsMembershipsRemoveOutput = {
   state: "removed";
 };
 
+/** Input of `admin.orgs.owners.add`: Make a user an organization's owner. */
+export type AdminOrgsOwnersAddInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The user's handle. */
+  username: string;
+};
+
+/** Output of `admin.orgs.owners.add`. */
+export type AdminOrgsOwnersAddOutput = null;
+
 /** Input of `orgs.members.list`: List an organization's members. */
 export type OrgsMembersListInput = {
   /** The organization's handle. */
@@ -6499,6 +6510,7 @@ export const OPERATIONS = {
   "repos.file_commits.create": { method: "POST", path: "/repos/{owner}/{repo}/file-commits", pathParams: ["owner","repo"], idempotent: true },
   "orgs.memberships.set": { method: "PUT", path: "/orgs/{org}/memberships/{username}", pathParams: ["org","username"], idempotent: true },
   "orgs.memberships.remove": { method: "DELETE", path: "/orgs/{org}/memberships/{username}", pathParams: ["org","username"], idempotent: true },
+  "admin.orgs.owners.add": { method: "PUT", path: "/admin/organizations/{org}/owners/{username}", pathParams: ["org","username"], idempotent: true },
   "orgs.members.list": { method: "GET", path: "/orgs/{org}/members", pathParams: ["org"], idempotent: false, items: "members" },
   "orgs.repos.create": { method: "POST", path: "/orgs/{org}/repos", pathParams: ["org"], idempotent: true },
   "orgs.repos.list": { method: "GET", path: "/orgs/{org}/repos", pathParams: ["org"], idempotent: false, items: "repos" },
@@ -6815,6 +6827,8 @@ export interface Operations {
   "orgs.memberships.set": { input: OrgsMembershipsSetInput; output: OrgsMembershipsSetOutput };
   /** Remove a member. Removes a user from an organization and its teams; collaborator roles on its repositories stay. Repositories told of the change stop counting the membership at once; every repository stops within 60 seconds for writes and 5 minutes for reads. The last owner cannot be removed. Owners only. */
   "orgs.memberships.remove": { input: OrgsMembershipsRemoveInput; output: OrgsMembershipsRemoveOutput };
+  /** Make a user an organization's owner. Makes a user an owner of an organization, a member or not, as GitHub Enterprise's `ghe-org-admin-promote` does: for an organization whose owners can no longer act (one being deleted, as the deletion waits for another owner). Making an owner an owner changes nothing. Instance administrators only; the user must not be suspended or being deleted. */
+  "admin.orgs.owners.add": { input: AdminOrgsOwnersAddInput; output: AdminOrgsOwnersAddOutput };
   /** List an organization's members. Lists an organization's members by handle, ignoring case. Members only. */
   "orgs.members.list": { input: OrgsMembersListInput; output: OrgsMembersListOutput };
   /** Create an organization repository. Creates an empty private repository owned by an organization. Members may create them; owners administer every repository of the organization, and members can read them. */

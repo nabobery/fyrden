@@ -281,6 +281,64 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/admin/organizations/{org}/owners/{username}": {
+      "put": {
+        "description": "Makes a user an owner of an organization, a member or not, as GitHub Enterprise's \`ghe-org-admin-promote\` does: for an organization whose owners can no longer act (one being deleted, as the deletion waits for another owner). Making an owner an owner changes nothing. Instance administrators only; the user must not be suspended or being deleted.",
+        "operationId": "admin.orgs.owners.add",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "username",
+            "required": true,
+            "schema": {
+              "description": "The user's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Make a user an organization's owner",
+        "x-fyrden-permission": "instance:admin",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/admin/users": {
       "post": {
         "description": "Creates a user account. Instance administrators only.",

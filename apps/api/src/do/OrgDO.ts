@@ -497,6 +497,35 @@ export class OrgDO extends MigratingDO {
   }
 
   /**
+   * Makes `member` an owner, for an instance administrator (`actor`, who
+   * the Worker checked is one): an organization's owners need not agree,
+   * as when they can no longer act. Already an owner, it bumps nothing.
+   */
+  async handOwnership(
+    actor: ChangeActor,
+    member: { readonly id: string; readonly handle: string },
+  ): Promise<AclChange> {
+    return this.#change(
+      actor,
+      { instanceAdmin: true },
+      (meta) => {
+        const current = this.accountRole(member.id);
+        if (current === "owner") return this.#unchanged(meta);
+        this.ctx.storage.sql.exec(
+          `INSERT INTO members (principal_id, handle, role, added_at) VALUES (?, ?, 'owner', ?)
+           ON CONFLICT (principal_id) DO UPDATE SET role = excluded.role, handle = excluded.handle`,
+          member.id,
+          member.handle,
+          this.#now(),
+        );
+        if (current === null) this.#keepWithinLimit(meta);
+        return this.#changed(actor, "org.owner_handoff", { user: member.id });
+      },
+      [member.id],
+    );
+  }
+
+  /**
    * Removes a member, if `actor` is an owner now; the last owner cannot
    * leave. Gone already, it bumps nothing. `held`: the repositories the
    * account holds, as the caller read them from the directory just before
@@ -1315,7 +1344,11 @@ export class OrgDO extends MigratingDO {
    */
   async #change(
     actor: ChangeActor,
-    needs: { readonly owner: true } | { readonly repoAdmin: string },
+    needs:
+      | { readonly owner: true }
+      | { readonly repoAdmin: string }
+      /** An instance administrator's change of an organization (the Worker checked the role). */
+      | { readonly instanceAdmin: true },
     apply: (meta: Meta) => AclChange,
     /** The principals the change gives access: none being deleted (see `#gone`). */
     incoming: readonly string[] = [],
@@ -1329,6 +1362,8 @@ export class OrgDO extends MigratingDO {
         if ("owner" in needs) {
           const refused = this.#refuse(actor);
           if (refused) return refused;
+        } else if ("instanceAdmin" in needs) {
+          if (meta?.kind !== "org") return NOT_AN_ORG;
         } else {
           if (!meta) return NOT_RECORDED;
           if (!atLeast(this.#roleOn(needs.repoAdmin, actor.principalId, meta), "admin"))

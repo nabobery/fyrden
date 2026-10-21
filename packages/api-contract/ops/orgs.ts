@@ -1,6 +1,6 @@
 import { HANDLE_SHAPE, MAX_HANDLE_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
-import { defineOperation, INSTANCE_ADMIN } from "../src/op.js";
+import { defineOperation, INSTANCE_ADMIN, NoContent } from "../src/op.js";
 import { NewHandle } from "./admin.js";
 
 const Handle = z
@@ -112,6 +112,29 @@ export const setMembership = defineOperation({
     tool: "set_org_membership",
     title: "Add an organization member",
     description: "Add a user to an organization, or change the user's role there.",
+    readOnly: false,
+  },
+});
+
+export const addOrgOwner = defineOperation({
+  id: "admin.orgs.owners.add",
+  method: "PUT",
+  path: "/admin/organizations/{org}/owners/{username}",
+  summary: "Make a user an organization's owner",
+  description:
+    "Makes a user an owner of an organization, a member or not, as GitHub Enterprise's `ghe-org-admin-promote` does: for an organization whose owners can no longer act (one being deleted, as the deletion waits for another owner). Making an owner an owner changes nothing. Instance administrators only; the user must not be suspended or being deleted.",
+  input: z.object({ org: OrgParam, username: UserParam }),
+  output: NoContent,
+  permission: INSTANCE_ADMIN,
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  successStatus: 204,
+  mcp: {
+    tool: "add_org_owner",
+    title: "Make a user an organization's owner",
+    description:
+      "Make a user an owner of an organization on this Fyrden instance, whether or not they belong to it. Requires an instance administrator.",
     readOnly: false,
   },
 });
