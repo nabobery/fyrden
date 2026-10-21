@@ -116,10 +116,7 @@ export async function deliverEffects(
     // As many as the calls left allow, in the message's order; the others go back.
     let taken = 0;
     for (const row of claimed.rows) {
-      const cost = effectCalls(sink, {
-        target: row.target,
-        payload: JSON.parse(row.payload) as Record<string, unknown>,
-      });
+      const cost = effectCalls(sink, { target: row.target, payload: payloadOf(row) });
       if (cost > budget.calls && (!first || taken > 0)) break;
       budget.calls -= cost;
       budget.effects--;
@@ -281,12 +278,24 @@ async function release(
     .run();
 }
 
+/** Payloads parsed, by their row: parsed once for the budget and kept for the delivery. */
+const parsed = new WeakMap<Row, Record<string, unknown>>();
+
+function payloadOf(row: Row): Record<string, unknown> {
+  let payload = parsed.get(row);
+  if (!payload) {
+    payload = JSON.parse(row.payload) as Record<string, unknown>;
+    parsed.set(row, payload);
+  }
+  return payload;
+}
+
 function effectOf(row: Row): Effect {
   return {
     id: row.effect_id,
     sink: row.sink,
     target: row.target,
-    payload: JSON.parse(row.payload) as Record<string, unknown>,
+    payload: payloadOf(row),
     attempts: row.attempts,
   };
 }

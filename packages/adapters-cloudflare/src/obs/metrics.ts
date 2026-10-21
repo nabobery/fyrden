@@ -81,6 +81,10 @@ export const METRICS = {
   "effects.recovered": ["sink"],
   "effects.invalidated": ["sink"],
   "effects.failed": ["sink"],
+  // Wall time of one stage of making webhook deliveries, in ms: an event's
+  // rows, body, claim and hooks once per event; post and record once per
+  // attempt the event's effect makes. The clock advances only on I/O.
+  "webhooks.stage_ms": ["stage"],
   // Calls one invocation made against one subrequest budget, written once
   // when it ends: where = worker | do; budget = internal (R2, D1, Durable
   // Object calls) | external (outbound fetch and Cache API); op = the route
@@ -113,6 +117,7 @@ export const METRIC_AGGREGATION: Partial<Record<MetricName, MetricAggregation>> 
   "git.repo.bytes": "last",
   subrequests: "each",
   "do.active_ms": "each",
+  "webhooks.stage_ms": "each",
   "acl.snapshot_age_ms": "each",
   "worker.cpu_ms": "each",
   "worker.wall_ms": "each",

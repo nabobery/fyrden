@@ -1,7 +1,15 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { type DomainEvent, eventKey } from "@fyrden/domain";
 import type { Effect, EffectSink, PlannedEffect } from "../effects/journal.js";
-import { ATTEMPT_POLICY, attemptDelivery, type DeliveryDeps } from "./deliver.js";
+import {
+  ATTEMPT_POLICY,
+  attemptClaimed,
+  type Claimed,
+  claimStatement,
+  type DeliveryDeps,
+  type Prepared,
+  Stages,
+} from "./deliver.js";
 import { entityBody, webhookEventOf } from "./events.js";
 
 /*
@@ -135,15 +143,19 @@ export async function bodyKeyOf(repoId: string, eventKeyText: string): Promise<s
  */
 export const FIRST_ATTEMPTS = 2;
 
-/** Calls making an event's deliveries costs besides their first attempts (counted from the code). */
-const MATERIALIZE_CALLS = 8;
 /**
- * Calls one first attempt costs at most: its claim, the hook's
- * configuration, the body, its record, a retry's message, turning off a
- * hook whose receiver answered 410 (three), or else, when it could not be
- * made, reading its row and queuing it instead (three).
+ * Calls making an event's deliveries costs besides their first attempts
+ * (counted from the code): the rows, the body, the claims, the others'
+ * messages and their mark, the hooks (or the body's deletion instead).
  */
-const ATTEMPT_CALLS = 8;
+const MATERIALIZE_CALLS = 7;
+/**
+ * Calls one first attempt costs at most (its claim, body and hook are the
+ * event's): its record, then a retry's message or turning off a hook whose
+ * receiver answered 410 (three), and, should any of that fail, reading its
+ * row and queuing it instead (three).
+ */
+const ATTEMPT_CALLS = 7;
 
 export interface WebhookSinkOptions {
   /** First attempts made per event (`FIRST_ATTEMPTS`). */
@@ -214,6 +226,13 @@ function planDeliveries(event: DomainEvent): readonly PlannedEffect[] {
  * other one's first attempt. Done again, it finds the rows, stores the
  * body again (the same bytes) while any waits, and attempts or sends only
  * those whose first attempt was neither made nor sent.
+ *
+ * In this order, each step a round trip: the rows and which wait (one
+ * batch); the body; the tombstone and the first attempts' claims (one
+ * batch, each claim also refused once the tombstone is in); the others'
+ * messages; the claimed attempts' hooks (one call to the repository
+ * object, after their claims: a hook deleted before then cancelled their
+ * rows); then the attempts side by side, from the body and hooks held.
  */
 async function materialize(
   env: Env,
@@ -226,6 +245,39 @@ async function materialize(
   },
 ): Promise<void> {
   const { metrics } = options;
+  const stages = new Stages(metrics);
+  const started = Date.now();
+  let outcome = "done";
+  try {
+    outcome = await makeDeliveries(env, db, planned, options, stages);
+  } catch (error) {
+    outcome = "error";
+    throw error;
+  } finally {
+    createLogger({ op: "webhooks.materialize" }).info("an event's deliveries", {
+      repo: planned.repoId,
+      event: planned.eventKey,
+      hooks: planned.hooks.length,
+      outcome,
+      elapsedMs: Date.now() - started,
+      stagesMs: stages.ms,
+    });
+  }
+}
+
+/** `materialize`'s steps; what they came to (`done`, `none_waiting`, `deleted`). */
+async function makeDeliveries(
+  env: Env,
+  db: D1Database,
+  planned: PlannedDeliveries,
+  options: {
+    readonly firstAttempts: number;
+    readonly metrics?: Metrics;
+    readonly resolver?: DeliveryDeps["resolver"];
+  },
+  stages: Stages,
+): Promise<string> {
+  const { metrics } = options;
   const bytes = new TextEncoder().encode(JSON.stringify(planned.body));
   const payloadKey = await bodyKeyOf(planned.repoId, planned.eventKey);
   const now = Date.now();
@@ -236,87 +288,140 @@ async function materialize(
     })),
   );
   const dropped = typeof planned.body.dropped === "string" ? planned.body.dropped : null;
-  // One row per hook: each admitted against its own hook's count of waiting deliveries.
-  metrics?.count("d1.query", { db: "org", op: "webhooks_materialize" });
-  await db
-    .prepare(
-      `INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, action, private,
-         payload_key, state, reason, attempts, next_attempt_at, created_at, updated_at, expires_at)
-       SELECT r.value ->> 'id', ?1, r.value ->> 'hook', ?2, ?3, ?4, ?5,
-         CASE WHEN ?6 IS NOT NULL OR (SELECT count(*) FROM webhook_deliveries
-                          WHERE repo_id = ?1 AND hook_id = r.value ->> 'hook' AND state = 'pending') >= ?7
-              THEN 'dropped' ELSE 'pending' END,
-         CASE WHEN ?6 IS NOT NULL THEN ?6
-              WHEN (SELECT count(*) FROM webhook_deliveries
-                    WHERE repo_id = ?1 AND hook_id = r.value ->> 'hook' AND state = 'pending') >= ?7
-              THEN 'too_many_outstanding' ELSE NULL END,
-         0, ?8, ?8, ?8, ?9
-       FROM json_each(?10) r
-       -- None of a deleted repository once its tombstone is in: its cleanups may have run.
-       WHERE NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = ?1 AND deleted = 1)
-       ON CONFLICT (delivery_id) DO NOTHING`,
-    )
-    .bind(
-      planned.repoId,
-      planned.event,
-      planned.action,
-      planned.private ? 1 : 0,
-      payloadKey,
-      dropped,
-      DELIVERY_POLICY.maxOutstanding,
-      now,
-      now + DELIVERY_POLICY.retentionMs,
-      JSON.stringify(rows),
-    )
-    .run();
-  metrics?.count("d1.query", { db: "org", op: "webhooks_pending" });
-  const { results: waiting } = await db
-    .prepare(
-      `SELECT delivery_id, enqueued_at FROM webhook_deliveries
-       WHERE delivery_id IN (SELECT value ->> 'id' FROM json_each(?)) AND state = 'pending'`,
-    )
-    .bind(JSON.stringify(rows))
-    .all<{ delivery_id: string; enqueued_at: number | null }>();
-  if (waiting.length === 0) return;
+  // One row per hook, each admitted against its own hook's count of waiting deliveries; then
+  // those waiting (in the same batch, so they see the rows it admitted).
+  metrics?.count("d1.query", { db: "org", op: "webhooks_materialize" }, 2);
+  const [, pending] = await stages.time("rows", () =>
+    db.batch([
+      db
+        .prepare(
+          `INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, action, private,
+             payload_key, state, reason, attempts, next_attempt_at, created_at, updated_at,
+             expires_at)
+           SELECT r.value ->> 'id', ?1, r.value ->> 'hook', ?2, ?3, ?4, ?5,
+             CASE WHEN ?6 IS NOT NULL OR (SELECT count(*) FROM webhook_deliveries
+                              WHERE repo_id = ?1 AND hook_id = r.value ->> 'hook' AND state = 'pending') >= ?7
+                  THEN 'dropped' ELSE 'pending' END,
+             CASE WHEN ?6 IS NOT NULL THEN ?6
+                  WHEN (SELECT count(*) FROM webhook_deliveries
+                        WHERE repo_id = ?1 AND hook_id = r.value ->> 'hook' AND state = 'pending') >= ?7
+                  THEN 'too_many_outstanding' ELSE NULL END,
+             0, ?8, ?8, ?8, ?9
+           FROM json_each(?10) r
+           -- None of a deleted repository once its tombstone is in: its cleanups may have run.
+           WHERE NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = ?1 AND deleted = 1)
+           ON CONFLICT (delivery_id) DO NOTHING`,
+        )
+        .bind(
+          planned.repoId,
+          planned.event,
+          planned.action,
+          planned.private ? 1 : 0,
+          payloadKey,
+          dropped,
+          DELIVERY_POLICY.maxOutstanding,
+          now,
+          now + DELIVERY_POLICY.retentionMs,
+          JSON.stringify(rows),
+        ),
+      db
+        .prepare(
+          // In the event's hook order: the first attempts are its first hooks' still waiting.
+          `SELECT w.delivery_id, w.enqueued_at FROM json_each(?) r
+           JOIN webhook_deliveries w ON w.delivery_id = r.value ->> 'id'
+           WHERE w.state = 'pending' ORDER BY r.key`,
+        )
+        .bind(JSON.stringify(rows)),
+    ]),
+  );
+  const waiting = (pending?.results ?? []) as { delivery_id: string; enqueued_at: number | null }[];
+  if (waiting.length === 0) return "none_waiting";
   // The body whenever one may still be waiting for it (stored again, it is the same bytes).
   metrics?.count("r2.class_a", { bucket: "fyrden-assets", op: "webhook_body_put" });
-  await env.ASSETS.put(payloadKey, bytes, { httpMetadata: { contentType: "application/json" } });
-  // The repository's deletion may have listed its bodies before this one was stored: its
-  // tombstone comes before that, so either the cleanup saw the body or this sees the tombstone.
-  metrics?.count("d1.query", { db: "org", op: "webhooks_tombstone" });
-  const deleted = await db
-    .prepare("SELECT 1 AS deleted FROM repos WHERE repo_id = ? AND deleted = 1")
-    .bind(planned.repoId)
-    .first();
-  if (deleted) {
-    metrics?.count("r2.class_a", { bucket: "fyrden-assets", op: "webhook_body_delete" });
-    await env.ASSETS.delete(payloadKey);
-    return;
-  }
+  await stages.time("body", () =>
+    env.ASSETS.put(payloadKey, bytes, { httpMetadata: { contentType: "application/json" } }),
+  );
   const unsent = waiting.filter((r) => r.enqueued_at === null).map((r) => r.delivery_id);
-  // The others' messages first: an attempt can take its receiver's whole deadline.
   const own = unsent.slice(0, options.firstAttempts);
-  await enqueue(env, db, unsent.slice(own.length), metrics);
-  const deps: DeliveryDeps = {
+  const attemptDeps: DeliveryDeps = {
     env,
     db,
     now: () => Date.now(),
+    stages,
     ...(metrics && { metrics }),
     ...(options.resolver && { resolver: options.resolver }),
   };
-  for (const delivery of own) {
-    try {
-      // Claimed by its row, as a queued attempt is: made once, whoever else tries.
-      await attemptDelivery(deps, delivery);
-    } catch (error) {
-      // Not made, or not recorded: queued instead.
-      createLogger({ op: "webhooks.deliver" }).warn("a first attempt failed to run; queued", {
-        delivery,
-        error,
-      });
-      await enqueueWhenClaimable(env, db, delivery, metrics);
-    }
+  const policy = ATTEMPT_POLICY;
+  const tokens = own.map(() => crypto.randomUUID());
+  // The repository's deletion may have listed its bodies before this one was stored: its
+  // tombstone comes before that, so either the cleanup saw the body or this sees the
+  // tombstone. Read after the body is stored, with the first attempts' claims, which the
+  // tombstone refuses as well.
+  metrics?.count("d1.query", { db: "org", op: "webhooks_claim" }, 1 + own.length);
+  const claimedAt = Date.now();
+  const [tombstone, ...claims] = await stages.time("claim", () =>
+    db.batch([
+      db
+        .prepare("SELECT 1 AS deleted FROM repos WHERE repo_id = ? AND deleted = 1")
+        .bind(planned.repoId),
+      ...own.map((delivery, i) =>
+        claimStatement(db, delivery, tokens[i] as string, claimedAt, policy),
+      ),
+    ]),
+  );
+  if ((tombstone?.results.length ?? 0) > 0) {
+    metrics?.count("r2.class_a", { bucket: "fyrden-assets", op: "webhook_body_delete" });
+    await env.ASSETS.delete(payloadKey);
+    return "deleted";
   }
+  // The others' messages first: an attempt can take its receiver's whole deadline. Should
+  // they fail, the claimed attempts are still made (or queued), and then the failure told.
+  const failures: unknown[] = [];
+  await enqueue(env, db, unsent.slice(own.length), metrics).catch((error) => failures.push(error));
+  const claimed = claims.flatMap((result, i) => {
+    const row = result.results[0] as Claimed | undefined;
+    return row ? [{ row, token: tokens[i] as string }] : [];
+  });
+  if (claimed.length === 0) {
+    if (failures.length > 0) throw failures[0];
+    return "done";
+  }
+  // Their hooks now, after their claims, in one call.
+  metrics?.count("do.request", { class: "RepoDO", method: "hooksForDelivery" });
+  let hooks: Prepared["hook"][];
+  try {
+    hooks = await stages.time(
+      "hooks",
+      async (): Promise<Prepared["hook"][]> =>
+        await env.REPO.getByName(planned.repoId).hooksForDelivery(
+          claimed.map((c) => c.row.hook_id),
+        ),
+    );
+  } catch (error) {
+    // Each attempt is then tried again later, as when its own lookup fails.
+    hooks = claimed.map(() => ({ kind: "unavailable" as const, error }));
+  }
+  // Side by side, each with its own fallback; every one seen through before any failure is told.
+  const results = await Promise.allSettled(
+    claimed.map(async ({ row, token }, i) => {
+      try {
+        await attemptClaimed(attemptDeps, row, token, {
+          body: bytes,
+          hook: hooks[i] ?? { kind: "unavailable", error: new Error("no hook looked up") },
+        });
+      } catch (error) {
+        // Not made, or not recorded: queued instead.
+        createLogger({ op: "webhooks.deliver" }).warn("a first attempt failed to run; queued", {
+          delivery: row.delivery_id,
+          error,
+        });
+        await enqueueWhenClaimable(env, db, row.delivery_id, metrics);
+      }
+    }),
+  );
+  for (const result of results) if (result.status === "rejected") failures.push(result.reason);
+  if (failures.length > 0) throw failures[0];
+  return "done";
 }
 
 /**

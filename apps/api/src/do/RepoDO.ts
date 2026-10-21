@@ -969,6 +969,18 @@ export class RepoDO extends MigratingDO {
     });
   }
 
+  /** `hookForDelivery` for several hooks in one call (an event's first attempts), in `ids`' order. */
+  hooksForDelivery(ids: readonly number[]): Promise<HookForDelivery[]> {
+    if (this.#refusesReads()) return Promise.resolve(ids.map(() => ({ kind: "gone" as const })));
+    return this.#measured("hooksForDelivery", async () => {
+      if (this.#refusesReads()) return ids.map(() => ({ kind: "gone" as const }));
+      const repoPrivate = this.events.visibility() !== "public";
+      const hooks: HookForDelivery[] = [];
+      for (const id of ids) hooks.push(await this.hooks.forDelivery(id, repoPrivate));
+      return hooks;
+    });
+  }
+
   /** Turns the hook off after its receiver answered 410 Gone (unless it changed since). */
   disableHook(id: number, configVersion: number, reason: string): boolean {
     // Erased: no hook left to turn off.

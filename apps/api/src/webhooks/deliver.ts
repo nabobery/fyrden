@@ -5,6 +5,7 @@ import {
   type SsrfPolicy,
 } from "@fyrden/adapters-cloudflare/net";
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
+import type { HookForDelivery } from "../do/repo/hooks.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { ownHostsOf } from "../git/import/network.js";
 import { signature } from "./secrets.js";
@@ -16,7 +17,9 @@ import type { DeliveryMessage } from "./sink.js";
  * consumer claims the delivery (a lease and a token), reads the hook's
  * current configuration and secrets from the repository object, signs the
  * stored body (Standard Webhooks) and posts it through the SSRF guard,
- * then records the attempt and the outcome under its claim. The deliveries
+ * then records the attempt and the outcome under its claim. The sink's
+ * first attempts are claimed together, their hooks read together after
+ * their claims, and post the body the sink holds (`attemptClaimed`). The deliveries
  * table decides when an attempt is due; a retry is a new message sent with
  * a delay, and the cron sends one again for a due delivery whose message
  * was lost (or whose wait was longer than a queue delay may be).
@@ -81,7 +84,7 @@ const attemptCap = (maxAttempts: string, maxTotal: string) =>
 const capOf = (attemptLimit: number | null, policy: AttemptPolicy) =>
   Math.min(attemptLimit ?? policy.maxAttempts, policy.maxTotalAttempts);
 
-type Claimed = {
+export type Claimed = {
   delivery_id: string;
   repo_id: string;
   hook_id: number;
@@ -110,6 +113,8 @@ export interface DeliveryDeps {
   readonly now: () => number;
   readonly policy?: AttemptPolicy;
   readonly metrics?: Metrics;
+  /** Where the stages' times go (a new one per attempt when not given). */
+  readonly stages?: Stages;
   /** The SSRF policy's resolver (tests replace it). */
   readonly resolver?: (signal: AbortSignal) => SsrfPolicy["resolve"];
 }
@@ -140,13 +145,46 @@ export async function consumeWebhooks(
   }
 }
 
-/** Makes the delivery's next attempt, if it is due and no one else is making it. */
-export async function attemptDelivery(deps: DeliveryDeps, deliveryId: string): Promise<void> {
-  const policy = deps.policy ?? ATTEMPT_POLICY;
-  const { db } = deps;
-  const now = deps.now();
-  const token = crypto.randomUUID();
-  const claimed = await db
+/**
+ * The times of the stages of making deliveries (`webhooks.stage_ms`, one
+ * point each), kept too for the log line of an event's effect. Stages run
+ * side by side overlap: their times do not add up to the time taken.
+ */
+export class Stages {
+  readonly ms: Record<string, number[]> = {};
+
+  constructor(private readonly metrics?: Metrics) {}
+
+  async time<T>(stage: string, run: () => Promise<T>): Promise<T> {
+    const started = Date.now();
+    try {
+      return await run();
+    } finally {
+      this.add(stage, Date.now() - started);
+    }
+  }
+
+  add(stage: string, ms: number): void {
+    const times = this.ms[stage] ?? [];
+    times.push(ms);
+    this.ms[stage] = times;
+    this.metrics?.count("webhooks.stage_ms", { stage }, ms);
+  }
+}
+
+/**
+ * The statement claiming the delivery's next attempt under `token`: one
+ * row, if it is due, no one else holds it, its attempts are not spent and
+ * its repository's tombstone is not in (a deletion's cleanups may have run).
+ */
+export function claimStatement(
+  db: D1Database,
+  deliveryId: string,
+  token: string,
+  now: number,
+  policy: AttemptPolicy,
+): D1PreparedStatement {
+  return db
     .prepare(
       // The attempt's number is taken with the claim: a claim that dies uses it up, so the
       // attempts stay bounded however many runs crash.
@@ -154,20 +192,61 @@ export async function attemptDelivery(deps: DeliveryDeps, deliveryId: string): P
          attempts = attempts + 1
        WHERE delivery_id = ?4 AND state = 'pending' AND next_attempt_at <= ?3
          AND (lease_until IS NULL OR lease_until <= ?3) AND attempts < ${attemptCap("?5", "?6")}
+         AND NOT EXISTS (SELECT 1 FROM repos
+                         WHERE repos.repo_id = webhook_deliveries.repo_id AND repos.deleted = 1)
        RETURNING delivery_id, repo_id, hook_id, event, private, payload_key, attempts,
          attempt_limit, created_at`,
     )
-    .bind(token, now + policy.leaseMs, now, deliveryId, policy.maxAttempts, policy.maxTotalAttempts)
-    .first<Claimed>();
+    .bind(
+      token,
+      now + policy.leaseMs,
+      now,
+      deliveryId,
+      policy.maxAttempts,
+      policy.maxTotalAttempts,
+    );
+}
+
+/** Makes the delivery's next attempt, if it is due and no one else is making it. */
+export async function attemptDelivery(deps: DeliveryDeps, deliveryId: string): Promise<void> {
+  const policy = deps.policy ?? ATTEMPT_POLICY;
+  const token = crypto.randomUUID();
+  const stages = deps.stages ?? new Stages(deps.metrics);
+  const claimed = await stages.time("claim", () =>
+    claimStatement(deps.db, deliveryId, token, deps.now(), policy).first<Claimed>(),
+  );
   if (!claimed) return;
-  const outcome = await attempt(deps, claimed, policy);
-  await record(deps, claimed, token, outcome, policy);
+  await attemptClaimed({ ...deps, stages }, claimed, token);
+}
+
+/**
+ * What a first attempt holds already: the body its event's effect stored,
+ * and its hook, looked up after its claim (or why it could not be).
+ */
+export interface Prepared {
+  readonly body: Uint8Array;
+  readonly hook: HookForDelivery | { readonly kind: "unavailable"; readonly error: unknown };
+}
+
+/** Makes the attempt `token` claimed, and records it; from what it holds when `prepared`. */
+export async function attemptClaimed(
+  deps: DeliveryDeps,
+  claimed: Claimed,
+  token: string,
+  prepared?: Prepared,
+): Promise<void> {
+  const policy = deps.policy ?? ATTEMPT_POLICY;
+  const stages = deps.stages ?? new Stages(deps.metrics);
+  const outcome = await attempt(deps, claimed, policy, stages, prepared);
+  await stages.time("record", () => record(deps, claimed, token, outcome, policy));
 }
 
 async function attempt(
   deps: DeliveryDeps,
   delivery: Claimed,
   policy: AttemptPolicy,
+  stages: Stages,
+  prepared?: Prepared,
 ): Promise<
   Outcome & {
     readonly configVersion?: number;
@@ -178,9 +257,16 @@ async function attempt(
   }
 > {
   const { env } = deps;
-  let hook: Awaited<ReturnType<ReturnType<Env["REPO"]["getByName"]>["hookForDelivery"]>>;
+  let hook: HookForDelivery;
   try {
-    hook = await env.REPO.getByName(delivery.repo_id).hookForDelivery(delivery.hook_id);
+    if (prepared?.hook.kind === "unavailable") throw prepared.hook.error;
+    hook =
+      prepared?.hook ??
+      (await stages.time(
+        "hook",
+        async (): Promise<HookForDelivery> =>
+          await env.REPO.getByName(delivery.repo_id).hookForDelivery(delivery.hook_id),
+      ));
   } catch (error) {
     // The repository object could not answer now: tried again later (the claim spent an attempt).
     return { kind: "retry", status: null, afterMs: policy.backoffMs, error: errorText(error) };
@@ -193,13 +279,16 @@ async function attempt(
   // Private when the event happened, or now: https only.
   if ((delivery.private === 1 || hook.private) && !isHttps(hook.url))
     return { kind: "failed", status: null, reason: "insecure_url", ...at };
-  const object = await env.ASSETS.get(delivery.payload_key);
-  if (!object) {
-    if (deps.now() - delivery.created_at > policy.bodyWaitMs)
-      return { kind: "failed", status: null, reason: "payload_missing", ...at };
-    return { kind: "wait", afterMs: policy.bodyRecheckMs };
+  let body = prepared?.body;
+  if (!body) {
+    const object = await stages.time("body_read", () => env.ASSETS.get(delivery.payload_key));
+    if (!object) {
+      if (deps.now() - delivery.created_at > policy.bodyWaitMs)
+        return { kind: "failed", status: null, reason: "payload_missing", ...at };
+      return { kind: "wait", afterMs: policy.bodyRecheckMs };
+    }
+    body = new Uint8Array(await object.arrayBuffer());
   }
-  const body = new Uint8Array(await object.arrayBuffer());
   const timestamp = Math.floor(deps.now() / 1000);
   const headers = {
     "content-type": "application/json",
@@ -229,6 +318,7 @@ async function attempt(
     );
   } catch (error) {
     const durationMs = deps.now() - started;
+    stages.add("post", durationMs);
     if (error instanceof SsrfError && error.reason !== "unresolvable")
       return { kind: "failed", status: null, reason: `blocked_${error.reason}`, durationMs, ...at };
     // Unreachable for now (a timeout, a connection, a lookup that failed): tried again.
@@ -236,6 +326,7 @@ async function attempt(
   }
   const excerpt = await excerptOf(response, policy.excerptBytes, deadline);
   const durationMs = deps.now() - started;
+  stages.add("post", durationMs);
   const seen = { durationMs, excerpt, ...at };
   const { status } = response;
   if (status >= 200 && status < 300) return { kind: "done", status, ...seen };

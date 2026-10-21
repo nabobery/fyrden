@@ -6,6 +6,7 @@
 // other tests' too: a test that runs it either orders its own rows first
 // or runs it until its own are handled.
 import { env } from "cloudflare:workers";
+import { METRIC_AGGREGATION, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { type DomainEvent, eventKey } from "@fyrden/domain";
 import { describe, expect, it, vi } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
@@ -691,9 +692,9 @@ describe("webhooks", () => {
         getByName: (name: string) => {
           const stub = base.REPO.getByName(name);
           return {
-            hookForDelivery: (...args: Parameters<typeof stub.hookForDelivery>) => {
+            hooksForDelivery: (...args: Parameters<typeof stub.hooksForDelivery>) => {
               calls.n++;
-              return stub.hookForDelivery(...args);
+              return stub.hooksForDelivery(...args);
             },
             disableHook: (...args: Parameters<typeof stub.disableHook>) => {
               calls.n++;
@@ -705,9 +706,11 @@ describe("webhooks", () => {
     } as unknown as Env;
     await sink.deliver(effect, measured, measured.ORG_READ);
     expect(t.received).toHaveLength(2);
-    expect((await t.deliveries()).map((d) => d.reason)).toEqual(["gone", "gone", null]);
-    // Measured: 20 (two attempts turning their hooks off, and the third queued).
-    expect(calls.n).toBeGreaterThan(15);
+    // The event's first two hooks attempted (in its order), the third queued.
+    const byHook = (await t.deliveries()).sort((a, b) => a.hook_id - b.hook_id);
+    expect(byHook.map((d) => d.reason)).toEqual(["gone", "gone", null]);
+    // Measured: 14 (two attempts turning their hooks off, and the third queued).
+    expect(calls.n).toBe(14);
     expect(calls.n).toBeLessThanOrEqual(
       effectCalls(sink, { target: effect.target, payload: effect.payload }),
     );
@@ -727,10 +730,13 @@ describe("webhooks", () => {
     const claimedAt = Date.now();
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(claimedAt);
+    // Its deliveries made and its first attempt claimed (two batches), the record is lost.
+    let batches = 0;
     const lostRecord = new Proxy(env.ORG_READ, {
       get(target, prop) {
         if (prop === "batch")
-          return async () => {
+          return async (statements: D1PreparedStatement[]) => {
+            if (++batches <= 2) return target.batch(statements);
             vi.setSystemTime(claimedAt + 2_000);
             throw new Error("D1 overloaded");
           };
@@ -752,5 +758,329 @@ describe("webhooks", () => {
     ]);
     await attemptDelivery(t.deps(claimedAt + ATTEMPT_POLICY.leaseMs), row?.delivery_id ?? "");
     expect(await t.deliveries()).toMatchObject([{ state: "done", attempts: 2 }]);
+  });
+  it("make their first attempts from the body and hooks they hold, one lookup an event", async () => {
+    for (let i = 0; i < 2; i++) await t.createHook({ events: ["push"] });
+    await api("POST", `${t.path}/file-commits`, t.owner.token, {
+      message: "first",
+      changes: [{ path: "a.txt", content: "a\n" }],
+    });
+    const [push] = (await t.outbox()).filter((e) => e.type === "refs.updated" && e.webhooks);
+    const sink = createWebhookSink({ resolver: () => async () => ["93.184.216.34"] });
+    const effect = effectOf(sink, push as DomainEvent);
+    const reads: string[] = [];
+    const base = t.testEnv();
+    const lookups: number[][] = [];
+    const watched = {
+      ...base,
+      ASSETS: new Proxy(base.ASSETS, {
+        get(target, prop) {
+          const value = Reflect.get(target, prop);
+          if (typeof value !== "function") return value;
+          return (...args: unknown[]) => {
+            if (prop === "get" || prop === "head") reads.push(String(prop));
+            return value.apply(target, args);
+          };
+        },
+      }),
+      REPO: {
+        getByName: (name: string) => {
+          const stub = base.REPO.getByName(name);
+          return {
+            hooksForDelivery: (ids: number[]) => {
+              lookups.push(ids);
+              return stub.hooksForDelivery(ids);
+            },
+            hookForDelivery: () => {
+              throw new Error("a first attempt looks its hook up with the others");
+            },
+            disableHook: (...args: Parameters<typeof stub.disableHook>) =>
+              stub.disableHook(...args),
+          };
+        },
+      },
+    } as unknown as Env;
+    const points: { name: string; dimensions: Record<string, string>; value: number }[] = [];
+    const metrics = {
+      count: (name: string, dimensions: Record<string, string>, value = 1) =>
+        points.push({ name, dimensions, value }),
+    } as unknown as Metrics;
+    await sink.deliver(effect, watched, env.ORG_READ, metrics);
+    expect(t.received).toHaveLength(2);
+    expect((await t.deliveries()).map((d) => d.state)).toEqual(["done", "done"]);
+    // The body it stored is the body it sent, not read back; both hooks in one lookup.
+    expect(reads).toEqual([]);
+    expect(lookups).toHaveLength(1);
+    expect(lookups[0]?.length).toBe(2);
+    // Each stage timed: the event's once, each attempt's once per attempt.
+    const stages = points
+      .filter((p) => p.name === "webhooks.stage_ms")
+      .map((p) => p.dimensions.stage)
+      .sort();
+    expect(stages).toEqual(["body", "claim", "hooks", "post", "post", "record", "record", "rows"]);
+    expect(METRIC_AGGREGATION["webhooks.stage_ms"]).toBe("each");
+  });
+
+  it("send nothing to a hook deleted before its delivery is claimed", async () => {
+    const hook = (await t.createHook({ events: ["push"] })).body;
+    await api("POST", `${t.path}/file-commits`, t.owner.token, {
+      message: "first",
+      changes: [{ path: "a.txt", content: "a\n" }],
+    });
+    const [push] = (await t.outbox()).filter((e) => e.type === "refs.updated" && e.webhooks);
+    const sink = createWebhookSink({ resolver: () => async () => ["93.184.216.34"] });
+    const base = t.testEnv();
+    // The hook goes while the body is stored: after its delivery's row, before its claim.
+    const racing = {
+      ...base,
+      ASSETS: new Proxy(base.ASSETS, {
+        get(target, prop) {
+          const value = Reflect.get(target, prop);
+          if (prop !== "put") return typeof value === "function" ? value.bind(target) : value;
+          return async (...args: unknown[]) => {
+            expect((await api("DELETE", `${t.path}/hooks/${hook.id}`, t.owner.token)).status).toBe(
+              200,
+            );
+            return value.apply(target, args);
+          };
+        },
+      }),
+    } as unknown as Env;
+    await sink.deliver(effectOf(sink, push as DomainEvent), racing, env.ORG_READ);
+    expect(t.received).toHaveLength(0);
+    expect(await t.deliveries()).toMatchObject([
+      { state: "cancelled", reason: "hook_deleted", attempts: 0 },
+    ]);
+    expect(t.sent).toEqual([]);
+  });
+
+  it("claim no first attempt once the repository's tombstone is in, and take the body back", async () => {
+    await t.createHook({ events: ["push"] });
+    await api("POST", `${t.path}/file-commits`, t.owner.token, {
+      message: "first",
+      changes: [{ path: "a.txt", content: "a\n" }],
+    });
+    const [push] = (await t.outbox()).filter((e) => e.type === "refs.updated" && e.webhooks);
+    const sink = createWebhookSink({ resolver: () => async () => ["93.184.216.34"] });
+    const base = t.testEnv();
+    const deleted: unknown[] = [];
+    // The tombstone comes in while the body is stored.
+    const racing = {
+      ...base,
+      ASSETS: new Proxy(base.ASSETS, {
+        get(target, prop) {
+          const value = Reflect.get(target, prop);
+          if (typeof value !== "function") return value;
+          return async (...args: unknown[]) => {
+            const result = await value.apply(target, args);
+            if (prop === "put")
+              await env.ORG_READ.prepare(
+                `INSERT INTO repos (repo_id, deleted, epoch_gen, version, owner_gen, updated_seq,
+                   updated_at) VALUES (?1, 1, 0, 0, 0, 0, 0)
+                 ON CONFLICT (repo_id) DO UPDATE SET deleted = 1`,
+              )
+                .bind(t.repo.id)
+                .run();
+            if (prop === "delete") deleted.push(args[0]);
+            return result;
+          };
+        },
+      }),
+    } as unknown as Env;
+    await sink.deliver(effectOf(sink, push as DomainEvent), racing, env.ORG_READ);
+    expect(t.received).toHaveLength(0);
+    expect(deleted).toHaveLength(1);
+    expect(await t.deliveries()).toMatchObject([{ state: "pending", attempts: 0 }]);
+    expect(t.sent).toEqual([]);
+  });
+
+  it("see every first attempt of an event through, one failing not stopping the other", async () => {
+    for (let i = 0; i < 2; i++) await t.createHook({ events: ["push"] });
+    await api("POST", `${t.path}/file-commits`, t.owner.token, {
+      message: "first",
+      changes: [{ path: "a.txt", content: "a\n" }],
+    });
+    const [push] = (await t.outbox()).filter((e) => e.type === "refs.updated" && e.webhooks);
+    const sink = createWebhookSink({ resolver: () => async () => ["93.184.216.34"] });
+    // The first record written fails, and so does queuing that attempt instead; the other
+    // record is held until that has happened.
+    let batches = 0;
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let fallbackFailed: () => void = () => {};
+    const fellBack = new Promise<void>((resolve) => {
+      fallbackFailed = resolve;
+    });
+    const db = new Proxy(env.ORG_READ, {
+      get(target, prop) {
+        if (prop === "batch")
+          return async (statements: D1PreparedStatement[]) => {
+            const n = ++batches;
+            if (n === 3) throw new Error("D1 overloaded");
+            if (n === 4) await held;
+            return target.batch(statements);
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const base = t.testEnv();
+    const failingQueue = {
+      ...base,
+      WEBHOOKS: {
+        send: async () => {
+          throw new Error("queue unavailable");
+        },
+        sendBatch: async () => {
+          fallbackFailed();
+          throw new Error("queue unavailable");
+        },
+      },
+    } as unknown as Env;
+    let settled = false;
+    const delivering = sink.deliver(effectOf(sink, push as DomainEvent), failingQueue, db);
+    delivering.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await fellBack;
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    // One attempt's failure told only once the other's record is through.
+    expect(settled).toBe(false);
+    release();
+    await expect(delivering).rejects.toThrow("queue unavailable");
+    expect(t.received).toHaveLength(2);
+    // The other attempt was recorded; the failed one keeps its claim until its lease ends.
+    expect((await t.deliveries()).map((d) => [d.state, d.attempts]).sort()).toEqual([
+      ["done", 1],
+      ["pending", 1],
+    ]);
+  });
+
+  it("retry later the first attempts whose hooks could not be looked up", async () => {
+    for (let i = 0; i < 2; i++) await t.createHook({ events: ["push"] });
+    await api("POST", `${t.path}/file-commits`, t.owner.token, {
+      message: "first",
+      changes: [{ path: "a.txt", content: "a\n" }],
+    });
+    const [push] = (await t.outbox()).filter((e) => e.type === "refs.updated" && e.webhooks);
+    const sink = createWebhookSink({ resolver: () => async () => ["93.184.216.34"] });
+    const base = t.testEnv();
+    const unavailable = {
+      ...base,
+      REPO: {
+        getByName: () => ({
+          hooksForDelivery: async () => {
+            throw new Error("repository object overloaded");
+          },
+        }),
+      },
+    } as unknown as Env;
+    await sink.deliver(effectOf(sink, push as DomainEvent), unavailable, env.ORG_READ);
+    expect(t.received).toHaveLength(0);
+    expect((await t.deliveries()).map((d) => [d.state, d.attempts])).toEqual([
+      ["pending", 1],
+      ["pending", 1],
+    ]);
+    expect(t.sent).toEqual([
+      { delivery: expect.any(String), delaySeconds: ATTEMPT_POLICY.backoffMs / 1000 },
+      { delivery: expect.any(String), delaySeconds: ATTEMPT_POLICY.backoffMs / 1000 },
+    ]);
+  });
+  it("keep within the calls the sink counts when every record fails and is queued instead", async () => {
+    for (let i = 0; i < 3; i++) await t.createHook({ events: ["push"] });
+    await api("POST", `${t.path}/file-commits`, t.owner.token, {
+      message: "first",
+      changes: [{ path: "a.txt", content: "a\n" }],
+    });
+    const [push] = (await t.outbox()).filter((e) => e.type === "refs.updated" && e.webhooks);
+    t.answer = () => new Response("busy", { status: 503 });
+    const sink = createWebhookSink({ resolver: () => async () => ["93.184.216.34"] });
+    const effect = effectOf(sink, push as DomainEvent);
+    const calls = { n: 0 };
+    let batches = 0;
+    const counted = <T extends object>(target: T, methods: readonly string[]): T =>
+      new Proxy(target, {
+        get(object, prop) {
+          const value = Reflect.get(object, prop);
+          if (typeof value !== "function") return value;
+          return (...args: unknown[]) => {
+            if (methods.includes(String(prop))) calls.n++;
+            // Past the rows and the claims, every record is lost.
+            if (prop === "batch" && ++batches > 2) throw new Error("D1 overloaded");
+            const result = value.apply(object, args);
+            if (prop === "prepare" || prop === "bind")
+              return counted(result, ["run", "first", "all", "raw"]);
+            return result;
+          };
+        },
+      });
+    const base = t.testEnv();
+    const measured = {
+      ...base,
+      WEBHOOKS: counted(base.WEBHOOKS, ["send", "sendBatch"]),
+      ASSETS: counted(base.ASSETS, ["put", "get", "delete", "head"]),
+      REPO: {
+        getByName: (name: string) => {
+          const stub = base.REPO.getByName(name);
+          return {
+            hooksForDelivery: (ids: number[]) => {
+              calls.n++;
+              return stub.hooksForDelivery(ids);
+            },
+          };
+        },
+      },
+    } as unknown as Env;
+    await sink.deliver(effect, measured, counted(env.ORG_READ, ["batch"]));
+    expect(t.received).toHaveLength(2);
+    // Both attempts queued for when their claims end, the third's at once.
+    expect(t.sent).toHaveLength(3);
+    expect(calls.n).toBeLessThanOrEqual(
+      effectCalls(sink, { target: effect.target, payload: effect.payload }),
+    );
+  });
+  it("make an event's first attempts side by side, and those it claimed even when queuing the others fails", async () => {
+    for (let i = 0; i < 3; i++) await t.createHook({ events: ["push"] });
+    await api("POST", `${t.path}/file-commits`, t.owner.token, {
+      message: "first",
+      changes: [{ path: "a.txt", content: "a\n" }],
+    });
+    const [push] = (await t.outbox()).filter((e) => e.type === "refs.updated" && e.webhooks);
+    const sink = createWebhookSink({ resolver: () => async () => ["93.184.216.34"] });
+    // The first request is answered only once the second has come: made one after the
+    // other, they never would be.
+    let entered = 0;
+    let bothIn: () => void = () => {};
+    const together = new Promise<void>((resolve) => {
+      bothIn = resolve;
+    });
+    t.answer = (async () => {
+      if (++entered === 2) bothIn();
+      await together;
+      return new Response("ok");
+    }) as unknown as () => Response;
+    const base = t.testEnv();
+    const failingQueue = {
+      ...base,
+      WEBHOOKS: {
+        ...base.WEBHOOKS,
+        sendBatch: async () => {
+          throw new Error("queue unavailable");
+        },
+      },
+    } as unknown as Env;
+    await expect(
+      sink.deliver(effectOf(sink, push as DomainEvent), failingQueue, env.ORG_READ),
+    ).rejects.toThrow("queue unavailable");
+    // The two claimed were made and recorded; the third, never queued, waits for the cron.
+    expect(t.received).toHaveLength(2);
+    expect((await t.deliveries()).map((d) => [d.state, d.attempts]).sort()).toEqual([
+      ["done", 1],
+      ["done", 1],
+      ["pending", 0],
+    ]);
   });
 });
