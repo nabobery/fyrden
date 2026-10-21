@@ -16,8 +16,13 @@ export const LABEL_COLOR = /^[0-9a-fA-F]{6}$/;
 /**
  * A label name: no control characters, no surrounding spaces, and not `.`
  * or `..` (a path segment URLs resolve away, so no path could name it).
+ * The control characters are spelled as ranges, not `\p{Cc}`: the pattern
+ * is published in the OpenAPI document, and not every regex dialect that
+ * reads it has Unicode property escapes.
  */
-export const LABEL_NAME = /^(?!\.\.?$)[^\p{Cc}\s](?:[^\p{Cc}]*[^\p{Cc}\s])?$/u;
+export const LABEL_NAME =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the control characters are what it refuses
+  /^(?!\.\.?$)[^\x00-\x1f\x7f-\x9f\s](?:[^\x00-\x1f\x7f-\x9f]*[^\x00-\x1f\x7f-\x9f\s])?$/u;
 
 /**
  * A label name as names compare: the case of ASCII letters ignored, others

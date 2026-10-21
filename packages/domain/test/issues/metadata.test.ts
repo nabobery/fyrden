@@ -34,7 +34,18 @@ describe("label names and colors", () => {
   it("take any characters but controls, without spaces around them", () => {
     for (const name of ["bug", "good first issue", "area/api", "ünïcode", "🐛", "a", "...", ".x"])
       expect(LABEL_NAME.test(name), name).toBe(true);
-    for (const name of [" bug", "bug ", "", "a\nb", "\u0000", "\t", ".", ".."])
+    for (const name of [
+      " bug",
+      "bug ",
+      "",
+      "a\nb",
+      "\u0000",
+      "\t",
+      "a\u007fb",
+      "a\u009fb",
+      ".",
+      "..",
+    ])
       expect(LABEL_NAME.test(name), JSON.stringify(name)).toBe(false);
   });
 

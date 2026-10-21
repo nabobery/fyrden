@@ -104,6 +104,16 @@ describe("generated artifacts", () => {
     expect(openApiDocument(registry, { version: "0.0.0" })).toMatchSnapshot();
   });
 
+  it("publishes no pattern with Unicode property escapes, which not every client's regexes have", () => {
+    const patterns: string[] = [];
+    JSON.stringify(openApiDocument(registry, { version: "0.0.0" }), (key, value) => {
+      if (key === "pattern" && typeof value === "string") patterns.push(value);
+      return value;
+    });
+    expect(patterns.length).toBeGreaterThan(0);
+    for (const pattern of patterns) expect(pattern).not.toMatch(/\\[pP]\{/);
+  });
+
   it("lists whoami as an MCP tool with the same input schema as the operation", () => {
     const tools = mcpTools(registry);
     const tool = tools.find((t) => t.name === "whoami");
