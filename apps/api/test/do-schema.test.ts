@@ -21,6 +21,7 @@ import repoV33 from "./fixtures/do-schemas/RepoDO/v33.sql?raw";
 import repoV34 from "./fixtures/do-schemas/RepoDO/v34.sql?raw";
 import repoV35 from "./fixtures/do-schemas/RepoDO/v35.sql?raw";
 import repoV36 from "./fixtures/do-schemas/RepoDO/v36.sql?raw";
+import repoV37 from "./fixtures/do-schemas/RepoDO/v37.sql?raw";
 
 // One fixture per released schema version: an object last migrated by any
 // released build must reach the same schema as a fresh one. The latest
@@ -47,6 +48,7 @@ const fixtures: Record<
       34: repoV34,
       35: repoV35,
       36: repoV36,
+      37: repoV37,
     },
   },
 };
@@ -157,6 +159,42 @@ describe("RepoDO schema", () => {
       issue: [{ title: "Bug", milestone: null }],
       meta: [{ next_number: 3, next_label_id: 1, next_milestone: 1 }],
     });
+  });
+
+  it("counts a v36 object's thread participants, and the next to join after the last", async () => {
+    const stub = env.REPO.getByName(uniqueId("repo"));
+    const after = await runInDurableObject(stub, async (_, state) => {
+      const sql = state.storage.sql;
+      await state.storage.deleteAll();
+      sql.exec(repoV36);
+      sql.exec(
+        "CREATE TABLE _fyrden_schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)",
+      );
+      sql.exec("INSERT INTO _fyrden_schema_version VALUES (1, 36)");
+      for (const [number, principal, joined] of [
+        [1, "usr_a", 1],
+        [1, "usr_b", 2],
+        [1, "usr_c", 5],
+        [2, "usr_a", 1],
+      ] as const)
+        sql.exec(
+          `INSERT INTO feed_participants (number, principal, root, reason, joined_seq)
+           VALUES (?1, ?2, ?2, 'commenter', ?3)`,
+          number,
+          principal,
+          joined,
+        );
+      applyDoMigrations(state.storage, repoSchema);
+      return sql
+        .exec(
+          "SELECT number, participants, next_seq, overflow FROM feed_participation ORDER BY number",
+        )
+        .toArray();
+    });
+    expect(after).toEqual([
+      { number: 1, participants: 3, next_seq: 6, overflow: 0 },
+      { number: 2, participants: 1, next_seq: 2, overflow: 0 },
+    ]);
   });
 
   it("finds a head repository's open pull requests through an index, in number order", async () => {

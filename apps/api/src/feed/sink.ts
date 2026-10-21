@@ -151,6 +151,9 @@ export const feedSink: EffectSink = {
         }),
       );
     }
+    // A block's further pages (`pages`) are read and delivered by later versions; this one
+    // delivers the recipients the event carries, so it is no version to go back to once
+    // events with pages are made.
     if (!event.feed || event.feed.audience.length === 0) return [];
     return [
       {
@@ -186,7 +189,8 @@ export const feedSink: EffectSink = {
  * every call it takes part in succeeded.
  */
 async function deliverFeeds(effects: readonly Effect[], env: Env): Promise<BatchDelivery> {
-  const failed = new Set<string>();
+  // Each failed effect with the first error that stopped it.
+  const failed = new Map<string, unknown>();
   let error: unknown;
   const calls = entryCalls(
     effects.filter((effect) => !isPurge(effect)),
@@ -197,7 +201,7 @@ async function deliverFeeds(effects: readonly Effect[], env: Env): Promise<Batch
     calls.push(...(await purgeCalls(purges, env)));
   } catch (cause) {
     error = cause;
-    for (const effect of purges) failed.add(effect.id);
+    for (const effect of purges) if (!failed.has(effect.id)) failed.set(effect.id, cause);
   }
   for (let at = 0; at < calls.length; at += PARALLEL_FEEDS) {
     const slice = calls.slice(at, at + PARALLEL_FEEDS);
@@ -205,11 +209,12 @@ async function deliverFeeds(effects: readonly Effect[], env: Env): Promise<Batch
     results.forEach((result, i) => {
       if (result.status === "fulfilled") return;
       error ??= result.reason;
-      for (const id of slice[i]?.effects ?? []) failed.add(id);
+      for (const id of slice[i]?.effects ?? []) if (!failed.has(id)) failed.set(id, result.reason);
     });
   }
   return {
     delivered: effects.map((effect) => effect.id).filter((id) => !failed.has(id)),
+    failures: [...failed].map(([id, cause]) => ({ ids: [id], error: cause })),
     ...(error !== undefined && { error }),
   };
 }

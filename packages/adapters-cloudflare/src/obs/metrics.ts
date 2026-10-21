@@ -81,6 +81,11 @@ export const METRICS = {
   "effects.recovered": ["sink"],
   "effects.invalidated": ["sink"],
   "effects.failed": ["sink"],
+  // Activity feeds (the value is the amount): recipients an event named
+  // past what it carries, and joins a thread refused at its cap of
+  // participants.
+  "feed.audience_dropped": [],
+  "feed.participants_overflow": [],
   // Wall time of one stage of making webhook deliveries, in ms: an event's
   // rows, body, claim and hooks once per event; post and record once per
   // attempt the event's effect makes. The clock advances only on I/O.

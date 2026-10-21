@@ -79,9 +79,14 @@ export interface EffectSink {
   readonly inline?: boolean;
 }
 
-/** What a batch delivery did: the effects delivered, and the first failure of the rest. */
+/**
+ * What a batch delivery did: the effects delivered, the failures it can
+ * tell apart (each with the effects it stopped), and the first failure of
+ * any other effect not delivered.
+ */
 export interface BatchDelivery {
   readonly delivered: readonly string[];
+  readonly failures?: readonly { readonly ids: readonly string[]; readonly error: unknown }[];
   readonly error?: unknown;
 }
 

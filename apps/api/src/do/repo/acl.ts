@@ -127,6 +127,28 @@ export class RepoAcl {
   }
 
   /**
+   * `lastRoleOf` for many principals from one read of the snapshot (a
+   * feed's audience), and what that snapshot is (`key`, changing whenever
+   * its account, restore generation or version does; null for none).
+   */
+  lastRoles(): {
+    readonly roleOf: (principalId: string) => RepoRole | null;
+    readonly key: string | null;
+  } {
+    const account = this.deps.account();
+    if (!account) return { roleOf: () => null, key: null };
+    const row = this.#usable(account.accountId, Number.POSITIVE_INFINITY);
+    const roles = row ? this.#roles(row) : new Map<string, RepoRole>();
+    return {
+      roleOf: (principalId) =>
+        principalId === account.accountId || ownsUserAccount(principalId, account.ownerId)
+          ? "admin"
+          : (roles.get(principalId) ?? null),
+      key: row ? `${row.account_id}:${row.epoch_gen}:${row.version}` : null,
+    };
+  }
+
+  /**
    * What decisions made now (as `allows` makes them) rest on: the snapshot
    * within the write window, its account, `(epochGen, version)` and when it
    * was pulled; `unknown` when there is none to use (a pull failed: a

@@ -1103,4 +1103,27 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT, WITHOUT ROWID;
     `,
   },
+  {
+    version: 37,
+    // A thread's participants counted (`feed_participation`): how many it
+    // keeps, the sequence the next to join takes, how many joins the cap
+    // refused (of principals not already in), and the readers it last
+    // reclaimed the places of those who no longer read with (their ACL's
+    // key), so a join reads one row rather than counting the thread's
+    // participants. Their index in join
+    // order serves reading them a page at a time.
+    name: "feed_participation",
+    sql: `
+      CREATE TABLE feed_participation (
+        number INTEGER PRIMARY KEY,
+        participants INTEGER NOT NULL,
+        next_seq INTEGER NOT NULL,
+        overflow INTEGER NOT NULL DEFAULT 0,
+        reclaimed TEXT
+      ) STRICT;
+      INSERT INTO feed_participation (number, participants, next_seq)
+        SELECT number, count(*), max(joined_seq) + 1 FROM feed_participants GROUP BY number;
+      CREATE INDEX feed_participants_joined ON feed_participants (number, joined_seq);
+    `,
+  },
 ];
