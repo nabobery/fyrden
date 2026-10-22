@@ -554,6 +554,28 @@ describe("requesting reviews", () => {
     expect(now.length).toBe(15);
   });
 
+  it("shows a requested reviewer being deleted as ghost", async () => {
+    const [gone, kept] = [await collaborator("pull"), await collaborator("pull")];
+    await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
+      reviewers: [gone.handle, kept.handle],
+    });
+    await env.DIRECTORY.prepare(
+      `UPDATE principals SET lifecycle = 'deleting', disabled_at = 1, handle = id,
+         lifecycle_gen = lifecycle_gen + 1 WHERE id = ?`,
+    )
+      .bind(gone.principalId)
+      .run();
+    const listed = await json<{ users: { id: string; login: string }[] }>(
+      api("GET", `${path}/pulls/1/requested_reviewers`, owner.token),
+    );
+    expect(listed.body.users).toEqual(
+      expect.arrayContaining([
+        { id: gone.principalId, login: "ghost" },
+        { id: kept.principalId, login: kept.handle },
+      ]),
+    );
+  });
+
   it("keeps a request of a reviewer being deleted below the limit, as history", async () => {
     const [gone, other] = [await collaborator("pull"), await collaborator("pull")];
     await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {

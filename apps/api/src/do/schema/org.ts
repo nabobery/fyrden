@@ -248,4 +248,15 @@ export const orgSchema: readonly DoMigration[] = [
       CREATE INDEX collaborators_principal ON collaborators (principal_id);
     `,
   },
+  {
+    version: 9,
+    // A restored object's reconciliation: where it got to forgetting the
+    // principals deleted since its backup (null: none under way), and the
+    // page whose rows it is removing (JSON; null between pages).
+    name: "reconcile_cursor",
+    sql: `
+      ALTER TABLE org_meta ADD COLUMN reconcile_cursor TEXT;
+      ALTER TABLE org_meta ADD COLUMN reconcile_pending TEXT;
+    `,
+  },
 ];

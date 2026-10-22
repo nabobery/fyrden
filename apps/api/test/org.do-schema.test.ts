@@ -16,8 +16,16 @@ import orgV5 from "./fixtures/do-schemas/OrgDO/v5.sql?raw";
 import orgV6 from "./fixtures/do-schemas/OrgDO/v6.sql?raw";
 import orgV7 from "./fixtures/do-schemas/OrgDO/v7.sql?raw";
 import orgV8 from "./fixtures/do-schemas/OrgDO/v8.sql?raw";
+import orgV9 from "./fixtures/do-schemas/OrgDO/v9.sql?raw";
 
-const versions: Record<number, string> = { 0: orgV0, 5: orgV5, 6: orgV6, 7: orgV7, 8: orgV8 };
+const versions: Record<number, string> = {
+  0: orgV0,
+  5: orgV5,
+  6: orgV6,
+  7: orgV7,
+  8: orgV8,
+  9: orgV9,
+};
 
 describe("OrgDO schema", () => {
   it("matches the committed expected schema (no drift)", async () => {

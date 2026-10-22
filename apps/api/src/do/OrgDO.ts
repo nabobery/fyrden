@@ -40,6 +40,8 @@ export interface ChangeActor {
 export const accountHooks: {
   /** After an addition read its principals' lifecycle, before its transaction. */
   afterLifecycleRead?: (account: OrgDO) => Promise<void>;
+  /** Before the object reads its restore generation from the directory. */
+  beforeEpochRead?: () => Promise<void>;
 } = {};
 
 /** What a user deletion asks of each account object (see `retirePrincipals`). */
@@ -144,6 +146,19 @@ type Meta = {
   acl_version: number;
   epoch_gen: number;
 };
+
+/** A page of a restored object's reconciliation, kept while its rows are being removed. */
+type ReconcilePage = {
+  /** Its principals being deleted or deleted. */
+  readonly gone: readonly string[];
+  /** Its last principal id (where the next page starts), null for an empty page. */
+  readonly last: string | null;
+  /** Whether it was a full page (more may follow). */
+  readonly full: boolean;
+};
+
+/** Rows a restored object's reconciliation removes an alarm at most. Proposed. */
+const RECONCILE_ROWS = 500;
 
 /** Principals one directory query reads the lifecycle of (D1 binds at most 100 parameters). */
 const LIFECYCLE_BATCH = 90;
@@ -1478,6 +1493,25 @@ export class OrgDO extends MigratingDO {
   }
 
   override async alarm(): Promise<void> {
+    // The restore generation first (a restored object's first call may be its alarm): nothing
+    // runs before it is taken; unknown (the directory unreachable), tried again later.
+    try {
+      await this.#checkEpoch();
+    } catch (error) {
+      createLogger({ op: "org.epoch", doClass: "OrgDO" }).warn("taking the epoch failed", {
+        error,
+      });
+      await this.#armBy(this.#now() + AUDIT_RETRY_MS);
+      return;
+    }
+    try {
+      if (await this.#reconcileSlice()) await this.#armBy(this.#now());
+    } catch (error) {
+      createLogger({ op: "org.reconcile", doClass: "OrgDO" }).warn("reconciling failed", {
+        error,
+      });
+      await this.#armBy(this.#now() + AUDIT_RETRY_MS);
+    }
     // Events first (a failure backs off and never stops the audit delivery).
     try {
       const outbox = this.#outbox;
@@ -1533,16 +1567,22 @@ export class OrgDO extends MigratingDO {
     const meta = this.#meta();
     // Nothing recorded yet: `init` records the generation just allocated.
     if (!meta) return;
+    await accountHooks.beforeEpochRead?.();
     const row = await this.env.DIRECTORY.withSession("first-primary")
       .prepare("SELECT epoch_gen FROM source_epochs WHERE source_id = ?")
       .bind(meta.account_id)
       .first<{ epoch_gen: number }>();
-    if (row && row.epoch_gen > (this.#meta() as Meta).epoch_gen)
+    if (row && row.epoch_gen > (this.#meta() as Meta).epoch_gen) {
+      // Restored: it may hold principals deleted since its backup; its alarm forgets them, from
+      // the start (a page the backup was in the middle of was decided before it).
       this.ctx.storage.sql.exec(
-        "UPDATE org_meta SET epoch_gen = ?, epoch_uuid = ? WHERE id = 1",
+        `UPDATE org_meta SET epoch_gen = ?, epoch_uuid = ?, reconcile_cursor = '',
+           reconcile_pending = NULL WHERE id = 1`,
         row.epoch_gen,
         crypto.randomUUID(),
       );
+      await this.#armBy(this.#now());
+    }
     this.#epochChecked = true;
   }
 
@@ -1594,6 +1634,117 @@ export class OrgDO extends MigratingDO {
     return ids.some((id) => !remaining.has(id) || this.#retired.has(id));
   }
 
+  /**
+   * One page of a restored object's reconciliation: of the principals it
+   * holds (members, team members, collaborators), in id order from where it
+   * got to, those being deleted or deleted since its backup are forgotten
+   * as a retirement forgets them, an organization's last owners kept (it
+   * keeps an owner; an administrator hands it over). True while pages are
+   * left.
+   */
+  async #reconcileSlice(): Promise<boolean> {
+    const state = this.ctx.storage.sql
+      .exec<{ c: string | null; p: string | null }>(
+        "SELECT reconcile_cursor AS c, reconcile_pending AS p FROM org_meta WHERE id = 1",
+      )
+      .toArray()[0];
+    const cursor = state?.c;
+    if (cursor === null || cursor === undefined) return false;
+    // A page whose rows are not all removed yet goes on as it was read (neither the page nor
+    // the directory read again); a new one is read from the cursor.
+    let page: ReconcilePage;
+    if (state?.p) page = JSON.parse(state.p) as ReconcilePage;
+    else {
+      const ids = this.ctx.storage.sql
+        .exec<{ p: string }>(
+          `SELECT principal_id AS p FROM members WHERE principal_id > ?1
+           UNION SELECT principal_id FROM team_members WHERE principal_id > ?1
+           UNION SELECT principal_id FROM collaborators WHERE principal_id > ?1
+           ORDER BY 1 LIMIT ?2`,
+          cursor,
+          LIFECYCLE_BATCH,
+        )
+        .toArray()
+        .map((r) => r.p);
+      const remaining = ids.length > 0 ? await this.#remaining(ids) : new Set<string>();
+      page = {
+        gone: ids.filter((id) => this.#gone([id], remaining)),
+        last: ids.at(-1) ?? null,
+        full: ids.length === LIFECYCLE_BATCH,
+      };
+    }
+    for (const id of page.gone) this.#retired.add(id);
+    return this.ctx.storage.transactionSync(() => {
+      // Moved on meanwhile (another alarm): leave it to that one.
+      const now = this.ctx.storage.sql
+        .exec<{ c: string | null }>("SELECT reconcile_cursor AS c FROM org_meta WHERE id = 1")
+        .one().c;
+      if (now !== cursor) return now !== null;
+      const meta = this.#meta() as Meta;
+      const theirs = JSON.stringify(page.gone);
+      const keepOwners =
+        meta.kind === "org" &&
+        this.ctx.storage.sql
+          .exec<{ others: number }>(
+            `SELECT NOT EXISTS (SELECT 1 FROM members WHERE role = 'owner'
+               AND principal_id NOT IN (SELECT value FROM json_each(?))) AS others`,
+            theirs,
+          )
+          .one().others === 1;
+      // A page of rows at most (as a retirement's); the page stays until none is left.
+      const kept = keepOwners ? "AND role <> 'owner'" : "";
+      const theirsIn = "principal_id IN (SELECT value FROM json_each(?))";
+      let budget = RECONCILE_ROWS;
+      let removed = 0;
+      for (const table of ["members", "team_members", "collaborators"] as const) {
+        if (budget <= 0) break;
+        const gone = this.ctx.storage.sql
+          .exec(
+            `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE ${theirsIn}
+               ${table === "members" ? kept : ""} LIMIT ?) RETURNING rowid`,
+            theirs,
+            budget,
+          )
+          .toArray().length;
+        removed += gone;
+        budget -= gone;
+      }
+      const left =
+        this.ctx.storage.sql
+          .exec<{ left: number }>(
+            `SELECT EXISTS (SELECT 1 FROM members WHERE ${theirsIn} ${kept})
+               OR EXISTS (SELECT 1 FROM team_members WHERE ${theirsIn})
+               OR EXISTS (SELECT 1 FROM collaborators WHERE ${theirsIn}) AS left`,
+            theirs,
+            theirs,
+            theirs,
+          )
+          .one().left === 1;
+      if (removed > 0) {
+        const version = this.#bump();
+        this.#audit(null, "principal.retire", {
+          principals: page.gone,
+          job: "restore",
+          removed,
+          acl_version: version,
+        });
+        this.#scheduleAudit();
+      }
+      if (left) {
+        this.ctx.storage.sql.exec(
+          "UPDATE org_meta SET reconcile_pending = ? WHERE id = 1",
+          JSON.stringify(page),
+        );
+        return true;
+      }
+      this.ctx.storage.sql.exec(
+        "UPDATE org_meta SET reconcile_cursor = ?, reconcile_pending = NULL WHERE id = 1",
+        page.full && page.last !== null ? page.last : null,
+      );
+      return page.full;
+    });
+  }
+
   #owners(): number {
     return this.ctx.storage.sql
       .exec<{ n: number }>("SELECT count(*) AS n FROM members WHERE role = 'owner'")
@@ -1608,16 +1759,17 @@ export class OrgDO extends MigratingDO {
       .one().v;
   }
 
-  #audit(actor: ChangeActor, action: string, details: Record<string, unknown>): void {
+  /** An audit row of the change; `actor` null for the object's own (a restore's reconciliation). */
+  #audit(actor: ChangeActor | null, action: string, details: Record<string, unknown>): void {
     this.ctx.storage.sql.exec(
       `INSERT INTO pending_audit (at, actor_id, action, target_id, details, request_id)
        VALUES (?, ?, ?, ?, ?, ?)`,
       this.#now(),
-      actor.principalId,
+      actor?.principalId ?? null,
       action,
       (this.#meta() as Meta).account_id,
       JSON.stringify(details),
-      actor.requestId ?? null,
+      actor?.requestId ?? null,
     );
   }
 

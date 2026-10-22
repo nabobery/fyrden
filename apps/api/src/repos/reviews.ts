@@ -9,6 +9,7 @@ import type {
   removeRequestedReviewers,
   requestReviewers,
 } from "@fyrden/api-contract";
+import { SHOWN_HANDLE } from "../accounts/handles.js";
 import type { ReviewRecord } from "../do/repo/reviews.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
@@ -83,7 +84,10 @@ async function reviewersByLogin(ctx: OpContext, logins: readonly string[]): Prom
   });
 }
 
-/** Handles of principals, for showing requested reviewers; one that is gone shows its id. */
+/**
+ * Handles of principals, for showing requested reviewers: `ghost` for one
+ * being deleted or deleted; one unknown shows its id.
+ */
 async function loginsOf(
   ctx: OpContext,
   ids: readonly string[],
@@ -91,7 +95,8 @@ async function loginsOf(
   if (ids.length === 0) return [];
   ctx.metrics.count("d1.query", { db: "directory", op: "reviewers_handles" });
   const { results } = await ctx.env.DIRECTORY.prepare(
-    `SELECT id, handle FROM principals WHERE id IN (${ids.map(() => "?").join(", ")})`,
+    `SELECT p.id, ${SHOWN_HANDLE} AS handle FROM principals p
+     WHERE p.id IN (${ids.map(() => "?").join(", ")})`,
   )
     .bind(...ids)
     .all<{ id: string; handle: string | null }>();
