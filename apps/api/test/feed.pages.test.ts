@@ -17,9 +17,10 @@ import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { FEED_PAGE_GRACE_MS } from "../src/do/repo/feed.js";
+import type { UserDO } from "../src/do/UserDO.js";
 import { deliverEffects, invocationBudget } from "../src/effects/dispatcher.js";
 import { effectCalls, INLINE_RECIPIENTS } from "../src/effects/journal.js";
-import { feedSink } from "../src/feed/sink.js";
+import { FEED_CALLS_IN_FLIGHT, feedSink } from "../src/feed/sink.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { recordingPublish } from "./helpers/effects.js";
@@ -99,7 +100,7 @@ async function commentEvent(): Promise<DomainEvent> {
 }
 
 /** Journals the event's feed effects and delivers them as the feed queue would, at `now`. */
-async function deliver(event: DomainEvent, now = Date.now(), metrics?: Metrics) {
+async function deliver(event: DomainEvent, now = Date.now(), metrics?: Metrics, via: Env = env) {
   const { publish, sent } = recordingPublish();
   await applyEnvelope(
     env,
@@ -110,7 +111,7 @@ async function deliver(event: DomainEvent, now = Date.now(), metrics?: Metrics) 
     await deliverEffects(
       {
         db: env.ORG_READ,
-        env,
+        env: via,
         sinks: [feedSink],
         now: () => now,
         publish,
@@ -220,6 +221,48 @@ describe("audience pages", () => {
     // Delivered together: its page read, then the calls to every recipient's feed.
     expect(points.map((p) => p.stage)).toEqual(["pages", "calls"]);
     expect(points.every((p) => p.ms >= 0)).toBe(true);
+  });
+
+  it("keep up to 32 calls to feeds under way at once, one slow call holding up no other", async () => {
+    await participants(150);
+    const event = await commentEvent();
+    let inFlight = 0;
+    let most = 0;
+    let slow: () => void = () => {};
+    let first = true;
+    let doneMeanwhile = 0;
+    const counting = {
+      ...env,
+      USER: {
+        getByName: (name: string) => ({
+          applyFeed: async (...args: Parameters<DurableObjectStub<UserDO>["applyFeed"]>) => {
+            inFlight++;
+            most = Math.max(most, inFlight);
+            try {
+              // The first call waits until every other has ended (lockstep rounds never would).
+              if (first) {
+                first = false;
+                await new Promise<void>((resolve) => {
+                  slow = resolve;
+                });
+              }
+              const result = await env.USER.getByName(name).applyFeed(...args);
+              doneMeanwhile++;
+              if (doneMeanwhile === 149) slow();
+              return result;
+            } finally {
+              inFlight--;
+            }
+          },
+        }),
+      },
+    } as unknown as Env;
+    await deliver(event, Date.now(), undefined, counting);
+    expect(most).toBe(FEED_CALLS_IN_FLIGHT);
+    expect(FEED_CALLS_IN_FLIGHT).toBe(32);
+    expect(doneMeanwhile).toBe(150);
+    for (const name of [names[0], names[149]] as string[])
+      expect(await items(name)).toEqual(["issue/1"]);
   });
 
   it("count a page's recipients in the calls its effect makes", () => {

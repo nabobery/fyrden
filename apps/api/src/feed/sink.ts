@@ -27,8 +27,40 @@ import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effect
 /** Principals one purge effect names at most (an event names up to 100 recipients too). */
 export const PURGE_PRINCIPALS = 100;
 
-/** Feeds called at once while delivering a batch. Proposed. */
-const PARALLEL_FEEDS = 10;
+/**
+ * Calls to feeds (and page reads) under way at once while delivering a
+ * batch, the next started as soon as one ends. A call takes 280 ms of wall
+ * time at p50, 570 ms at p95, nearly all of it waiting (measured on Free,
+ * 2026-10-22); Durable Object calls are not among those Cloudflare's
+ * six-connection limit counts. Proposed.
+ */
+export const FEED_CALLS_IN_FLIGHT = 32;
+
+/**
+ * Runs `tasks` with at most `limit` under way at once, the next started as
+ * soon as one ends, and answers their outcomes in order, as
+ * `Promise.allSettled` does.
+ */
+export async function settledInPool<T>(
+  tasks: readonly (() => PromiseLike<T>)[],
+  limit: number,
+): Promise<PromiseSettledResult<T>[]> {
+  if (!Number.isInteger(limit) || limit < 1)
+    throw new RangeError(`a pool needs at least one task under way, not ${limit}`);
+  const results: PromiseSettledResult<T>[] = new Array(tasks.length);
+  let next = 0;
+  const run = async () => {
+    for (let i = next++; i < tasks.length; i = next++) {
+      try {
+        results[i] = { status: "fulfilled", value: await (tasks[i] as () => PromiseLike<T>)() };
+      } catch (reason) {
+        results[i] = { status: "rejected", reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, run));
+  return results;
+}
 
 /** What an event means for feeds, as its effect carries it. */
 interface PlannedFeed {
@@ -241,7 +273,7 @@ export const feedSink: EffectSink = {
 };
 
 /**
- * The effects' calls to feeds, a few at once. An effect is delivered when
+ * The effects' calls to feeds, several under way at once. An effect is delivered when
  * every call it takes part in succeeded.
  */
 async function deliverFeeds(
@@ -272,15 +304,15 @@ async function deliverFeeds(
     for (const effect of purges) if (!failed.has(effect.id)) failed.set(effect.id, cause);
   }
   started = Date.now();
-  for (let at = 0; at < calls.length; at += PARALLEL_FEEDS) {
-    const slice = calls.slice(at, at + PARALLEL_FEEDS);
-    const results = await Promise.allSettled(slice.map((call) => call.call()));
-    results.forEach((result, i) => {
-      if (result.status === "fulfilled") return;
-      error ??= result.reason;
-      for (const id of slice[i]?.effects ?? []) if (!failed.has(id)) failed.set(id, result.reason);
-    });
-  }
+  const results = await settledInPool(
+    calls.map((call) => call.call),
+    FEED_CALLS_IN_FLIGHT,
+  );
+  results.forEach((result, i) => {
+    if (result.status === "fulfilled") return;
+    error ??= result.reason;
+    for (const id of calls[i]?.effects ?? []) if (!failed.has(id)) failed.set(id, result.reason);
+  });
   const callsMs = Date.now() - started;
   if (calls.length > 0) metrics?.count("feed.stage_ms", { stage: "calls" }, callsMs);
   createLogger({ op: "feed.deliver" }).info("feeds delivered", {
@@ -299,7 +331,7 @@ async function deliverFeeds(
 }
 
 /**
- * The page effects' recipients, read from their repositories a few at
+ * The page effects' recipients, read from their repositories several at
  * once. A page past its deadline is ended unread (entries that old are
  * dropped on arrival); one its repository no longer holds as the event's
  * (deleted, restored or transferred since: `invalidated:`; or gone) or
@@ -320,48 +352,46 @@ async function readPages(
     ended.set(effect.id, "expired: past the feed's delivery deadline");
     return false;
   });
-  for (let at = 0; at < due.length; at += PARALLEL_FEEDS) {
-    const slice = due.slice(at, at + PARALLEL_FEEDS);
-    const results = await Promise.allSettled(
-      slice.map((effect) => {
-        const p = effect.payload as unknown as PlannedPage;
-        return env.REPO.getByName(p.repoId).feedAudiencePage({
-          eventKey: p.eventKey,
-          page: p.page.n,
-          epochGen: p.epochGen,
-          ownerGen: p.ownerGen,
-        });
-      }),
-    );
-    results.forEach((result, i) => {
-      const effect = slice[i] as Effect;
-      const {
-        page,
-        deadline: _deadline,
-        ownerGen: _ownerGen,
-        feed,
-        ...event
-      } = effect.payload as unknown as PlannedPage;
-      if (result.status === "rejected") {
-        failed.set(effect.id, result.reason);
-        return;
-      }
-      const answer = result.value;
-      if ("missing" in answer) {
-        ended.set(
-          effect.id,
-          answer.missing === "absent"
-            ? "page missing: absent"
-            : `invalidated: page missing: its source was ${answer.missing}`,
-        );
-        return;
-      }
-      if (answer.recipients.length !== page.count || answer.bytes !== page.bytes) {
-        ended.set(effect.id, "page missing: not the page its manifest names");
-        return;
-      }
-      read.push({ id: effect.id, event, feed, audience: answer.recipients });
-    });
-  }
+  const results = await settledInPool(
+    due.map((effect) => async () => {
+      const p = effect.payload as unknown as PlannedPage;
+      return await env.REPO.getByName(p.repoId).feedAudiencePage({
+        eventKey: p.eventKey,
+        page: p.page.n,
+        epochGen: p.epochGen,
+        ownerGen: p.ownerGen,
+      });
+    }),
+    FEED_CALLS_IN_FLIGHT,
+  );
+  results.forEach((result, i) => {
+    const effect = due[i] as Effect;
+    const {
+      page,
+      deadline: _deadline,
+      ownerGen: _ownerGen,
+      feed,
+      ...event
+    } = effect.payload as unknown as PlannedPage;
+    if (result.status === "rejected") {
+      failed.set(effect.id, result.reason);
+      return;
+    }
+    const answer = result.value;
+    if ("missing" in answer) {
+      ended.set(
+        effect.id,
+        answer.missing === "absent"
+          ? "page missing: absent"
+          : `invalidated: page missing: its source was ${answer.missing}`,
+      );
+      return;
+    }
+    if (answer.recipients.length !== page.count || answer.bytes !== page.bytes) {
+      ended.set(effect.id, "page missing: not the page its manifest names");
+      return;
+    }
+    read.push({ id: effect.id, event, feed, audience: answer.recipients });
+  });
   return read;
 }
