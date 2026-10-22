@@ -42,7 +42,7 @@ import type {
 export type SubjectKind = FeedSubjectKind;
 
 /** Both kinds: a webhook's capture shows what a reader of both would see. */
-const ALL_KINDS: readonly SubjectKind[] = ["issue", "pull"];
+export const ALL_KINDS: readonly SubjectKind[] = ["issue", "pull"];
 
 /** An issue as the repository keeps it (its labels, assignees and milestone are read apart). */
 export interface IssueRecord extends Omit<IssueRow, SubjectMetaField> {
@@ -161,6 +161,14 @@ export class RepoIssues {
   /** Whether the issue or pull request numbered `number` was deleted (issues only: a tombstone). */
   deleted(number: number): boolean {
     return this.#exec("SELECT 1 FROM issue_tombstones WHERE number = ?", number).length > 0;
+  }
+
+  /** The issue or pull request numbered `number` with its labels, assignees, milestone and reactions. */
+  subject(number: number): Subject | undefined {
+    const issue = this.get(number);
+    if (issue) return { kind: "issue", issue, meta: this.deps.meta.of(number) };
+    const pull = this.deps.pulls.get(number);
+    return pull && { kind: "pull", pull, meta: this.deps.meta.of(number) };
   }
 
   /** The issue's or pull request's conversation: its kind, whether it is locked, its title and state. */

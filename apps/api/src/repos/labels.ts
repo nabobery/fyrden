@@ -23,9 +23,8 @@ import type { MetaInput } from "../do/repo/subject-meta.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import type { RepoEntry } from "./directory.js";
-import { subjectOutput } from "./issues.js";
 import { actorOf, failure } from "./pulls.js";
-import { labelOutput } from "./shapes.js";
+import { labelOutput, subjectOutput } from "./shapes.js";
 import { assigneesByLogin, sortingFailure, unassigneesByLogin } from "./sorting.js";
 import { subjectAccess, subjectNotFound, tokenKinds } from "./subjects.js";
 

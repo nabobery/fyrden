@@ -3,11 +3,8 @@
 // change shows nowhere, however late the body is made), what the change
 // touched in full, users with their logins, times as ISO 8601, and long
 // text exactly.
-import { env } from "cloudflare:workers";
-import { type DomainEvent, eventKey } from "@fyrden/domain";
 import { Sha1 } from "@fyrden/git-core";
 import { describe, expect, it, vi } from "vitest";
-import { bodyKeyOf } from "../src/webhooks/sink.js";
 import { api } from "./helpers/api.js";
 import { webhookTest } from "./helpers/webhooks.js";
 
@@ -21,23 +18,6 @@ const ISO = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 async function ok(res: Promise<Response>): Promise<void> {
   const answer = await res;
   if (answer.status >= 300) throw new Error(`${answer.status}: ${await answer.text()}`);
-}
-
-/** The outbox's events with webhooks (pings aside), in order. */
-async function routed(): Promise<DomainEvent[]> {
-  return (await t.outbox()).filter((e) => e.webhooks && e.type !== "webhook.ping");
-}
-
-/** Makes `events`' deliveries now, and the bodies they were made with, in order. */
-async function bodies(events: DomainEvent[]): Promise<Body[]> {
-  await t.materialize(events);
-  return Promise.all(
-    events.map(async (e) => {
-      const object = await env.ASSETS.get(await bodyKeyOf(t.repo.id, eventKey(e.id)));
-      if (!object) throw new Error(`no body for ${e.type}`);
-      return (await object.json()) as Body;
-    }),
-  );
 }
 
 describe("issue webhooks made from captures", () => {
@@ -64,7 +44,7 @@ describe("issue webhooks made from captures", () => {
     await ok(api("PATCH", `${at}/labels/triage`, t.owner.token, { new_name: "renamed" }));
 
     const [opened, edited, labeled, assigned, milestoned, demilestoned, closed, deleted] =
-      await bodies(await routed());
+      await t.bodies(await t.routed());
 
     expect(opened).toMatchObject({
       fyrden_payload: 1,
@@ -136,7 +116,9 @@ describe("issue webhooks made from captures", () => {
     await ok(api("PATCH", `${at}/milestones/1`, t.owner.token, { state: "closed" }));
     await ok(api("DELETE", `${at}/milestones/1`, t.owner.token));
 
-    const [created, renamed, deleted, made, edited, closed, gone] = await bodies(await routed());
+    const [created, renamed, deleted, made, edited, closed, gone] = await t.bodies(
+      await t.routed(),
+    );
     const label = { name: "triage", color: "d73a4a", description: "Something is wrong" };
     expect(created).toMatchObject({ event: "label", action: "created", label });
     expect(renamed).toMatchObject({

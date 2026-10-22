@@ -1,12 +1,12 @@
 import { env } from "cloudflare:workers";
-import type { DomainEvent } from "@fyrden/domain";
+import { type DomainEvent, eventKey } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { RepoDO } from "../../src/do/RepoDO.js";
 import { deliverEffects, invocationBudget } from "../../src/effects/dispatcher.js";
 import { applyEnvelope } from "../../src/queues/events-consumer.js";
 import type { DeliveryDeps } from "../../src/webhooks/deliver.js";
-import { createWebhookSink } from "../../src/webhooks/sink.js";
+import { bodyKeyOf, createWebhookSink } from "../../src/webhooks/sink.js";
 import { api, json, user, type Who } from "./api.js";
 import { recordingPublish } from "./effects.js";
 import { inRepo } from "./repo-git.js";
@@ -186,6 +186,23 @@ export class WebhookTest {
         invocationBudget(now),
       );
     }
+  }
+
+  /** The outbox's events with webhooks (pings aside), in order. */
+  async routed(): Promise<DomainEvent[]> {
+    return (await this.outbox()).filter((e) => e.webhooks && e.type !== "webhook.ping");
+  }
+
+  /** Makes `events`' deliveries now, and the bodies they were made with, in order. */
+  async bodies(events: DomainEvent[]): Promise<Record<string, unknown>[]> {
+    await this.materialize(events);
+    return Promise.all(
+      events.map(async (e) => {
+        const object = await env.ASSETS.get(await bodyKeyOf(this.repo.id, eventKey(e.id)));
+        if (!object) throw new Error(`no body for ${e.type}`);
+        return (await object.json()) as Record<string, unknown>;
+      }),
+    );
   }
 
   /** This repository's deliveries, oldest first. */

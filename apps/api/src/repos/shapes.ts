@@ -1,11 +1,14 @@
-import type { getIssue, getLabel, getMilestone, Output } from "@fyrden/api-contract";
-import type { IssueRecord, SubjectKind } from "../do/repo/issues.js";
-import type { ReactionCounts } from "../do/repo/reactions.js";
+import type { getComment, getIssue, getLabel, getMilestone, Output } from "@fyrden/api-contract";
+import type { CommentRecord } from "../do/repo/comments.js";
+import type { IssueRecord, Subject, SubjectKind } from "../do/repo/issues.js";
+import type { PullRecord } from "../do/repo/pulls.js";
+import type { Reacted, ReactionCounts } from "../do/repo/reactions.js";
 import type { LabelRecord, MilestoneRecord, SubjectMeta } from "../do/repo/subject-meta.js";
 
 /*
- * Issues, labels and milestones as the API answers them: pure functions of
- * the repository object's records, which webhook captures take too.
+ * Issues, comments, labels and milestones as the API answers them: pure
+ * functions of the repository object's records, which webhook captures
+ * take too.
  */
 
 type IssueOutput = Output<typeof getIssue>;
@@ -92,5 +95,52 @@ export function issueOutput(
     updated_at: issue.updatedAt,
     closed_at: issue.closedAt,
     ...sortingOutput(meta, readable),
+  };
+}
+
+/** A pull request as the issue endpoints answer it (GitHub's shape: marked with `pull_request`). */
+function pullAsIssue(
+  pull: PullRecord,
+  meta: SubjectMeta,
+  readable: readonly SubjectKind[],
+): IssueOutput {
+  return {
+    id: pull.number,
+    number: pull.number,
+    state: pull.state === "open" ? "open" : "closed",
+    state_reason: null,
+    duplicate_of: null,
+    title: pull.title,
+    body: pull.body,
+    user: { id: pull.authorId },
+    performed_via_agents: [...pull.authorAct],
+    locked: pull.locked,
+    active_lock_reason: pull.lockReason,
+    closed_by: null,
+    created_at: pull.createdAt,
+    updated_at: pull.updatedAt,
+    closed_at: pull.closedAt,
+    ...sortingOutput(meta, readable),
+    pull_request: { merged_at: pull.mergedAt },
+  };
+}
+
+/** An issue, or a pull request as the issue endpoints answer one. */
+export const subjectOutput = (subject: Subject, readable: readonly SubjectKind[]) =>
+  subject.kind === "issue"
+    ? issueOutput(subject.issue, readable, subject.meta)
+    : pullAsIssue(subject.pull, subject.meta, readable);
+
+/** A conversation comment as the API answers it. */
+export function commentOutput(comment: Reacted<CommentRecord>): Output<typeof getComment> {
+  return {
+    id: comment.id,
+    issue_number: comment.number,
+    user: { id: comment.authorId },
+    performed_via_agents: [...comment.actChain],
+    body: comment.body,
+    created_at: comment.createdAt,
+    updated_at: comment.updatedAt,
+    reactions: reactionRollup(comment.reactions),
   };
 }

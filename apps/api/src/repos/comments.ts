@@ -7,27 +7,12 @@ import type {
   Output,
   updateComment,
 } from "@fyrden/api-contract";
-import type { CommentRecord } from "../do/repo/comments.js";
-import type { Reacted } from "../do/repo/reactions.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import type { RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
-import { reactionRollup } from "./shapes.js";
+import { commentOutput } from "./shapes.js";
 import { subjectAccess, subjectNotFound } from "./subjects.js";
-
-function commentOutput(comment: Reacted<CommentRecord>): Output<typeof getComment> {
-  return {
-    id: comment.id,
-    issue_number: comment.number,
-    user: { id: comment.authorId },
-    performed_via_agents: [...comment.actChain],
-    body: comment.body,
-    created_at: comment.createdAt,
-    updated_at: comment.updatedAt,
-    reactions: reactionRollup(comment.reactions),
-  };
-}
 
 const repo = (ctx: OpContext, entry: RepoEntry, method: string) => {
   ctx.metrics.count("do.request", { class: "RepoDO", method });
