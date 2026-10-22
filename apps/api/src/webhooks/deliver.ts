@@ -95,6 +95,11 @@ export type Claimed = {
   /** Set for a delivery sent again by hand: its last attempt (else the policy's). */
   attempt_limit: number | null;
   created_at: number;
+  /**
+   * 1 when a payload row owns its body (made from the event's capture,
+   * stored before the delivery was made): a body not found is gone.
+   */
+  owned: number;
 };
 
 /** How an attempt ended. */
@@ -195,7 +200,9 @@ export function claimStatement(
          AND NOT EXISTS (SELECT 1 FROM repos
                          WHERE repos.repo_id = webhook_deliveries.repo_id AND repos.deleted = 1)
        RETURNING delivery_id, repo_id, hook_id, event, private, payload_key, attempts,
-         attempt_limit, created_at`,
+         attempt_limit, created_at,
+         EXISTS (SELECT 1 FROM webhook_payloads p WHERE p.payload_key = webhook_deliveries.payload_key)
+           AS owned`,
     )
     .bind(
       token,
@@ -283,7 +290,8 @@ async function attempt(
   if (!body) {
     const object = await stages.time("body_read", () => env.ASSETS.get(delivery.payload_key));
     if (!object) {
-      if (deps.now() - delivery.created_at > policy.bodyWaitMs)
+      // One made before its delivery is gone; one stored after its rows may still come.
+      if (delivery.owned === 1 || deps.now() - delivery.created_at > policy.bodyWaitMs)
         return { kind: "failed", status: null, reason: "payload_missing", ...at };
       return { kind: "wait", afterMs: policy.bodyRecheckMs };
     }
@@ -509,13 +517,16 @@ export interface Reconciled {
   readonly disabled: number;
   /** Deliveries past retention deleted (with their attempts, and the bodies of those sent). */
   readonly pruned: number;
+  /** Bodies made from captures past their time deleted, with their payload rows. */
+  readonly payloads: number;
 }
 
 /**
  * The cron's share, in independent steps, each bounded on its own: sends a
  * message again for due deliveries whose message is late, fails those
  * whose last attempt died with its claim, tries again to turn off hooks
- * whose receiver answered 410, and deletes deliveries past retention. A
+ * whose receiver answered 410, deletes deliveries past retention, and
+ * bodies made from captures past theirs. A
  * step that fails (a queue or a repository object unavailable) stops none
  * of the others; the failures are thrown together once all have run.
  */
@@ -545,6 +556,7 @@ export async function reconcileWebhooks(deps: DeliveryDeps): Promise<Reconciled>
     finished: late.finished + (await step("finish", () => finishDeadClaims(deps, policy), 0)),
     disabled: await step("disable", () => disableGone(deps, policy), 0),
     pruned: await step("prune", () => pruneExpired(deps, policy), 0),
+    payloads: await step("prune_payloads", () => prunePayloads(deps, policy), 0),
   };
   if (failures.length > 0)
     throw new AggregateError(failures, `webhook reconciliation: ${failures.length} failure(s)`);
@@ -649,7 +661,8 @@ async function disableGone(deps: DeliveryDeps, policy: AttemptPolicy): Promise<n
  * bodies go first (one bulk delete; a run that fails after it finds them
  * gone next time), then the attempts and rows. An event none of whose
  * deliveries was sent never had its body stored: its rows go without an
- * R2 delete.
+ * R2 delete. Nor do those of a body a payload row owns (made from the
+ * event's capture): it goes with its row (`prunePayloads`).
  */
 async function pruneExpired(deps: DeliveryDeps, policy: AttemptPolicy): Promise<number> {
   const { db, env } = deps;
@@ -664,7 +677,10 @@ async function pruneExpired(deps: DeliveryDeps, policy: AttemptPolicy): Promise<
          SELECT payload_key, max(state != 'dropped') AS sent FROM batch GROUP BY payload_key
          HAVING count(*) = (SELECT count(*) FROM webhook_deliveries d
                             WHERE d.payload_key = batch.payload_key))
-       SELECT b.delivery_id, b.payload_key, w.sent FROM batch b JOIN whole w USING (payload_key)`,
+       SELECT b.delivery_id, b.payload_key,
+         w.sent AND NOT EXISTS (SELECT 1 FROM webhook_payloads p WHERE p.payload_key = b.payload_key)
+           AS sent
+       FROM batch b JOIN whole w USING (payload_key)`,
     )
     .bind(deps.now(), policy.pruneBatch)
     .all<{ delivery_id: string; payload_key: string; sent: number }>();
@@ -682,6 +698,39 @@ async function pruneExpired(deps: DeliveryDeps, policy: AttemptPolicy): Promise<
       )
       .bind(ids),
   ]);
+  return results.length;
+}
+
+/**
+ * Deletes the bodies made from captures longest past their time, a batch
+ * a run, whatever their deliveries (whose time is the body's): intents
+ * whose run died, bodies all of whose deliveries were dropped, bodies
+ * whose deliveries are gone. The objects go first (one bulk delete), then
+ * the rows. An intent's time is a day past its event's deadline, after
+ * which no run stores its object; an established body's never moves back.
+ */
+async function prunePayloads(deps: DeliveryDeps, policy: AttemptPolicy): Promise<number> {
+  const { db, env } = deps;
+  const now = deps.now();
+  deps.metrics?.count("d1.query", { db: "org", op: "webhooks_payloads_due" });
+  const { results } = await db
+    .prepare(
+      `SELECT event_key, payload_key FROM webhook_payloads
+       WHERE expires_at <= ? ORDER BY expires_at LIMIT ?`,
+    )
+    .bind(now, policy.pruneBatch)
+    .all<{ event_key: string; payload_key: string }>();
+  if (results.length === 0) return 0;
+  deps.metrics?.count("r2.class_a", { bucket: "fyrden-assets", op: "webhook_payloads_delete" });
+  await env.ASSETS.delete(results.map((r) => r.payload_key));
+  deps.metrics?.count("d1.query", { db: "org", op: "webhooks_payloads_prune" });
+  await db
+    .prepare(
+      `DELETE FROM webhook_payloads
+       WHERE event_key IN (SELECT value FROM json_each(?1)) AND expires_at <= ?2`,
+    )
+    .bind(JSON.stringify(results.map((r) => r.event_key)), now)
+    .run();
   return results.length;
 }
 
