@@ -71,6 +71,15 @@ export function invocationBudget(now: number, policy: EffectPolicy = EFFECT_POLI
   return { calls, effects, bytes, deadline: now + deadlineMs, started: false };
 }
 
+/**
+ * The bytes an effect's delivery reads: its payload, and what the payload
+ * says it keeps elsewhere (`externalBytes`, a count; anything else adds
+ * nothing), so the invocation's byte budget bounds both before they are read.
+ */
+const effectBytes = (payload: string) =>
+  `(length(CAST(${payload} AS BLOB)) + max(0, coalesce(CASE json_type(${payload}, '$.externalBytes')
+     WHEN 'integer' THEN json_extract(${payload}, '$.externalBytes') END, 0)))`;
+
 /** Where a pending effect stands when a claim passes it over. */
 const ELIGIBLE = `e.sink = ?2 AND e.state = 'pending' AND (e.lease_until IS NULL OR e.lease_until <= ?3)
   AND e.attempts < ?4`;
@@ -131,6 +140,7 @@ export async function deliverEffects(
     }
     const outcome = await deliverClaimed(deps, policy, sink, claimed.rows.slice(0, taken), {
       token: claimed.token,
+      at: claimed.at,
       budget,
       first,
     });
@@ -160,6 +170,8 @@ async function claim(
   budget: EffectBudget,
 ): Promise<{
   token: string;
+  /** When the claim was made. */
+  at: number;
   rows: Row[];
   passed: string[];
   early: Map<number, string[]>;
@@ -195,13 +207,12 @@ async function claim(
          WHERE effect_id IN (
            SELECT effect_id FROM (
              SELECT e.effect_id, row_number() OVER listed AS n,
-               sum(length(CAST(e.payload AS BLOB))) OVER listed AS upto
+               sum(${effectBytes("e.payload")}) OVER listed AS upto
              FROM json_each(?1) j JOIN effects e ON e.effect_id = j.value
              WHERE ${ELIGIBLE} AND e.next_attempt_at <= ?3
              WINDOW listed AS (ORDER BY j.key ROWS UNBOUNDED PRECEDING))
            WHERE upto <= ?7 OR (n = 1 AND ?8))
-         RETURNING effect_id, sink, target, payload, attempts,
-           length(CAST(payload AS BLOB)) AS bytes`,
+         RETURNING effect_id, sink, target, payload, attempts, ${effectBytes("payload")} AS bytes`,
       )
       .bind(
         list,
@@ -243,7 +254,7 @@ async function claim(
     const delay = Math.ceil((row.next_attempt_at - now) / 1000);
     group(early, delay, row.effect_id);
   }
-  return { token, rows, passed: due, early };
+  return { token, at: now, rows, passed: due, early };
 }
 
 /** Ends effects of a sink this deployment does not have: nothing could deliver them. */
@@ -290,13 +301,14 @@ function payloadOf(row: Row): Record<string, unknown> {
   return payload;
 }
 
-function effectOf(row: Row): Effect {
+function effectOf(row: Row, claimedAt?: number): Effect {
   return {
     id: row.effect_id,
     sink: row.sink,
     target: row.target,
     payload: payloadOf(row),
     attempts: row.attempts,
+    ...(claimedAt !== undefined && { claimedAt }),
   };
 }
 
@@ -321,7 +333,7 @@ async function deliverClaimed(
   policy: EffectPolicy,
   sink: EffectSink,
   claimed: readonly Row[],
-  claim: { token: string; budget: EffectBudget; first: boolean },
+  claim: { token: string; at: number; budget: EffectBudget; first: boolean },
 ): Promise<Delivered> {
   const result: Delivered = { delivered: 0, retries: new Map(), unstarted: [] };
   let rows = claimed;
@@ -344,7 +356,7 @@ async function deliverClaimed(
     let outcome: Awaited<ReturnType<NonNullable<EffectSink["deliverBatch"]>>>;
     try {
       outcome = await sink.deliverBatch(
-        rows.map(effectOf),
+        rows.map((row) => effectOf(row, claim.at)),
         deps.env,
         deps.db,
         deps.metrics,
@@ -394,12 +406,16 @@ async function deliverClaimed(
         result.unstarted.push(...left.map((r) => r.effect_id));
         break;
       }
+      let outcome: Awaited<ReturnType<EffectSink["deliver"]>>;
       try {
-        await sink.deliver(effectOf(row), deps.env, deps.db, deps.metrics);
-        done.push(row.effect_id);
+        outcome = await sink.deliver(effectOf(row, claim.at), deps.env, deps.db, deps.metrics);
       } catch (error) {
         failures.push({ rows: [row], error });
+        continue;
       }
+      // Recording the end is not the sink's failure: if it fails, the message is retried.
+      if (outcome) await markEnded(deps, sink, [row], token, outcome.ended);
+      else done.push(row.effect_id);
     }
   }
   for (const failure of failures) {

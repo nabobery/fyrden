@@ -27,6 +27,14 @@ export interface Effect {
   readonly target: string;
   readonly payload: Record<string, unknown>;
   readonly attempts: number;
+  /** When the dispatcher claimed it (the delivery's own time, not the sink's). */
+  readonly claimedAt?: number;
+}
+
+/** What a single delivery may answer besides done (return) or retry (throw): ended for good. */
+export interface DeliverOutcome {
+  /** Why, recorded as the effect's error (`expired:`, `invalidated:` and so on). */
+  readonly ended: string;
 }
 
 export interface EffectSink {
@@ -37,9 +45,15 @@ export interface EffectSink {
   /**
    * Delivers one effect (`db`: the read model it is journaled in; `metrics`:
    * the invocation's, for the sink's own calls). Must be idempotent per
-   * `effect.id`; throws to retry later.
+   * `effect.id`; throws to retry later, or answers `{ ended }` when the
+   * effect can never be delivered.
    */
-  deliver(effect: Effect, env: Env, db: D1Database, metrics?: Metrics): Promise<void>;
+  deliver(
+    effect: Effect,
+    env: Env,
+    db: D1Database,
+    metrics?: Metrics,
+  ): Promise<void | DeliverOutcome>;
   /**
    * Delivers several of the sink's effects at once, when the sink can do
    * better than one at a time (one call per destination they share): the
