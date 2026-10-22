@@ -21,12 +21,15 @@
       { "name": "USER", "class_name": "UserDO" },
       { "name": "RUN", "class_name": "RunDO" },
       // One user deletion's runner (its alarm advances the job).
-      { "name": "DELETION", "class_name": "DeletionDO" }
+      { "name": "DELETION", "class_name": "DeletionDO" },
+      // Runs the five-minute maintenance cron's work, with a Durable Object's CPU.
+      { "name": "MAINTENANCE", "class_name": "MaintenanceDO" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RepoDO", "NetworkDO", "OrgDO", "UserDO", "RunDO"] },
-    { "tag": "v2", "new_sqlite_classes": ["DeletionDO"] }
+    { "tag": "v2", "new_sqlite_classes": ["DeletionDO"] },
+    { "tag": "v3", "new_sqlite_classes": ["MaintenanceDO"] }
   ],
 
   // Database ids are filled in per deployment by `fyrden deploy`.
