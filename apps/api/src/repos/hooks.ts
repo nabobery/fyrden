@@ -458,6 +458,7 @@ export async function redeliverHookDeliveryOperation(
     );
   // A message lost here is sent again by the cron (its enqueued time is set).
   await ctx.env.WEBHOOKS.send({ delivery: moved.delivery_id } satisfies DeliveryMessage);
+  ctx.metrics.count("queue.send", { queue: "webhooks" });
   return deliveryOut(moved);
 }
 

@@ -458,13 +458,13 @@ async function enqueue(
   delaySeconds = 0,
 ): Promise<void> {
   if (deliveries.length === 0) return;
-  metrics?.count("queue.send", { queue: "webhooks" });
   await env.WEBHOOKS.sendBatch(
     deliveries.map((delivery) => ({
       body: { delivery } satisfies DeliveryMessage,
       ...(delaySeconds > 0 && { delaySeconds }),
     })),
   );
+  metrics?.count("queue.send", { queue: "webhooks" }, deliveries.length);
   metrics?.count("d1.query", { db: "org", op: "webhooks_enqueued" });
   await db
     .prepare(

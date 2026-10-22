@@ -5,6 +5,7 @@
 // deadline, and as the manifest says; pages go a day after the deadline.
 import { evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
   type DomainEvent,
   eventKey,
@@ -98,7 +99,7 @@ async function commentEvent(): Promise<DomainEvent> {
 }
 
 /** Journals the event's feed effects and delivers them as the feed queue would, at `now`. */
-async function deliver(event: DomainEvent, now = Date.now()) {
+async function deliver(event: DomainEvent, now = Date.now(), metrics?: Metrics) {
   const { publish, sent } = recordingPublish();
   await applyEnvelope(
     env,
@@ -107,7 +108,14 @@ async function deliver(event: DomainEvent, now = Date.now()) {
   );
   for (let next = sent.shift(); next; next = sent.shift())
     await deliverEffects(
-      { db: env.ORG_READ, env, sinks: [feedSink], now: () => now, publish },
+      {
+        db: env.ORG_READ,
+        env,
+        sinks: [feedSink],
+        now: () => now,
+        publish,
+        ...(metrics && { metrics }),
+      },
       next.sink,
       next.ids,
       invocationBudget(now),
@@ -197,6 +205,21 @@ describe("audience pages", () => {
     await deliver(event);
     expect(await effects()).toHaveLength(3);
     expect(await items(names[249] as string)).toEqual(["issue/1"]);
+  });
+
+  it("time a delivery's page reads and its calls to feeds (`feed.stage_ms`)", async () => {
+    await participants(150);
+    const event = await commentEvent();
+    const points: { stage: string; ms: number }[] = [];
+    const metrics = {
+      count(name: string, dimensions: Record<string, string>, value = 1) {
+        if (name === "feed.stage_ms") points.push({ stage: dimensions.stage ?? "", ms: value });
+      },
+    } as unknown as Metrics;
+    await deliver(event, Date.now(), metrics);
+    // Delivered together: its page read, then the calls to every recipient's feed.
+    expect(points.map((p) => p.stage)).toEqual(["pages", "calls"]);
+    expect(points.every((p) => p.ms >= 0)).toBe(true);
   });
 
   it("count a page's recipients in the calls its effect makes", () => {

@@ -1,3 +1,4 @@
+import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { type DomainEvent, eventKey, type FeedBlock, type FeedEntry } from "@fyrden/domain";
 import { z } from "zod";
 import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effects/journal.js";
@@ -144,10 +145,15 @@ async function purgeCalls(effects: readonly Effect[], env: Env): Promise<FeedCal
   });
 }
 
+/** The id of a page's effect (`effectId`: the event key, the sink, the target `page:<n>`). */
+const PAGE_ID = /:feed:page:\d+$/;
+
 export const feedSink: EffectSink = {
   name: "feed",
   // Delivered in one batch, a call per recipient (100 at most each): within an invocation's calls.
   perMessage: 8,
+  // A page of further recipients (up to 100 calls) alone, so an event's pages go side by side.
+  alone: (id: string) => PAGE_ID.test(id),
   inline: true,
   // A page goes to the queue: an event carrying one has more recipients than an invocation's share.
   inlineable: (planned: PlannedEffect) => !("page" in planned.payload),
@@ -218,9 +224,9 @@ export const feedSink: EffectSink = {
     effects: readonly Effect[],
     env: Env,
     _db: D1Database,
-    _metrics?: unknown,
+    metrics?: Metrics,
     now = Date.now(),
-  ) => deliverFeeds(effects, env, now),
+  ) => deliverFeeds(effects, env, now, metrics),
 
   /**
    * One call per recipient of an event, or per principal a purge names; a
@@ -242,12 +248,17 @@ async function deliverFeeds(
   effects: readonly Effect[],
   env: Env,
   now: number,
+  metrics?: Metrics,
 ): Promise<BatchDelivery> {
   // Each failed effect with the first error that stopped it; those ended, with why.
   const failed = new Map<string, unknown>();
   const ended = new Map<string, string>();
   let error: unknown;
-  const pages = await readPages(effects.filter(isPage), env, now, failed, ended);
+  const pageEffects = effects.filter(isPage);
+  let started = Date.now();
+  const pages = await readPages(pageEffects, env, now, failed, ended);
+  const pagesMs = Date.now() - started;
+  if (pageEffects.length > 0) metrics?.count("feed.stage_ms", { stage: "pages" }, pagesMs);
   error = [...failed.values()][0];
   const calls = entryCalls(
     [...effects.filter((effect) => !isPurge(effect) && !isPage(effect)).map(entriesOf), ...pages],
@@ -260,6 +271,7 @@ async function deliverFeeds(
     error = cause;
     for (const effect of purges) if (!failed.has(effect.id)) failed.set(effect.id, cause);
   }
+  started = Date.now();
   for (let at = 0; at < calls.length; at += PARALLEL_FEEDS) {
     const slice = calls.slice(at, at + PARALLEL_FEEDS);
     const results = await Promise.allSettled(slice.map((call) => call.call()));
@@ -269,6 +281,15 @@ async function deliverFeeds(
       for (const id of slice[i]?.effects ?? []) if (!failed.has(id)) failed.set(id, result.reason);
     });
   }
+  const callsMs = Date.now() - started;
+  if (calls.length > 0) metrics?.count("feed.stage_ms", { stage: "calls" }, callsMs);
+  createLogger({ op: "feed.deliver" }).info("feeds delivered", {
+    effects: effects.length,
+    pages: pageEffects.length,
+    calls: calls.length,
+    pagesMs,
+    callsMs,
+  });
   return {
     delivered: effects.map((effect) => effect.id).filter((id) => !failed.has(id) && !ended.has(id)),
     ended: [...ended].map(([id, reason]) => ({ ids: [id], reason })),

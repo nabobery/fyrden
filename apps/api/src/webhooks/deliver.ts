@@ -491,10 +491,12 @@ async function record(
   // object is retried by the cron.
   if (updated > 0 && gone) await disableFor(deps, delivery.delivery_id);
   // A later wait than a message may be delayed, or a claim lost meanwhile: the cron sees to it.
-  if (updated > 0 && sendNow)
+  if (updated > 0 && sendNow) {
     await deps.env.WEBHOOKS.send({ delivery: delivery.delivery_id } satisfies DeliveryMessage, {
       delaySeconds: Math.max(0, Math.ceil((next - now) / 1000)),
     });
+    deps.metrics?.count("queue.send", { queue: "webhooks" });
+  }
 }
 
 /** What one cron run of reconciliation did, step by step. */
@@ -597,6 +599,7 @@ async function resendLate(
     }
     try {
       await env.WEBHOOKS.send({ delivery: row.delivery_id } satisfies DeliveryMessage);
+      deps.metrics?.count("queue.send", { queue: "webhooks" });
       sent++;
     } catch (error) {
       // Each on its own: the others are still sent.
