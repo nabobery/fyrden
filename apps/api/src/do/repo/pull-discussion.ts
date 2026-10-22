@@ -318,13 +318,20 @@ export class PullDiscussion {
     return this.deps.pullChange(
       "createReviewComment",
       actor,
-      (caller, checked) =>
-        checked.ok
-          ? this.#withComparison(
-              this.deps.reviewComments.start(number, checked.value.anchor, input.body, caller),
-              checked.value.compared,
-            )
-          : checked,
+      (caller, checked) => {
+        if (!checked.ok) return checked;
+        const comparison = this.#comparisonNow(number, checked.value.compared);
+        return this.#withComparison(
+          this.deps.reviewComments.start(
+            number,
+            checked.value.anchor,
+            input.body,
+            caller,
+            comparison,
+          ),
+          comparison,
+        );
+      },
       () => this.#checkedAnchor(number, input),
       [input.body],
     );
@@ -336,8 +343,13 @@ export class PullDiscussion {
     return this.deps.pullChange(
       "replyReviewComment",
       actor,
-      (caller, compared) =>
-        this.#withComparison(reviewComments.reply(number, to, body, caller), compared),
+      (caller, compared) => {
+        const comparison = this.#comparisonNow(number, compared);
+        return this.#withComparison(
+          reviewComments.reply(number, to, body, caller, comparison),
+          comparison,
+        );
+      },
       () => this.#comparedFor(number, reviewComments.get(to)?.anchor),
       [body],
     );
@@ -403,7 +415,11 @@ export class PullDiscussion {
     return this.deps.pullChange(
       "editReviewComment",
       actor,
-      (caller, compared) => this.#withComparison(reviewComments.edit(id, body, caller), compared),
+      (caller, compared) => {
+        const number = reviewComments.get(id)?.number;
+        const comparison = number === undefined ? null : this.#comparisonNow(number, compared);
+        return this.#withComparison(reviewComments.edit(id, body, caller, comparison), comparison);
+      },
       () => {
         const comment = reviewComments.get(id);
         return comment ? this.#comparedFor(comment.number, comment.anchor) : Promise.resolve(null);
@@ -412,16 +428,20 @@ export class PullDiscussion {
     );
   }
 
-  /** A diff comment's change, with what its pull request's diff compares now (whether it is outdated). */
+  /**
+   * A diff comment's change, with what its pull request's diff compares now
+   * (whether it is outdated): `comparison`, worked out in the change (its
+   * webhook judges the comment by it too).
+   */
   #withComparison(
     result: { ok: true; comment: ReviewCommentRecord } | { ok: false; code: ReviewCommentFailure },
-    compared: Compared | null,
+    comparison: Comparison | null,
   ) {
     return result.ok
       ? {
           ...result,
           comment: (this.deps.reacted([result.comment]) as [Reacted<ReviewCommentRecord>])[0],
-          comparison: this.#comparisonNow(result.comment.number, compared),
+          comparison,
         }
       : result;
   }

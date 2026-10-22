@@ -27,38 +27,11 @@ import { resolveOne } from "../signing/verification.js";
 import type { RepoEntry } from "./directory.js";
 import { commitIdentityOf, noReplyPeople } from "./file-writes.js";
 import { actorOf, failure } from "./pulls.js";
-import { reactionRollup } from "./shapes.js";
+import { reviewCommentOutput } from "./shapes.js";
 
 /** A diff comment as the API returns it, judged against what its pull request's diff compares now. */
-function commentOutput(
-  comment: Reacted<ReviewCommentRecord>,
-  now: Comparison | null,
-): Output<typeof getReviewComment> {
-  const { anchor } = comment;
-  const outdated = isOutdated(anchor, now);
-  return {
-    id: comment.id,
-    pull_request_review_id: null,
-    ...(comment.inReplyTo !== null && { in_reply_to_id: comment.inReplyTo }),
-    thread_id: comment.threadId,
-    user: { id: comment.authorId },
-    performed_via_agents: [...comment.actChain],
-    body: comment.body,
-    commit_id: anchor.commitSha,
-    original_commit_id: anchor.commitSha,
-    path: anchor.path,
-    side: anchor.side,
-    line: outdated ? null : anchor.line,
-    original_line: anchor.line,
-    start_line: anchor.startLine,
-    start_side: anchor.startLine === null ? null : anchor.side,
-    outdated,
-    resolved: comment.resolved,
-    created_at: comment.createdAt,
-    updated_at: comment.updatedAt,
-    reactions: reactionRollup(comment.reactions),
-  };
-}
+const commentOutput = (comment: Reacted<ReviewCommentRecord>, now: Comparison | null) =>
+  reviewCommentOutput(comment, isOutdated(comment.anchor, now));
 
 function threadOutput(
   thread: ThreadRecord,

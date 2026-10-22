@@ -552,6 +552,8 @@ export class RepoDO extends MigratingDO {
       pulls: this.pulls,
       repoId: () => this.#repoId(),
       forgetReactions: (id) => this.reactions.forget("review_comment", id),
+      reactionsOf: (id) =>
+        this.reactions.countsOf("review_comment", [id]).get(id) as ReactionCounts,
     });
     this.pullAcl = async (accountId) => {
       this.git.context.metrics.count("do.request", { class: "OrgDO", method: "snapshotFor" });
