@@ -579,6 +579,111 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/admin/users/{username}": {
+      "delete": {
+        "description": "Deletes a user, as GitHub Enterprise does, with their repositories and everything else of theirs: from the request on they and their agents can do nothing (every credential revoked, their handles released and held for 90 days); the rest runs in the background, and the deletion answers 202 with where it is (GitHub Enterprise answers 204 and works at once). What they made in others' repositories stays, shown as \`ghost\`. An organization they solely own holds the deletion until an administrator makes someone else its owner. Asking again answers where the deletion is: by the released handle while it is held, and by the user's id at any time (a deleted user's handle is their id). Instance administrators only; not yourself, nor the last active administrator.",
+        "operationId": "admin.users.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "username",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "blocked": {
+                      "description": "Why it waits, or null: \`sole_owner:<organization id>\` while the user is an organization's only owner (make another user its owner with \`PUT /admin/organizations/{org}/owners/{username}\`).",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "created_at": {
+                      "description": "When it began, Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "id": {
+                      "description": "The user's id (usr_ prefix); their handle is released, and the id names them.",
+                      "type": "string",
+                    },
+                    "state": {
+                      "description": "\`deleting\` while the deletion runs; \`deleted\` once it is done.",
+                      "enum": [
+                        "deleting",
+                        "deleted",
+                      ],
+                      "type": "string",
+                    },
+                    "step": {
+                      "description": "Where it is: their repositories deleted, their access in every account removed, their stars and feed, then done.",
+                      "enum": [
+                        "repositories",
+                        "accounts",
+                        "stars",
+                        "feeds",
+                        "finalize",
+                        "done",
+                      ],
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "When it last moved, Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "step",
+                    "blocked",
+                    "created_at",
+                    "updated_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Accepted",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete a user",
+        "x-fyrden-permission": "instance:admin",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/admin/webhooks/reseal": {
       "post": {
         "description": "Fyrden: seals again, with \`WEBHOOKS_KEY\`, webhook secrets sealed with a retired key, a batch of repositories at a time (call again with \`cursor\` until \`next_cursor\` is null and \`remaining\` is 0); \`unreadable\` counts secrets whose key is gone (rotate those hooks' secrets). Instance administrators only.",

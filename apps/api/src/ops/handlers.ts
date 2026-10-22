@@ -15,6 +15,7 @@ import {
   listGrantsOperation,
   revokeGrantOperation,
 } from "../accounts/delegation.js";
+import { deleteUserOperation } from "../accounts/deletion.js";
 import {
   createTeamOperation,
   listCollaboratorsOperation,
@@ -306,6 +307,7 @@ export const handlers: Handlers = {
   },
 
   "admin.users.suspend": suspendUserOperation,
+  "admin.users.delete": deleteUserOperation,
   "admin.users.unsuspend": unsuspendUserOperation,
 
   "admin.tokens.create": async (ctx, input) => {

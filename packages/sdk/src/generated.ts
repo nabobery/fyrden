@@ -252,6 +252,27 @@ export type AdminUsersUnsuspendInput = {
 /** Output of `admin.users.unsuspend`. */
 export type AdminUsersUnsuspendOutput = null;
 
+/** Input of `admin.users.delete`: Delete a user. */
+export type AdminUsersDeleteInput = {
+  username: string;
+};
+
+/** Output of `admin.users.delete`. */
+export type AdminUsersDeleteOutput = {
+  /** The user's id (usr_ prefix); their handle is released, and the id names them. */
+  id: string;
+  /** `deleting` while the deletion runs; `deleted` once it is done. */
+  state: "deleting" | "deleted";
+  /** Where it is: their repositories deleted, their access in every account removed, their stars and feed, then done. */
+  step: "repositories" | "accounts" | "stars" | "feeds" | "finalize" | "done";
+  /** Why it waits, or null: `sole_owner:<organization id>` while the user is an organization's only owner (make another user its owner with `PUT /admin/organizations/{org}/owners/{username}`). */
+  blocked: string | null;
+  /** When it began, Unix time in milliseconds. */
+  created_at: number;
+  /** When it last moved, Unix time in milliseconds. */
+  updated_at: number;
+};
+
 /** Input of `agents.create`: Create an agent. */
 export type AgentsCreateInput = {
   /** 1-39 letters, digits and single inner hyphens; unique among all handles, ignoring case; not reserved. */
@@ -6377,6 +6398,7 @@ export const OPERATIONS = {
   "admin.tokens.create": { method: "POST", path: "/admin/users/{user_id}/tokens", pathParams: ["user_id"], idempotent: true },
   "admin.users.suspend": { method: "PUT", path: "/users/{username}/suspended", pathParams: ["username"], idempotent: true },
   "admin.users.unsuspend": { method: "DELETE", path: "/users/{username}/suspended", pathParams: ["username"], idempotent: true },
+  "admin.users.delete": { method: "DELETE", path: "/admin/users/{username}", pathParams: ["username"], idempotent: true },
   "agents.create": { method: "POST", path: "/agents", pathParams: [], idempotent: true },
   "agents.list": { method: "GET", path: "/agents", pathParams: [], idempotent: false, items: "agents" },
   "agents.get": { method: "GET", path: "/agents/{agent}", pathParams: ["agent"], idempotent: false },
@@ -6561,6 +6583,8 @@ export interface Operations {
   "admin.users.suspend": { input: AdminUsersSuspendInput; output: AdminUsersSuspendOutput };
   /** Unsuspend a user. Lifts a user's suspension: they can sign in again, and their tokens and their agents' work again (sessions and OAuth tokens revoked by the suspension stay revoked). Unsuspending a user who is not suspended changes nothing. Instance administrators only. */
   "admin.users.unsuspend": { input: AdminUsersUnsuspendInput; output: AdminUsersUnsuspendOutput };
+  /** Delete a user. Deletes a user, as GitHub Enterprise does, with their repositories and everything else of theirs: from the request on they and their agents can do nothing (every credential revoked, their handles released and held for 90 days); the rest runs in the background, and the deletion answers 202 with where it is (GitHub Enterprise answers 204 and works at once). What they made in others' repositories stays, shown as `ghost`. An organization they solely own holds the deletion until an administrator makes someone else its owner. Asking again answers where the deletion is: by the released handle while it is held, and by the user's id at any time (a deleted user's handle is their id). Instance administrators only; not yourself, nor the last active administrator. */
+  "admin.users.delete": { input: AdminUsersDeleteInput; output: AdminUsersDeleteOutput };
   /** Create an agent. Creates an agent principal owned by you, or by an organization you own (`org`). An agent acts with its own tokens and collaborator roles, or for a user under a delegation grant; either way it never exceeds its owner. */
   "agents.create": { input: AgentsCreateInput; output: AgentsCreateOutput };
   /** List agents. Your agents, or those of an organization you own (`org`), oldest first. */
