@@ -6641,27 +6641,27 @@ export interface Operations {
   "repos.rulesets.update": { input: ReposRulesetsUpdateInput; output: ReposRulesetsUpdateOutput };
   /** Delete a ruleset. Removes a ruleset. Administrators only. */
   "repos.rulesets.delete": { input: ReposRulesetsDeleteInput; output: ReposRulesetsDeleteOutput };
-  /** List repository webhooks. The repository's webhooks. Administrators only. */
+  /** List repository webhooks. The repository's webhooks. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.list": { input: ReposHooksListInput; output: ReposHooksListOutput };
-  /** Create a repository webhook. Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, or `*`. Administrators only. */
+  /** Create a repository webhook. Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, or `*`. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.create": { input: ReposHooksCreateInput; output: ReposHooksCreateOutput };
-  /** Get a repository webhook. One webhook. Administrators only. */
+  /** Get a repository webhook. One webhook. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.get": { input: ReposHooksGetInput; output: ReposHooksGetOutput };
-  /** Update a repository webhook. Changes a webhook's URL, events or state (turning it on clears why the server turned it off). Deliveries waiting for an attempt go to the new URL. Administrators only. */
+  /** Update a repository webhook. Changes a webhook's URL, events or state (turning it on clears why the server turned it off). Deliveries waiting for an attempt go to the new URL. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.update": { input: ReposHooksUpdateInput; output: ReposHooksUpdateOutput };
-  /** Delete a repository webhook. Removes a webhook; its waiting deliveries are cancelled. Administrators only. */
+  /** Delete a repository webhook. Removes a webhook; its waiting deliveries are cancelled. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.delete": { input: ReposHooksDeleteInput; output: ReposHooksDeleteOutput };
-  /** Ping a repository webhook. Sends the webhook a `ping` delivery. Administrators only. */
+  /** Ping a repository webhook. Sends the webhook a `ping` delivery. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.pings.create": { input: ReposHooksPingsCreateInput; output: ReposHooksPingsCreateOutput };
-  /** Rotate a webhook's secret. Fyrden: a new signing secret (in this answer only). Deliveries are signed with both the new and the previous secret for a week, or until the previous one is dropped. Administrators only. */
+  /** Rotate a webhook's secret. Fyrden: a new signing secret (in this answer only). Deliveries are signed with both the new and the previous secret for a week, or until the previous one is dropped. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.secret.rotate": { input: ReposHooksSecretRotateInput; output: ReposHooksSecretRotateOutput };
-  /** Drop a webhook's previous secret. Fyrden: stops signing deliveries with the secret a rotation replaced. Administrators only. */
+  /** Drop a webhook's previous secret. Fyrden: stops signing deliveries with the secret a rotation replaced. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.secret.drop": { input: ReposHooksSecretDropInput; output: ReposHooksSecretDropOutput };
-  /** List deliveries for a repository webhook. The webhook's deliveries of the last 30 days, newest first. Administrators only. */
+  /** List deliveries for a repository webhook. The webhook's deliveries of the last 30 days, newest first. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.deliveries.list": { input: ReposHooksDeliveriesListInput; output: ReposHooksDeliveriesListOutput };
-  /** Get a delivery for a repository webhook. One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only. */
+  /** Get a delivery for a repository webhook. One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.deliveries.get": { input: ReposHooksDeliveriesGetInput; output: ReposHooksDeliveriesGetOutput };
-  /** Redeliver a delivery for a repository webhook. Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), once it has made 50 attempts (422 `too_many_attempts`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only. */
+  /** Redeliver a delivery for a repository webhook. Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), once it has made 50 attempts (422 `too_many_attempts`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.deliveries.redeliver": { input: ReposHooksDeliveriesRedeliverInput; output: ReposHooksDeliveriesRedeliverOutput };
   /** Seal webhook secrets with the current key. Fyrden: seals again, with `WEBHOOKS_KEY`, webhook secrets sealed with a retired key, a batch of repositories at a time (call again with `cursor` until `next_cursor` is null and `remaining` is 0); `unreadable` counts secrets whose key is gone (rotate those hooks' secrets). Instance administrators only. */
   "admin.webhooks.reseal": { input: AdminWebhooksResealInput; output: AdminWebhooksResealOutput };
