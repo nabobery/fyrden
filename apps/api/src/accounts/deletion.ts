@@ -1,3 +1,7 @@
+import { createLogger } from "@fyrden/adapters-cloudflare/obs";
+import type { deleteUser, Input, Output } from "@fyrden/api-contract";
+import { type OpContext, OperationError } from "../ops/execute.js";
+import { clock } from "../services.js";
 import { HANDLE_HOLD_MS } from "./handles.js";
 import type { Lifecycle } from "./lifecycle.js";
 
@@ -158,4 +162,97 @@ export async function beginUserDeletion(
     ),
   ]);
   return (changed?.meta.changes ?? 0) > 0;
+}
+
+type Deletion = Output<typeof deleteUser>;
+
+/** A deletion as its job stands; undefined for a user never being deleted. */
+async function deletionOf(ctx: OpContext, userId: string): Promise<Deletion | undefined> {
+  ctx.metrics.count("d1.query", { db: "directory", op: "user_deletion_read" });
+  const row = await ctx.env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT d.user_id AS id, p.lifecycle AS state, d.step, d.blocked, d.created_at, d.updated_at
+       FROM user_deletions d JOIN principals p ON p.id = d.user_id WHERE d.user_id = ?`,
+    )
+    .bind(userId)
+    .first<Deletion>();
+  return row ?? undefined;
+}
+
+/**
+ * Who `username` names: the user with that handle now, else, while a
+ * deletion holds it, the user it was released by.
+ */
+async function deletionTarget(
+  ctx: OpContext,
+  username: string,
+): Promise<(DeletionTarget & { readonly type: string }) | undefined> {
+  const db = ctx.env.DIRECTORY.withSession("first-primary");
+  ctx.metrics.count("d1.query", { db: "directory", op: "lifecycle_target" });
+  const row = await db
+    .prepare(
+      `SELECT id, type, lifecycle, lifecycle_gen AS gen FROM principals
+       WHERE handle = ?1 COLLATE NOCASE
+       UNION ALL
+       SELECT p.id, p.type, p.lifecycle, p.lifecycle_gen FROM handle_reservations r
+         JOIN principals p ON p.id = r.principal_id
+       WHERE r.handle = ?1 AND r.until > ?2
+         AND NOT EXISTS (SELECT 1 FROM principals WHERE handle = ?1 COLLATE NOCASE)
+       LIMIT 1`,
+    )
+    .bind(username, clock())
+    .first<DeletionTarget & { type: string }>();
+  return row ?? undefined;
+}
+
+/** The `admin.users.delete` operation (see the module's description). */
+export async function deleteUserOperation(
+  ctx: OpContext,
+  input: Input<typeof deleteUser>,
+): Promise<Output<typeof deleteUser>> {
+  const target = await deletionTarget(ctx, input.username);
+  if (target?.type !== "user")
+    throw new OperationError(404, "user_not_found", `No user has the handle ${input.username}.`);
+  if (target.id === ctx.auth.principalId)
+    throw new OperationError(422, "cannot_delete_self", "You cannot delete yourself.");
+  if (target.lifecycle === "active" || target.lifecycle === "suspended") {
+    ctx.metrics.count("d1.query", { db: "directory", op: "user_deletion_begin" }, 15);
+    const began = await beginUserDeletion(
+      ctx.env.DIRECTORY,
+      target,
+      {
+        principalId: ctx.auth.principalId,
+        act: ctx.auth.act,
+        ...(ctx.requestId !== undefined && { requestId: ctx.requestId }),
+      },
+      clock(),
+    );
+    if (began) {
+      // Its runner, at once; if this is lost, the deletions' recovery cron sets it.
+      ctx.metrics.count("do.request", { class: "DeletionDO", method: "arm" });
+      await ctx.env.DELETION.getByName(target.id)
+        .arm(clock())
+        .catch((error: unknown) =>
+          createLogger({ op: "users.delete", userId: target.id }).warn(
+            "arming the deletion failed",
+            { error },
+          ),
+        );
+    }
+  }
+  const deletion = await deletionOf(ctx, target.id);
+  if (deletion) return deletion;
+  // Not begun, and no deletion: why.
+  ctx.metrics.count("d1.query", { db: "directory", op: "lifecycle_target" });
+  const now = await ctx.env.DIRECTORY.withSession("first-primary")
+    .prepare("SELECT lifecycle_gen AS gen, lifecycle FROM principals WHERE id = ?")
+    .bind(target.id)
+    .first<{ gen: number; lifecycle: Lifecycle }>();
+  if (now?.gen === target.gen && now.lifecycle === target.lifecycle)
+    throw new OperationError(
+      409,
+      "last_admin",
+      "This is the last active instance administrator: make another one first.",
+    );
+  throw new OperationError(409, "user_changed", "The user changed meanwhile; try again.");
 }

@@ -1,5 +1,11 @@
 import { createMetrics, type Metrics, type RequestMeta } from "@fyrden/adapters-cloudflare/obs";
-import type { EffectsCheck, HealthCheck, HealthReport, HealthResult } from "@fyrden/api-contract";
+import type {
+  DeletionsCheck,
+  EffectsCheck,
+  HealthCheck,
+  HealthReport,
+  HealthResult,
+} from "@fyrden/api-contract";
 import { DEFAULT_ORG_SHARD, readModelFor } from "./events/read-model.js";
 
 async function timed(check: () => Promise<boolean>): Promise<HealthCheck> {
@@ -73,6 +79,39 @@ async function checkEffects(env: Env, metrics: Metrics): Promise<EffectsCheck> {
   return check.error === undefined ? { ...check, overdueS, failed } : check;
 }
 
+/** How long a user deletion may be due without running before it reads as late. Proposed. */
+export const DELETIONS_OVERDUE_MS = 60 * 60 * 1000;
+
+/**
+ * Whether user deletions go on: one waiting on an organization it solely
+ * owns, one whose last run failed, and how long the longest due one no
+ * run holds has waited. One D1 query; the deletions are few.
+ */
+async function checkDeletions(env: Env, metrics: Metrics): Promise<DeletionsCheck> {
+  let blocked = false;
+  let failing = false;
+  let overdueS = 0;
+  const check = await timed(async () => {
+    const now = Date.now();
+    metrics.count("d1.query", { db: "directory", op: "healthz_deletions" });
+    const row = await env.DIRECTORY.prepare(
+      `SELECT EXISTS (SELECT 1 FROM user_deletions WHERE step <> 'done' AND blocked IS NOT NULL)
+           AS blocked,
+         EXISTS (SELECT 1 FROM user_deletions WHERE step <> 'done' AND attempts > 0) AS failing,
+         (SELECT min(next_attempt_at) FROM user_deletions WHERE step <> 'done'
+           AND (lease_until IS NULL OR lease_until <= ?1)) AS due`,
+    )
+      .bind(now)
+      .first<{ blocked: number; failing: number; due: number | null }>();
+    blocked = row?.blocked === 1;
+    failing = row?.failing === 1;
+    const overdueMs = row?.due == null ? 0 : Math.max(0, now - row.due);
+    overdueS = Math.floor(overdueMs / 1000);
+    return !blocked && !failing && overdueMs <= DELETIONS_OVERDUE_MS;
+  });
+  return check.error === undefined ? { ...check, blocked, failing, overdueS } : check;
+}
+
 /**
  * Round-trips each storage tier the API depends on: a D1 read, a RepoDO
  * SQLite write and read, and an R2 put, get and delete; and reports how
@@ -84,7 +123,7 @@ async function checkHealth(env: Env, meta: RequestMeta, metrics: Metrics): Promi
   const nonce = crypto.randomUUID();
   // Cost counters, each counted as its operation is attempted;
   // the R2 delete is free and not counted.
-  const [d1, durableObject, r2, effects] = await Promise.all([
+  const [d1, durableObject, r2, effects, deletions] = await Promise.all([
     timed(async () => {
       metrics.count("d1.query", { db: "directory", op: "healthz" });
       return (await env.DIRECTORY.prepare("SELECT 1 AS one").first("one")) === 1;
@@ -105,8 +144,12 @@ async function checkHealth(env: Env, meta: RequestMeta, metrics: Metrics): Promi
       }
     }),
     checkEffects(env, metrics),
+    checkDeletions(env, metrics),
   ]);
-  return { ok: d1.ok && durableObject.ok && r2.ok, checks: { d1, durableObject, r2, effects } };
+  return {
+    ok: d1.ok && durableObject.ok && r2.ok,
+    checks: { d1, durableObject, r2, effects, deletions },
+  };
 }
 
 /**

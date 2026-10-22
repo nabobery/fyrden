@@ -24,7 +24,13 @@ describe("GET /healthz", () => {
     }>();
     expect(body.ok).toBe(true);
     expect(body.requestId).toBe("req-healthz-1");
-    expect(Object.keys(body.checks).sort()).toEqual(["d1", "durableObject", "effects", "r2"]);
+    expect(Object.keys(body.checks).sort()).toEqual([
+      "d1",
+      "deletions",
+      "durableObject",
+      "effects",
+      "r2",
+    ]);
     for (const check of Object.values(body.checks)) {
       expect(check.ok).toBe(true);
       expect(check.ms).toBeGreaterThanOrEqual(0);
@@ -40,6 +46,7 @@ describe("GET /healthz", () => {
     expect(result.rateLimited).toBe(false);
     expect(counted.sort()).toEqual([
       "d1.query directory,healthz",
+      "d1.query directory,healthz_deletions",
       "d1.query org,healthz_effects",
       "do.request RepoDO,healthProbe",
       "r2.class_a fyrden-assets,put",

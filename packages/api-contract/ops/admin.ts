@@ -119,6 +119,52 @@ export const suspendUser = defineOperation({
   },
 });
 
+/** A user deletion, as its job stands. */
+export const UserDeletion = z.object({
+  id: z
+    .string()
+    .describe("The user's id (usr_ prefix); their handle is released, and the id names them."),
+  state: z
+    .enum(["deleting", "deleted"])
+    .describe("`deleting` while the deletion runs; `deleted` once it is done."),
+  step: z
+    .enum(["repositories", "accounts", "stars", "feeds", "finalize", "done"])
+    .describe(
+      "Where it is: their repositories deleted, their access in every account removed, their stars and feed, then done.",
+    ),
+  blocked: z
+    .string()
+    .nullable()
+    .describe(
+      "Why it waits, or null: `sole_owner:<organization id>` while the user is an organization's only owner (make another user its owner with `PUT /admin/organizations/{org}/owners/{username}`).",
+    ),
+  created_at: z.number().int().describe("When it began, Unix time in milliseconds."),
+  updated_at: z.number().int().describe("When it last moved, Unix time in milliseconds."),
+});
+
+export const deleteUser = defineOperation({
+  id: "admin.users.delete",
+  method: "DELETE",
+  path: "/admin/users/{username}",
+  summary: "Delete a user",
+  description:
+    "Deletes a user, as GitHub Enterprise does, with their repositories and everything else of theirs: from the request on they and their agents can do nothing (every credential revoked, their handles released and held for 90 days); the rest runs in the background, and the deletion answers 202 with where it is (GitHub Enterprise answers 204 and works at once). What they made in others' repositories stays, shown as `ghost`. An organization they solely own holds the deletion until an administrator makes someone else its owner. Asking again answers where the deletion is: by the released handle while it is held, and by the user's id at any time (a deleted user's handle is their id). Instance administrators only; not yourself, nor the last active administrator.",
+  input: z.object({ username: z.string().min(1).max(64) }),
+  output: UserDeletion,
+  permission: INSTANCE_ADMIN,
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  successStatus: 202,
+  mcp: {
+    tool: "delete_user",
+    title: "Delete a user",
+    description:
+      "Delete a user on this Fyrden instance with their repositories; it runs in the background (call again, with the user's id, to see where it is). Requires an instance administrator.",
+    readOnly: false,
+  },
+});
+
 export const unsuspendUser = defineOperation({
   id: "admin.users.unsuspend",
   method: "DELETE",
