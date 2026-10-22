@@ -768,19 +768,19 @@ describe("delivering effects a message names", () => {
 describe("an invocation's budget", () => {
   it("delivers as many effects as the budget allows and sends the rest back", async () => {
     const repoId = await listedRepo();
-    const ids = await dueEffects(repoId, 30, T0);
+    const ids = await dueEffects(repoId, 40, T0);
     const { sink, received } = recordingSink();
     const { publish, sent } = recordingPublish();
     const shared = budget(T0);
-    expect(EFFECT_POLICY.invocation.effects).toBe(20);
+    expect(EFFECT_POLICY.invocation.effects).toBe(32);
     // Two messages share one invocation's budget.
     const deps = depsOf([sink], T0, publish);
-    expect(await deliverEffects(deps, "test_hook", ids.slice(0, 15), shared)).toBe(15);
-    expect(await deliverEffects(deps, "test_hook", ids.slice(15), shared)).toBe(5);
-    expect(received.size).toBe(20);
-    expect(sent).toEqual([{ sink: "test_hook", ids: ids.slice(20) }]);
-    // The ten sent back were never claimed.
-    const left = await Promise.all(ids.slice(20).map(effectRow));
+    expect(await deliverEffects(deps, "test_hook", ids.slice(0, 20), shared)).toBe(20);
+    expect(await deliverEffects(deps, "test_hook", ids.slice(20), shared)).toBe(12);
+    expect(received.size).toBe(32);
+    expect(sent).toEqual([{ sink: "test_hook", ids: ids.slice(32) }]);
+    // The eight sent back were never claimed.
+    const left = await Promise.all(ids.slice(32).map(effectRow));
     expect(left.every((row) => row?.attempts === 0 && row.lease_token === null)).toBe(true);
   });
 
