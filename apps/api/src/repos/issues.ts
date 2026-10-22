@@ -10,7 +10,7 @@ import type {
   unlockIssue,
   updateIssue,
 } from "@fyrden/api-contract";
-import type { IssueRecord, Subject, SubjectBoundary, SubjectKind } from "../do/repo/issues.js";
+import type { Subject, SubjectBoundary, SubjectKind } from "../do/repo/issues.js";
 import type { PullRecord } from "../do/repo/pulls.js";
 import type { SubjectMeta } from "../do/repo/subject-meta.js";
 import { repoFor } from "../git/chunked/operations.js";
@@ -18,7 +18,8 @@ import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/curs
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { authorize, findReposById, type RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
-import { sortingFailure, sortingInput, sortingOutput } from "./sorting.js";
+import { issueOutput, sortingOutput } from "./shapes.js";
+import { sortingFailure, sortingInput } from "./sorting.js";
 import { subjectAccess, subjectNotFound, tokenKinds } from "./subjects.js";
 
 type IssueOutput = Output<typeof getIssue>;
@@ -27,35 +28,6 @@ const repo = (ctx: OpContext, entry: RepoEntry, method: string) => {
   ctx.metrics.count("do.request", { class: "RepoDO", method });
   return ctx.env.REPO.getByName(entry.id);
 };
-
-/** An issue as the API answers it; its duplicate target only when the caller reads that kind. */
-function issueOutput(
-  issue: IssueRecord,
-  readable: readonly SubjectKind[],
-  meta: SubjectMeta,
-): IssueOutput {
-  return {
-    id: issue.number,
-    number: issue.number,
-    state: issue.state,
-    state_reason: issue.stateReason,
-    duplicate_of:
-      issue.duplicateKind !== null && readable.includes(issue.duplicateKind)
-        ? issue.duplicateOf
-        : null,
-    title: issue.title,
-    body: issue.body,
-    user: { id: issue.authorId },
-    performed_via_agents: [...issue.authorAct],
-    locked: issue.locked,
-    active_lock_reason: issue.lockReason,
-    closed_by: issue.closedBy === null ? null : { id: issue.closedBy },
-    created_at: issue.createdAt,
-    updated_at: issue.updatedAt,
-    closed_at: issue.closedAt,
-    ...sortingOutput(meta, readable),
-  };
-}
 
 /** A pull request as the issue endpoints answer it (GitHub's shape: marked with `pull_request`). */
 function pullAsIssue(

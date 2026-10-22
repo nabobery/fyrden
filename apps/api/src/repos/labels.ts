@@ -25,7 +25,8 @@ import { type OpContext, OperationError } from "../ops/execute.js";
 import type { RepoEntry } from "./directory.js";
 import { subjectOutput } from "./issues.js";
 import { actorOf, failure } from "./pulls.js";
-import { assigneesByLogin, labelOutput, sortingFailure, unassigneesByLogin } from "./sorting.js";
+import { labelOutput } from "./shapes.js";
+import { assigneesByLogin, sortingFailure, unassigneesByLogin } from "./sorting.js";
 import { subjectAccess, subjectNotFound, tokenKinds } from "./subjects.js";
 
 /*

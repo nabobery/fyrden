@@ -11,6 +11,8 @@ import {
   type MilestoneState,
   type RepoRole,
 } from "@fyrden/domain";
+import { labelOutput, milestoneOutput } from "../../repos/shapes.js";
+import { capturable } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller } from "./pulls.js";
 import { NO_REACTIONS, type ReactionCounts } from "./reactions.js";
@@ -124,6 +126,15 @@ export type MetaFailure =
 export interface SubjectEvent {
   readonly event: string;
   readonly data: Record<string, unknown>;
+  /** What the action touched, in full, for the event's webhook capture. */
+  readonly touched: SubjectTouched;
+}
+
+/** The label, assignee or milestone a metadata action added or removed. */
+export interface SubjectTouched {
+  readonly label?: LabelRecord;
+  readonly assignee?: string;
+  readonly milestone?: MilestoneRecord;
 }
 
 /** A checked change, applied (all of it) by `apply` in the caller's transaction. */
@@ -702,9 +713,9 @@ export class RepoSubjectMeta {
           });
         });
       for (const label of added)
-        events.push({ event: "labeled", data: { label: labelRef(label) } });
+        events.push({ event: "labeled", data: { label: labelRef(label) }, touched: { label } });
       for (const label of removed)
-        events.push({ event: "unlabeled", data: { label: labelRef(label) } });
+        events.push({ event: "unlabeled", data: { label: labelRef(label) }, touched: { label } });
     }
 
     if (patch.assignees) {
@@ -755,11 +766,16 @@ export class RepoSubjectMeta {
           });
         });
         for (const a of added)
-          events.push({ event: "assigned", data: { assignee: a.id, assignee_root: a.root } });
+          events.push({
+            event: "assigned",
+            data: { assignee: a.id, assignee_root: a.root },
+            touched: { assignee: a.id },
+          });
         for (const id of removed)
           events.push({
             event: "unassigned",
             data: { assignee: id, assignee_root: roots.get(id) ?? id },
+            touched: { assignee: id },
           });
       }
     }
@@ -782,8 +798,18 @@ export class RepoSubjectMeta {
             milestone: target?.number ?? null,
           });
         });
-        if (from) events.push({ event: "demilestoned", data: { milestone: milestoneRef(from) } });
-        if (target) events.push({ event: "milestoned", data: { milestone: milestoneRef(target) } });
+        if (from)
+          events.push({
+            event: "demilestoned",
+            data: { milestone: milestoneRef(from) },
+            touched: { milestone: from },
+          });
+        if (target)
+          events.push({
+            event: "milestoned",
+            data: { milestone: milestoneRef(target) },
+            touched: { milestone: target },
+          });
       }
     }
 
@@ -841,6 +867,11 @@ export class RepoSubjectMeta {
       { type: LABEL_ENTITY, id: `${this.deps.repoId()}#labels/${label.id}`, version, row },
       data,
       deleted,
+      // The label as the API shows it (as it was, once deleted), and an edit's changes.
+      () => ({
+        label: capturable(labelOutput(label)),
+        ...(data?.changes !== undefined && { changes: capturable(data.changes) }),
+      }),
     );
   }
 
@@ -863,6 +894,11 @@ export class RepoSubjectMeta {
       },
       data,
       deleted,
+      // The milestone as the API shows it to a reader of both kinds (as it was, once deleted).
+      () => ({
+        milestone: capturable(milestoneOutput(milestone, ["issue", "pull"])),
+        ...(data?.changes !== undefined && { changes: capturable(data.changes) }),
+      }),
     );
   }
 

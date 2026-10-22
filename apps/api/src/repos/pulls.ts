@@ -22,7 +22,7 @@ import { type OpContext, OperationError } from "../ops/execute.js";
 import { resolveVerification } from "../signing/verification.js";
 import { authorize, findReposById, networkReposOf, type RepoEntry } from "./directory.js";
 import { commitIdentityFor, commitIdentityOf } from "./file-writes.js";
-import { sortingOutput } from "./sorting.js";
+import { sortingOutput } from "./shapes.js";
 import { tokenKinds } from "./subjects.js";
 
 /** The kinds the caller reads in `entry` (its token's limits; both take the same role). */

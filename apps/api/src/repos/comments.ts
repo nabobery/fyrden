@@ -13,7 +13,7 @@ import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import type { RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
-import { reactionRollup } from "./sorting.js";
+import { reactionRollup } from "./shapes.js";
 import { subjectAccess, subjectNotFound } from "./subjects.js";
 
 function commentOutput(comment: Reacted<CommentRecord>): Output<typeof getComment> {

@@ -27,7 +27,7 @@ import { resolveOne } from "../signing/verification.js";
 import type { RepoEntry } from "./directory.js";
 import { commitIdentityOf, noReplyPeople } from "./file-writes.js";
 import { actorOf, failure } from "./pulls.js";
-import { reactionRollup } from "./sorting.js";
+import { reactionRollup } from "./shapes.js";
 
 /** A diff comment as the API returns it, judged against what its pull request's diff compares now. */
 function commentOutput(

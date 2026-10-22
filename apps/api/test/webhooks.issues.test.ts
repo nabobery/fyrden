@@ -1,6 +1,7 @@
 // Issue, label and milestone webhooks, and the pull request metadata
-// actions: GitHub's event names and actions, each body made from what its
-// event recorded when the change was made (a later change shows nowhere).
+// actions: GitHub's event names and actions, and the bodies made from what
+// an event without a capture recorded when the change was made (a later
+// change shows nowhere): what events recorded before captures still get.
 import type { DomainEvent } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
 import { bodyOf } from "../src/webhooks/sink.js";

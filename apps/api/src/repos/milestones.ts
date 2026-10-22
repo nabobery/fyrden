@@ -12,7 +12,8 @@ import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/curs
 import { type OpContext, OperationError } from "../ops/execute.js";
 import type { RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
-import { milestoneOutput, sortingFailure } from "./sorting.js";
+import { milestoneOutput } from "./shapes.js";
+import { sortingFailure } from "./sorting.js";
 import { subjectAccess, tokenKinds } from "./subjects.js";
 
 /*

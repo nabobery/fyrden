@@ -7,6 +7,7 @@ import {
   BLOB_FALLBACK_MIN_BYTES,
   BLOB_MIN_BYTES,
   type BlobRef,
+  CaptureCache,
   captureTree,
   INLINE_MAX_BYTES,
   refsOf,
@@ -90,7 +91,7 @@ describe("a webhook capture", () => {
     try {
       const body = "h".repeat(70_000);
       const labels = Array.from({ length: 100 }, (_, id) => ({ id, description: "d".repeat(700) }));
-      const cache = new Map();
+      const cache = new CaptureCache();
       // Over the bound at first: the second pass hashes only what the first had not.
       captureTree({ body, changes: { body: { from: body } }, labels }, cache);
       captureTree({ issue: { body } }, cache);
@@ -117,6 +118,20 @@ describe("a webhook capture", () => {
       { u: undefined },
     ];
     for (const tree of refused) expect(() => captureTree(tree as never)).toThrow(/JSON|finite/);
+  });
+
+  it("keeps only text that could become a blob in its cache, up to its bound", () => {
+    const long = "y".repeat(BLOB_FALLBACK_MIN_BYTES);
+    const cache = new CaptureCache();
+    captureTree({ short: "x", long, again: long }, cache);
+    captureTree({ long }, cache);
+    expect(cache.texts()).toEqual([long]);
+    // Full, it keeps nothing more, and captures are the same.
+    const full = new CaptureCache(1_500);
+    const texts = ["a", "b", "c"].map((c) => c.repeat(200));
+    const captured = captureTree({ texts }, full);
+    expect(full.texts()).toEqual([texts[0]]);
+    expect(captured).toEqual(captureTree({ texts }));
   });
 
   it("refuses an object that would read as a reference", () => {
