@@ -261,6 +261,13 @@ that invocation, so Fyrden's long work is sliced and saves its place:
   CPU) and keeps the client's connection alive.
 - Repack and garbage collection slices stop after 20 s, 200,000 objects,
   256 MiB written or 500 R2 calls (defaults), whichever comes first.
+- The five-minute maintenance cron (archiving the directory's audit log,
+  expiring repositories, advancing deletions and transfers, reaping keys)
+  runs in a Durable Object of its own, which the cron trigger calls: a
+  cron trigger gets 10 ms of CPU on Workers Free
+  ([platform limit](https://developers.cloudflare.com/workers/platform/limits/#cpu-time)),
+  and the run took 14 to 80 ms (measured on Free, 2026-10-22). A run asked
+  for while one is under way joins it.
 
 Not measured yet: the CPU needed to parse the largest packs, as the first
 parsing pass of one pack runs in one invocation.
