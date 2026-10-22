@@ -6851,7 +6851,7 @@ export interface Operations {
   "orgs.memberships.set": { input: OrgsMembershipsSetInput; output: OrgsMembershipsSetOutput };
   /** Remove a member. Removes a user from an organization and its teams; collaborator roles on its repositories stay. Repositories told of the change stop counting the membership at once; every repository stops within 60 seconds for writes and 5 minutes for reads. The last owner cannot be removed. Owners only. */
   "orgs.memberships.remove": { input: OrgsMembershipsRemoveInput; output: OrgsMembershipsRemoveOutput };
-  /** Make a user an organization's owner. Makes a user an owner of an organization, a member or not, as GitHub Enterprise's `ghe-org-admin-promote` does: for an organization whose owners can no longer act (one being deleted, as the deletion waits for another owner). Making an owner an owner changes nothing. Instance administrators only; the user must not be suspended or being deleted. */
+  /** Make a user an organization's owner. Makes a user an owner of an organization, a member or not, as GitHub Enterprise's `ghe-org-admin-promote` does: for an organization whose owners can no longer act (one being deleted: the deletion waits for another owner, and goes on as soon as one is made, or within the hour). Making an owner an owner changes nothing. Instance administrators only; the user must not be suspended or being deleted. */
   "admin.orgs.owners.add": { input: AdminOrgsOwnersAddInput; output: AdminOrgsOwnersAddOutput };
   /** List an organization's members. Lists an organization's members by handle, ignoring case. Members only. */
   "orgs.members.list": { input: OrgsMembersListInput; output: OrgsMembersListOutput };

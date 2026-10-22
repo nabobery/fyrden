@@ -283,7 +283,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/admin/organizations/{org}/owners/{username}": {
       "put": {
-        "description": "Makes a user an owner of an organization, a member or not, as GitHub Enterprise's \`ghe-org-admin-promote\` does: for an organization whose owners can no longer act (one being deleted, as the deletion waits for another owner). Making an owner an owner changes nothing. Instance administrators only; the user must not be suspended or being deleted.",
+        "description": "Makes a user an owner of an organization, a member or not, as GitHub Enterprise's \`ghe-org-admin-promote\` does: for an organization whose owners can no longer act (one being deleted: the deletion waits for another owner, and goes on as soon as one is made, or within the hour). Making an owner an owner changes nothing. Instance administrators only; the user must not be suspended or being deleted.",
         "operationId": "admin.orgs.owners.add",
         "parameters": [
           {

@@ -18,6 +18,7 @@ export class DeletionDO extends DurableObject<Env> {
     const userId = this.ctx.id.name;
     if (userId === undefined) return;
     const { next } = await runDeletionSlice(this.env, userId);
-    if (next !== null) await this.ctx.storage.setAlarm(next);
+    // Never later than a wake set while the run went on (`arm`).
+    if (next !== null) await this.arm(next);
   }
 }
