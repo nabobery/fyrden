@@ -15,14 +15,18 @@ import {
   planIssueState,
   type SubjectMetaField,
 } from "@fyrden/domain";
+import { issueOutput, labelOutput, milestoneOutput } from "../../repos/shapes.js";
+import { capturable, userOf } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller, PullRecord, RepoPulls } from "./pulls.js";
 import type {
   MetaPlan,
   MetaSubject,
+  MilestoneRecord,
   SnapshotMeta,
   SubjectEvent,
   SubjectMeta,
+  SubjectTouched,
 } from "./subject-meta.js";
 
 /*
@@ -36,6 +40,9 @@ import type {
 
 /** What a subject's number names: an issue or a pull request. */
 export type SubjectKind = FeedSubjectKind;
+
+/** Both kinds: a webhook's capture shows what a reader of both would see. */
+const ALL_KINDS: readonly SubjectKind[] = ["issue", "pull"];
 
 /** An issue as the repository keeps it (its labels, assignees and milestone are read apart). */
 export interface IssueRecord extends Omit<IssueRow, SubjectMetaField> {
@@ -128,6 +135,10 @@ export class RepoIssues {
         /** In its deletion: what it and its comments refer to, and what refers to it, go. */
         readonly forgetReferences: (number: number, actor: RefActor) => void;
         readonly ofMany: (subjects: readonly MetaSubject[]) => Map<number, SubjectMeta>;
+        /** Its labels, assignees, milestone and reactions as they stand (for webhook captures). */
+        readonly of: (number: number) => SubjectMeta;
+        /** A milestone as it stands (its counts after a change), for webhook captures. */
+        readonly milestone: (number: number) => MilestoneRecord | undefined;
       };
     },
   ) {}
@@ -336,7 +347,8 @@ export class RepoIssues {
   touch(number: number, events: readonly SubjectEvent[], actor: RefActor): void {
     const [row] = this.#update(number, this.deps.git.context.now(), "");
     const record = this.#record(row as Row);
-    for (const { event, data } of events) this.#emit(event, record, actor, data);
+    for (const { event, data, touched } of events)
+      this.#emit(event, record, actor, data, false, { touched });
   }
 
   /**
@@ -407,6 +419,8 @@ export class RepoIssues {
     this.deps.git.context.storage.transactionSync(() => {
       const now = this.deps.git.context.now();
       const version = current.version + 1;
+      // What its deletion's webhook tells of it, read before it goes.
+      const meta = this.deps.meta.of(number);
       this.deps.meta.forgetReactions(number);
       this.deps.meta.forgetReferences(number, caller.actor);
       this.#exec("DELETE FROM comments WHERE number = ?", number);
@@ -427,6 +441,7 @@ export class RepoIssues {
         caller.actor,
         { number, title: current.title },
         true,
+        { meta },
       );
       this.deps.events.auditChange(ISSUE_ACTION_RULES.delete.audit, caller.actor, { number });
     });
@@ -527,21 +542,46 @@ export class RepoIssues {
     );
   }
 
+  /**
+   * Emits the issue's event; its webhook capture is the issue as the API
+   * shows it (with its labels, assignees and milestone: `meta`, read
+   * before a deletion), what a metadata action `touched`, and an edit's
+   * changes.
+   */
   #emit(
     event: string,
     issue: IssueRecord,
     actor: RefActor | null,
     data: Record<string, unknown> | null = null,
     deleted = false,
+    capture: { readonly meta?: SubjectMeta; readonly touched?: SubjectTouched } = {},
   ): void {
     const { authorAct: _act, duplicateKind: _kind, version, ...fields } = issue;
     const row = deleted ? fields : { ...fields, ...this.deps.meta.snapshot(issue.number) };
+    const { touched } = capture;
     this.deps.events.emitEntity(
       `issue.${event}`,
       actor,
       { type: ISSUE_ENTITY, id: `${this.deps.repoId()}#${issue.number}`, version, row },
       data,
       deleted,
+      () => ({
+        issue: capturable(
+          issueOutput(issue, ALL_KINDS, capture.meta ?? this.deps.meta.of(issue.number)),
+        ),
+        ...(touched?.label && { label: capturable(labelOutput(touched.label)) }),
+        ...(touched?.assignee !== undefined && { assignee: userOf(touched.assignee) }),
+        // The milestone set or left, its counts as the change left them.
+        ...(touched?.milestone && {
+          milestone: capturable(
+            milestoneOutput(
+              this.deps.meta.milestone(touched.milestone.number) ?? touched.milestone,
+              ALL_KINDS,
+            ),
+          ),
+        }),
+        ...(data?.changes !== undefined && { changes: capturable(data.changes) }),
+      }),
     );
     if (
       event === "opened" ||

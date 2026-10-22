@@ -1,10 +1,11 @@
 import type { DomainEvent } from "@fyrden/domain";
 
 /*
- * Which repository events make webhook deliveries, and what each delivery
- * says of its event. A body is built from the event alone (the snapshot
- * of the entity it carries, as the change left it), in Fyrden's own
- * shape: no later lookup adds to it.
+ * Which repository events make webhook deliveries, and what a delivery of
+ * an event without a capture (see `captures.ts`) says of it: a body built
+ * from the event alone (the snapshot of the entity it carries, as the
+ * change left it), in Fyrden's own shape, no later lookup adding to it.
+ * Events recorded before their family was captured keep these bodies.
  */
 
 /** A webhook event and its action (null for those without one). */

@@ -12,6 +12,9 @@ import {
   type RepoRow,
 } from "@fyrden/domain";
 import { oidToHex } from "@fyrden/git-core";
+import { type Blob, CaptureCache, type CaptureValue, captureTree } from "../../webhooks/capture.js";
+import { CAPTURE_DEADLINE_MS, CAPTURE_VERSION, userOf } from "../../webhooks/captures.js";
+import { webhookEventOf } from "../../webhooks/events.js";
 import type { NewEvent, Outbox } from "../base/outbox.js";
 
 /** The webhooks an event goes to: each hook's id and configuration version. */
@@ -32,6 +35,17 @@ export type FeedRouter = (
   row: Record<string, unknown> | null,
   event: { readonly id: EventId; readonly at: number; readonly ownerGen: number },
 ) => FeedBlock | undefined;
+
+/**
+ * What a webhook delivery of an event says of it beyond what every one
+ * says (see `#captured`), as of the event: its entity and what the change
+ * touched, in the API's shapes (`webhooks/captures.ts`). Called only when
+ * the event goes to a hook.
+ */
+export type CaptureBuilder = () => Record<string, CaptureValue>;
+
+/** Keeps a capture's blobs until a day past `deadline`, in the event's transaction. */
+export type CaptureStore = (blobs: ReadonlyMap<string, Blob>, deadline: number) => void;
 
 /** A repository's snapshot as a read-model rebuild takes it. */
 export interface RepoExport {
@@ -185,6 +199,19 @@ export class RepoEvents {
   /** What an event means for activity feeds (see `routeFeed`). */
   #feedFor: FeedRouter = () => undefined;
 
+  /** Where captures' blobs are kept (see `routeCaptures`). */
+  #storeCapture: CaptureStore = () => {};
+
+  /**
+   * Text values already encoded and hashed in the change being made (equal
+   * text in its events, such as an issue's body in each of its label
+   * events, is hashed once). A change emits its events synchronously in
+   * one transaction: the cache is dropped by a microtask once that code
+   * has run, whether it committed or threw, so it holds one change's text
+   * at most, and of that no more than its bound.
+   */
+  #captureCache: CaptureCache | undefined;
+
   constructor(
     private readonly git: RepoGitStorage,
     private readonly outbox: Outbox,
@@ -210,6 +237,11 @@ export class RepoEvents {
   /** Says, with each event, what it means for principals' activity feeds. */
   routeFeed(router: FeedRouter): void {
     this.#feedFor = router;
+  }
+
+  /** Keeps the blobs of events' webhook captures. */
+  routeCaptures(store: CaptureStore): void {
+    this.#storeCapture = store;
   }
 
   #meta(): MetaRow | undefined {
@@ -710,12 +742,14 @@ export class RepoEvents {
     data: Record<string, unknown> | null = null,
     /** The entity is gone: its snapshot carries no row. */
     deleted = false,
+    capture?: CaptureBuilder,
   ): void {
     this.#assertCanEmit();
     this.#emit(
       type,
       { actor: actor?.principal ?? null, actChain: [...(actor?.actChain ?? [])], data },
       { ...entity, deleted, row: deleted ? null : entity.row },
+      capture,
     );
   }
 
@@ -724,13 +758,19 @@ export class RepoEvents {
    * requested of someone). The repository must be writable, with its epoch
    * checked.
    */
-  emitActivity(type: string, actor: RefActor | null, data: Record<string, unknown>): void {
+  emitActivity(
+    type: string,
+    actor: RefActor | null,
+    data: Record<string, unknown>,
+    capture?: CaptureBuilder,
+  ): void {
     this.#assertCanEmit();
-    this.#emit(type, {
-      actor: actor?.principal ?? null,
-      actChain: [...(actor?.actChain ?? [])],
-      data,
-    });
+    this.#emit(
+      type,
+      { actor: actor?.principal ?? null, actChain: [...(actor?.actChain ?? [])], data },
+      false,
+      capture,
+    );
   }
 
   /** Whether an event about the repository's entities may be emitted now (see `#assertCanEmit`). */
@@ -808,6 +848,7 @@ export class RepoEvents {
     type: string,
     event: Pick<NewEvent, "actor" | "actChain" | "data">,
     snapshot: boolean | EntitySnapshot = false,
+    capture?: CaptureBuilder,
   ): MetaRow {
     const cursor = this.#storage.sql.exec<MetaRow & { source_seq: number }>(
       `UPDATE repo_meta SET source_seq = source_seq + 1, version = version + ?
@@ -834,8 +875,13 @@ export class RepoEvents {
             typeof snapshot === "object" ? (snapshot.row as Record<string, unknown> | null) : null,
             { id, at, ownerGen: meta.owner_gen },
           );
+    const data =
+      hooks.length > 0 && capture
+        ? this.#captured(type, event, capture(), meta, id, at)
+        : event.data;
     this.outbox.append(id, {
       ...event,
+      data,
       // What a delivery says of the repository is what it was now.
       ...(hooks.length > 0 && {
         webhooks: {
@@ -865,6 +911,51 @@ export class RepoEvents {
             : null,
     });
     return meta;
+  }
+
+  /**
+   * The event's data with its webhook capture (`webhook`): the body every
+   * delivery of it is made from, its blobs kept in this transaction until
+   * a day past the event's deadline. Besides `entity` (the builder's),
+   * every body says the event and action, the repository and the sender
+   * as they were, when, and where the event stands among the repository's
+   * (deliveries are unordered).
+   */
+  #captured(
+    type: string,
+    event: Pick<NewEvent, "actor" | "actChain" | "data">,
+    entity: Record<string, CaptureValue>,
+    meta: MetaRow,
+    id: EventId,
+    at: number,
+  ): Record<string, unknown> {
+    const name = webhookEventOf(type);
+    const tree: Record<string, CaptureValue> = {
+      event: name?.event ?? type,
+      ...(name?.action && { action: name.action }),
+      ...entity,
+      repository: {
+        id: meta.repo_id,
+        name: meta.name as string,
+        owner: userOf(meta.owner_id),
+        private: meta.visibility !== "public",
+      },
+      sender: event.actor === null ? null : { $user: event.actor, act_chain: [...event.actChain] },
+      at: new Date(at).toISOString(),
+      position: { epoch: id.epochGen, sequence: id.sourceSeq },
+    };
+    if (!this.#captureCache) {
+      this.#captureCache = new CaptureCache();
+      queueMicrotask(() => {
+        this.#captureCache = undefined;
+      });
+    }
+    const captured = captureTree(tree, this.#captureCache);
+    this.#storeCapture(captured.blobs, at + CAPTURE_DEADLINE_MS);
+    return {
+      ...event.data,
+      webhook: { v: CAPTURE_VERSION, tree: captured.tree, blobBytes: captured.blobBytes },
+    };
   }
 
   #row(meta: MetaRow): RepoRow {

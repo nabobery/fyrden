@@ -49,12 +49,44 @@ interface Encoded {
   hash?: string;
 }
 
+/** An entry's heap besides its strings' characters (a map slot, an object, a 40-character hash). */
+const ENTRY_OVERHEAD_BYTES = 256;
+
+/** What a capture cache may hold, estimated as the heap its entries take. Proposed. */
+export const CAPTURE_CACHE_MAX_BYTES = 4 * 1024 * 1024;
+
 /**
- * Text values already encoded (and hashed, when long enough): one per
- * mutation, so a value appearing in several places or captures is encoded
- * and hashed once.
+ * Text values already encoded (and hashed, when long enough), so a value
+ * appearing in several places or captures of one change is encoded and
+ * hashed once. Only values that could become blobs are kept
+ * (`BLOB_FALLBACK_MIN_BYTES` or more as JSON), up to `maxBytes` of heap
+ * (estimated: the text and its encoding as UTF-16, the hash, and an
+ * entry's overhead); past it, values are encoded and hashed again, which
+ * changes nothing but the work.
  */
-export type CaptureCache = Map<string, Encoded>;
+export class CaptureCache {
+  readonly #entries = new Map<string, Encoded>();
+  #bytes = 0;
+
+  constructor(private readonly maxBytes = CAPTURE_CACHE_MAX_BYTES) {}
+
+  get(text: string): Encoded | undefined {
+    return this.#entries.get(text);
+  }
+
+  /** Keeps `encoded` (with the hash it will get) while the cache has room for it. */
+  remember(text: string, encoded: Encoded): void {
+    const bytes = 2 * (text.length + encoded.json.length) + ENTRY_OVERHEAD_BYTES;
+    if (this.#bytes + bytes > this.maxBytes) return;
+    this.#entries.set(text, encoded);
+    this.#bytes += bytes;
+  }
+
+  /** The texts it holds, in the order kept. */
+  texts(): string[] {
+    return [...this.#entries.keys()];
+  }
+}
 
 /**
  * The hex SHA-1 of `json` (UTF-8), with git's collision detection: a text
@@ -70,7 +102,7 @@ function encodedOf(text: string, cache: CaptureCache): Encoded {
   if (!encoded) {
     const json = JSON.stringify(text);
     encoded = { json, bytes: bytesOf(json) };
-    cache.set(text, encoded);
+    if (encoded.bytes >= BLOB_FALLBACK_MIN_BYTES) cache.remember(text, encoded);
   }
   return encoded;
 }
@@ -151,7 +183,7 @@ function blobify(
  */
 export function captureTree(
   tree: CaptureValue,
-  cache: CaptureCache = new Map(),
+  cache: CaptureCache = new CaptureCache(),
 ): {
   readonly tree: unknown;
   readonly blobs: ReadonlyMap<string, Blob>;

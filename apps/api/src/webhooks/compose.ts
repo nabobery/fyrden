@@ -1,6 +1,7 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { GHOST_LOGIN } from "../accounts/handles.js";
 import { refsOf, resolveTree } from "./capture.js";
+import { CAPTURE_VERSION } from "./captures.js";
 
 /*
  * A webhook body made from its event's capture: the capture's tree with
@@ -11,9 +12,6 @@ import { refsOf, resolveTree } from "./capture.js";
  * shown as `ghost`, as GitHub shows one.
  */
 
-/** The capture format this version makes bodies from. */
-export const CAPTURE_VERSION = 1;
-
 /** What an event's `data.webhook` holds when the event was captured. */
 export interface WebhookCapture {
   readonly v: number;
@@ -23,7 +21,7 @@ export interface WebhookCapture {
   readonly blobBytes: number;
 }
 
-/** A user as a capture names one. */
+/** A user as a capture names one (with any fields of its own, such as a sender's act chain). */
 interface UserRef {
   readonly $user: string;
 }
@@ -33,7 +31,6 @@ function isUserRef(value: unknown): value is UserRef {
     typeof value === "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    Object.keys(value).length === 1 &&
     Object.hasOwn(value, "$user") &&
     typeof (value as UserRef).$user === "string"
   );
@@ -114,7 +111,14 @@ export function composeBody(
   logins: ReadonlyMap<string, string>,
 ): Record<string, unknown> {
   const users = (value: unknown): unknown => {
-    if (isUserRef(value)) return { id: value.$user, login: logins.get(value.$user) ?? GHOST_LOGIN };
+    if (isUserRef(value)) {
+      const { $user: id, ...rest } = value as UserRef & Record<string, unknown>;
+      return {
+        id,
+        login: logins.get(id) ?? GHOST_LOGIN,
+        ...(users(rest) as Record<string, unknown>),
+      };
+    }
     if (Array.isArray(value)) return value.map(users);
     if (typeof value === "object" && value !== null)
       return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, users(item)]));

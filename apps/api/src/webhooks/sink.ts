@@ -3,6 +3,7 @@ import { type DomainEvent, eventKey } from "@fyrden/domain";
 import type { WebhookBlobsRead } from "../do/repo/webhook-blobs.js";
 import type { DeliverOutcome, Effect, EffectSink, PlannedEffect } from "../effects/journal.js";
 import { expandedBytesOf } from "./capture.js";
+import { CAPTURE_DEADLINE_MS } from "./captures.js";
 import {
   blobsOf,
   captureOf,
@@ -70,7 +71,7 @@ export const DELIVERY_POLICY = {
    * as an effect may be repaired (`fyrden effects repair`), or a feed entry
    * delivered. Past it, the event's webhooks are not made.
    */
-  captureDeadlineMs: 7 * 24 * 60 * 60_000,
+  captureDeadlineMs: CAPTURE_DEADLINE_MS,
   /** How long past its deadline a body's intent is kept (its object found and deleted after). */
   intentGraceMs: 24 * 60 * 60_000,
   /** The largest body made from a capture (GitHub's cap); larger, the event's webhooks are not made. */

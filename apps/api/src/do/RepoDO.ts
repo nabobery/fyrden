@@ -483,6 +483,7 @@ export class RepoDO extends MigratingDO {
       pruneAt: (at) =>
         this.git.jobs.ensure("webhook_blobs_prune", WEBHOOK_BLOBS_JOB, { runAt: at }),
     });
+    this.events.routeCaptures((blobs, deadline) => this.webhookBlobStore.store(blobs, deadline));
     this.events.routeFeed((type, actor, data, row, event) =>
       this.feed.blockFor(type, actor, data, row, event),
     );
@@ -524,6 +525,8 @@ export class RepoDO extends MigratingDO {
           this.references.sync({ kind: "issue", number, comment: 0 }, body, actor),
         forgetReferences: (number, actor) => this.references.forgetSubject(number, actor),
         ofMany: (numbers) => this.subjectMeta.ofMany(numbers),
+        of: (number) => this.subjectMeta.of(number),
+        milestone: (number) => this.subjectMeta.milestone(number),
       },
     });
     this.comments = new RepoComments({

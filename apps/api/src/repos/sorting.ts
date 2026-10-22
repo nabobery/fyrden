@@ -1,75 +1,11 @@
-import type { getIssue, getLabel, getMilestone, Output } from "@fyrden/api-contract";
-import type { SubjectKind } from "../do/repo/issues.js";
-import type { ReactionCounts } from "../do/repo/reactions.js";
-import type {
-  LabelRecord,
-  MetaInput,
-  MilestoneRecord,
-  SubjectMeta,
-} from "../do/repo/subject-meta.js";
+import type { MetaInput } from "../do/repo/subject-meta.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { principalsByLogin } from "./reviews.js";
 
 /*
  * What issues and pull requests are sorted by (labels, milestones,
- * assignees), as the API answers and takes it.
+ * assignees), as the API takes it (`shapes.ts` answers it).
  */
-
-export function labelOutput(label: LabelRecord): Output<typeof getLabel> {
-  return {
-    id: label.id,
-    name: label.name,
-    color: label.color,
-    description: label.description,
-    default: label.isDefault,
-  };
-}
-
-/**
- * A milestone as the API answers it: its counts of the kinds the caller
- * reads (`readable`) only, so they tell nothing of the other kind.
- */
-export function milestoneOutput(
-  milestone: MilestoneRecord,
-  readable: readonly SubjectKind[],
-): Output<typeof getMilestone> {
-  const issues = readable.includes("issue");
-  const pulls = readable.includes("pull");
-  return {
-    id: milestone.number,
-    number: milestone.number,
-    title: milestone.title,
-    description: milestone.description,
-    state: milestone.state,
-    open_issues: (issues ? milestone.openIssues : 0) + (pulls ? milestone.openPulls : 0),
-    closed_issues: (issues ? milestone.closedIssues : 0) + (pulls ? milestone.closedPulls : 0),
-    creator: { id: milestone.creator },
-    due_on: milestone.dueOn,
-    created_at: milestone.createdAt,
-    updated_at: milestone.updatedAt,
-    closed_at: milestone.closedAt,
-  };
-}
-
-/** A target's reactions as the API answers them (GitHub's rollup). */
-export function reactionRollup(counts: ReactionCounts): Output<typeof getIssue>["reactions"] {
-  return { total_count: Object.values(counts).reduce((a, b) => a + b, 0), ...counts };
-}
-
-/** An issue's or pull request's labels, assignees and milestone, as both answer them, for a caller reading `readable`. */
-export function sortingOutput(
-  meta: SubjectMeta,
-  readable: readonly SubjectKind[],
-): Pick<Output<typeof getIssue>, "labels" | "assignee" | "assignees" | "milestone" | "reactions"> {
-  const assignees = meta.assignees.map((id) => ({ id }));
-  return {
-    labels: meta.labels.map(labelOutput),
-    assignee: assignees[0] ?? null,
-    assignees,
-    milestone: meta.milestone && milestoneOutput(meta.milestone, readable),
-    reactions: reactionRollup(meta.reactions),
-  };
-}
 
 /**
  * Principal ids for `logins`, users and agents enabled now; one that names
