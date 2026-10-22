@@ -1148,4 +1148,20 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX feed_audience_pages_expiry ON feed_audience_pages (expires_at);
     `,
   },
+  {
+    version: 39,
+    // Webhook capture blobs (`webhook_blobs`): long text values webhook
+    // captures name by the hash of their JSON encoding, each kept once until
+    // a day after the latest delivery deadline of an event naming it.
+    name: "webhook_blobs",
+    sql: `
+      CREATE TABLE webhook_blobs (
+        hash TEXT PRIMARY KEY,
+        text_json TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        retain_until INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX webhook_blobs_retain ON webhook_blobs (retain_until);
+    `,
+  },
 ];

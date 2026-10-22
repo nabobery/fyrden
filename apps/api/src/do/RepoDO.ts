@@ -204,6 +204,11 @@ import {
   type TemplateWriteInput,
   templateTree,
 } from "./repo/template.js";
+import {
+  RepoWebhookBlobs,
+  type WebhookBlobsAsk,
+  type WebhookBlobsRead,
+} from "./repo/webhook-blobs.js";
 import type { WriteContext, WriteRefusal } from "./repo/write-context.js";
 import { repoSchema } from "./schema/repo.js";
 
@@ -222,6 +227,9 @@ const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
 /** The job that prunes feed audience pages past their time, and how many a slice deletes. */
 const FEED_PAGES_JOB = "feed_pages_prune";
 const FEED_PAGES_PRUNE_BATCH = 500;
+const WEBHOOK_BLOBS_JOB = "webhook_blobs_prune";
+/** Webhook capture blobs one slice of their pruning deletes at most. Proposed. */
+const WEBHOOK_BLOBS_PRUNE_BATCH = 200;
 
 /** The job the deletion runs the audit archiver's slices as (they read no job state). */
 const DELETION_SLICE = {
@@ -337,6 +345,7 @@ export class RepoDO extends MigratingDO {
   /** The repository's webhooks. */
   readonly hooks: RepoHooks;
   readonly feed: RepoFeed;
+  readonly webhookBlobStore: RepoWebhookBlobs;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -467,6 +476,12 @@ export class RepoDO extends MigratingDO {
       resolveHandles: (handles) => this.#feedView.resolveHandles(handles),
       prepareTexts: (texts) => this.references.prepare(texts),
       metrics: this.git.context.metrics,
+    });
+    this.webhookBlobStore = new RepoWebhookBlobs({
+      git: this.git,
+      metrics: this.git.context.metrics,
+      pruneAt: (at) =>
+        this.git.jobs.ensure("webhook_blobs_prune", WEBHOOK_BLOBS_JOB, { runAt: at }),
     });
     this.events.routeFeed((type, actor, data, row, event) =>
       this.feed.blockFor(type, actor, data, row, event),
@@ -1012,6 +1027,23 @@ export class RepoDO extends MigratingDO {
       await this.checkEpoch();
       if (this.#refusesReads()) return { missing: "deleted" as const };
       return this.feed.readPage(ask, {
+        epochGen: this.events.epochGen(),
+        ownerGen: this.events.account()?.ownerGen ?? 0,
+      });
+    });
+  }
+
+  /**
+   * The webhook capture blobs an event's delivery needs, while the event is
+   * still this repository's (the restore generation taken first, then
+   * deletion, restore and ownership checked with the read).
+   */
+  webhookBlobs(ask: WebhookBlobsAsk): Promise<WebhookBlobsRead> {
+    if (this.#gone()) return Promise.resolve({ missing: "deleted" as const });
+    return this.#measured("webhookBlobs", async () => {
+      await this.checkEpoch();
+      if (this.#refusesReads()) return { missing: "deleted" as const };
+      return this.webhookBlobStore.read(ask, {
         epochGen: this.events.epochGen(),
         ownerGen: this.events.account()?.ownerGen ?? 0,
       });
@@ -2592,6 +2624,15 @@ export class RepoDO extends MigratingDO {
         runSlice: async () => {
           const now = this.git.context.now();
           const { nextAt } = this.feed.prunePages(now, FEED_PAGES_PRUNE_BATCH);
+          return nextAt === null
+            ? { done: true }
+            : { done: false, cursor: null, runAfterMs: Math.max(0, nextAt - now) };
+        },
+      },
+      webhook_blobs_prune: {
+        runSlice: async () => {
+          const now = this.git.context.now();
+          const { nextAt } = this.webhookBlobStore.prune(now, WEBHOOK_BLOBS_PRUNE_BATCH);
           return nextAt === null
             ? { done: true }
             : { done: false, cursor: null, runAfterMs: Math.max(0, nextAt - now) };
