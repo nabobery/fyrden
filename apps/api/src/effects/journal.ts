@@ -174,8 +174,9 @@ export const EFFECT_POLICY: EffectPolicy = {
     // its claims hold, and how long the effects behind it wait: a cron run delivering 20 webhook
     // effects took 42 to 86 ms of CPU on Free (measured, 2026-10-17). Each sink's messages carry
     // fewer (`EffectSink.perMessage`), and its queue's batch size bounds how many messages an
-    // invocation takes; this caps a batch.
-    effects: 20,
+    // invocation takes; this caps a batch. The feed queue's 4 messages of up to 8 effects fit
+    // (an event's pages share an invocation's pool of calls: the queue adds consumers slowly).
+    effects: 32,
     // A webhook effect's payload holds its body (up to 192 KiB): at most 5 of the largest.
     bytes: 1024 * 1024,
     deadlineMs: 60_000,

@@ -91,7 +91,9 @@
       },
       {
         "queue": "fyrden-effects-feed",
-        "max_batch_size": 1,
+        // Up to 4 messages: an event's pages, each a message of its own, delivered in one
+        // invocation through its pool of calls (Queues add consumers only for a larger backlog).
+        "max_batch_size": 4,
         "max_batch_timeout": 1,
         "max_retries": 3
       },

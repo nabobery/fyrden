@@ -3,7 +3,13 @@
 // a manifest; the feed sink delivers each page as an effect of its own,
 // read from the repository only while the event is still its, before the
 // deadline, and as the manifest says; pages go a day after the deadline.
-import { evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
+import {
+  createExecutionContext,
+  createMessageBatch,
+  evictDurableObject,
+  getQueueResult,
+  runDurableObjectAlarm,
+} from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
@@ -19,8 +25,9 @@ import type { RepoDO } from "../src/do/RepoDO.js";
 import { FEED_PAGE_GRACE_MS } from "../src/do/repo/feed.js";
 import type { UserDO } from "../src/do/UserDO.js";
 import { deliverEffects, invocationBudget } from "../src/effects/dispatcher.js";
-import { effectCalls, INLINE_RECIPIENTS } from "../src/effects/journal.js";
+import { EFFECT_POLICY, effectCalls, INLINE_RECIPIENTS } from "../src/effects/journal.js";
 import { FEED_CALLS_IN_FLIGHT, feedSink } from "../src/feed/sink.js";
+import { consumeEffects } from "../src/queues/effects-consumer.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { recordingPublish } from "./helpers/effects.js";
@@ -263,6 +270,45 @@ describe("audience pages", () => {
     expect(doneMeanwhile).toBe(150);
     for (const name of [names[0], names[149]] as string[])
       expect(await items(name)).toEqual(["issue/1"]);
+  });
+
+  it("are delivered with their event's own recipients in one invocation of the feed queue, its four messages together", async () => {
+    await participants(350);
+    const event = await commentEvent();
+    const { publish, sent } = recordingPublish();
+    await applyEnvelope(
+      env,
+      { sourceId: repo.id, events: [event] },
+      { sinks: [feedSink], publish, inline: { batched: 0 } },
+    );
+    // As the feed queue gets them: the event's effect, then each page alone.
+    const ids = sent.flatMap((m) => m.ids);
+    expect(ids).toHaveLength(4);
+    const batch = createMessageBatch(
+      "fyrden-effects-feed",
+      ids.map((id, i) => ({
+        id: `m${i}`,
+        timestamp: new Date(),
+        attempts: 1,
+        body: { v: 1, sink: "feed", ids: [id] },
+      })),
+    );
+    const back = recordingPublish();
+    await consumeEffects(batch, env, { sinks: [feedSink], publish: back.publish });
+    expect(await getQueueResult(batch, createExecutionContext())).toMatchObject({
+      explicitAcks: ["m0", "m1", "m2", "m3"],
+      retryMessages: [],
+    });
+    // Nothing went back to the queue: all four in the one invocation.
+    expect(back.sent).toEqual([]);
+    expect((await effects()).map((e) => e.state)).toEqual(["done", "done", "done", "done"]);
+    for (const name of [names[0], names[200], names[349]] as string[])
+      expect(await items(name)).toEqual(["issue/1"]);
+  });
+
+  it("fit four full messages of the feed queue in one invocation's effects", () => {
+    // The feed queue's consumer takes up to 4 messages (`max_batch_size`, wrangler.jsonc).
+    expect(EFFECT_POLICY.invocation.effects).toBeGreaterThanOrEqual(4 * (feedSink.perMessage ?? 0));
   });
 
   it("count a page's recipients in the calls its effect makes", () => {
