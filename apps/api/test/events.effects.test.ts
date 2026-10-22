@@ -5,6 +5,7 @@ import {
   runInDurableObject,
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
   createIdFactory,
   type DomainEvent,
@@ -36,6 +37,7 @@ import {
   type Publish,
   publisher,
 } from "../src/effects/queues.js";
+import { feedSink } from "../src/feed/sink.js";
 import { consumeEffects } from "../src/queues/effects-consumer.js";
 import { applyEnvelope, consumeEvents, EVENTS_QUEUE } from "../src/queues/events-consumer.js";
 import { recordingPublish } from "./helpers/effects.js";
@@ -931,6 +933,81 @@ describe("effects queue messages", () => {
         MESSAGE_BYTES,
       );
     expect(messages.flatMap((m) => m.ids)).toEqual(long);
+  });
+
+  it("give an effect its sink sends alone a message of its own, the others packed around it in order", () => {
+    const ids = ["a:feed:feed", "a:feed:page:1", "a:feed:page:2", "b:feed:feed", "c:feed:feed"];
+    const alone = (id: string) => id.includes(":page:");
+    expect(effectMessages("feed", ids, 8, alone).map((m) => m.ids)).toEqual([
+      ["a:feed:feed"],
+      ["a:feed:page:1"],
+      ["a:feed:page:2"],
+      ["b:feed:feed", "c:feed:feed"],
+    ]);
+    expect(effectMessages("feed", ["a:feed:page:1"], 8, alone).map((m) => m.ids)).toEqual([
+      ["a:feed:page:1"],
+    ]);
+    // Without such a rule, by count as before.
+    expect(effectMessages("feed", ids, 8).map((m) => m.ids)).toEqual([ids]);
+  });
+
+  it("send each of the feed's audience pages alone, and its other effects 8 a message", async () => {
+    const sent: EffectMessage[] = [];
+    const queue = {
+      send: async () => {},
+      sendBatch: async (messages: MessageSendRequest<EffectMessage>[]) => {
+        sent.push(...messages.map((m) => m.body));
+      },
+    } as unknown as Queue<EffectMessage>;
+    const pages = Array.from({ length: 3 }, (_, i) => `r:1:1:e:feed:page:${i + 1}`);
+    const small = Array.from({ length: 11 }, (_, i) => `r:1:1:e${i}:feed:feed`);
+    await publisher({ feed: queue }, [feedSink])("feed", [
+      ...small.slice(0, 2),
+      ...pages,
+      ...small.slice(2),
+    ]);
+    expect(sent.map((m) => m.ids)).toEqual([
+      small.slice(0, 2),
+      [pages[0]],
+      [pages[1]],
+      [pages[2]],
+      // Nine in a row: eight, then one.
+      small.slice(2, 10),
+      small.slice(10),
+    ]);
+  });
+
+  it("count each message sent, not each call sending them", async () => {
+    const queue = {
+      send: async () => {},
+      sendBatch: async () => {},
+    } as unknown as Queue<EffectMessage>;
+    let counted = 0;
+    const metrics = {
+      count(name: string, dimensions: Record<string, string>, value = 1) {
+        if (name === "queue.send" && dimensions.queue === "effects_test_hook") counted += value;
+      },
+    } as unknown as Metrics;
+    const { sink } = recordingSink({ perMessage: 1 });
+    await publisher(
+      { test_hook: queue },
+      [sink],
+      metrics,
+    )(
+      "test_hook",
+      Array.from({ length: 150 }, (_, i) => `id_${i}`),
+    );
+    expect(counted).toBe(150);
+    // None that could not be sent.
+    const down = {
+      sendBatch: async () => {
+        throw new Error("queue down");
+      },
+    } as unknown as Queue<EffectMessage>;
+    await expect(
+      publisher({ test_hook: down }, [sink], metrics)("test_hook", ["id_x"]),
+    ).rejects.toThrow(/queue down/);
+    expect(counted).toBe(150);
   });
 
   it("go out in sendBatch calls of at most 100 messages, with their delay", async () => {

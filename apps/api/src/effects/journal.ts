@@ -75,6 +75,13 @@ export interface EffectSink {
    */
   readonly perMessage?: number;
   /**
+   * Whether the effect `id` names is sent in a queue message of its own:
+   * one costing about an invocation's share by itself, so it is delivered
+   * beside the others rather than after them. Decided from the id alone, as
+   * every sending (and the effects cron's) has it.
+   */
+  readonly alone?: (id: string) => boolean;
+  /**
    * The events consumer delivers some of the sink's effects itself (see
    * `INLINE_BATCH_EFFECTS`), sparing them a queue's wait; a batch sink only.
    */

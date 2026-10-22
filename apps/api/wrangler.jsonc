@@ -82,7 +82,7 @@
       // cron sends a message again for an effect overdue, so no dead-letter queue. Batch sizes
       // keep an invocation short, so the effects behind it wait little (a consumer gets 30 s of
       // CPU on Free as on Paid): a message names up to 2 webhook effects (an event's deliveries
-      // each), 8 feed effects or 10 references.
+      // each), 8 feed effects or one feed audience page (up to 101 calls), or 10 references.
       {
         "queue": "fyrden-effects-webhooks",
         "max_batch_size": 1,
@@ -91,7 +91,7 @@
       },
       {
         "queue": "fyrden-effects-feed",
-        "max_batch_size": 2,
+        "max_batch_size": 1,
         "max_batch_timeout": 1,
         "max_retries": 3
       },

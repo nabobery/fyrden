@@ -4,7 +4,12 @@
 // with a spy (below), so the queue's consumer never makes an attempt behind
 // a test's back, in this test or a later one.
 import { env } from "cloudflare:workers";
+import { D1TokenStore } from "@fyrden/adapters-cloudflare/auth";
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpContext } from "../src/ops/execute.js";
+import { redeliverHookDeliveryOperation } from "../src/repos/hooks.js";
 import { ATTEMPT_POLICY, attemptDelivery, reconcileWebhooks } from "../src/webhooks/deliver.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { webhookTest } from "./helpers/webhooks.js";
@@ -61,6 +66,44 @@ describe("redelivery", () => {
       [2, 200],
       [1, 400],
     ]);
+  });
+
+  it("counts the message it sends, and none it could not send", async () => {
+    const { hook, id } = await delivered(400);
+    const checked = await new D1TokenStore(env.DIRECTORY, {
+      clock: () => Date.now(),
+      newId: createIdFactory(() => Date.now(), secureRandomBytes),
+      randomBytes: secureRandomBytes,
+    }).verify(t.owner.token, "write");
+    if (!checked.ok) throw new Error(`the token is refused: ${checked.reason}`);
+    let sent = 0;
+    const metrics = {
+      count(name: string, dimensions: Record<string, string>, value = 1) {
+        if (name === "queue.send" && dimensions.queue === "webhooks") sent += value;
+      },
+    } as unknown as Metrics;
+    const ctx = {
+      env,
+      auth: checked.record,
+      requestId: "req_test",
+      metrics,
+    } as unknown as OpContext;
+    const input = { owner: t.owner.handle, repo: t.repo.name, hook_id: hook, delivery_id: id };
+    vi.spyOn(env.WEBHOOKS, "send").mockRejectedValueOnce(new Error("queue down"));
+    await expect(redeliverHookDeliveryOperation(ctx, input)).rejects.toThrow(/queue down/);
+    expect(sent).toBe(0);
+    // Another hook's, sent: counted once.
+    const other = (await t.createHook()).body.id;
+    await t.materialize((await t.outbox()).filter((e) => e.webhooks));
+    const next = (await t.deliveries())
+      .map((d) => (d as { delivery_id: string }).delivery_id)
+      .find((d) => d !== id);
+    if (!next) throw new Error("no second delivery");
+    t.answer = () => new Response("no", { status: 400 });
+    await attemptDelivery(t.deps(), next);
+    await redeliverHookDeliveryOperation(ctx, { ...input, hook_id: other, delivery_id: next });
+    expect(queued).toEqual([next]);
+    expect(sent).toBe(1);
   });
 
   it("makes one attempt only, not the automatic retries", async () => {

@@ -54,28 +54,38 @@ export const MAX_DELAY_SECONDS = 12 * 60 * 60;
 const encoder = new TextEncoder();
 const bytesOf = (value: unknown) => encoder.encode(JSON.stringify(value)).length;
 
-/** `ids` as messages of at most `perMessage` ids and `MESSAGE_BYTES` each, in order. */
+/**
+ * `ids` as messages of at most `perMessage` ids and `MESSAGE_BYTES` each, in
+ * order; an id `alone` says so has a message of its own.
+ */
 export function effectMessages(
   sink: string,
   ids: readonly string[],
   perMessage: number,
+  alone?: (id: string) => boolean,
 ): EffectMessage[] {
   const messages: EffectMessage[] = [];
   let current: string[] = [];
   const empty = bytesOf({ v: 1, sink, ids: [] });
   let bytes = empty;
+  const flush = () => {
+    if (current.length > 0) messages.push({ v: 1, sink, ids: current });
+    current = [];
+    bytes = empty;
+  };
   for (const id of ids) {
+    if (alone?.(id)) {
+      flush();
+      messages.push({ v: 1, sink, ids: [id] });
+      continue;
+    }
     // The id as JSON, with the comma before it.
     const size = bytesOf(id) + 1;
-    if (current.length > 0 && (current.length >= perMessage || bytes + size > MESSAGE_BYTES)) {
-      messages.push({ v: 1, sink, ids: current });
-      current = [];
-      bytes = empty;
-    }
+    if (current.length >= perMessage || bytes + size > MESSAGE_BYTES) flush();
     current.push(id);
     bytes += size;
   }
-  if (current.length > 0) messages.push({ v: 1, sink, ids: current });
+  flush();
   return messages;
 }
 
@@ -84,7 +94,7 @@ export type EffectQueues = Readonly<Record<string, Queue<EffectMessage>>>;
 
 /**
  * Publishing through `queues`, each sink's messages in as few `sendBatch`
- * calls as their number and bytes allow. Counts each call (`queue.send`).
+ * calls as their number and bytes allow. Counts each message sent (`queue.send`).
  */
 export function publisher(
   queues: EffectQueues,
@@ -96,7 +106,7 @@ export function publisher(
     const sink = sinks.find((s) => s.name === sinkName);
     const queue = queues[sinkName];
     if (!sink || !queue) throw new Error(`no queue for the effects of sink ${sinkName}`);
-    const messages = effectMessages(sinkName, ids, sink.perMessage ?? PER_MESSAGE);
+    const messages = effectMessages(sinkName, ids, sink.perMessage ?? PER_MESSAGE, sink.alone);
     const delay =
       delaySeconds === undefined
         ? {}
@@ -105,8 +115,8 @@ export function publisher(
     let bytes = 0;
     const flush = async () => {
       if (batch.length === 0) return;
-      metrics?.count("queue.send", { queue: `effects_${sinkName}` });
       await queue.sendBatch(batch);
+      metrics?.count("queue.send", { queue: `effects_${sinkName}` }, batch.length);
       batch = [];
       bytes = 0;
     };

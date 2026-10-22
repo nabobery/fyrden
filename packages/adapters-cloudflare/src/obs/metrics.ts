@@ -90,6 +90,7 @@ export const METRICS = {
   // rows, body, claim and hooks once per event; post and record once per
   // attempt the event's effect makes. The clock advances only on I/O.
   "webhooks.stage_ms": ["stage"],
+  "feed.stage_ms": ["stage"],
   // Calls one invocation made against one subrequest budget, written once
   // when it ends: where = worker | do; budget = internal (R2, D1, Durable
   // Object calls) | external (outbound fetch and Cache API); op = the route
@@ -123,6 +124,7 @@ export const METRIC_AGGREGATION: Partial<Record<MetricName, MetricAggregation>> 
   subrequests: "each",
   "do.active_ms": "each",
   "webhooks.stage_ms": "each",
+  "feed.stage_ms": "each",
   "acl.snapshot_age_ms": "each",
   "worker.cpu_ms": "each",
   "worker.wall_ms": "each",

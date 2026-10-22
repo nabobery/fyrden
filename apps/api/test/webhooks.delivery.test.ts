@@ -202,6 +202,43 @@ describe("webhooks", () => {
     });
   });
 
+  it("count each retry and each late message sent again as a message sent", async () => {
+    await t.createHook();
+    await t.materialize((await t.outbox()).filter((e) => e.webhooks));
+    const [ping] = await t.deliveries();
+    const id = (ping as { delivery_id: string }).delivery_id;
+    let counted = 0;
+    const metrics = {
+      count(name: string, dimensions: Record<string, string>, value = 1) {
+        if (name === "queue.send" && dimensions.queue === "webhooks") counted += value;
+      },
+    } as unknown as Metrics;
+    t.sent.length = 0;
+    t.answer = () => new Response("busy", { status: 503, headers: { "retry-after": "30" } });
+    await attemptDelivery({ ...t.deps(Date.now()), metrics }, id);
+    expect(t.sent).toHaveLength(1);
+    expect(counted).toBe(1);
+    // Its retry's message lost, and the queue down: the cron sends nothing, counting nothing.
+    const late = t.deps(Date.now() + 16 * 60_000);
+    const down = {
+      send: async () => {
+        throw new Error("queue down");
+      },
+    };
+    await expect(
+      reconcileWebhooks({
+        ...late,
+        env: { ...late.env, WEBHOOKS: down } as unknown as Env,
+        metrics,
+      }),
+    ).rejects.toThrow();
+    expect(counted).toBe(1);
+    // A later run sends it again (its failed send left it due from then), and any other late ones.
+    await reconcileWebhooks({ ...t.deps(Date.now() + 32 * 60_000), metrics });
+    expect(t.sent.length).toBeGreaterThan(1);
+    expect(counted).toBe(t.sent.length);
+  });
+
   it("are cancelled when their hook goes, and never go over http for a private repository", async () => {
     const hook = (await t.createHook()).body;
     await t.materialize((await t.outbox()).filter((e) => e.webhooks));
@@ -652,6 +689,27 @@ describe("webhooks", () => {
     await sink.deliver(effect, t.testEnv(), env.ORG_READ);
     expect(t.received).toHaveLength(2);
     expect(t.sent).toHaveLength(2);
+  });
+
+  it("count each first attempt they queue as a message sent", async () => {
+    for (let i = 0; i < 5; i++) await t.createHook({ events: ["push"] });
+    await api("POST", `${t.path}/file-commits`, t.owner.token, {
+      message: "first",
+      changes: [{ path: "a.txt", content: "a\n" }],
+    });
+    const [push] = (await t.outbox()).filter((e) => e.type === "refs.updated" && e.webhooks);
+    let sent = 0;
+    const metrics = {
+      count(name: string, dimensions: Record<string, string>, value = 1) {
+        if (name === "queue.send" && dimensions.queue === "webhooks") sent += value;
+      },
+    } as unknown as Metrics;
+    const sink = createWebhookSink({ resolver: () => async () => ["93.184.216.34"] });
+    await sink.deliver(effectOf(sink, push as DomainEvent), t.testEnv(), env.ORG_READ, metrics);
+    // Two made at once, three queued in one call.
+    expect(t.received).toHaveLength(FIRST_ATTEMPTS);
+    expect(t.sent).toHaveLength(5 - FIRST_ATTEMPTS);
+    expect(sent).toBe(5 - FIRST_ATTEMPTS);
   });
 
   it("keep making an event's deliveries within the calls the sink counts for it", async () => {
