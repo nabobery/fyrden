@@ -1,14 +1,22 @@
-import type { getComment, getIssue, getLabel, getMilestone, Output } from "@fyrden/api-contract";
+import type {
+  getComment,
+  getIssue,
+  getLabel,
+  getMilestone,
+  getPull,
+  Output,
+} from "@fyrden/api-contract";
 import type { CommentRecord } from "../do/repo/comments.js";
 import type { IssueRecord, Subject, SubjectKind } from "../do/repo/issues.js";
+import type { PullView } from "../do/repo/mergeability.js";
 import type { PullRecord } from "../do/repo/pulls.js";
 import type { Reacted, ReactionCounts } from "../do/repo/reactions.js";
 import type { LabelRecord, MilestoneRecord, SubjectMeta } from "../do/repo/subject-meta.js";
 
 /*
- * Issues, comments, labels and milestones as the API answers them: pure
- * functions of the repository object's records, which webhook captures
- * take too.
+ * Issues, pull requests, comments, labels and milestones as the API
+ * answers them: pure functions of the repository object's records, which
+ * webhook captures take too.
  */
 
 type IssueOutput = Output<typeof getIssue>;
@@ -142,5 +150,39 @@ export function commentOutput(comment: Reacted<CommentRecord>): Output<typeof ge
     created_at: comment.createdAt,
     updated_at: comment.updatedAt,
     reactions: reactionRollup(comment.reactions),
+  };
+}
+
+/** A pull request as the API answers it, for a caller reading `readable` (its milestone's counts). */
+export function pullOutput(
+  pull: PullView,
+  readable: readonly SubjectKind[],
+): Output<typeof getPull> {
+  return {
+    number: pull.number,
+    state: pull.state === "open" ? "open" : "closed",
+    merged: pull.state === "merged",
+    head_repo_id: pull.headRepoId,
+    mergeable: pull.mergeable,
+    mergeable_state: pull.mergeableState,
+    mergeable_reason: pull.mergeableReason,
+    draft: pull.draft,
+    maintainer_can_modify: pull.maintainerCanModify,
+    locked: pull.locked,
+    active_lock_reason: pull.lockReason,
+    title: pull.title,
+    body: pull.body,
+    user: { id: pull.authorId },
+    performed_via_agents: [...pull.authorAct],
+    head: { ref: pull.headRef, sha: pull.headSha },
+    base: { ref: pull.baseRef, sha: pull.baseSha },
+    head_ref_deleted: pull.headRefDeleted,
+    created_at: pull.createdAt,
+    updated_at: pull.updatedAt,
+    closed_at: pull.closedAt,
+    merged_at: pull.mergedAt,
+    merge_commit_sha: pull.mergeCommitSha,
+    merged_by: pull.mergedBy === null ? null : { id: pull.mergedBy },
+    ...sortingOutput(pull.meta, readable),
   };
 }

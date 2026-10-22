@@ -14,53 +14,17 @@ import type {
   updatePullBranch,
 } from "@fyrden/api-contract";
 import { MAX_REQUESTED_REVIEWERS } from "@fyrden/domain";
-import type { SubjectKind } from "../do/repo/issues.js";
-import type { PullView } from "../do/repo/mergeability.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, decodeCursor, encodeBytesCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { resolveVerification } from "../signing/verification.js";
 import { authorize, findReposById, networkReposOf, type RepoEntry } from "./directory.js";
 import { commitIdentityFor, commitIdentityOf } from "./file-writes.js";
-import { sortingOutput } from "./shapes.js";
+import { pullOutput } from "./shapes.js";
 import { tokenKinds } from "./subjects.js";
 
 /** The kinds the caller reads in `entry` (its token's limits; both take the same role). */
 export const readable = (ctx: OpContext, entry: RepoEntry) => tokenKinds(ctx, entry, "read");
-
-type PullOutput = Output<typeof getPull>;
-
-/** A pull request as the API returns it. */
-/** A pull request as the API answers it, for a caller reading `readable` (its milestone's counts). */
-export function pullOutput(pull: PullView, readable: readonly SubjectKind[]): PullOutput {
-  return {
-    number: pull.number,
-    state: pull.state === "open" ? "open" : "closed",
-    merged: pull.state === "merged",
-    head_repo_id: pull.headRepoId,
-    mergeable: pull.mergeable,
-    mergeable_state: pull.mergeableState,
-    mergeable_reason: pull.mergeableReason,
-    draft: pull.draft,
-    maintainer_can_modify: pull.maintainerCanModify,
-    locked: pull.locked,
-    active_lock_reason: pull.lockReason,
-    title: pull.title,
-    body: pull.body,
-    user: { id: pull.authorId },
-    performed_via_agents: [...pull.authorAct],
-    head: { ref: pull.headRef, sha: pull.headSha },
-    base: { ref: pull.baseRef, sha: pull.baseSha },
-    head_ref_deleted: pull.headRefDeleted,
-    created_at: pull.createdAt,
-    updated_at: pull.updatedAt,
-    closed_at: pull.closedAt,
-    merged_at: pull.mergedAt,
-    merge_commit_sha: pull.mergeCommitSha,
-    merged_by: pull.mergedBy === null ? null : { id: pull.mergedBy },
-    ...sortingOutput(pull.meta, readable),
-  };
-}
 
 /** The caller as the repository object records it. */
 export function actorOf(ctx: OpContext): RefActor {

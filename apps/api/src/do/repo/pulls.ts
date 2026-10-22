@@ -25,8 +25,17 @@ import {
   oidToHex,
   type RefUpdate,
 } from "@fyrden/git-core";
+import { labelOutput, milestoneOutput, pullOutput } from "../../repos/shapes.js";
+import type { CaptureValue } from "../../webhooks/capture.js";
+import { ALL_KINDS, capturable, userOf } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
-import type { SnapshotMeta, SubjectEvent } from "./subject-meta.js";
+import type { PullView } from "./mergeability.js";
+import type {
+  MilestoneRecord,
+  SnapshotMeta,
+  SubjectEvent,
+  SubjectTouched,
+} from "./subject-meta.js";
 
 const BRANCHES = "refs/heads/";
 const PULL_HEAD = /^refs\/pull\/([1-9][0-9]*)\/head$/;
@@ -174,8 +183,18 @@ export class RepoPulls {
       readonly described?: (number: number, body: string | null, actor: RefActor | null) => void;
       /** In a merge's transaction, once merged: what its description closes is closed. */
       readonly merged?: (pull: PullRecord, actor: RefActor) => void;
+      /** A pull request as the API shows it, as it stands (for webhook captures). */
+      readonly view?: (pull: PullRecord) => PullView;
+      /** A milestone as it stands (its counts after a change), for webhook captures. */
+      readonly milestone?: (number: number) => MilestoneRecord | undefined;
     },
   ) {}
+
+  /** `pull` as the API shows it to a reader of both kinds, as it stands, for a webhook capture. */
+  captured(pull: PullRecord): CaptureValue {
+    const view = this.deps.view?.(pull);
+    return view ? capturable(pullOutput(view, ALL_KINDS)) : null;
+  }
 
   get(number: number): PullRecord | undefined {
     const row = this.#rows("SELECT * FROM pull_requests WHERE number = ?", number)[0];
@@ -849,11 +868,17 @@ export class RepoPulls {
     return row?.oid ? oidFromBytes(new Uint8Array(row.oid)) : null;
   }
 
+  /**
+   * Emits the pull request's event; its webhook capture is its number, the
+   * pull request as the API shows it, what a metadata action `touched`, a
+   * synchronize's head before and after, and an edit's changes.
+   */
   #emit(
     event: string,
     pull: PullRecord,
     actor: RefActor | null,
     data: Record<string, unknown> | null = null,
+    touched?: SubjectTouched,
   ): void {
     // Every change passes here: the head it leaves is one the pull request has had, and
     // whether it merges is worked out again (only when its base tip or head moved, in fact).
@@ -892,6 +917,27 @@ export class RepoPulls {
       actor,
       { type: PULL_ENTITY, id: `${this.deps.repoId()}#${pull.number}`, version, row },
       data,
+      false,
+      () => ({
+        number: pull.number,
+        pull_request: this.captured(pull),
+        ...(event === "synchronize" && {
+          before: (data?.before as string | null | undefined) ?? null,
+          after: (data?.after as string | null | undefined) ?? null,
+        }),
+        ...(touched?.label && { label: capturable(labelOutput(touched.label)) }),
+        ...(touched?.assignee !== undefined && { assignee: userOf(touched.assignee) }),
+        // The milestone set or left, its counts as the change left them.
+        ...(touched?.milestone && {
+          milestone: capturable(
+            milestoneOutput(
+              this.deps.milestone?.(touched.milestone.number) ?? touched.milestone,
+              ALL_KINDS,
+            ),
+          ),
+        }),
+        ...(data?.changes !== undefined && { changes: capturable(data.changes) }),
+      }),
     );
     if (
       event === "opened" ||
@@ -912,7 +958,7 @@ export class RepoPulls {
       number,
     );
     const pull = record(row as Row);
-    for (const { event, data } of events) this.#emit(event, pull, actor, data);
+    for (const { event, data, touched } of events) this.#emit(event, pull, actor, data, touched);
   }
 
   #rows<T extends Record<string, SqlStorageValue> = Row>(

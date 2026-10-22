@@ -16,7 +16,7 @@ import {
   type SubjectMetaField,
 } from "@fyrden/domain";
 import { issueOutput, labelOutput, milestoneOutput } from "../../repos/shapes.js";
-import { capturable, userOf } from "../../webhooks/captures.js";
+import { ALL_KINDS, capturable, userOf } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller, PullRecord, RepoPulls } from "./pulls.js";
 import type {
@@ -40,9 +40,6 @@ import type {
 
 /** What a subject's number names: an issue or a pull request. */
 export type SubjectKind = FeedSubjectKind;
-
-/** Both kinds: a webhook's capture shows what a reader of both would see. */
-export const ALL_KINDS: readonly SubjectKind[] = ["issue", "pull"];
 
 /** An issue as the repository keeps it (its labels, assignees and milestone are read apart). */
 export interface IssueRecord extends Omit<IssueRow, SubjectMetaField> {

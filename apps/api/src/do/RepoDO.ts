@@ -424,6 +424,8 @@ export class RepoDO extends MigratingDO {
       stale: (number, open) => this.mergeability.stale(number, open),
       staleBase: (branch) => this.mergeability.staleBase(branch),
       follow: (pull) => this.#forkPulls.follow(pull),
+      view: (pull) => this.#viewed(pull),
+      milestone: (number) => this.subjectMeta.milestone(number),
     });
     this.pullSource = new PullSource({
       git: this.git,

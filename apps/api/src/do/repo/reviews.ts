@@ -11,6 +11,7 @@ import {
   type ReviewState,
   reviewStateOf,
 } from "@fyrden/domain";
+import { userOf } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller, PullRecord, RepoPulls } from "./pulls.js";
 
@@ -445,11 +446,24 @@ export class RepoReviews {
     /** The root identity the reviewer counts as, when known (a user's agent: that user). */
     reviewerRoot?: string,
   ): void {
-    this.deps.events.emitActivity(`pull_request.${event}`, actor, {
-      number,
-      reviewer,
-      ...(reviewerRoot !== undefined && { reviewer_root: reviewerRoot }),
-    });
+    this.deps.events.emitActivity(
+      `pull_request.${event}`,
+      actor,
+      {
+        number,
+        reviewer,
+        ...(reviewerRoot !== undefined && { reviewer_root: reviewerRoot }),
+      },
+      // The pull request as it stands, and the reviewer requested or no longer.
+      () => {
+        const pull = this.deps.pulls.get(number);
+        return {
+          number,
+          pull_request: pull ? this.deps.pulls.captured(pull) : null,
+          requested_reviewer: userOf(reviewer),
+        };
+      },
+    );
   }
 
   /** In the transaction of a change of a review that can count: the merge's stamp changes. */

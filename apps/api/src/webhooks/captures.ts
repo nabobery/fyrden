@@ -1,3 +1,4 @@
+import type { SubjectKind } from "../do/repo/issues.js";
 import type { CaptureValue } from "./capture.js";
 
 /*
@@ -8,6 +9,9 @@ import type { CaptureValue } from "./capture.js";
  * is made; a time (`*_at`, `due_on`, and the `from` of an edit of one) is
  * ISO 8601, null when no date can hold it.
  */
+
+/** Both kinds: a capture shows what a reader of issues and pull requests would see. */
+export const ALL_KINDS: readonly SubjectKind[] = ["issue", "pull"];
 
 /** The capture format this version makes and makes bodies from. */
 export const CAPTURE_VERSION = 1;

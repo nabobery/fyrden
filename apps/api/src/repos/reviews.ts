@@ -15,7 +15,8 @@ import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import type { RepoEntry } from "./directory.js";
-import { actorOf, failure, pullOutput, readable } from "./pulls.js";
+import { actorOf, failure, readable } from "./pulls.js";
+import { pullOutput } from "./shapes.js";
 
 type ReviewOutput = Output<typeof getReview>;
 
