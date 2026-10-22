@@ -26,6 +26,8 @@ const DueOn = z
   .number()
   .int()
   .min(0)
+  // The latest time a date holds (JavaScript's, as ISO 8601's year 275760).
+  .max(8_640_000_000_000_000)
   .describe("Fyrden: Unix time in milliseconds (GitHub takes an ISO 8601 time).");
 
 const MANAGE =

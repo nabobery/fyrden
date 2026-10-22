@@ -19,8 +19,13 @@ const HookEvent = z.enum([
   "pull_request_review",
   "pull_request_review_comment",
   "issue_comment",
+  "issues",
+  "label",
+  "milestone",
   "*",
 ]);
+/** A list of events names each at most once: no longer than the events there are. */
+const MAX_EVENTS = HookEvent.options.length;
 const Url = z
   .string()
   .max(2048)
@@ -107,7 +112,7 @@ export const createHook = defineOperation({
   path: "/repos/{owner}/{repo}/hooks",
   summary: "Create a repository webhook",
   description:
-    "Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, or `*`. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents).",
+    "Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, `issues`, `label`, `milestone`, or `*`. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents).",
   input: z.object({
     ...RepoInput,
     name: z.literal("web").optional(),
@@ -115,7 +120,7 @@ export const createHook = defineOperation({
       url: Url,
       content_type: z.literal("json").optional(),
     }),
-    events: z.array(HookEvent).min(1).max(6).default(["push"]),
+    events: z.array(HookEvent).min(1).max(MAX_EVENTS).default(["push"]),
     active: z.boolean().default(true),
   }),
   output: Hook.extend({ secret: Secret }),
@@ -142,9 +147,9 @@ export const updateHook = defineOperation({
     config: z
       .object({ url: Url.optional(), content_type: z.literal("json").optional() })
       .optional(),
-    events: z.array(HookEvent).min(1).max(6).optional(),
-    add_events: z.array(HookEvent).max(6).optional(),
-    remove_events: z.array(HookEvent).max(6).optional(),
+    events: z.array(HookEvent).min(1).max(MAX_EVENTS).optional(),
+    add_events: z.array(HookEvent).max(MAX_EVENTS).optional(),
+    remove_events: z.array(HookEvent).max(MAX_EVENTS).optional(),
     active: z.boolean().optional(),
   }),
   output: Hook,

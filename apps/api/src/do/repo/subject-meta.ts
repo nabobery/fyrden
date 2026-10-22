@@ -333,7 +333,16 @@ export class RepoSubjectMeta {
         "deleted",
         { ...current, version: current.version + 1 },
         caller.actor,
-        null,
+        // What its deletion's webhook tells of it (the event keeps no row).
+        {
+          label: {
+            id: current.id,
+            name: current.name,
+            color: current.color,
+            description: current.description,
+            isDefault: current.isDefault,
+          },
+        },
         true,
       );
       this.deps.events.auditChange("label.delete", caller.actor, { label: current.name });
@@ -504,7 +513,8 @@ export class RepoSubjectMeta {
         "deleted",
         { ...current, version: current.version + 1 },
         caller.actor,
-        null,
+        // What its deletion's webhook tells of it (the event keeps no row).
+        { milestone: { number: current.number, title: current.title, state: current.state } },
         true,
       );
       this.deps.events.auditChange("milestone.delete", caller.actor, { milestone: number });

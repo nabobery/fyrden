@@ -421,7 +421,13 @@ export class RepoIssues {
         now,
         caller.actor.principal,
       );
-      this.#emit("deleted", { ...current, version }, caller.actor, { number }, true);
+      this.#emit(
+        "deleted",
+        { ...current, version },
+        caller.actor,
+        { number, title: current.title },
+        true,
+      );
       this.deps.events.auditChange(ISSUE_ACTION_RULES.delete.audit, caller.actor, { number });
     });
     return { ok: true };
