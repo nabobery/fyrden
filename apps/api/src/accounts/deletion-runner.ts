@@ -254,19 +254,37 @@ async function accounts(env: Env, job: Job, metrics: Metrics | undefined): Promi
   const batches = Math.ceil(set.length / DELETION_RUN_POLICY.principalsPerCall);
   let accountCursor = job.account_cursor;
   let batchCursor = job.batch_cursor;
-  let calls = 0;
-  while (calls < DELETION_RUN_POLICY.accountCallsPerRun) {
+  // The accounts in two reads a run: the one it starts on, then, once that is done, as many
+  // as its calls left could reach (each takes at least one). A round trip to the primary an
+  // account would be most of the run's time; a run that stays on its first (blocked, or more
+  // of the set there) reads no further.
+  const budget = DELETION_RUN_POLICY.accountCallsPerRun;
+  const after = async (limit: number) => {
     metrics?.count("d1.query", { db: "directory", op: "user_deletion_account" });
-    const next = await db
+    const { results } = await db
       .prepare(
         `SELECT e.rowid AS seq, e.source_id AS id, p.type FROM source_epochs e
            LEFT JOIN principals p ON p.id = e.source_id
          WHERE e.rowid > ?1 AND e.rowid <= ?2
            AND (e.source_id LIKE 'usr\\_%' ESCAPE '\\' OR e.source_id LIKE 'org\\_%' ESCAPE '\\')
-         ORDER BY e.rowid LIMIT 1`,
+         ORDER BY e.rowid LIMIT ?3`,
       )
-      .bind(accountCursor, job.scan_until)
-      .first<{ seq: number; id: string; type: string | null }>();
+      .bind(accountCursor, job.scan_until, limit)
+      .all<{ seq: number; id: string; type: string | null }>();
+    return results;
+  };
+  let calls = 0;
+  let page = await after(1);
+  let at = 0;
+  let rest = false;
+  while (calls < budget) {
+    if (!rest && at === page.length && at > 0) {
+      page = await after(budget - calls);
+      at = 0;
+      rest = true;
+    }
+    const next = page[at];
+    // Only a page shorter than the calls left can run out first: there are no more.
     if (!next) return { step: "stars", accountCursor, batchCursor: 0, againInMs: 0 };
     const ids = set.slice(
       batchCursor * DELETION_RUN_POLICY.principalsPerCall,
@@ -300,6 +318,7 @@ async function accounts(env: Env, job: Job, metrics: Metrics | undefined): Promi
     else {
       accountCursor = next.seq;
       batchCursor = 0;
+      at++;
     }
   }
   return { step: "accounts", accountCursor, batchCursor, againInMs: 0 };

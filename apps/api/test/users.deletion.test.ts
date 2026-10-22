@@ -18,7 +18,7 @@ import {
   runDeletionSlice,
 } from "../src/accounts/deletion-runner.js";
 import { setMembershipOperation } from "../src/accounts/orgs.js";
-import type { OrgDO } from "../src/do/OrgDO.js";
+import type { OrgDO, RetireInput } from "../src/do/OrgDO.js";
 import type { OpContext } from "../src/ops/execute.js";
 import { advanceDeletions } from "../src/repos/deletion.js";
 import { api, json, user, type Who } from "./helpers/api.js";
@@ -368,6 +368,129 @@ describe("a user's deletion", () => {
     }
     expect(await row("SELECT state FROM repos WHERE id = ?", ready)).toEqual({ state: "deleted" });
     expect(await row("SELECT state FROM repos WHERE id = ?", moving)).toEqual({ state: "active" });
+  });
+
+  it("visits every account in batches of the set, with at most two reads of accounts a run", async () => {
+    const alice = await user();
+    const agent = await json<{ id: string }>(
+      api("POST", "/agents", alice.token, { handle: uniqueId("ag").slice(0, 30) }),
+    );
+    expect(agent.status).toBe(201);
+    const orgs = [];
+    for (let i = 0; i < 3; i++) {
+      const org = await newOrg(admin);
+      await ok(
+        api("PUT", `/orgs/${org.login}/memberships/${alice.handle}`, admin.token, {
+          role: "member",
+        }),
+      );
+      orgs.push(org);
+    }
+    // In the first, a collaborator grant as well: two rows, so a call of one row answers `more`.
+    const [first] = orgs;
+    if (!first) throw new Error("no organization");
+    const repo = uniqueId("r");
+    await ok(api("POST", `/orgs/${first.login}/repos`, admin.token, { name: repo }));
+    await ok(
+      api("PUT", `/repos/${first.login}/${repo}/collaborators/${alice.handle}`, admin.token, {
+        permission: "pull",
+      }),
+    );
+    expect(await begin(alice)).toBe(true);
+    await runJob(alice.principalId, (step) => step === "accounts" || step === "done");
+    // What the runs do: their reads of accounts, and their calls (account, principals, answer).
+    let reads = 0;
+    const limits: number[] = [];
+    const calls: { account: string; ids: string; state: string }[] = [];
+    const counted = <T extends object>(db: T): T =>
+      new Proxy(db, {
+        get(target, prop) {
+          const value = Reflect.get(target, prop);
+          if (prop === "prepare")
+            return (sql: string) => {
+              const statement = (target as unknown as D1Database).prepare(sql);
+              if (!sql.includes("FROM source_epochs")) return statement;
+              reads++;
+              return {
+                bind: (...args: unknown[]) => {
+                  limits.push(Number(args.at(-1)));
+                  return statement.bind(...args);
+                },
+              };
+            };
+          if (prop === "withSession")
+            return (...args: unknown[]) =>
+              counted((target as unknown as D1Database).withSession(...(args as [string])));
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    const traced = new Proxy(env, {
+      get(target, prop) {
+        if (prop === "DIRECTORY") return counted(target.DIRECTORY);
+        if (prop !== "ORG") return Reflect.get(target, prop);
+        return {
+          getByName: (id: string) => ({
+            retirePrincipals: async (input: { ids: string[] }) => {
+              const answer = await target.ORG.getByName(id).retirePrincipals(
+                input as unknown as RetireInput,
+              );
+              calls.push({ account: id, ids: input.ids.join(), state: answer.state });
+              return answer;
+            },
+          }),
+        };
+      },
+    });
+    const policy = { ...DELETION_RUN_POLICY };
+    // Three calls a run of one principal and one row each: the user and their agent are two
+    // batches, so runs end within an account as well as between two.
+    DELETION_RUN_POLICY.accountCallsPerRun = 3;
+    DELETION_RUN_POLICY.principalsPerCall = 1;
+    DELETION_RUN_POLICY.rowsPerCall = 1;
+    const runs: { reads: number; calls: number; limits: number[] }[] = [];
+    try {
+      for (let run = 0; run < 2_000; run++) {
+        if ((await jobOf(alice.principalId))?.step !== "accounts") break;
+        await env.DIRECTORY.prepare(
+          "UPDATE user_deletions SET next_attempt_at = 0 WHERE user_id = ?",
+        )
+          .bind(alice.principalId)
+          .run();
+        const [readsBefore, callsBefore] = [reads, calls.length];
+        await runDeletionSlice(traced, alice.principalId);
+        runs.push({
+          reads: reads - readsBefore,
+          calls: calls.length - callsBefore,
+          limits: limits.slice(readsBefore),
+        });
+      }
+    } finally {
+      Object.assign(DELETION_RUN_POLICY, policy);
+    }
+    expect((await jobOf(alice.principalId))?.step).not.toBe("accounts");
+    // At most two reads a run: its first account alone, then what its calls left could reach.
+    expect(runs.every((r) => r.reads <= 2 && r.limits[0] === 1 && r.calls <= 3)).toBe(true);
+    expect(runs.some((r) => r.reads === 2)).toBe(true);
+    expect(runs.slice(0, -1).every((r) => r.calls === 3)).toBe(true);
+    // Every account, in order, for the user then the agent; a call answered `more` repeated.
+    const { results: accounts } = await env.DIRECTORY.prepare(
+      `SELECT source_id AS id FROM source_epochs
+       WHERE rowid <= (SELECT scan_until FROM user_deletions WHERE user_id = ?)
+         AND (source_id LIKE 'usr\\_%' ESCAPE '\\' OR source_id LIKE 'org\\_%' ESCAPE '\\')
+       ORDER BY rowid`,
+    )
+      .bind(alice.principalId)
+      .all<{ id: string }>();
+    const expected = accounts.flatMap(({ id }) => [
+      `${id}:${alice.principalId}`,
+      `${id}:${agent.body.id}`,
+    ]);
+    const done = calls.filter((c) => c.state === "done").map((c) => `${c.account}:${c.ids}`);
+    expect(done).toEqual(expected);
+    const more = calls.filter((c) => c.state === "more");
+    expect(more.length).toBeGreaterThan(0);
+    expect(more.every((c) => c.account === first.id && c.ids === alice.principalId)).toBe(true);
+    for (const org of orgs) expect(await org.stub.accountRole(alice.principalId)).toBeNull();
   });
 
   it("waits for a repository deleted before it began whose deletion was reopened since", async () => {
