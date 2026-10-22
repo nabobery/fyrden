@@ -182,7 +182,12 @@ import {
   RepoPulls,
 } from "./repo/pulls.js";
 import { hasPrecheckRules } from "./repo/push-rules.js";
-import { type Reacted, type ReactionSubject, RepoReactions } from "./repo/reactions.js";
+import {
+  type Reacted,
+  type ReactionCounts,
+  type ReactionSubject,
+  RepoReactions,
+} from "./repo/reactions.js";
 import { REBASE_POLICY, type RebasePolicy } from "./repo/rebase-replay.js";
 import { RebaseSagas } from "./repo/rebase-saga.js";
 import { type IncomingReferences, RepoReferences } from "./repo/references.js";
@@ -535,6 +540,7 @@ export class RepoDO extends MigratingDO {
       issues: this.issues,
       repoId: () => this.#repoId(),
       forgetReactions: (id) => this.reactions.forget("comment", id),
+      reactionsOf: (id) => this.reactions.countsOf("comment", [id]).get(id) as ReactionCounts,
       described: (comment, kind, text, actor) =>
         this.references.sync({ kind, number: comment.number, comment: comment.id }, text, actor),
     });

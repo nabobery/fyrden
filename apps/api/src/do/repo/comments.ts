@@ -1,8 +1,11 @@
 import type { RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import { decideComment } from "@fyrden/domain";
+import { commentOutput, subjectOutput } from "../../repos/shapes.js";
+import { capturable } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
-import type { RepoIssues, SubjectKind } from "./issues.js";
+import { ALL_KINDS, type RepoIssues, type SubjectKind } from "./issues.js";
 import type { PullCaller } from "./pulls.js";
+import type { ReactionCounts } from "./reactions.js";
 
 /** The entity type comment snapshots travel as in events. */
 export const COMMENT_ENTITY = "issue_comment";
@@ -51,6 +54,8 @@ export class RepoComments {
       readonly repoId: () => string;
       /** In a comment's deletion: its reactions go with it. */
       readonly forgetReactions: (id: number) => void;
+      /** A comment's reactions counted, as they stand (for webhook captures). */
+      readonly reactionsOf: (id: number) => ReactionCounts;
       /** In a change's transaction: a comment's text now (null: deleted), for what it refers to. */
       readonly described: (
         comment: CommentRecord,
@@ -156,6 +161,8 @@ export class RepoComments {
     const current = this.#changeable(id, "delete", caller, kinds);
     if (!current.ok) return current;
     this.deps.git.context.storage.transactionSync(() => {
+      // What its deletion's webhook tells of it, read before they go.
+      const reactions = this.deps.reactionsOf(id);
       this.deps.forgetReactions(id);
       this.#rows("DELETE FROM comments WHERE comment_id = ?", id);
       // Gone, its snapshot carries no row: what it was on, for those told of it.
@@ -165,6 +172,7 @@ export class RepoComments {
         caller.actor,
         true,
         { number: current.comment.number, comment_id: id },
+        reactions,
       );
       this.deps.events.auditChange("issue_comment.delete", caller.actor, {
         number: current.comment.number,
@@ -192,12 +200,18 @@ export class RepoComments {
     return decision.ok ? { ok: true, comment } : { ok: false, code: decision.refusal };
   }
 
+  /**
+   * Emits the comment's event; its webhook capture is what it is on, as
+   * the API shows it, the comment with its reactions (`reactions`, read
+   * before a deletion), and an edit's changes.
+   */
   #emit(
     event: string,
     comment: CommentRecord,
     actor: RefActor,
     deleted: boolean,
     data: Record<string, unknown> | null = null,
+    reactions?: ReactionCounts,
   ): void {
     const { version, ...row } = comment;
     // What it is on, as it was then (webhooks and later readers cannot ask once that changed).
@@ -219,6 +233,19 @@ export class RepoComments {
       },
       { ...data, parent },
       deleted,
+      () => {
+        const subject = this.deps.issues.subject(comment.number);
+        return {
+          ...(subject && { issue: capturable(subjectOutput(subject, ALL_KINDS)) }),
+          comment: capturable(
+            commentOutput({
+              ...comment,
+              reactions: reactions ?? this.deps.reactionsOf(comment.id),
+            }),
+          ),
+          ...(data?.changes !== undefined && { changes: capturable(data.changes) }),
+        };
+      },
     );
     if (conversation && (event !== "edited" || "body" in ((data?.changes as object) ?? {})))
       this.deps.described(comment, conversation.kind, deleted ? null : comment.body, actor);

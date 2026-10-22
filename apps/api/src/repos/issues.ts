@@ -11,56 +11,19 @@ import type {
   updateIssue,
 } from "@fyrden/api-contract";
 import type { Subject, SubjectBoundary, SubjectKind } from "../do/repo/issues.js";
-import type { PullRecord } from "../do/repo/pulls.js";
-import type { SubjectMeta } from "../do/repo/subject-meta.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { authorize, findReposById, type RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
-import { issueOutput, sortingOutput } from "./shapes.js";
+import { subjectOutput } from "./shapes.js";
 import { sortingFailure, sortingInput } from "./sorting.js";
 import { subjectAccess, subjectNotFound, tokenKinds } from "./subjects.js";
-
-type IssueOutput = Output<typeof getIssue>;
 
 const repo = (ctx: OpContext, entry: RepoEntry, method: string) => {
   ctx.metrics.count("do.request", { class: "RepoDO", method });
   return ctx.env.REPO.getByName(entry.id);
 };
-
-/** A pull request as the issue endpoints answer it (GitHub's shape: marked with `pull_request`). */
-function pullAsIssue(
-  pull: PullRecord,
-  meta: SubjectMeta,
-  readable: readonly SubjectKind[],
-): IssueOutput {
-  return {
-    id: pull.number,
-    number: pull.number,
-    state: pull.state === "open" ? "open" : "closed",
-    state_reason: null,
-    duplicate_of: null,
-    title: pull.title,
-    body: pull.body,
-    user: { id: pull.authorId },
-    performed_via_agents: [...pull.authorAct],
-    locked: pull.locked,
-    active_lock_reason: pull.lockReason,
-    closed_by: null,
-    created_at: pull.createdAt,
-    updated_at: pull.updatedAt,
-    closed_at: pull.closedAt,
-    ...sortingOutput(meta, readable),
-    pull_request: { merged_at: pull.mergedAt },
-  };
-}
-
-/** An issue, or a pull request as the issue endpoints answer one. */
-export const subjectOutput = (subject: Subject, readable: readonly SubjectKind[]) =>
-  subject.kind === "issue"
-    ? issueOutput(subject.issue, readable, subject.meta)
-    : pullAsIssue(subject.pull, subject.meta, readable);
 
 /** The problem for an issue refusal; the codes issues share with pull requests map as theirs do. */
 function issueFailure(entry: RepoEntry, code: string, number: number): OperationError {
