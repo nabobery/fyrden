@@ -765,6 +765,96 @@ describe("delivering effects a message names", () => {
   });
 });
 
+describe("a single-effect sink's outcome", () => {
+  it("ends an effect its sink says is over, with no retry and its claim cleared", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    const { sink } = recordingSink({
+      deliver: async () => ({ ended: "expired: past its delivery deadline" }),
+    });
+    const { publish, sent } = recordingPublish();
+    expect(await deliverEffects(depsOf([sink], T0, publish), "test_hook", [id], budget(T0))).toBe(
+      0,
+    );
+    expect(await effectRow(id)).toMatchObject({
+      state: "failed",
+      attempts: 1,
+      lease_token: null,
+      last_error: "expired: past its delivery deadline",
+    });
+    expect(sent).toEqual([]);
+  });
+
+  it("hands the sink the time it was claimed at, not a later one", async () => {
+    const repoId = await listedRepo();
+    const [one = "", two = ""] = await dueEffects(repoId, 2, T0);
+    const seen: (number | undefined)[] = [];
+    // The clock reads T0 until the claim's batch is done, and an hour later from then on.
+    let late = false;
+    const clock = () => (late ? T0 + 3_600_000 : T0);
+    const claiming = new Proxy(env.ORG_READ, {
+      get(target, prop) {
+        if (prop === "batch")
+          return async (statements: D1PreparedStatement[]) => {
+            const results = await target.batch(statements);
+            late = true;
+            return results;
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const run = async (sink: EffectSink, id: string) => {
+      late = false;
+      const deps = { ...depsOf([sink], clock, recordingPublish().publish), db: claiming };
+      expect(await deliverEffects(deps, "test_hook", [id], budget(T0))).toBe(1);
+    };
+    await run(
+      recordingSink({
+        deliver: async (effect) => {
+          seen.push(effect.claimedAt);
+        },
+      }).sink,
+      one,
+    );
+    await run(
+      recordingSink({
+        deliverBatch: async (effects) => {
+          seen.push(...effects.map((e) => e.claimedAt));
+          return { delivered: effects.map((e) => e.id) };
+        },
+      }).sink,
+      two,
+    );
+    expect(seen).toEqual([T0, T0]);
+  });
+
+  it("is retried, not counted a failed delivery, when its end cannot be recorded", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    const { sink } = recordingSink({ deliver: async () => ({ ended: "expired: past" }) });
+    const lost = new Proxy(env.ORG_READ, {
+      get(target, prop) {
+        if (prop === "prepare")
+          return (query: string) => {
+            if (query.includes("SET state = 'failed', next_attempt_at = ?1, last_error = ?2"))
+              throw new Error("D1 down");
+            return target.prepare(query);
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const { publish, sent } = recordingPublish();
+    await expect(
+      deliverEffects({ ...depsOf([sink], T0, publish), db: lost }, "test_hook", [id], budget(T0)),
+    ).rejects.toThrow(/D1 down/);
+    // Still claimed, its claim to expire: nothing marked it failed or sent a retry.
+    expect(await effectRow(id)).toMatchObject({ state: "pending", last_error: null });
+    expect(sent).toEqual([]);
+  });
+});
+
 describe("an invocation's budget", () => {
   it("delivers as many effects as the budget allows and sends the rest back", async () => {
     const repoId = await listedRepo();
@@ -782,6 +872,31 @@ describe("an invocation's budget", () => {
     // The eight sent back were never claimed.
     const left = await Promise.all(ids.slice(32).map(effectRow));
     expect(left.every((row) => row?.attempts === 0 && row.lease_token === null)).toBe(true);
+  });
+
+  it("counts the bytes an effect keeps elsewhere in the same budget, claimed and debited alike", async () => {
+    const repoId = await listedRepo();
+    const KiB = 1024;
+    const big = await dueEffects(repoId, 3, T0, JSON.stringify({ externalBytes: 600 * KiB }));
+    const { sink, received } = recordingSink();
+    const { publish, sent } = recordingPublish();
+    const shared = budget(T0);
+    // The first whatever its size; the second would pass the 1 MiB.
+    expect(await deliverEffects(depsOf([sink], T0, publish), "test_hook", big, shared)).toBe(1);
+    expect(sent).toEqual([{ sink: "test_hook", ids: big.slice(1) }]);
+    // What is left (about 424 KiB) takes a small one, not a second large one.
+    const small = await dueEffects(
+      await listedRepo(),
+      1,
+      T0,
+      JSON.stringify({ externalBytes: 100 * KiB }),
+    );
+    expect(await deliverEffects(depsOf([sink], T0, publish), "test_hook", small, shared)).toBe(1);
+    expect(shared.bytes).toBeLessThan(1024 * KiB - 700 * KiB);
+    expect(received.size).toBe(2);
+    // A value that is no count charges nothing more.
+    const odd = await dueEffects(await listedRepo(), 1, T0, JSON.stringify({ externalBytes: "x" }));
+    expect(await deliverEffects(depsOf([sink], T0, publish), "test_hook", odd, budget(T0))).toBe(1);
   });
 
   it("claims a bounded number of payload bytes, the first effect whatever its size", async () => {
