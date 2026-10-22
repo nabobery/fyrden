@@ -1,9 +1,9 @@
 import type { RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import { decideComment } from "@fyrden/domain";
 import { commentOutput, subjectOutput } from "../../repos/shapes.js";
-import { capturable } from "../../webhooks/captures.js";
+import { ALL_KINDS, capturable } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
-import { ALL_KINDS, type RepoIssues, type SubjectKind } from "./issues.js";
+import type { RepoIssues, SubjectKind } from "./issues.js";
 import type { PullCaller } from "./pulls.js";
 import type { ReactionCounts } from "./reactions.js";
 
