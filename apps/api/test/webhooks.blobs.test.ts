@@ -3,10 +3,11 @@
 // while the event is still the repository's; pruned a bounded slice at a time.
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import { WEBHOOK_BLOB_GRACE_MS } from "../src/do/repo/webhook-blobs.js";
+import { RepoWebhookBlobs, WEBHOOK_BLOB_GRACE_MS } from "../src/do/repo/webhook-blobs.js";
 import { captureTree } from "../src/webhooks/capture.js";
 import { api, json, user } from "./helpers/api.js";
 
@@ -117,5 +118,32 @@ describe("webhook capture blobs", () => {
     for (let i = 0; i < 5 && Object.keys(await held()).length > 0; i++)
       await runDurableObjectAlarm(stub);
     expect(await held()).toEqual({});
+  });
+
+  it("cost what they cost: rows written for a new blob, a reuse, an extension and a collection", async () => {
+    const costs = await runInDurableObject(stub, (instance, state) => {
+      let written = 0;
+      const metrics = {
+        count(name: string, _dimensions: Record<string, string>, value = 1) {
+          if (name === "do.rows_written") written += value;
+        },
+      } as unknown as Metrics;
+      const store = new RepoWebhookBlobs({ git: instance.git, metrics, pruneAt: () => {} });
+      const blobs = blobsOf(["d".repeat(2_000)]);
+      const measured = (run: () => unknown) => {
+        written = 0;
+        state.storage.transactionSync(run);
+        return written;
+      };
+      return {
+        created: measured(() => store.store(blobs, 1_000)),
+        reused: measured(() => store.store(blobs, 1_000)),
+        earlier: measured(() => store.store(blobs, 500)),
+        extended: measured(() => store.store(blobs, 2_000)),
+        collected: measured(() => store.prune(Number.MAX_SAFE_INTEGER, 10)),
+      };
+    });
+    // Measured: the row and its index entry; nothing when its time does not move.
+    expect(costs).toEqual({ created: 2, reused: 0, earlier: 0, extended: 2, collected: 1 });
   });
 });
