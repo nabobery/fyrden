@@ -4,6 +4,8 @@ import type {
   getLabel,
   getMilestone,
   getPull,
+  getReview,
+  getReviewComment,
   Output,
 } from "@fyrden/api-contract";
 import type { CommentRecord } from "../do/repo/comments.js";
@@ -11,12 +13,14 @@ import type { IssueRecord, Subject, SubjectKind } from "../do/repo/issues.js";
 import type { PullView } from "../do/repo/mergeability.js";
 import type { PullRecord } from "../do/repo/pulls.js";
 import type { Reacted, ReactionCounts } from "../do/repo/reactions.js";
+import type { ReviewCommentRecord } from "../do/repo/review-comments.js";
+import type { ReviewRecord } from "../do/repo/reviews.js";
 import type { LabelRecord, MilestoneRecord, SubjectMeta } from "../do/repo/subject-meta.js";
 
 /*
- * Issues, pull requests, comments, labels and milestones as the API
- * answers them: pure functions of the repository object's records, which
- * webhook captures take too.
+ * Issues, pull requests, reviews, comments, labels and milestones as the
+ * API answers them: pure functions of the repository object's records,
+ * which webhook captures take too.
  */
 
 type IssueOutput = Output<typeof getIssue>;
@@ -184,5 +188,59 @@ export function pullOutput(
     merge_commit_sha: pull.mergeCommitSha,
     merged_by: pull.mergedBy === null ? null : { id: pull.mergedBy },
     ...sortingOutput(pull.meta, readable),
+  };
+}
+
+/** A review as the API answers it (a dismissed one's state `DISMISSED`). */
+export function reviewOutput(review: ReviewRecord): Output<typeof getReview> {
+  const dismissed = review.dismissedAt !== null;
+  return {
+    id: review.id,
+    user: { id: review.reviewerId },
+    performed_via_agents: [...review.actChain],
+    state: dismissed ? "DISMISSED" : review.state,
+    body: review.body,
+    commit_id: review.commitSha,
+    submitted_at: review.submittedAt,
+    dismissal: dismissed
+      ? {
+          by: review.dismissedBy as string,
+          message: review.dismissalMessage as string,
+          at: review.dismissedAt as number,
+        }
+      : null,
+  };
+}
+
+/**
+ * A diff comment as the API answers it, `outdated` when what its pull
+ * request's diff compares no longer has the lines it is on.
+ */
+export function reviewCommentOutput(
+  comment: Reacted<ReviewCommentRecord>,
+  outdated: boolean,
+): Output<typeof getReviewComment> {
+  const { anchor } = comment;
+  return {
+    id: comment.id,
+    pull_request_review_id: null,
+    ...(comment.inReplyTo !== null && { in_reply_to_id: comment.inReplyTo }),
+    thread_id: comment.threadId,
+    user: { id: comment.authorId },
+    performed_via_agents: [...comment.actChain],
+    body: comment.body,
+    commit_id: anchor.commitSha,
+    original_commit_id: anchor.commitSha,
+    path: anchor.path,
+    side: anchor.side,
+    line: outdated ? null : anchor.line,
+    original_line: anchor.line,
+    start_line: anchor.startLine,
+    start_side: anchor.startLine === null ? null : anchor.side,
+    outdated,
+    resolved: comment.resolved,
+    created_at: comment.createdAt,
+    updated_at: comment.updatedAt,
+    reactions: reactionRollup(comment.reactions),
   };
 }

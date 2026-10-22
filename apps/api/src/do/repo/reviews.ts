@@ -11,7 +11,8 @@ import {
   type ReviewState,
   reviewStateOf,
 } from "@fyrden/domain";
-import { userOf } from "../../webhooks/captures.js";
+import { reviewOutput } from "../../repos/shapes.js";
+import { capturable, userOf } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller, PullRecord, RepoPulls } from "./pulls.js";
 
@@ -428,14 +429,35 @@ export class RepoReviews {
     return decision.ok ? { ok: true, pull } : { ok: false, code: decision.refusal };
   }
 
+  /**
+   * Emits the review's event; its webhook capture is the review as the API
+   * shows it (who dismissed it as a user) and its pull request as it stands.
+   */
   #emit(event: string, review: ReviewRecord, actor: RefActor): void {
     const { version, ...row } = review;
-    this.deps.events.emitEntity(`pull_request_review.${event}`, actor, {
-      type: REVIEW_ENTITY,
-      id: `${this.deps.repoId()}#${review.number}/reviews/${review.id}`,
-      version,
-      row: { ...row, actChain: [...row.actChain] },
-    });
+    this.deps.events.emitEntity(
+      `pull_request_review.${event}`,
+      actor,
+      {
+        type: REVIEW_ENTITY,
+        id: `${this.deps.repoId()}#${review.number}/reviews/${review.id}`,
+        version,
+        row: { ...row, actChain: [...row.actChain] },
+      },
+      null,
+      false,
+      () => {
+        const shown = reviewOutput(review);
+        const pull = this.deps.pulls.get(review.number);
+        return {
+          review: capturable({
+            ...shown,
+            dismissal: shown.dismissal && { ...shown.dismissal, by: { id: shown.dismissal.by } },
+          }),
+          pull_request: pull ? this.deps.pulls.captured(pull) : null,
+        };
+      },
+    );
   }
 
   #emitRequest(

@@ -10,35 +10,12 @@ import type {
   requestReviewers,
 } from "@fyrden/api-contract";
 import { SHOWN_HANDLE } from "../accounts/handles.js";
-import type { ReviewRecord } from "../do/repo/reviews.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import type { RepoEntry } from "./directory.js";
 import { actorOf, failure, readable } from "./pulls.js";
-import { pullOutput } from "./shapes.js";
-
-type ReviewOutput = Output<typeof getReview>;
-
-function reviewOutput(review: ReviewRecord): ReviewOutput {
-  const dismissed = review.dismissedAt !== null;
-  return {
-    id: review.id,
-    user: { id: review.reviewerId },
-    performed_via_agents: [...review.actChain],
-    state: dismissed ? "DISMISSED" : review.state,
-    body: review.body,
-    commit_id: review.commitSha,
-    submitted_at: review.submittedAt,
-    dismissal: dismissed
-      ? {
-          by: review.dismissedBy as string,
-          message: review.dismissalMessage as string,
-          at: review.dismissedAt as number,
-        }
-      : null,
-  };
-}
+import { pullOutput, reviewOutput } from "./shapes.js";
 
 const repo = (ctx: OpContext, entry: RepoEntry, method: string) => {
   ctx.metrics.count("do.request", { class: "RepoDO", method });
