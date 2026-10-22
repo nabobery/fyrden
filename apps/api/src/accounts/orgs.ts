@@ -16,7 +16,7 @@ import { type OpContext, OperationError } from "../ops/execute.js";
 import { heldRepos } from "../repos/directory.js";
 import { clock, newId } from "../services.js";
 import { applied, findAccount, invalidateChange, orgFor, userFor } from "./account.js";
-import { handleFree } from "./handles.js";
+import { GHOST_LOGIN, ghostsAmong, handleFree } from "./handles.js";
 
 // D1 reports a unique-index violation in the error message.
 const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
@@ -188,8 +188,17 @@ export async function listMembersOperation(
   const rows = await env.ORG.getByName(org.id).members(after, input.per_page + 1);
   const page = rows.slice(0, input.per_page);
   const last = page.at(-1);
+  const ghosts = await ghostsAmong(
+    env,
+    page.map((m) => m.id),
+    metrics,
+  );
   return {
-    members: page.map((m) => ({ id: m.id, login: m.handle, role: toApiRole(m.role) })),
+    members: page.map((m) => ({
+      id: m.id,
+      login: ghosts.has(m.id) ? GHOST_LOGIN : m.handle,
+      role: toApiRole(m.role),
+    })),
     next_cursor: rows.length > input.per_page && last ? encodeCursor(last.handle) : null,
   };
 }

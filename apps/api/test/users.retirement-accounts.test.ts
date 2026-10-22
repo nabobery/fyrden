@@ -7,6 +7,7 @@ import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { accountHooks, type OrgDO } from "../src/do/OrgDO.js";
+import { allocateEpoch } from "../src/events/epochs.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 
 let admin: Who;
@@ -17,6 +18,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   delete accountHooks.afterLifecycleRead;
+  delete accountHooks.beforeEpochRead;
 });
 
 const markDeleting = (principalId: string) =>
@@ -341,5 +343,160 @@ describe("retiring principals in an account", () => {
     expect(moved.body.state).toBe("transferred");
     expect((await held(org.stub, gone.principalId)).collaborators).toBe(0);
     expect((await held(org.stub, kept.principalId)).collaborators).toBe(1);
+  });
+
+  it("are forgotten on its own by an account object restored from before they were retired", async () => {
+    const owner = await user();
+    const gone = await user();
+    const kept = await user();
+    const org = await newOrg(owner);
+    await everywhere(org, owner, gone);
+    await everywhere(org, owner, kept);
+    // The deletion began (and retired them); the object is then restored from a backup.
+    await markDeleting(gone.principalId);
+    await allocateEpoch(env.DIRECTORY, org.id);
+    // Restored with an alarm due (a backup's), which is its first call.
+    await runInDurableObject(org.stub, (_: OrgDO, s) => s.storage.setAlarm(Date.now()));
+    await runInDurableObject(org.stub, (_: OrgDO, s) => s.abort("restore")).catch(() => {});
+    const restored = env.ORG.getByName(org.id);
+    // The alarm takes the new generation, then forgets them, a page at a time.
+    for (let i = 0; i < 5; i++) await runDurableObjectAlarm(restored);
+    expect(await held(restored, gone.principalId)).toEqual({
+      members: 0,
+      teams: 0,
+      collaborators: 0,
+    });
+    expect(await held(restored, kept.principalId)).toEqual({
+      members: 1,
+      teams: 1,
+      collaborators: 1,
+    });
+    expect(await restored.accountRole(owner.principalId)).toBe("owner");
+  });
+
+  it("keeps a restored organization's last owner, deleted since, as its owner", async () => {
+    const owner = await user();
+    const org = await newOrg(owner);
+    await markDeleting(owner.principalId);
+    await allocateEpoch(env.DIRECTORY, org.id);
+    await runInDurableObject(org.stub, (_: OrgDO, s) => s.abort("restore")).catch(() => {});
+    const restored = env.ORG.getByName(org.id);
+    await restored.snapshotFor("rep_any");
+    for (let i = 0; i < 3; i++) await runDurableObjectAlarm(restored);
+    // Reconciled, the owner kept.
+    expect(
+      await runInDurableObject(restored, (_: OrgDO, s) =>
+        s.storage.sql.exec("SELECT reconcile_cursor AS c FROM org_meta").one(),
+      ),
+    ).toEqual({ c: null });
+    expect(await restored.accountRole(owner.principalId)).toBe("owner");
+  });
+
+  it("are forgotten a page of rows at a time, the same principals until none is left", async () => {
+    const owner = await user();
+    const gone = await user();
+    const account = env.ORG.getByName(owner.principalId);
+    const repo = (
+      await json<{ name: string }>(api("POST", "/user/repos", owner.token, { name: uniqueId("r") }))
+    ).body;
+    await ok(
+      api("PUT", `/repos/${owner.handle}/${repo.name}/collaborators/${gone.handle}`, owner.token, {
+        permission: "pull",
+      }),
+    );
+    // More grants than a page's rows (on repositories the account once held).
+    await runInDurableObject(account, (_: OrgDO, s) => {
+      for (let i = 0; i < 520; i++)
+        s.storage.sql.exec(
+          `INSERT INTO collaborators (repo_id, principal_id, handle, role, added_at)
+           VALUES (?, ?, ?, 'read', 0)`,
+          `rep_old${i}`,
+          gone.principalId,
+          gone.handle,
+        );
+    });
+    await markDeleting(gone.principalId);
+    await allocateEpoch(env.DIRECTORY, owner.principalId);
+    await runInDurableObject(account, (_: OrgDO, s) => s.abort("restore")).catch(() => {});
+    const restored = env.ORG.getByName(owner.principalId);
+    await restored.snapshotFor("rep_any");
+    // How often it asks the directory: once a page, not once an alarm.
+    let reads = 0;
+    accountHooks.afterLifecycleRead = async () => {
+      reads++;
+    };
+    expect(await runDurableObjectAlarm(restored)).toBe(true);
+    expect((await held(restored, gone.principalId)).collaborators).toBe(21);
+    expect(reads).toBe(1);
+    await runDurableObjectAlarm(restored);
+    expect((await held(restored, gone.principalId)).collaborators).toBe(0);
+    expect(reads).toBe(1);
+  });
+
+  it("waits for the directory before a restored object does anything", async () => {
+    const owner = await user();
+    const gone = await user();
+    const org = await newOrg(owner);
+    await everywhere(org, owner, gone);
+    await markDeleting(gone.principalId);
+    await allocateEpoch(env.DIRECTORY, org.id);
+    await runInDurableObject(org.stub, (_: OrgDO, s) => s.storage.setAlarm(Date.now()));
+    await runInDurableObject(org.stub, (_: OrgDO, s) => s.abort("restore")).catch(() => {});
+    const restored = env.ORG.getByName(org.id);
+    accountHooks.beforeEpochRead = () => Promise.reject(new Error("the directory is down"));
+    await runDurableObjectAlarm(restored);
+    // Its alarm is set again, and nothing was forgotten yet.
+    expect(
+      await runInDurableObject(restored, (_: OrgDO, s) => s.storage.getAlarm()),
+    ).not.toBeNull();
+    expect((await held(restored, gone.principalId)).members).toBe(1);
+    delete accountHooks.beforeEpochRead;
+    for (let i = 0; i < 3; i++) await runDurableObjectAlarm(restored);
+    expect((await held(restored, gone.principalId)).members).toBe(0);
+  });
+
+  it("are listed as ghost while their rows are still there", async () => {
+    const owner = await user();
+    const gone = await user();
+    const org = await newOrg(owner);
+    const { repo } = await everywhere(org, owner, gone);
+    await markDeleting(gone.principalId);
+    const members = await json<{ members: { id: string; login: string }[] }>(
+      api("GET", `/orgs/${org.login}/members`, owner.token),
+    );
+    expect(members.body.members).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: gone.principalId, login: "ghost" })]),
+    );
+    const collaborators = await json<{ collaborators: { id: string; login: string }[] }>(
+      api("GET", `/repos/${org.login}/${repo.name}/collaborators`, owner.token),
+    );
+    expect(collaborators.body.collaborators).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: gone.principalId, login: "ghost" })]),
+    );
+  });
+
+  it("starts over after a restore, not from a page its backup was in the middle of", async () => {
+    const owner = await user();
+    const org = await newOrg(owner);
+    const later = await user();
+    await everywhere(org, owner, later);
+    // The backup was taken while reconciling a page of someone else's; `later` was active then.
+    await runInDurableObject(org.stub, (_: OrgDO, s) =>
+      s.storage.sql.exec(
+        "UPDATE org_meta SET reconcile_cursor = '', reconcile_pending = ?",
+        JSON.stringify({ gone: ["usr_someoneelse"], last: null, full: false }),
+      ),
+    );
+    await markDeleting(later.principalId);
+    await allocateEpoch(env.DIRECTORY, org.id);
+    await runInDurableObject(org.stub, (_: OrgDO, s) => s.abort("restore")).catch(() => {});
+    const restored = env.ORG.getByName(org.id);
+    await restored.snapshotFor("rep_any");
+    for (let i = 0; i < 4; i++) await runDurableObjectAlarm(restored);
+    expect(await held(restored, later.principalId)).toEqual({
+      members: 0,
+      teams: 0,
+      collaborators: 0,
+    });
   });
 });

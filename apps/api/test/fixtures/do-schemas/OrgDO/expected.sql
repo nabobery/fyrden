@@ -48,7 +48,7 @@ CREATE TABLE org_meta (
         acl_version INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL
       , source_seq INTEGER NOT NULL DEFAULT 0, default_labels_set INTEGER NOT NULL DEFAULT 0
-        CHECK (default_labels_set IN (0, 1))) STRICT;
+        CHECK (default_labels_set IN (0, 1)), reconcile_cursor TEXT, reconcile_pending TEXT) STRICT;
 CREATE TABLE outbox (
         source_seq INTEGER PRIMARY KEY,
         event TEXT NOT NULL CHECK (json_valid(event)),
