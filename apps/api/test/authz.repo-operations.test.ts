@@ -370,12 +370,30 @@ describe("repository operations", () => {
     },
   );
 
-  it.each(repoOps.map((op) => [op.id, op] as const))(
+  it.each(repoOps.filter((op) => !isHookOp(op)).map((op) => [op.id, op] as const))(
     "%s needs no more than the permission it declares",
     async (_, op) => {
       const token = await scopedToken(owner.principalId, [op.permission]);
       const name = CASES[op.id]?.ownRepo ? (await createRepo(owner.principalId)).name : repo.name;
       expect(await outcome(await call(op, token, name))).toEqual(CASES[op.id]?.expected);
+    },
+  );
+});
+
+/** A webhook operation: a hook carries issue and pull request contents out. */
+const isHookOp = (op: OperationDef) => op.id.startsWith("repos.hooks.");
+const HOOK_CONTENT = ["issues:read", "pull_requests:read"];
+
+describe("webhook operations", () => {
+  it.each(repoOps.filter(isHookOp).map((op) => [op.id, op] as const))(
+    "%s needs both content reads beside the permission it declares",
+    async (_, op) => {
+      for (const extra of [[], ["issues:read"], ["pull_requests:read"]]) {
+        const token = await scopedToken(owner.principalId, [op.permission, ...extra]);
+        expect(await outcome(await call(op, token))).toEqual({ status: 403, code: "forbidden" });
+      }
+      const token = await scopedToken(owner.principalId, [op.permission, ...HOOK_CONTENT]);
+      expect(await outcome(await call(op, token))).toEqual(CASES[op.id]?.expected);
     },
   );
 });
