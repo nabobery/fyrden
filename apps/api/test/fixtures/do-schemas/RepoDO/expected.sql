@@ -54,6 +54,7 @@ CREATE INDEX revision_imports_waiting ON revision_imports (requested_at, pr_numb
 CREATE UNIQUE INDEX rulesets_name ON rulesets (name);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);
 CREATE INDEX view_merged_into ON view_merged (into_pack_id, merged_at);
+CREATE INDEX webhook_blobs_retain ON webhook_blobs (retain_until);
 CREATE TABLE acl_snapshot (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         account_id TEXT NOT NULL DEFAULT '',
@@ -695,6 +696,12 @@ CREATE TABLE view_merged (
         pack_id TEXT PRIMARY KEY,
         into_pack_id TEXT NOT NULL,
         merged_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE webhook_blobs (
+        hash TEXT PRIMARY KEY,
+        text_json TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        retain_until INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;
 CREATE TABLE webhook_ids (
         id INTEGER PRIMARY KEY CHECK (id = 1),

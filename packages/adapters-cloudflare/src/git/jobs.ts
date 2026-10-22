@@ -31,6 +31,7 @@ export const JOB_KINDS = [
   "pull_refollow",
   "network_reclaim",
   "feed_pages_prune",
+  "webhook_blobs_prune",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
