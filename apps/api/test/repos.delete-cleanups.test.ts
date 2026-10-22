@@ -64,7 +64,7 @@ async function deleteFully(repo: { id: string; name: string }): Promise<void> {
 /**
  * What a repository left in the org database and R2: `effects` journaled
  * effects (one done), `deliveries` webhook deliveries with an attempt each,
- * and a body for each delivery.
+ * and a body for each delivery, owned by a payload row.
  */
 async function leaveTraces(repoId: string, effects: number, deliveries: number): Promise<void> {
   await env.ORG_READ.prepare(
@@ -88,6 +88,13 @@ async function leaveTraces(repoId: string, effects: number, deliveries: number):
   await env.ORG_READ.prepare(
     `INSERT INTO webhook_attempts (delivery_id, n, at, status)
      SELECT delivery_id, 1, 0, 200 FROM webhook_deliveries WHERE repo_id = ?`,
+  )
+    .bind(repoId)
+    .run();
+  await env.ORG_READ.prepare(
+    `INSERT INTO webhook_payloads (event_key, repo_id, payload_key, state, bytes, expires_at)
+     SELECT delivery_id, repo_id, payload_key, 'established', 2, 9e15
+     FROM webhook_deliveries WHERE repo_id = ?`,
   )
     .bind(repoId)
     .run();
@@ -119,11 +126,12 @@ async function traces(repoId: string) {
          OR substr(delivery_id, 1, length(?1) + 1) = ?1 || '-'`,
       repoId,
     ),
+    payloads: await count("SELECT count(*) AS n FROM webhook_payloads WHERE repo_id = ?", repoId),
     bodies: bodies.objects.length,
   };
 }
 
-const NONE = { effects: 0, deliveries: 0, attempts: 0, bodies: 0 };
+const NONE = { effects: 0, deliveries: 0, attempts: 0, payloads: 0, bodies: 0 };
 
 function deletion(repoId: string) {
   return env.DIRECTORY.prepare(
@@ -188,7 +196,13 @@ describe("repository deletion cleanups", () => {
     await deleteFully(doomed);
 
     expect(await traces(doomed.id)).toEqual(NONE);
-    expect(await traces(kept.id)).toEqual({ effects: 3, deliveries: 4, attempts: 4, bodies: 4 });
+    expect(await traces(kept.id)).toEqual({
+      effects: 3,
+      deliveries: 4,
+      attempts: 4,
+      payloads: 4,
+      bodies: 4,
+    });
     expect(await cleanupsDone(doomed.id)).toEqual(REPO_CLEANUPS.map((c) => c.name).sort());
   });
 
@@ -214,8 +228,9 @@ describe("repository deletion cleanups", () => {
       if (await runCleanups(env, target, { pages: 1 })) break;
     }
     expect(await traces(repo.id)).toEqual(NONE);
-    // Settling: two pages; effects: two; deliveries: two; bodies: one listing of up to 1,000 keys.
-    expect(calls).toBe(7);
+    // Settling: two pages; effects: two; deliveries: two; payloads: two; bodies: one listing of
+    // up to 1,000 keys.
+    expect(calls).toBe(9);
     expect(await cleanupsDone(repo.id)).toEqual(REPO_CLEANUPS.map((c) => c.name).sort());
   });
 
@@ -232,7 +247,13 @@ describe("repository deletion cleanups", () => {
     const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD, gen: 0 };
 
     expect(await runCleanups(env, target)).toBe(false);
-    expect(await traces(repo.id)).toEqual({ effects: 2, deliveries: 2, attempts: 2, bodies: 2 });
+    expect(await traces(repo.id)).toEqual({
+      effects: 2,
+      deliveries: 2,
+      attempts: 2,
+      payloads: 2,
+      bodies: 2,
+    });
     expect(await cleanupsDone(repo.id)).toEqual([]);
 
     // The delivery ended (its lease released or lapsed).
@@ -262,7 +283,13 @@ describe("repository deletion cleanups", () => {
     const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD, gen: 0 };
 
     expect(await runCleanups(env, target)).toBe(false);
-    expect(await traces(repo.id)).toEqual({ effects: 3, deliveries: 2, attempts: 2, bodies: 2 });
+    expect(await traces(repo.id)).toEqual({
+      effects: 3,
+      deliveries: 2,
+      attempts: 2,
+      payloads: 2,
+      bodies: 2,
+    });
     // The claimed one is ended, as its next claim would end it.
     const ended = await env.ORG_READ.prepare(
       "SELECT state, last_error, next_attempt_at FROM effects WHERE effect_id = ?",

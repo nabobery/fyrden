@@ -184,6 +184,16 @@ export function refsOf(tree: unknown): BlobRef[] {
   return [...seen.values()];
 }
 
+/** The bytes `tree`'s references stand for, each place they appear: what resolving it adds. */
+export function expandedBytesOf(tree: unknown): number {
+  if (isRef(tree)) return tree.bytes;
+  if (Array.isArray(tree))
+    return tree.reduce((sum: number, item) => sum + expandedBytesOf(item), 0);
+  if (typeof tree === "object" && tree !== null)
+    return Object.values(tree).reduce((sum: number, item) => sum + expandedBytesOf(item), 0);
+  return 0;
+}
+
 /**
  * `tree` with each reference replaced by its blob's text (`texts`: hash to
  * JSON encoding). Throws when a blob is missing or not the size its

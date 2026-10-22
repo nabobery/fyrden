@@ -90,6 +90,17 @@ CREATE TABLE webhook_deliveries (
   expires_at INTEGER NOT NULL
 , attempt_limit INTEGER) STRICT;
 
+-- table webhook_payloads
+CREATE TABLE webhook_payloads (
+  event_key TEXT PRIMARY KEY,
+  repo_id TEXT NOT NULL,
+  payload_key TEXT NOT NULL UNIQUE,
+  state TEXT NOT NULL CHECK (state IN ('intent', 'established', 'expired')),
+  -- The stored body's size, once established.
+  bytes INTEGER,
+  expires_at INTEGER NOT NULL
+) STRICT;
+
 -- index effects_done
 CREATE INDEX effects_done ON effects (done_at) WHERE state = 'done';
 
@@ -135,3 +146,9 @@ CREATE INDEX webhook_deliveries_payload ON webhook_deliveries (payload_key, deli
 
 -- index webhook_deliveries_pending
 CREATE INDEX webhook_deliveries_pending ON webhook_deliveries (repo_id, hook_id) WHERE state = 'pending';
+
+-- index webhook_payloads_expiry
+CREATE INDEX webhook_payloads_expiry ON webhook_payloads (expires_at);
+
+-- index webhook_payloads_repo
+CREATE INDEX webhook_payloads_repo ON webhook_payloads (repo_id);

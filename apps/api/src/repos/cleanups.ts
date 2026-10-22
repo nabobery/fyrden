@@ -27,10 +27,11 @@ export const CLEANUP_POLICY = {
   /**
    * Pages one deletion call works through: each takes up to three internal
    * calls (D1 or R2), plus one to read what is done and one to record each
-   * cleanup finished: at most 17 calls a deletion, 170 for the cron's ten,
-   * of an invocation's 1,000.
+   * cleanup finished: at most 21 calls a deletion, 210 for the cron's ten,
+   * of an invocation's 1,000. One page of each cleanup: a repository with
+   * little to clean up is cleaned up in one call.
    */
-  pagesPerCall: 4,
+  pagesPerCall: 5,
   /** Journaled effects deleted a page. */
   effectsPage: 500,
   /** Webhook deliveries (and their attempts) deleted a page. */
@@ -172,6 +173,23 @@ const webhookDeliveries: RepoCleanup = {
   },
 };
 
+/** Its webhook payload rows (their bodies go after, by their prefix). */
+const webhookPayloads: RepoCleanup = {
+  name: "webhook_payloads",
+  async page(env, { repoId, shard }, metrics) {
+    const db = readModelFor(env, shard);
+    metrics?.count("d1.query", { db: "org", op: "cleanup_payloads" });
+    const { meta } = await db
+      .prepare(
+        `DELETE FROM webhook_payloads WHERE event_key IN
+           (SELECT event_key FROM webhook_payloads WHERE repo_id = ? LIMIT ?)`,
+      )
+      .bind(repoId, CLEANUP_POLICY.deliveriesPage)
+      .run();
+    return pageOutcome(meta.changes, CLEANUP_POLICY.deliveriesPage);
+  },
+};
+
 /** Its webhook bodies, all under `webhooks/<repo>/` (whether or not a row still names them). */
 const webhookBodies: RepoCleanup = {
   name: "webhook_bodies",
@@ -195,6 +213,7 @@ export const REPO_CLEANUPS: readonly RepoCleanup[] = [
   webhookEffects,
   journaledEffects,
   webhookDeliveries,
+  webhookPayloads,
   webhookBodies,
 ];
 
