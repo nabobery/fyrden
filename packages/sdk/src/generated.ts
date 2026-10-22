@@ -1355,7 +1355,7 @@ export type ReposHooksCreateInput = {
     url: string;
     content_type?: "json";
   };
-  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
+  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "*")[];
   active?: boolean;
 };
 
@@ -1430,9 +1430,9 @@ export type ReposHooksUpdateInput = {
     url?: string;
     content_type?: "json";
   };
-  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
-  add_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
-  remove_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
+  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "*")[];
+  add_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "*")[];
+  remove_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "*")[];
   active?: boolean;
 };
 
@@ -6643,7 +6643,7 @@ export interface Operations {
   "repos.rulesets.delete": { input: ReposRulesetsDeleteInput; output: ReposRulesetsDeleteOutput };
   /** List repository webhooks. The repository's webhooks. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.list": { input: ReposHooksListInput; output: ReposHooksListOutput };
-  /** Create a repository webhook. Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, or `*`. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
+  /** Create a repository webhook. Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, `issues`, `label`, `milestone`, or `*`. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.create": { input: ReposHooksCreateInput; output: ReposHooksCreateOutput };
   /** Get a repository webhook. One webhook. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.get": { input: ReposHooksGetInput; output: ReposHooksGetOutput };
