@@ -378,6 +378,41 @@ async function finalize(env: Env, job: Job, metrics: Metrics | undefined): Promi
 }
 
 /**
+ * Deletions blocked on `orgId` (it had no owner but the user) run again at
+ * once, after an administrator gave it another owner, rather than at their
+ * next hourly try. A run that read the organization before the handoff may
+ * still save its block after this; it then waits for that try.
+ */
+export async function wakeDeletionsBlockedOn(
+  env: Env,
+  orgId: string,
+  options: { metrics?: Metrics } = {},
+): Promise<void> {
+  const now = clock();
+  options.metrics?.count("d1.query", { db: "directory", op: "user_deletion_wake" });
+  const { results } = await env.DIRECTORY.prepare(
+    `UPDATE user_deletions SET next_attempt_at = ?2
+     WHERE step <> 'done' AND blocked = ?1 AND next_attempt_at > ?2
+     RETURNING user_id`,
+  )
+    .bind(`sole_owner:${orgId}`, now)
+    .all<{ user_id: string }>();
+  // A lost one is set by the recovery cron: the job is due now.
+  await Promise.all(
+    results.map(({ user_id }) => {
+      options.metrics?.count("do.request", { class: "DeletionDO", method: "arm" });
+      return env.DELETION.getByName(user_id)
+        .arm(now)
+        .catch((error: unknown) =>
+          createLogger({ op: "users.delete", userId: user_id }).warn("arming the deletion failed", {
+            error,
+          }),
+        );
+    }),
+  );
+}
+
+/**
  * The recovery cron's share: re-arms the alarm of the job longest due
  * whose run is not under way, the job's turn moved back first (so a job
  * whose alarm cannot be set, or that keeps failing, goes behind the

@@ -122,7 +122,7 @@ export const addOrgOwner = defineOperation({
   path: "/admin/organizations/{org}/owners/{username}",
   summary: "Make a user an organization's owner",
   description:
-    "Makes a user an owner of an organization, a member or not, as GitHub Enterprise's `ghe-org-admin-promote` does: for an organization whose owners can no longer act (one being deleted, as the deletion waits for another owner). Making an owner an owner changes nothing. Instance administrators only; the user must not be suspended or being deleted.",
+    "Makes a user an owner of an organization, a member or not, as GitHub Enterprise's `ghe-org-admin-promote` does: for an organization whose owners can no longer act (one being deleted: the deletion waits for another owner, and goes on as soon as one is made, or within the hour). Making an owner an owner changes nothing. Instance administrators only; the user must not be suspended or being deleted.",
   input: z.object({ org: OrgParam, username: UserParam }),
   output: NoContent,
   permission: INSTANCE_ADMIN,

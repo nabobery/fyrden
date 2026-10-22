@@ -1,4 +1,5 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
+import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type {
   addOrgOwner,
   createOrg,
@@ -16,6 +17,7 @@ import { type OpContext, OperationError } from "../ops/execute.js";
 import { heldRepos } from "../repos/directory.js";
 import { clock, newId } from "../services.js";
 import { applied, findAccount, invalidateChange, orgFor, userFor } from "./account.js";
+import { wakeDeletionsBlockedOn } from "./deletion-runner.js";
 import { GHOST_LOGIN, ghostsAmong, handleFree } from "./handles.js";
 
 // D1 reports a unique-index violation in the error message.
@@ -123,14 +125,24 @@ export async function setMembershipOperation(
   );
   ctx.waitUntil(stub.deliverAudit());
   await invalidateChange(env, org.id, change, metrics);
+  if (input.role === "admin") await wakeDeletions(env, org.id, metrics);
   return { org: org.handle, user: user.handle, role: input.role, state: "active" };
+}
+
+/** A user deletion waiting on the organization's last owner goes on now that it has another. */
+async function wakeDeletions(env: Env, orgId: string, metrics: Metrics): Promise<void> {
+  await wakeDeletionsBlockedOn(env, orgId, { metrics }).catch((error: unknown) =>
+    createLogger({ op: "orgs.owners", orgId }).warn("waking deletions failed", { error }),
+  );
 }
 
 /**
  * The `admin.orgs.owners.add` operation: an instance administrator (the
  * permission checked) makes an active user an owner of the organization,
  * whoever its owners are; the organization's object adds them as any
- * addition is (never a user being deleted), audited `org.owner_handoff`.
+ * addition is (never a user being deleted), audited `org.owner_handoff`;
+ * a user deletion waiting on the organization then runs again at once (as
+ * after an owner's promotion of a member).
  */
 export async function addOrgOwnerOperation(
   ctx: OpContext,
@@ -151,6 +163,7 @@ export async function addOrgOwnerOperation(
   );
   ctx.waitUntil(stub.deliverAudit());
   await invalidateChange(env, org.id, change, metrics);
+  await wakeDeletions(env, org.id, metrics);
   return null;
 }
 

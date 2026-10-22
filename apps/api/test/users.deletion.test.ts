@@ -6,6 +6,8 @@
 // once every repository is gone.
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import { D1TokenStore } from "@fyrden/adapters-cloudflare/auth";
+import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { beginUserDeletion } from "../src/accounts/deletion.js";
@@ -15,7 +17,9 @@ import {
   rearmDeletions,
   runDeletionSlice,
 } from "../src/accounts/deletion-runner.js";
+import { setMembershipOperation } from "../src/accounts/orgs.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
+import type { OpContext } from "../src/ops/execute.js";
 import { advanceDeletions } from "../src/repos/deletion.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 
@@ -257,12 +261,58 @@ describe("a user's deletion", () => {
     expect(blocked).toMatchObject({ step: "accounts", blocked: `sole_owner:${org.id}` });
     expect(blocked?.next_attempt_at).toBeGreaterThan(Date.now() + DELETION_RUN_POLICY.waitMs);
     expect(await org.stub.accountRole(alice.principalId)).toBe("owner");
+    const runner = env.DELETION.getByName(alice.principalId);
+    await runInDurableObject(runner, (_, state) =>
+      state.storage.setAlarm(blocked?.next_attempt_at ?? 0),
+    );
+    // Another organization's handoff leaves the job waiting.
+    const other = await newOrg(bob);
+    expect(
+      (await api("PUT", `/admin/organizations/${other.login}/owners/${admin.handle}`, admin.token))
+        .status,
+    ).toBe(204);
+    expect((await jobOf(alice.principalId))?.next_attempt_at).toBe(blocked?.next_attempt_at);
+    const before = Date.now();
     expect(
       (await api("PUT", `/admin/organizations/${org.login}/owners/${bob.handle}`, admin.token))
         .status,
     ).toBe(204);
+    // Its handoff wakes the job at once, rather than at its next hourly try.
+    expect((await jobOf(alice.principalId))?.next_attempt_at).toBeLessThanOrEqual(Date.now());
+    const alarm = await runInDurableObject(runner, (_, state) => state.storage.getAlarm());
+    expect(alarm).toBeGreaterThanOrEqual(before);
+    expect(alarm).toBeLessThanOrEqual(Date.now());
+    expect(await runDurableObjectAlarm(runner)).toBe(true);
+    expect(await jobOf(alice.principalId)).toMatchObject({ blocked: null });
+    expect(await org.stub.accountRole(alice.principalId)).toBeNull();
     expect(await runJob(alice.principalId)).toMatchObject({ step: "done", blocked: null });
     expect(await org.stub.accountRole(alice.principalId)).toBeNull();
+  });
+
+  it("goes on at once when a promotion the user asked for before it began makes another owner", async () => {
+    const alice = await user();
+    const bob = await user();
+    const org = await newOrg(alice);
+    // Alice's request, checked before her deletion began, lands while it waits.
+    const checked = await new D1TokenStore(env.DIRECTORY, {
+      clock: () => Date.now(),
+      newId: createIdFactory(() => Date.now(), secureRandomBytes),
+      randomBytes: secureRandomBytes,
+    }).verify(alice.token, "write");
+    if (!checked.ok) throw new Error(`the token is refused: ${checked.reason}`);
+    expect(await begin(alice)).toBe(true);
+    const blocked = await runJob(alice.principalId, (step) => step === "done", 8);
+    expect(blocked).toMatchObject({ step: "accounts", blocked: `sole_owner:${org.id}` });
+    const stale = {
+      env,
+      auth: checked.record,
+      requestId: "req_test",
+      metrics: { count() {} },
+      waitUntil() {},
+    } as unknown as OpContext;
+    await setMembershipOperation(stale, { org: org.login, username: bob.handle, role: "admin" });
+    expect(await org.stub.accountRole(bob.principalId)).toBe("owner");
+    expect((await jobOf(alice.principalId))?.next_attempt_at).toBeLessThanOrEqual(Date.now());
   });
 
   it("deletes a repository that became theirs after it began, before finishing", async () => {
@@ -445,6 +495,26 @@ describe("a run of a user's deletion", () => {
     await runner.arm(Date.now());
     expect(await runDurableObjectAlarm(runner)).toBe(true);
     expect((await jobOf(alice.principalId))?.step).not.toBe("repositories");
+    // The run, ending, set the alarm for the next.
+    const next = await runInDurableObject(runner, (_, state) => state.storage.getAlarm());
+    expect(next).toBe((await jobOf(alice.principalId))?.next_attempt_at);
+  });
+
+  it("keeps a wake that came while it ran, rather than its own later time", async () => {
+    const alice = await user();
+    expect(await begin(alice)).toBe(true);
+    const later = Date.now() + 60 * 60_000;
+    await env.DIRECTORY.prepare("UPDATE user_deletions SET next_attempt_at = ? WHERE user_id = ?")
+      .bind(later, alice.principalId)
+      .run();
+    const runner = env.DELETION.getByName(alice.principalId);
+    const wake = Date.now();
+    const alarm = await runInDurableObject(runner, async (instance, state) => {
+      await state.storage.setAlarm(wake);
+      await instance.alarm();
+      return state.storage.getAlarm();
+    });
+    expect(alarm).toBe(wake);
   });
 });
 
