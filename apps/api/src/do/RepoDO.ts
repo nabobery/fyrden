@@ -118,6 +118,7 @@ import {
   type TagPage,
 } from "./repo/browse.js";
 import { ChangeLists } from "./repo/change-lists.js";
+import { RepoCodeOwners } from "./repo/code-owners.js";
 import { type CommentRecord, RepoComments } from "./repo/comments.js";
 import type { ConflictsView, MergedIntoHead } from "./repo/conflicts.js";
 import {
@@ -343,6 +344,7 @@ export class RepoDO extends MigratingDO {
 
   /** Whether open pull requests merge cleanly, worked out in the background. */
   readonly mergeability: RepoMergeability;
+  readonly codeOwners: RepoCodeOwners;
 
   /** This repository's branches that are heads of pull requests into other members of its network. */
   readonly pullSource: PullSource;
@@ -397,6 +399,8 @@ export class RepoDO extends MigratingDO {
         reclaimAfterRestore(this.git);
         // An ownership repaired may leave team requests of another owner to settle.
         this.#scheduleReviewTeams();
+        // Code owners shown for pairs the restored state may not have: checked again.
+        this.codeOwners.restored();
       },
     );
     this.changeLists = new ChangeLists(this.git);
@@ -429,8 +433,14 @@ export class RepoDO extends MigratingDO {
       described: (number, body, actor) =>
         this.references.sync({ kind: "pull", number, comment: 0 }, body, actor),
       merged: (pull, actor) => this.#closeOnMerge(pull, actor),
-      stale: (number, open) => this.mergeability.stale(number, open),
-      staleBase: (branch) => this.mergeability.staleBase(branch),
+      stale: (number, open) => {
+        this.mergeability.stale(number, open);
+        this.codeOwners.stale(number, open);
+      },
+      staleBase: (branch) => {
+        this.mergeability.staleBase(branch);
+        this.codeOwners.staleBase(branch);
+      },
       follow: (pull) => this.#forkPulls.follow(pull),
       view: (pull) => this.#viewed(pull),
       milestone: (number) => this.subjectMeta.milestone(number),
@@ -455,6 +465,13 @@ export class RepoDO extends MigratingDO {
         const pull = this.pulls.get(row.number);
         return pull !== undefined && (await this.#headReadable(row.headRepoId, pull.authorRoot));
       },
+    });
+    this.codeOwners = new RepoCodeOwners({
+      git: this.git,
+      pulls: this.pulls,
+      memoryBlocks: () => this.#memoryBlocks(),
+      writable: () => this.#writeRefusal() === undefined,
+      log: () => this.#log(),
     });
     this.mergeability = new RepoMergeability({
       git: this.git,
@@ -1322,6 +1339,22 @@ export class RepoDO extends MigratingDO {
     return this.#pullChange("dismissReview", actor, (caller) =>
       this.reviews.dismiss(number, id, message, caller),
     );
+  }
+
+  /**
+   * Who owns what pull request `number` changes, as far as it is worked out
+   * for its current pair (see `RepoCodeOwners.view`); null when the
+   * repository is gone.
+   */
+  pullCodeOwners(
+    number: number,
+    page: { readonly evalId: number; readonly after: number } | null,
+    limit: number,
+  ) {
+    return this.#measured("pullCodeOwners", () => {
+      if (this.#refusesReads()) return null;
+      return this.codeOwners.view(number, page, limit);
+    });
   }
 
   /** Queues the settling of team review requests no longer standing (see `RepoTeamRequests`). */
@@ -2685,6 +2718,7 @@ export class RepoDO extends MigratingDO {
     return {
       storage_confirm: this.#storageCharges.confirmHandler(),
       mergeability: this.mergeability.handler(),
+      code_owners: this.codeOwners.handler(),
       merge_saga: this.rebases.handler("alarm"),
       pull_notices: this.pullSource.noticesHandler(),
       revision_import: this.pullImports.handler(),

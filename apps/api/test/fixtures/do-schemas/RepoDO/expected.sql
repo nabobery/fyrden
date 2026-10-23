@@ -7,6 +7,10 @@ CREATE INDEX audit_segments_archived ON audit_segments (archived_at) WHERE state
 CREATE INDEX audit_segments_from ON audit_segments (from_seq);
 CREATE INDEX audit_segments_pending ON audit_segments (from_seq) WHERE state = 'pending';
 CREATE INDEX audit_segments_to ON audit_segments (to_seq);
+CREATE UNIQUE INDEX code_owner_evaluations_key
+        ON code_owner_evaluations (merge_base, head, file_blob, version);
+CREATE INDEX code_owner_jobs_due ON code_owner_jobs (requested_at, pr_number);
+CREATE INDEX code_owner_pointers_eval ON code_owner_pointers (eval_id);
 CREATE INDEX comments_number ON comments (number, comment_id);
 CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
 CREATE INDEX feed_audience_pages_expiry ON feed_audience_pages (expires_at);
@@ -135,6 +139,55 @@ CREATE TABLE claim_releases (
         pack_id TEXT PRIMARY KEY,
         network_id TEXT NOT NULL,
         up_to INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE code_owner_evaluations (
+        eval_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        merge_base TEXT NOT NULL,
+        head TEXT NOT NULL,
+        file_blob TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('pending', 'complete', 'none', 'too_large')),
+        reason TEXT,
+        errors INTEGER NOT NULL DEFAULT 0,
+        cursor TEXT,
+        partial TEXT,
+        totals TEXT,
+        unmatched INTEGER NOT NULL DEFAULT 0,
+        unmatchable INTEGER NOT NULL DEFAULT 0,
+        unmatchable_example TEXT,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE code_owner_jobs (
+        pr_number INTEGER PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        requested_at INTEGER NOT NULL,
+        asked INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+CREATE TABLE code_owner_pointers (
+        pr_number INTEGER PRIMARY KEY,
+        base_ref TEXT NOT NULL,
+        base_tip TEXT NOT NULL,
+        head TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        eval_id INTEGER,
+        file_path TEXT,
+        file_blob TEXT,
+        outcome TEXT,
+        reason TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        retry_at INTEGER
+      ) STRICT;
+CREATE TABLE code_owner_restore (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        after INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE code_owner_rules (
+        eval_id INTEGER NOT NULL,
+        line INTEGER NOT NULL,
+        owners TEXT NOT NULL,
+        paths INTEGER NOT NULL,
+        example TEXT NOT NULL,
+        PRIMARY KEY (eval_id, line)
       ) STRICT, WITHOUT ROWID;
 CREATE TABLE collect_requests (
         id INTEGER PRIMARY KEY CHECK (id = 1),

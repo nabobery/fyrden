@@ -33,6 +33,7 @@ export const JOB_KINDS = [
   "feed_pages_prune",
   "webhook_blobs_prune",
   "review_teams",
+  "code_owners",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 

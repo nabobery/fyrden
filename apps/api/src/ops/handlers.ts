@@ -181,6 +181,7 @@ import {
 import {
   createReviewOperation,
   dismissReviewOperation,
+  getPullCodeOwnersOperation,
   getReviewOperation,
   listRequestedReviewersOperation,
   listReviewsOperation,
@@ -456,6 +457,7 @@ export const handlers: Handlers = {
   "pulls.requested_reviewers.list": listRequestedReviewersOperation,
   "pulls.requested_reviewers.add": requestReviewersOperation,
   "pulls.requested_reviewers.remove": removeRequestedReviewersOperation,
+  "pulls.code_owners.get": getPullCodeOwnersOperation,
   // Issues; the listing, get, lock and comments serve pull requests too, each kind on its
   // own permission (repos/subjects).
   "issues.list": listIssuesOperation,

@@ -38,13 +38,15 @@ export interface TreeDiffOptions {
 
 export class TreeDiffLimitError extends Error {
   constructor(
-    readonly limit: "trees" | "path",
+    readonly limit: "trees" | "path" | "depth",
     readonly value: number,
   ) {
     super(
       limit === "trees"
         ? `comparing the trees needs more than ${value} tree reads`
-        : `a path is longer than ${value} bytes`,
+        : limit === "path"
+          ? `a path is longer than ${value} bytes`
+          : `a path is more than ${value} directories deep`,
     );
     this.name = "TreeDiffLimitError";
   }
