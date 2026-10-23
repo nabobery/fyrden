@@ -22686,6 +22686,260 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/pulls/{pull_number}/code-owners": {
+      "get": {
+        "description": "Fyrden: who owns what an open pull request changes, under its base branch's CODEOWNERS (\`.github/\`, the root, \`docs/\`: the first location holding a regular file), for every path the three-dot diff changes (a rename as its two sides). Worked out in the background for the pull request's current base branch, base tip and head: \`pending\` until then (a draft's is worked out once asked for). Rules are those that decide at least one path, with how many and the first; an ownerless rule's paths need no owner. \`errors\` counts the file's invalid lines and \`unmatchable_paths\` the paths that are not UTF-8: either makes a merge needing code owners refuse. \`too_large\` is final for the pair, with why; \`unreadable\` is tried again at \`retry_at\`. Needs \`contents:read\` too.",
+        "operationId": "pulls.code_owners.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Rules a page, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "errors": {
+                      "description": "Invalid lines in the file.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "file": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                            },
+                            "sha": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "path",
+                            "sha",
+                          ],
+                          "type": "object",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "The CODEOWNERS file used; null when there is none.",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page of rules; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "ownerless_paths": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "file",
+                            "tree",
+                            "depth",
+                            "scan",
+                            "work",
+                            "merge_base",
+                            "stuck",
+                            "path",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Why it is \`too_large\`; null otherwise.",
+                    },
+                    "retry_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "When an \`unreadable\` result is worked out again (Unix time in milliseconds).",
+                    },
+                    "rules": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "example_path": {
+                            "description": "The first of them (at most 512 bytes).",
+                            "type": "string",
+                          },
+                          "line": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "owners": {
+                            "description": "As written (\`@user\`, \`@org/team\`); empty: ownerless.",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "paths": {
+                            "description": "Changed paths this rule decides.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                        },
+                        "required": [
+                          "line",
+                          "owners",
+                          "paths",
+                          "example_path",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "state": {
+                      "enum": [
+                        "pending",
+                        "complete",
+                        "none",
+                        "too_large",
+                        "unreadable",
+                      ],
+                      "type": "string",
+                    },
+                    "unmatchable_example": {
+                      "description": "The first such path's bytes (at most 512), base64.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "unmatchable_paths": {
+                      "description": "Changed paths that are not UTF-8, never matched.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "unmatched_paths": {
+                      "description": "Changed paths no rule matches (no code owners).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "state",
+                    "reason",
+                    "retry_at",
+                    "file",
+                    "errors",
+                    "rules",
+                    "ownerless_paths",
+                    "unmatched_paths",
+                    "unmatchable_paths",
+                    "unmatchable_example",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a pull request's code owners",
+        "x-fyrden-permission": "pull_requests:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/repos/{owner}/{repo}/pulls/{pull_number}/comments": {
       "get": {
         "description": "The comments on a pull request's diff, oldest first.",

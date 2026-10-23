@@ -149,6 +149,7 @@ import {
 import {
   createReview,
   dismissReview,
+  getPullCodeOwners,
   getReview,
   listRequestedReviewers,
   listReviews,
@@ -258,6 +259,7 @@ export const registry = defineRegistry([
   listRequestedReviewers,
   requestReviewers,
   removeRequestedReviewers,
+  getPullCodeOwners,
   listIssues,
   createIssue,
   getIssue,

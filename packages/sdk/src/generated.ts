@@ -3200,6 +3200,54 @@ export type PullsRequestedReviewersRemoveOutput = {
   };
 };
 
+/** Input of `pulls.code_owners.get`: Get a pull request's code owners. */
+export type PullsCodeOwnersGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Rules a page, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.code_owners.get`. */
+export type PullsCodeOwnersGetOutput = {
+  state: "pending" | "complete" | "none" | "too_large" | "unreadable";
+  /** Why it is `too_large`; null otherwise. */
+  reason: "file" | "tree" | "depth" | "scan" | "work" | "merge_base" | "stuck" | "path" | null;
+  /** When an `unreadable` result is worked out again (Unix time in milliseconds). */
+  retry_at: number | null;
+  /** The CODEOWNERS file used; null when there is none. */
+  file: {
+    path: string;
+    sha: string;
+  } | null;
+  /** Invalid lines in the file. */
+  errors: number;
+  rules: {
+    line: number;
+    /** As written (`@user`, `@org/team`); empty: ownerless. */
+    owners: string[];
+    /** Changed paths this rule decides. */
+    paths: number;
+    /** The first of them (at most 512 bytes). */
+    example_path: string;
+  }[];
+  ownerless_paths: number;
+  /** Changed paths no rule matches (no code owners). */
+  unmatched_paths: number;
+  /** Changed paths that are not UTF-8, never matched. */
+  unmatchable_paths: number;
+  /** The first such path's bytes (at most 512), base64. */
+  unmatchable_example: string | null;
+  /** Pass as `cursor` for the next page of rules; null on the last page. */
+  next_cursor: string | null;
+};
+
 /** Input of `issues.list`: List issues. */
 export type IssuesListInput = {
   /** The owner's handle. */
@@ -6470,6 +6518,7 @@ export const OPERATIONS = {
   "pulls.requested_reviewers.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: false },
   "pulls.requested_reviewers.add": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.requested_reviewers.remove": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.code_owners.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/code-owners", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "rules" },
   "issues.list": { method: "GET", path: "/repos/{owner}/{repo}/issues", pathParams: ["owner","repo"], idempotent: false, items: "issues" },
   "issues.create": { method: "POST", path: "/repos/{owner}/{repo}/issues", pathParams: ["owner","repo"], idempotent: true },
   "issues.get": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}", pathParams: ["owner","repo","issue_number"], idempotent: false },
@@ -6722,6 +6771,8 @@ export interface Operations {
   "pulls.requested_reviewers.add": { input: PullsRequestedReviewersAddInput; output: PullsRequestedReviewersAddOutput };
   /** Remove requested reviewers. Withdraws review requests of users, agents and teams; ones not requested are ignored. Fyrden takes teams alone too (GitHub needs `reviewers`). */
   "pulls.requested_reviewers.remove": { input: PullsRequestedReviewersRemoveInput; output: PullsRequestedReviewersRemoveOutput };
+  /** Get a pull request's code owners. Fyrden: who owns what an open pull request changes, under its base branch's CODEOWNERS (`.github/`, the root, `docs/`: the first location holding a regular file), for every path the three-dot diff changes (a rename as its two sides). Worked out in the background for the pull request's current base branch, base tip and head: `pending` until then (a draft's is worked out once asked for). Rules are those that decide at least one path, with how many and the first; an ownerless rule's paths need no owner. `errors` counts the file's invalid lines and `unmatchable_paths` the paths that are not UTF-8: either makes a merge needing code owners refuse. `too_large` is final for the pair, with why; `unreadable` is tried again at `retry_at`. Needs `contents:read` too. */
+  "pulls.code_owners.get": { input: PullsCodeOwnersGetInput; output: PullsCodeOwnersGetOutput };
   /** List issues. The repository's issues and pull requests (marked with `pull_request`), as GitHub's issue listing; `type` narrows it to one kind. Each kind is listed only for a caller that may read it: issues need the `issues:read` permission, pull requests `pull_requests:read`. A listing sorted by `updated` may move an item changed between pages. */
   "issues.list": { input: IssuesListInput; output: IssuesListOutput };
   /** Create an issue. Opens an issue. Anyone who can read the repository may; giving it labels, assignees or a milestone takes triage (refused without it, where GitHub drops them). */

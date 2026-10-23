@@ -194,6 +194,72 @@ export const listRequestedReviewers = defineOperation({
   mcp: false,
 });
 
+export const getPullCodeOwners = defineOperation({
+  id: "pulls.code_owners.get",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/pulls/{pull_number}/code-owners",
+  summary: "Get a pull request's code owners",
+  description:
+    "Fyrden: who owns what an open pull request changes, under its base branch's CODEOWNERS (`.github/`, the root, `docs/`: the first location holding a regular file), for every path the three-dot diff changes (a rename as its two sides). Worked out in the background for the pull request's current base branch, base tip and head: `pending` until then (a draft's is worked out once asked for). Rules are those that decide at least one path, with how many and the first; an ownerless rule's paths need no owner. `errors` counts the file's invalid lines and `unmatchable_paths` the paths that are not UTF-8: either makes a merge needing code owners refuse. `too_large` is final for the pair, with why; `unreadable` is tried again at `retry_at`. Needs `contents:read` too.",
+  input: z.object({
+    ...PullInput,
+    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Rules a page, 1-100."),
+    cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
+  }),
+  output: z.object({
+    state: z.enum(["pending", "complete", "none", "too_large", "unreadable"]),
+    reason: z
+      .enum(["file", "tree", "depth", "scan", "work", "merge_base", "stuck", "path"])
+      .nullable()
+      .describe("Why it is `too_large`; null otherwise."),
+    retry_at: z
+      .number()
+      .int()
+      .nullable()
+      .describe("When an `unreadable` result is worked out again (Unix time in milliseconds)."),
+    file: z
+      .object({ path: z.string(), sha: z.string() })
+      .nullable()
+      .describe("The CODEOWNERS file used; null when there is none."),
+    errors: z.number().int().describe("Invalid lines in the file."),
+    rules: z.array(
+      z.object({
+        line: z.number().int(),
+        owners: z
+          .array(z.string())
+          .describe("As written (`@user`, `@org/team`); empty: ownerless."),
+        paths: z.number().int().describe("Changed paths this rule decides."),
+        example_path: z.string().describe("The first of them (at most 512 bytes)."),
+      }),
+    ),
+    ownerless_paths: z.number().int(),
+    unmatched_paths: z.number().int().describe("Changed paths no rule matches (no code owners)."),
+    unmatchable_paths: z
+      .number()
+      .int()
+      .describe("Changed paths that are not UTF-8, never matched."),
+    unmatchable_example: z
+      .string()
+      .nullable()
+      .describe("The first such path's bytes (at most 512), base64."),
+    next_cursor: z
+      .string()
+      .nullable()
+      .describe("Pass as `cursor` for the next page of rules; null on the last page."),
+  }),
+  permission: "pull_requests:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "get_pull_request_code_owners",
+    title: "Get a pull request's code owners",
+    description:
+      "Who owns what an open pull request changes under its base branch's CODEOWNERS: each deciding rule with its owners and how many changed paths it decides, plus unmatched paths, the file's error count, and paths that cannot be matched. `pending` while it is worked out.",
+    readOnly: true,
+  },
+});
+
 export const requestReviewers = defineOperation({
   id: "pulls.requested_reviewers.add",
   method: "POST",

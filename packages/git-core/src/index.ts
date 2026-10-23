@@ -32,6 +32,16 @@ export {
 } from "./diff/patch.js";
 export { type DiffEntry, findExactRenames } from "./diff/rename.js";
 export {
+  type CursorName,
+  DIFF_START,
+  type DiffCursor,
+  diffTreesFrom,
+  ReadDeferred,
+  type ResumableDiffLimits,
+  type ResumedChange,
+  type ResumedDiff,
+} from "./diff/resumable-diff.js";
+export {
   BINARY_SNIFF_BYTES,
   DEFAULT_MAX_LINES,
   internLines,

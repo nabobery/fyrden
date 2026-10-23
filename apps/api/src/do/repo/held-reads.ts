@@ -44,6 +44,20 @@ export class ReadsTooLargeError extends Error {
   override name = "ReadsTooLargeError";
 }
 
+/**
+ * The work's bytes are spent, or the memory a read needs is not free now:
+ * the read might succeed in another piece of work (one that cannot be split
+ * may treat it as `ReadsTooLargeError`, which it is).
+ */
+export class ReadsBudgetSpent extends ReadsTooLargeError {
+  override name = "ReadsBudgetSpent";
+}
+
+/** The memory a read needs is held by other work now: the same read may succeed shortly. */
+export class ReadsMemoryBusy extends ReadsBudgetSpent {
+  override name = "ReadsMemoryBusy";
+}
+
 export interface HeldReadLimits {
   /** The largest tree or commit read, in bytes. */
   readonly maxTreeBytes: number;
@@ -88,15 +102,16 @@ export async function withHeldReads<T>(
   };
   const hold = (read: number, bytes: number) => {
     readBytes += read;
-    if (readBytes > limits.maxReadBytes) throw new ReadsTooLargeError();
+    if (readBytes > limits.maxReadBytes) throw new ReadsBudgetSpent();
     let held: { release(): void } | undefined;
     try {
       held = memory.tryReserve(Math.max(1, bytes));
     } catch (error) {
-      // More than the object's whole budget.
+      // More than the object's whole budget: never readable here.
       if (!(error instanceof RangeError)) throw error;
+      throw new ReadsTooLargeError();
     }
-    if (!held) throw new ReadsTooLargeError();
+    if (!held) throw new ReadsMemoryBusy();
     if (done) {
       held.release();
       throw new UnreadableObjectError();
