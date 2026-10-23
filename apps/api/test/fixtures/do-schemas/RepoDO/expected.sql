@@ -79,6 +79,12 @@ CREATE TABLE archive_segments (
         bytes INTEGER NOT NULL,
         PRIMARY KEY (run_id, seq)
       ) STRICT;
+CREATE TABLE archive_zip_chunks (
+        run_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        records TEXT NOT NULL CHECK (json_valid(records)),
+        PRIMARY KEY (run_id, seq)
+      ) STRICT;
 CREATE TABLE archive_zip_records (
         run_id TEXT NOT NULL,
         seq INTEGER NOT NULL,

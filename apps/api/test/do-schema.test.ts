@@ -26,6 +26,7 @@ import repoV38 from "./fixtures/do-schemas/RepoDO/v38.sql?raw";
 import repoV39 from "./fixtures/do-schemas/RepoDO/v39.sql?raw";
 import repoV40 from "./fixtures/do-schemas/RepoDO/v40.sql?raw";
 import repoV41 from "./fixtures/do-schemas/RepoDO/v41.sql?raw";
+import repoV42 from "./fixtures/do-schemas/RepoDO/v42.sql?raw";
 
 // One fixture per released schema version: an object last migrated by any
 // released build must reach the same schema as a fresh one. The latest
@@ -57,6 +58,7 @@ const fixtures: Record<
       39: repoV39,
       40: repoV40,
       41: repoV41,
+      42: repoV42,
     },
   },
 };
@@ -255,6 +257,39 @@ describe("RepoDO schema", () => {
     const ids = after.requests.map((r) => r.request_id as number);
     expect(new Set(ids).size).toBe(3);
     expect(after.next).toBeGreaterThan(Math.max(...ids));
+  });
+
+  it("keeps a v41 object's zip records being built, each as a chunk of its own, in order", async () => {
+    const stub = env.REPO.getByName(uniqueId("repo"));
+    const after = await runInDurableObject(stub, async (_, state) => {
+      const sql = state.storage.sql;
+      await state.storage.deleteAll();
+      sql.exec(repoV41);
+      sql.exec(
+        "CREATE TABLE _fyrden_schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)",
+      );
+      sql.exec("INSERT INTO _fyrden_schema_version VALUES (1, 41)");
+      for (const [run, seq, name] of [
+        ["run_b", 0, "Yg=="],
+        ["run_a", 1, "YS8x"],
+        ["run_a", 0, "YS8="],
+      ] as const)
+        sql.exec(
+          "INSERT INTO archive_zip_records (run_id, seq, record) VALUES (?, ?, ?)",
+          run,
+          seq,
+          JSON.stringify({ name, offset: seq * 10 }),
+        );
+      applyDoMigrations(state.storage, repoSchema);
+      return sql
+        .exec("SELECT run_id, seq, records FROM archive_zip_chunks ORDER BY run_id, seq")
+        .toArray();
+    });
+    expect(after.map((r) => ({ ...r, records: JSON.parse(r.records as string) }))).toEqual([
+      { run_id: "run_a", seq: 0, records: [{ name: "YS8=", offset: 0 }] },
+      { run_id: "run_a", seq: 1, records: [{ name: "YS8x", offset: 10 }] },
+      { run_id: "run_b", seq: 0, records: [{ name: "Yg==", offset: 0 }] },
+    ]);
   });
 
   it("finds a head repository's open pull requests through an index, in number order", async () => {
