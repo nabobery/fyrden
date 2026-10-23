@@ -106,6 +106,7 @@ export function MergeBox({
   const methods = rules?.methods ?? (["merge", "squash", "rebase"] as MergeMethod[]);
   const [method, setMethod] = useState<MergeMethod | undefined>(methods[0]);
   const pending = merge.state === "idle" && merge.data?.pending === true;
+  const updating = update.state !== "idle";
   const submit = merge.submit;
   // A rebase still going on in the background: ask again until it answers.
   useEffect(() => {
@@ -187,7 +188,7 @@ export function MergeBox({
             <button
               type="submit"
               className="primary"
-              disabled={blocked || merge.state !== "idle" || (pending && !stopped)}
+              disabled={blocked || updating || merge.state !== "idle" || (pending && !stopped)}
               aria-describedby={draft ? `${id}-draft` : undefined}
             >
               Merge pull request
@@ -236,7 +237,7 @@ export function MergeBox({
       <update.Form method="post" className="row">
         <input type="hidden" name="intent" value="update-branch" />
         <input type="hidden" name="expected_head_sha" value={pull.head.sha} />
-        <button type="submit" disabled={update.state !== "idle"}>
+        <button type="submit" disabled={updating}>
           Update branch
         </button>
         <span className="muted">Merge the base branch's latest commit into this one.</span>
@@ -246,7 +247,9 @@ export function MergeBox({
           {update.data.error}
         </p>
       )}
-      {update.data?.ok && <p role="status">The branch is up to date with the base branch.</p>}
+      {!updating && update.data?.ok && (
+        <p role="status">The branch is up to date with the base branch.</p>
+      )}
     </section>
   );
 }

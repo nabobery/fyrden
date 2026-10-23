@@ -3,6 +3,7 @@
 // key Fyrden does not know is not verified.
 
 import { env, exports } from "cloudflare:workers";
+import { secureRandomBytes, ulid } from "@fyrden/domain";
 import {
   ed25519FromSeed,
   ed25519PublicKeyBlob,
@@ -350,6 +351,17 @@ describe("SSH signing keys", () => {
     const me = await user();
     const first = (await add(me, await lineOf(20), "one")).body;
     const second = (await add(me, await lineOf(21), "two")).body;
+    // Creation order is explicit, regardless of how the test clock advances.
+    await env.DIRECTORY.batch([
+      env.DIRECTORY.prepare("UPDATE ssh_signing_keys SET created_at = ? WHERE id = ?").bind(
+        1000,
+        first.id,
+      ),
+      env.DIRECTORY.prepare("UPDATE ssh_signing_keys SET created_at = ? WHERE id = ?").bind(
+        2000,
+        second.id,
+      ),
+    ]);
     const page = await json<{ keys: { id: string }[]; next_cursor: string | null }>(
       api("GET", "/user/ssh_signing_keys?per_page=1", me.token),
     );
@@ -367,6 +379,36 @@ describe("SSH signing keys", () => {
       404,
     );
     expect((await api("GET", `/user/ssh_signing_keys/${first.id}`, me.token)).status).toBe(200);
+  });
+
+  it("paginates keys with equal creation timestamps by ascending id", async () => {
+    const me = await user();
+    const ids = Array.from({ length: 3 }, () => `key_${ulid(1000, secureRandomBytes)}`).sort();
+    // Reverse insertion order so an insertion-order tie-break cannot pass by chance.
+    await env.DIRECTORY.batch(
+      ids
+        .toReversed()
+        .map((id) =>
+          env.DIRECTORY.prepare(
+            "INSERT INTO ssh_signing_keys (id, principal_id, title, key, fingerprint, created_at) VALUES (?, ?, 't', 'k', ?, 1000)",
+          ).bind(id, me.principalId, uniqueId("fp")),
+        ),
+    );
+
+    let cursor: string | null = null;
+    for (const id of ids) {
+      const query = new URLSearchParams({ per_page: "1" });
+      if (cursor !== null) query.set("cursor", cursor);
+      const page = await json<{
+        keys: { id: string; created_at: number }[];
+        next_cursor: string | null;
+      }>(api("GET", `/user/ssh_signing_keys?${query}`, me.token));
+      expect(page.status).toBe(200);
+      expect(page.body.keys).toEqual([expect.objectContaining({ id, created_at: 1000 })]);
+      cursor = page.body.next_cursor;
+      if (id !== ids.at(-1)) expect(cursor).not.toBeNull();
+    }
+    expect(cursor).toBeNull();
   });
 
   it("refuse a malformed key, another type, and a key another user added", async () => {
