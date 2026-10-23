@@ -174,6 +174,29 @@ describe("CODEOWNERS patterns, against the reference implementation", () => {
     expect(spent.spent).toBeLessThan(path.length + 10_000);
     expect(() => ownershipOf(file, path, new MatchBudget(50_000))).toThrow(MatchBudgetExceeded);
   });
+
+  it("charge a literal what comparing it costs: no more than the segment left (the largest file's rules, measured)", () => {
+    // 1,000 rules whose first segment is a 2,000-character literal: a short path fails each one
+    // at once, so the whole file costs a few steps a rule, not the literals' length.
+    const rules = Array.from(
+      { length: 1_000 },
+      (_, r) =>
+        `/r${r}s0${"x".repeat(2_000)}?/${Array.from({ length: 62 }, (_, s) => `r${r}s${s + 1}?`).join("/")}* @owner`,
+    );
+    const file = parse(rules.join("\n"));
+    expect(file.errors).toEqual([]);
+    const spent = new MatchBudget(1_000_000);
+    expect(ownershipOf(file, "a.txt", spent)).toEqual({ kind: "unmatched" });
+    expect(spent.spent).toBeLessThan(20_000);
+    // A literal compared in full still spends its length.
+    const exact = compilePattern(`/${"y".repeat(3_000)}`);
+    if (!exact.ok) throw new Error("compiled");
+    const full = new MatchBudget(1_000_000);
+    const prepared = preparePath("y".repeat(3_000), full);
+    const before = full.spent;
+    expect(matchesPath(exact.pattern, prepared, full)).toBe(true);
+    expect(full.spent - before).toBeGreaterThanOrEqual(3_000);
+  });
 });
 
 describe("CODEOWNERS files", () => {
