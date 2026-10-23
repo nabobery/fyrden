@@ -53,7 +53,7 @@ import type { PullRecord, RepoPulls } from "./pulls.js";
  */
 
 /** Bumped with any change of what an evaluation answers for the same inputs (parser, matcher, locations, diff). */
-export const CODEOWNERS_EVALUATION_VERSION = 1;
+export const CODEOWNERS_EVALUATION_VERSION = 2;
 
 export const CODE_OWNERS_JOB_ID = "code_owners";
 

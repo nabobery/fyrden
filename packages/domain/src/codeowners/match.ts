@@ -206,7 +206,9 @@ const width = (text: string, at: number) => ((text.codePointAt(at) as number) > 
 /**
  * Whether `segment` matches a segment glob: greedy `*` with backtracking to
  * the last star (the classic two-pointer match, literal runs compared
- * whole), `?` one code point. Each comparison spends its length.
+ * whole), `?` one code point. Each comparison spends what it can compare:
+ * a literal no more than the segment left after its position (a longer one
+ * cannot match, and is not compared further).
  */
 function segmentMatches(parts: readonly GlobPart[], segment: string, budget: MatchBudget): boolean {
   let p = 0;
@@ -215,7 +217,9 @@ function segmentMatches(parts: readonly GlobPart[], segment: string, budget: Mat
   let starS = 0;
   while (s < segment.length) {
     const part = parts[p];
-    budget.spend(part?.kind === "literal" ? part.text.length : 1);
+    budget.spend(
+      part?.kind === "literal" ? Math.max(1, Math.min(part.text.length, segment.length - s)) : 1,
+    );
     if (part?.kind === "literal" && segment.startsWith(part.text, s)) {
       p++;
       s += part.text.length;
