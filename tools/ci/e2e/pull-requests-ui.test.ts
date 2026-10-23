@@ -325,6 +325,53 @@ describe("pull requests in the web UI", () => {
     await accessible(page, "merged pull request");
   });
 
+  it("waits for the updated head to revalidate before allowing a merge", async () => {
+    const number = await openPull(await pushTopic(), "Delayed branch update");
+    await pushFile("main", `docs/update-${number}.md`);
+    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}`);
+    const merge = page.locator("section.merge-box");
+    await see(merge.getByText("No conflicts with the base branch.")).toBeVisible({
+      timeout: 60_000,
+    });
+    const previousHead = await headOf(number);
+    const refreshHeld = Promise.withResolvers<void>();
+    const releaseRefresh = Promise.withResolvers<void>();
+    const dataUrl = `${stack.origin}/${handle}/${name}/pull/${number}.data*`;
+    await page.route(dataUrl, async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const response = await route.fetch();
+      refreshHeld.resolve();
+      await releaseRefresh.promise;
+      await route.fulfill({ response });
+    });
+    const updated = merge.getByText("The branch is up to date with the base branch.");
+    const submit = merge.getByRole("button", { name: "Merge pull request" });
+    let updatedHead: string;
+    try {
+      await merge.getByRole("button", { name: "Update branch" }).click();
+      await refreshHeld.promise;
+      updatedHead = await headOf(number);
+      expect(updatedHead).not.toBe(previousHead);
+      await see(submit).toBeDisabled();
+      await see(updated).toHaveCount(0);
+      await see(merge.locator('input[name="sha"]')).toHaveValue(previousHead);
+    } finally {
+      releaseRefresh.resolve();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+    await see(updated).toBeVisible();
+    await see(merge.locator('input[name="sha"]')).toHaveValue(updatedHead);
+    await see(submit).toBeEnabled();
+    const request = page.waitForRequest(
+      (req) =>
+        req.method() === "POST" &&
+        new URLSearchParams(req.postData() ?? "").get("intent") === "merge",
+    );
+    await submit.click();
+    expect(new URLSearchParams((await request).postData() ?? "").get("sha")).toBe(updatedHead);
+    await see(page.locator(".badge.status-merged")).toBeVisible({ timeout: 30_000 });
+  });
+
   it("resolves a conflict in the web editor, from the keyboard", async () => {
     // A branch whose README conflicts with the base's once the base changes it too.
     await pushBranch("clash", { "README.md": "# Clash\n" });
