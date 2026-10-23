@@ -28,6 +28,8 @@ export interface RepoAclDeps {
   readonly account: () => RepoAccount | undefined;
   /** The account object's snapshot for this repository. */
   readonly pull: (accountId: string) => Promise<AclSnapshot>;
+  /** In the caller's transaction: account `accountId`'s restore generation `epochGen` was seen. */
+  readonly observed?: (accountId: string, epochGen: number) => void;
 }
 
 type Row = {
@@ -191,6 +193,7 @@ export class RepoAcl {
    */
   invalidate(accountId: string, epochGen: number, version: number): void {
     if (this.deps.account()?.accountId !== accountId) return;
+    this.deps.observed?.(accountId, epochGen);
     const row = this.#row(accountId);
     if (row && !below(row.floor_epoch, row.floor_version, epochGen, version)) return;
     // Another account's snapshot and floor go with it.
@@ -279,6 +282,7 @@ export class RepoAcl {
       stored.floor_epoch,
       stored.floor_version,
     );
+    this.deps.observed?.(accountId, snapshot.epochGen);
     return stored;
   }
 

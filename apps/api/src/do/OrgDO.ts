@@ -3,6 +3,7 @@ import {
   atLeast,
   GITHUB_DEFAULT_LABELS,
   type LabelSpec,
+  MAX_TEAM_REVIEWERS,
   type OrgRole,
   orgRepoRole,
   REPO_ROLES,
@@ -110,6 +111,31 @@ export interface MemberRow {
   readonly id: string;
   readonly handle: string;
   readonly role: OrgRole;
+}
+
+/** A team a review is asked of, as the account has it now. */
+export interface TeamAudienceEntry {
+  /** Its stable id (a slug may be taken by another team later). */
+  readonly id: string;
+  readonly slug: string;
+  readonly name: string;
+  /** The role every member has on the repository at least: the base role or the team's grant. */
+  readonly role: RepoRole | null;
+  /** Every member, in id order; null when there are more than a request may ask. */
+  readonly members: readonly string[] | null;
+}
+
+/**
+ * Teams of the account asked to review a pull request of one of its
+ * repositories, read together, with the ACL `(epochGen, version)` they
+ * were read at; `missing`, the slugs that name no team.
+ */
+export interface TeamAudience {
+  readonly accountId: string;
+  readonly epochGen: number;
+  readonly version: number;
+  readonly teams: readonly TeamAudienceEntry[];
+  readonly missing: readonly string[];
 }
 
 /**
@@ -1237,6 +1263,94 @@ export class OrgDO extends MigratingDO {
       )
       .toArray()
       .map((r) => ({ slug: r.slug, name: r.name }));
+  }
+
+  /**
+   * Teams `slugs` as a review request of repository `repoId` asks them
+   * (see `TeamAudience`), read without an await between them, after the
+   * restore generation is checked. Members are listed up to `maxMembers`
+   * a team; a team with more answers none.
+   */
+  async teamAudience(
+    repoId: string,
+    slugs: readonly string[],
+    maxMembers: number = MAX_TEAM_REVIEWERS,
+  ): Promise<TeamAudience> {
+    await this.#checkEpoch();
+    const meta = this.#meta();
+    if (meta?.kind !== "org")
+      return {
+        accountId: meta?.account_id ?? "",
+        epochGen: meta?.epoch_gen ?? 0,
+        version: meta?.acl_version ?? 0,
+        teams: [],
+        missing: [...new Set(slugs)],
+      };
+    const sql = this.ctx.storage.sql;
+    const teams: TeamAudienceEntry[] = [];
+    const missing: string[] = [];
+    for (const slug of new Set(slugs)) {
+      const [team] = sql
+        .exec<{ team_id: string; name: string }>(
+          "SELECT team_id, name FROM teams WHERE slug = ?",
+          slug,
+        )
+        .toArray();
+      if (!team) {
+        missing.push(slug);
+        continue;
+      }
+      const granted = sql
+        .exec<{ role: RepoRole }>(
+          "SELECT role FROM team_repos WHERE team_id = ? AND repo_id = ?",
+          team.team_id,
+          repoId,
+        )
+        .toArray()[0]?.role;
+      const members = sql
+        .exec<{ principal_id: string }>(
+          "SELECT principal_id FROM team_members WHERE team_id = ? ORDER BY principal_id LIMIT ?",
+          team.team_id,
+          maxMembers + 1,
+        )
+        .toArray()
+        .map((m) => m.principal_id);
+      teams.push({
+        id: team.team_id,
+        slug,
+        name: team.name,
+        // Only members of the organization are on its teams: each has the base role at least.
+        role: strongestRole([orgRepoRole("member", BASE_ROLE), granted ?? null]),
+        members: members.length > maxMembers ? null : members,
+      });
+    }
+    return {
+      accountId: meta.account_id,
+      epochGen: meta.epoch_gen,
+      version: meta.acl_version,
+      teams,
+      missing,
+    };
+  }
+
+  /**
+   * Which of the teams `teamIds` (stable ids) the account has now, after
+   * its restore generation is checked, with that generation.
+   */
+  async teamsPresent(
+    teamIds: readonly string[],
+  ): Promise<{ accountId: string; epochGen: number; present: string[] }> {
+    await this.#checkEpoch();
+    const meta = this.#meta();
+    if (!meta) return { accountId: "", epochGen: 0, present: [] };
+    const present = this.ctx.storage.sql
+      .exec<{ team_id: string }>(
+        "SELECT team_id FROM teams WHERE team_id IN (SELECT value FROM json_each(?))",
+        JSON.stringify([...new Set(teamIds)]),
+      )
+      .toArray()
+      .map((row) => row.team_id);
+    return { accountId: meta.account_id, epochGen: meta.epoch_gen, present };
   }
 
   /** Adds a member of the organization to a team, if `actor` owns the organization now. */

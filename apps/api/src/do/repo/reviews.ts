@@ -3,6 +3,7 @@ import {
   decideDismissal,
   decideReview,
   decideReviewRequest,
+  MAX_PULL_TEAM_REVIEWERS,
   MAX_REQUESTED_REVIEWERS,
   principalTypeOf,
   type RepoRole,
@@ -13,8 +14,11 @@ import {
 } from "@fyrden/domain";
 import { reviewOutput } from "../../repos/shapes.js";
 import { capturable, userOf } from "../../webhooks/captures.js";
+import type { TeamAudience } from "../OrgDO.js";
 import type { RepoEvents } from "./events.js";
+import type { RepoFeed } from "./feed.js";
 import type { PullCaller, PullRecord, RepoPulls } from "./pulls.js";
+import { MANUAL, type RepoTeamRequests, type TeamRequest } from "./team-requests.js";
 
 /** The entity type review snapshots travel as in events. */
 export const REVIEW_ENTITY = "pull_request_review";
@@ -95,7 +99,9 @@ export type ReviewFailure =
   | "commit_not_in_pull"
   | "reviewer_no_access"
   | "reviewer_is_author"
-  | "too_many_reviewers";
+  | "too_many_reviewers"
+  | "team_not_found"
+  | "team_too_large";
 
 type Row = {
   review_id: number;
@@ -124,6 +130,8 @@ export class RepoReviews {
       readonly git: RepoGitStorage;
       readonly events: RepoEvents;
       readonly pulls: RepoPulls;
+      readonly feed: RepoFeed;
+      readonly teams: RepoTeamRequests;
       readonly repoId: () => string;
     },
   ) {}
@@ -251,12 +259,26 @@ export class RepoReviews {
       );
       const submitted = record(row as Row);
       if (submitted.state !== "COMMENTED") this.#revised(number);
+      // A review completes what was asked of its reviewer: its own request, and those of the
+      // teams that asked it; their members no other request asks are settled with it.
+      const { teams } = this.deps;
       this.#run(
         "DELETE FROM review_requests WHERE pr_number = ? AND reviewer_id = ?",
         number,
         actor.principal,
       );
-      this.#emit("submitted", submitted, actor);
+      const members = teams.completeBy(number, actor.principal, caller.root);
+      const asked = teams.addressed(number);
+      const resolutions = this.deps.feed.settlements(
+        number,
+        [
+          { id: actor.principal, root: caller.root },
+          ...members.filter((id) => !asked.has(id)).map((id) => ({ id, root: id })),
+        ],
+        actor.principal,
+        "review",
+      );
+      this.#emit("submitted", submitted, actor, resolutions.length > 0 ? { resolutions } : null);
       this.deps.events.auditChange("pull_request.review", actor, {
         number,
         review: submitted.id,
@@ -308,6 +330,11 @@ export class RepoReviews {
     return { ok: true, review };
   }
 
+  /** The teams a review is requested of, in the order requested (standing requests only). */
+  requestedTeams(number: number): TeamRequest[] {
+    return this.deps.teams.live(number);
+  }
+
   /** The principals a review is requested of, in the order requested. */
   requested(number: number): string[] {
     return this.#rows<{ reviewer_id: string }>(
@@ -318,16 +345,23 @@ export class RepoReviews {
 
   /**
    * Requests reviews of `reviewers`, each of whom must read the repository
-   * and not be the author (by root identity). Already requested ones are
-   * left as they are. Past the limit, the requests of `deleted` reviewers
-   * (being deleted: no one can withdraw them by name) give up their places
-   * first, quietly (audited; no event, as no one is told).
+   * and not be the author (by root identity), and of the teams `audience`
+   * answers (the organization's, read with the ACL the caller checked:
+   * each must be found and read the repository, and ask at most
+   * `MAX_TEAM_REVIEWERS` members), each asking the members it has now,
+   * the author left out. A team counts as one of the requests a pull
+   * request may have; its members count toward `MAX_PULL_TEAM_REVIEWERS`.
+   * Already requested reviewers and teams are left as they are (a team
+   * keeps the members it asked). Past the limit, the requests of `deleted`
+   * reviewers (being deleted: no one can withdraw them by name) give up
+   * their places first, quietly (audited; no event, as no one is told).
    */
   request(
     number: number,
     reviewers: readonly RequestedReviewer[],
     caller: PullCaller,
     deleted: ReadonlySet<string> = new Set(),
+    audience?: TeamAudience,
   ): { ok: true; pull: PullRecord } | { ok: false; code: ReviewFailure } {
     const pull = this.#requestable(number, caller);
     if (!pull.ok) return pull;
@@ -335,13 +369,36 @@ export class RepoReviews {
       if (reviewer.root === pull.pull.authorRoot) return { ok: false, code: "reviewer_is_author" };
       if (reviewer.role === null) return { ok: false, code: "reviewer_no_access" };
     }
+    if (audience && audience.missing.length > 0) return { ok: false, code: "team_not_found" };
+    for (const team of audience?.teams ?? []) {
+      // One that cannot read the repository is answered as one not found: a caller outside the
+      // organization learns no more of its teams than their names it asked with.
+      if (team.role === null) return { ok: false, code: "team_not_found" };
+      if (team.members === null) return { ok: false, code: "team_too_large" };
+    }
+    const { teams } = this.deps;
+    const standing = teams.live(number);
+    const asked = new Set(standing.map((r) => r.team.id));
+    const author = new Set([pull.pull.authorId, pull.pull.authorRoot]);
+    const newTeams = [...new Map((audience?.teams ?? []).map((team) => [team.id, team])).values()]
+      .filter((team) => !asked.has(team.id))
+      .map((team) => ({
+        id: team.id,
+        slug: team.slug,
+        name: team.name,
+        members: (team.members ?? []).filter((id) => !author.has(id)),
+      }));
+    if (
+      teams.associations(number) + newTeams.reduce((n, team) => n + team.members.length, 0) >
+      MAX_PULL_TEAM_REVIEWERS
+    )
+      return { ok: false, code: "team_too_large" };
     const already = new Set(this.requested(number));
     const added = [...new Set(reviewers.map((r) => r.id))].filter((id) => !already.has(id));
+    const places = already.size + standing.length + added.length + newTeams.length;
     const freed =
-      already.size + added.length > MAX_REQUESTED_REVIEWERS
-        ? [...already].filter((id) => deleted.has(id))
-        : [];
-    if (already.size - freed.length + added.length > MAX_REQUESTED_REVIEWERS)
+      places > MAX_REQUESTED_REVIEWERS ? [...already].filter((id) => deleted.has(id)) : [];
+    if (places - freed.length > MAX_REQUESTED_REVIEWERS)
       return { ok: false, code: "too_many_reviewers" };
     this.deps.git.context.storage.transactionSync(() => {
       const now = this.deps.git.context.now();
@@ -357,37 +414,49 @@ export class RepoReviews {
           reviewers: freed,
         });
       for (const id of added) {
+        const root = reviewers.find((r) => r.id === id)?.root ?? id;
         this.#run(
           `INSERT INTO review_requests (pr_number, reviewer_id, requested_by, requested_at,
-             reviewer_root) VALUES (?, ?, ?, ?, ?)`,
+             reviewer_root, reasons, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
           number,
           id,
           caller.actor.principal,
           now,
-          reviewers.find((r) => r.id === id)?.root ?? id,
+          root,
+          MANUAL,
+          teams.nextId(),
         );
-        const root = reviewers.find((r) => r.id === id)?.root ?? id;
         this.#emitRequest("review_requested", number, id, caller.actor, root);
       }
-      if (added.length > 0)
+      if (audience && newTeams.length > 0)
+        teams.askedAt(audience.accountId, audience.epochGen, standing.length > 0);
+      for (const team of newTeams) teams.ask(number, team, caller.actor, now);
+      if (added.length > 0 || newTeams.length > 0)
         this.deps.events.auditChange("pull_request.request_reviewers", caller.actor, {
           number,
           reviewers: added,
+          ...(newTeams.length > 0 && { teams: newTeams.map((team) => team.slug) }),
         });
     });
     return { ok: true, pull: pull.pull };
   }
 
-  /** Withdraws review requests; ones not requested are ignored. */
+  /**
+   * Withdraws review requests of principals and of the teams `teamSlugs`
+   * name; ones not requested are ignored. Each settles whom it asked
+   * unless another request still asks them.
+   */
   unrequest(
     number: number,
     reviewerIds: readonly string[],
     caller: PullCaller,
+    teamSlugs: readonly string[] = [],
   ): { ok: true; pull: PullRecord } | { ok: false; code: ReviewFailure } {
     const pull = this.#requestable(number, caller);
     if (!pull.ok) return pull;
     const requested = new Set(this.requested(number));
     const removed = [...new Set(reviewerIds)].filter((id) => requested.has(id));
+    const { teams } = this.deps;
     this.deps.git.context.storage.transactionSync(() => {
       for (const id of removed) {
         const [gone] = this.deps.git.context.storage.sql
@@ -398,18 +467,23 @@ export class RepoReviews {
           )
           .toArray();
         this.#count(1);
-        this.#emitRequest(
-          "review_request_removed",
-          number,
-          id,
-          caller.actor,
-          gone?.reviewer_root ?? undefined,
-        );
+        const root = gone?.reviewer_root ?? undefined;
+        const resolutions = teams.addressed(number).has(id)
+          ? []
+          : this.deps.feed.settlements(
+              number,
+              [{ id, root: root ?? id }],
+              caller.actor.principal,
+              "review_request_removed",
+            );
+        this.#emitRequest("review_request_removed", number, id, caller.actor, root, resolutions);
       }
-      if (removed.length > 0)
+      const teamsRemoved = teams.withdraw(number, teamSlugs, caller.actor);
+      if (removed.length > 0 || teamsRemoved.length > 0)
         this.deps.events.auditChange("pull_request.remove_review_request", caller.actor, {
           number,
           reviewers: removed,
+          ...(teamsRemoved.length > 0 && { teams: teamsRemoved.map((r) => r.team.slug) }),
         });
     });
     return { ok: true, pull: pull.pull };
@@ -433,7 +507,12 @@ export class RepoReviews {
    * Emits the review's event; its webhook capture is the review as the API
    * shows it (who dismissed it as a user) and its pull request as it stands.
    */
-  #emit(event: string, review: ReviewRecord, actor: RefActor): void {
+  #emit(
+    event: string,
+    review: ReviewRecord,
+    actor: RefActor,
+    data: Record<string, unknown> | null = null,
+  ): void {
     const { version, ...row } = review;
     this.deps.events.emitEntity(
       `pull_request_review.${event}`,
@@ -444,7 +523,7 @@ export class RepoReviews {
         version,
         row: { ...row, actChain: [...row.actChain] },
       },
-      null,
+      data,
       false,
       () => {
         const shown = reviewOutput(review);
@@ -467,6 +546,8 @@ export class RepoReviews {
     actor: RefActor,
     /** The root identity the reviewer counts as, when known (a user's agent: that user). */
     reviewerRoot?: string,
+    /** Entries settling the request for whom no other request asks (`RepoFeed.settlements`). */
+    resolutions?: readonly unknown[],
   ): void {
     this.deps.events.emitActivity(
       `pull_request.${event}`,
@@ -475,6 +556,7 @@ export class RepoReviews {
         number,
         reviewer,
         ...(reviewerRoot !== undefined && { reviewer_root: reviewerRoot }),
+        ...(resolutions !== undefined && { resolutions }),
       },
       // The pull request as it stands, and the reviewer requested or no longer.
       () => {

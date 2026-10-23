@@ -741,6 +741,34 @@ describe("delivering effects a message names", () => {
     expect([...acrossTransfers.received.keys()]).toEqual([refs[1]]);
   });
 
+  it("delivers a transferred source's effects that stand across transfers, ending its others", async () => {
+    const transferred = await listedRepo();
+    const { sink, received } = recordingSink({
+      plan: (event) =>
+        event.type === "refs.updated"
+          ? [
+              { target: "hook_1", payload: { event: event.type } },
+              { target: "settle_1", payload: { event: event.type }, acrossTransfers: true },
+            ]
+          : [],
+    });
+    const { publish } = recordingPublish();
+    await applyEnvelope(env, envelope(transferred, [pushEvent(transferred, 1)]), {
+      sinks: [sink],
+      publish,
+      now: () => T0,
+    });
+    await env.ORG_READ.prepare("INSERT INTO source_owner (source_id, owner_gen) VALUES (?, 2)")
+      .bind(transferred)
+      .run();
+    const ordinary = idOf(transferred, 1);
+    const standing = `${transferred}:1:1:test_hook:settle_1`;
+    const deps = depsOf([sink], T0, publish);
+    expect(await deliverEffects(deps, "test_hook", [ordinary, standing], budget(T0))).toBe(1);
+    expect([...received.keys()]).toEqual([standing]);
+    expect((await effectRow(ordinary))?.last_error).toBe("invalidated: its source was transferred");
+  });
+
   it("ends effects of a sink this deployment does not have", async () => {
     const repoId = await listedRepo();
     const [id = ""] = await dueEffects(repoId, 1, T0);

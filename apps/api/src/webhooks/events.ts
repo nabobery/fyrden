@@ -249,8 +249,11 @@ export function entityBody(name: WebhookEventName, event: DomainEvent): Row {
   const changes = data.changes === undefined ? {} : { changes: data.changes };
   switch (name.event) {
     case "pull_request":
-      // A review request has no snapshot: the pull request's number and the reviewer.
-      if (row === null) return { number: data.number, requested_reviewer: { id: data.reviewer } };
+      // A review request has no snapshot: the pull request's number and the reviewer or team.
+      if (row === null)
+        return data.team
+          ? { number: data.number, requested_team: data.team }
+          : { number: data.number, requested_reviewer: { id: data.reviewer } };
       return { number: row.number, pull_request: pullOf(row), ...subjectOf(data), ...changes };
     case "issues":
       // Deleted: what its event recorded of it.

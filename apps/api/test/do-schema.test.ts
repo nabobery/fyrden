@@ -24,6 +24,7 @@ import repoV36 from "./fixtures/do-schemas/RepoDO/v36.sql?raw";
 import repoV37 from "./fixtures/do-schemas/RepoDO/v37.sql?raw";
 import repoV38 from "./fixtures/do-schemas/RepoDO/v38.sql?raw";
 import repoV39 from "./fixtures/do-schemas/RepoDO/v39.sql?raw";
+import repoV40 from "./fixtures/do-schemas/RepoDO/v40.sql?raw";
 
 // One fixture per released schema version: an object last migrated by any
 // released build must reach the same schema as a fresh one. The latest
@@ -53,6 +54,7 @@ const fixtures: Record<
       37: repoV37,
       38: repoV38,
       39: repoV39,
+      40: repoV40,
     },
   },
 };
@@ -199,6 +201,58 @@ describe("RepoDO schema", () => {
       { number: 1, participants: 3, next_seq: 6, overflow: 0 },
       { number: 2, participants: 1, next_seq: 2, overflow: 0 },
     ]);
+  });
+
+  it("keeps a v39 object's review requests as asked by someone, each with an id the next ones follow", async () => {
+    const stub = env.REPO.getByName(uniqueId("repo"));
+    const after = await runInDurableObject(stub, async (_, state) => {
+      const sql = state.storage.sql;
+      await state.storage.deleteAll();
+      sql.exec(repoV39);
+      sql.exec(
+        "CREATE TABLE _fyrden_schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)",
+      );
+      sql.exec("INSERT INTO _fyrden_schema_version VALUES (1, 39)");
+      for (const [number, reviewer, root] of [
+        [1, "usr_a", "usr_a"],
+        [1, "agt_b", "usr_c"],
+        [2, "usr_d", null],
+      ] as const)
+        sql.exec(
+          `INSERT INTO review_requests (pr_number, reviewer_id, requested_by, requested_at,
+             reviewer_root) VALUES (?, ?, 'usr_owner', 1000, ?)`,
+          number,
+          reviewer,
+          root,
+        );
+      applyDoMigrations(state.storage, repoSchema);
+      return {
+        requests: sql
+          .exec(
+            `SELECT pr_number, reviewer_id, reviewer_root, requested_by, requested_at, reasons,
+               request_id FROM review_requests ORDER BY pr_number, reviewer_id`,
+          )
+          .toArray(),
+        next: sql.exec<{ n: number }>("SELECT next_id AS n FROM review_request_ids").one().n,
+      };
+    });
+    const asked = (pr: number, reviewer: string, root: string | null) => ({
+      pr_number: pr,
+      reviewer_id: reviewer,
+      reviewer_root: root,
+      requested_by: "usr_owner",
+      requested_at: 1000,
+      reasons: 1,
+      request_id: expect.any(Number),
+    });
+    expect(after.requests).toEqual([
+      asked(1, "agt_b", "usr_c"),
+      asked(1, "usr_a", "usr_a"),
+      asked(2, "usr_d", null),
+    ]);
+    const ids = after.requests.map((r) => r.request_id as number);
+    expect(new Set(ids).size).toBe(3);
+    expect(after.next).toBeGreaterThan(Math.max(...ids));
   });
 
   it("finds a head repository's open pull requests through an index, in number order", async () => {

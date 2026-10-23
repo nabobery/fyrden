@@ -10,8 +10,12 @@ export type ReviewEvent = (typeof REVIEW_EVENTS)[number];
 export const MAX_REVIEW_BODY_LENGTH = 65_536;
 /** The longest dismissal message, in characters. Proposed. */
 export const MAX_DISMISSAL_MESSAGE_LENGTH = 1_024;
-/** Reviewers a pull request may have requested at once. Proposed. */
+/** Reviewers a pull request may have requested at once, a team counting as one. Proposed. */
 export const MAX_REQUESTED_REVIEWERS = 15;
+/** Members a team asked to review may have (each is asked). Proposed. */
+export const MAX_TEAM_REVIEWERS = 2_000;
+/** Members a pull request's requested teams may have in all, counted per team. Proposed. */
+export const MAX_PULL_TEAM_REVIEWERS = 10_000;
 
 export function reviewStateOf(event: ReviewEvent): ReviewState {
   return event === "APPROVE"

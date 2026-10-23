@@ -9,6 +9,7 @@ import {
   rootIdentity,
 } from "@fyrden/domain";
 import { type BlockCache, oidFromHex, oidToHex } from "@fyrden/git-core";
+import type { TeamAudience } from "../OrgDO.js";
 import type { RepoAuthority } from "./authority.js";
 import { type BrowseFailure, RepoBrowse } from "./browse.js";
 import { rawFile } from "./contents.js";
@@ -40,18 +41,26 @@ export type PullChangeRefusal = "repo_not_found" | "repo_transferring" | "access
 
 /**
  * Runs a change of pull requests or reviews for `actor`, as one measured
- * invocation: anything `prepare` reads is worked out first, then, with no
- * await before `change`, whether the repository takes changes and the
- * caller's role now.
+ * invocation: anything `prepare` reads is worked out first, then
+ * everything else the change needs (its feed's), then `last` (when given:
+ * its answer goes to `change`), then, with no await before `change`,
+ * whether the repository takes changes and the caller's role now.
  */
-export type PullChange = <R, P = undefined>(
+export type PullChange = <R, P = undefined, L = undefined>(
   method: string,
   actor: RefActor,
-  change: (caller: PullCaller, prepared: P) => R,
+  change: (caller: PullCaller, prepared: P, last: L) => R,
   prepare?: () => Promise<P>,
   /** Texts the change writes, whose mentions its activity-feed entries name. */
   texts?: readonly (string | null | undefined)[],
+  last?: () => Promise<L>,
 ) => Promise<R | { ok: false; code: PullChangeRefusal }>;
+
+/** Whether a team audience was read with the ACL the repository decides by now. */
+export type AudienceFit = "same" | "older" | "newer" | "unavailable";
+
+/** Times a team request reads its teams again when they were read with another ACL. */
+const AUDIENCE_ATTEMPTS = 3;
 
 /** The largest file a diff comment's anchor is checked against. */
 const ANCHOR_MAX_BYTES = 1024 * 1024;
@@ -100,7 +109,22 @@ export interface DiscussionDeps {
   /** A pull request with whether it merges, as far as that is known now. */
   readonly viewed: (pull: PullRecord) => PullView;
   readonly pullChange: PullChange;
+  /**
+   * The repository's organization's teams `slugs`, as a review request
+   * asks them; `unavailable` when they could not be read.
+   */
+  readonly teamAudience: (slugs: readonly string[]) => Promise<TeamAudience | "unavailable">;
+  /**
+   * Synchronously: how `audience`'s ACL compares with the one the
+   * repository decides by now (`unavailable`: another account's, or none).
+   */
+  readonly audienceFit: (audience: TeamAudience) => AudienceFit;
+  /** The repository decides by `audience`'s ACL or a newer one from now on (pulled when used). */
+  readonly adoptAudience: (audience: TeamAudience) => void;
 }
+
+/** A review request's answer when its teams could not be read with the ACL it decides by. */
+export type AudienceRefusal = "team_audience_unavailable";
 
 export class PullDiscussion {
   constructor(private readonly deps: DiscussionDeps) {}
@@ -172,10 +196,19 @@ export class PullDiscussion {
 
   /**
    * Requests reviews of principals (users and agents, found by the
-   * Worker); each one's access is checked here, an agent's capped by its
-   * owner's, before the change.
+   * Worker) and of teams of the repository's organization (`teamSlugs`);
+   * each principal's access is checked here, an agent's capped by its
+   * owner's, before the change. The teams are read last, with the ACL
+   * their members' access is decided by: when the repository decides by
+   * another one, the newer is taken and the change tried again, a few
+   * times at most.
    */
-  async requestReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
+  async requestReviewers(
+    number: number,
+    reviewerIds: readonly string[],
+    actor: RefActor,
+    teamSlugs: readonly string[] = [],
+  ) {
     const { authority } = this.deps;
     // Whether an attempt read the reviewers being deleted.
     let read = false;
@@ -183,8 +216,14 @@ export class PullDiscussion {
       this.deps.pullChange(
         "requestReviewers",
         actor,
-        (caller, prepared) =>
-          this.#withView(
+        (caller, prepared, read: TeamAudience | "unavailable" | undefined) => {
+          if (read === "unavailable")
+            return { ok: false as const, code: "team_audience_unavailable" as const };
+          const audience = read;
+          const fit = audience && this.deps.audienceFit(audience);
+          if (audience && fit !== "same")
+            return { ok: false as const, code: "audience_stale" as const, audience, fit };
+          return this.#withView(
             this.deps.reviews.request(
               number,
               [...prepared.ceilings].map(([id, owners]) => ({
@@ -194,8 +233,10 @@ export class PullDiscussion {
               })),
               caller,
               prepared.deleted,
+              audience,
             ),
-          ),
+          );
+        },
         async () => {
           const ceilings = new Map<string, string[]>();
           for (const id of new Set(reviewerIds))
@@ -204,22 +245,37 @@ export class PullDiscussion {
           const requested = this.deps.reviews.requested(number);
           const asked = new Set(requested);
           const adding = [...ceilings.keys()].filter((id) => !asked.has(id)).length;
-          read = readDeleted || requested.length + adding > MAX_REQUESTED_REVIEWERS;
+          const teams = this.deps.reviews.requestedTeams(number).length + new Set(teamSlugs).size;
+          read = readDeleted || requested.length + teams + adding > MAX_REQUESTED_REVIEWERS;
           const deleted = read ? await authority.deletedOf(requested) : new Set<string>();
           return { ceilings, deleted };
         },
+        [],
+        teamSlugs.length > 0 ? () => this.deps.teamAudience(teamSlugs) : undefined,
       );
-    const first = await attempt(false);
-    // Others were requested meanwhile, past the limit this one judged by: once more, with the
-    // reviewers being deleted read.
-    if (!first.ok && first.code === "too_many_reviewers" && !read) return attempt(true);
-    return first;
+    for (let tries = 1; ; tries++) {
+      let result = await attempt(false);
+      // Others were requested meanwhile, past the limit this one judged by: once more, with the
+      // reviewers being deleted read.
+      if (!result.ok && result.code === "too_many_reviewers" && !read) result = await attempt(true);
+      if (result.ok || result.code !== "audience_stale")
+        return result as Exclude<typeof result, { code: "audience_stale" }>;
+      if (result.fit === "unavailable" || tries >= AUDIENCE_ATTEMPTS)
+        return { ok: false as const, code: "team_audience_unavailable" as const };
+      // Read with a newer ACL than the repository's: that one is pulled for the next attempt.
+      if (result.fit === "newer") this.deps.adoptAudience(result.audience);
+    }
   }
 
-  /** Withdraws review requests. */
-  removeRequestedReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
+  /** Withdraws review requests, of principals and of teams (by the slugs they were asked by). */
+  removeRequestedReviewers(
+    number: number,
+    reviewerIds: readonly string[],
+    actor: RefActor,
+    teamSlugs: readonly string[] = [],
+  ) {
     return this.deps.pullChange("removeRequestedReviewers", actor, (caller) =>
-      this.#withView(this.deps.reviews.unrequest(number, reviewerIds, caller)),
+      this.#withView(this.deps.reviews.unrequest(number, reviewerIds, caller, teamSlugs)),
     );
   }
 

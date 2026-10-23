@@ -1,5 +1,11 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
-import { type DomainEvent, eventKey, type FeedBlock, type FeedEntry } from "@fyrden/domain";
+import {
+  type DomainEvent,
+  eventKey,
+  type FeedBlock,
+  FeedBlockSchema,
+  type FeedEntry,
+} from "@fyrden/domain";
 import { z } from "zod";
 import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effects/journal.js";
 
@@ -22,6 +28,11 @@ import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effect
  * lost, as the account had them at its ACL version. The event names every
  * repository (a member's removal names those the account held then), and
  * public repositories are left out of every purge: anyone still reads those.
+ *
+ * An event settling review requests carries the entries doing so in its
+ * data (`resolutions`: blocks of at most 100 recipients, all they deliver
+ * in them): an effect each, standing across a transfer of the repository,
+ * since one who still reads it must not find a request open that ended.
  */
 
 /** Principals one purge effect names at most (an event names up to 100 recipients too). */
@@ -177,8 +188,11 @@ async function purgeCalls(effects: readonly Effect[], env: Env): Promise<FeedCal
   });
 }
 
-/** The id of a page's effect (`effectId`: the event key, the sink, the target `page:<n>`). */
-const PAGE_ID = /:feed:page:\d+$/;
+/**
+ * The id of a page's effect or a settlement's (`effectId`: the event key,
+ * the sink, the target `page:<n>` or `res:<n>`): up to 100 calls each.
+ */
+const PAGE_ID = /:feed:(page|res):\d+$/;
 
 export const feedSink: EffectSink = {
   name: "feed",
@@ -187,8 +201,10 @@ export const feedSink: EffectSink = {
   // A page of further recipients (up to 100 calls) alone, so an event's pages go side by side.
   alone: (id: string) => PAGE_ID.test(id),
   inline: true,
-  // A page goes to the queue: an event carrying one has more recipients than an invocation's share.
-  inlineable: (planned: PlannedEffect) => !("page" in planned.payload),
+  // A page goes to the queue: an event carrying one has more recipients than an invocation's share
+  // (so do an event's settlements).
+  inlineable: (planned: PlannedEffect) =>
+    !("page" in planned.payload) && planned.acrossTransfers !== true,
 
   plan(event: DomainEvent): readonly PlannedEffect[] {
     if (event.type === "access.revoked") {
@@ -220,7 +236,8 @@ export const feedSink: EffectSink = {
     // A block's further pages (`pages`) are read and delivered by later versions; this one
     // delivers the recipients the event carries, so it is no version to go back to once
     // events with pages are made.
-    if (!event.feed || event.feed.audience.length === 0) return [];
+    const settling = settlementsOf(event);
+    if (!event.feed || event.feed.audience.length === 0) return settling;
     const about = {
       repoId: event.id.sourceId,
       eventKey: eventKey(event.id),
@@ -244,6 +261,7 @@ export const feedSink: EffectSink = {
               feed,
             } satisfies PlannedPage,
           }))),
+      ...settling,
     ];
   },
 
@@ -271,6 +289,34 @@ export const feedSink: EffectSink = {
     return payload.feed.audience.length;
   },
 };
+
+/**
+ * The effects of an event's settlements (`data.resolutions`), one a block,
+ * each standing across a transfer. A block that is not one (a stored
+ * event whose data is gone, or any other shape) is no effect.
+ */
+function settlementsOf(event: DomainEvent): PlannedEffect[] {
+  const blocks = event.data?.resolutions;
+  if (!Array.isArray(blocks)) return [];
+  const about = {
+    repoId: event.id.sourceId,
+    eventKey: eventKey(event.id),
+    occurredAt: event.at,
+    actor: event.actor,
+    epochGen: event.id.epochGen,
+  };
+  return blocks.flatMap((block, i) => {
+    const parsed = FeedBlockSchema.safeParse(block);
+    if (!parsed.success || parsed.data.audience.length === 0) return [];
+    return [
+      {
+        target: `res:${i + 1}`,
+        payload: { ...about, feed: parsed.data } satisfies PlannedFeed,
+        acrossTransfers: true,
+      },
+    ];
+  });
+}
 
 /**
  * The effects' calls to feeds, several under way at once. An effect is delivered when

@@ -1164,4 +1164,60 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX webhook_blobs_retain ON webhook_blobs (retain_until);
     `,
   },
+  {
+    version: 40,
+    // Reviews asked of teams. Every request takes an id never used again
+    // (`review_request_ids`; a principal's too, existing ones numbered
+    // here) and its reasons (bit 1: someone asked; existing ones were).
+    // A team's request (`review_team_requests`) keeps the team as it was
+    // asked (stable id, slug and name), the ownership generation it was
+    // asked under (another owner's are no one's) and how many members it
+    // asked; its members as they were then (`review_request_audiences`,
+    // pages of ids) until it ends or its pull request merges.
+    // `review_team_epochs`: the account's restore generation
+    // its team requests were last checked against, and the one seen since,
+    // for the ownership they were seen under.
+    name: "review_team_requests",
+    sql: `
+      ALTER TABLE review_requests ADD COLUMN reasons INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE review_requests ADD COLUMN request_id INTEGER;
+      UPDATE review_requests SET request_id = rowid;
+      CREATE UNIQUE INDEX review_requests_id ON review_requests (request_id);
+      CREATE TABLE review_request_ids (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        next_id INTEGER NOT NULL
+      ) STRICT;
+      INSERT INTO review_request_ids (id, next_id)
+        SELECT 1, coalesce(max(request_id), 0) + 1 FROM review_requests;
+      CREATE TABLE review_team_requests (
+        request_id INTEGER PRIMARY KEY,
+        pr_number INTEGER NOT NULL,
+        team_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        name TEXT NOT NULL,
+        reasons INTEGER NOT NULL DEFAULT 1,
+        owner_gen INTEGER NOT NULL,
+        members INTEGER NOT NULL,
+        audience INTEGER NOT NULL CHECK (audience IN (0, 1)),
+        requested_by TEXT NOT NULL,
+        requested_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX review_team_requests_pr ON review_team_requests (pr_number, owner_gen);
+      CREATE INDEX review_team_requests_owner ON review_team_requests (owner_gen);
+      CREATE TABLE review_request_audiences (
+        request_id INTEGER NOT NULL,
+        page INTEGER NOT NULL CHECK (page >= 1),
+        members TEXT NOT NULL,
+        PRIMARY KEY (request_id, page)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE review_team_epochs (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        account_id TEXT NOT NULL,
+        owner_gen INTEGER NOT NULL,
+        observed INTEGER NOT NULL,
+        reconciled INTEGER,
+        cursor INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+    `,
+  },
 ];

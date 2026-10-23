@@ -13,7 +13,11 @@ import type {
   updatePull,
   updatePullBranch,
 } from "@fyrden/api-contract";
-import { MAX_REQUESTED_REVIEWERS } from "@fyrden/domain";
+import {
+  MAX_PULL_TEAM_REVIEWERS,
+  MAX_REQUESTED_REVIEWERS,
+  MAX_TEAM_REVIEWERS,
+} from "@fyrden/domain";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, decodeCursor, encodeBytesCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
@@ -146,7 +150,25 @@ export function failure(entry: RepoEntry, code: string, number?: number): Operat
       return new OperationError(
         422,
         "too_many_reviewers",
-        `A pull request may have at most ${MAX_REQUESTED_REVIEWERS} reviews requested at once.`,
+        `A pull request may have at most ${MAX_REQUESTED_REVIEWERS} reviews requested at once, a team counting as one.`,
+      );
+    case "team_not_found":
+      return new OperationError(
+        422,
+        "team_not_found",
+        "A team named is not one of the repository's organization's teams that can read it.",
+      );
+    case "team_too_large":
+      return new OperationError(
+        422,
+        "team_too_large",
+        `A team may be asked with at most ${MAX_TEAM_REVIEWERS} members, and a pull request's teams with ${MAX_PULL_TEAM_REVIEWERS} in all.`,
+      );
+    case "team_audience_unavailable":
+      return new OperationError(
+        409,
+        "team_audience_unavailable",
+        "The teams' members could not be read just now; try again.",
       );
     case "locked":
       return new OperationError(

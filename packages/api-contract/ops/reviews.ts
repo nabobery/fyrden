@@ -2,12 +2,15 @@ import {
   HANDLE_SHAPE,
   MAX_DISMISSAL_MESSAGE_LENGTH,
   MAX_HANDLE_LENGTH,
+  MAX_PULL_TEAM_REVIEWERS,
   MAX_REQUESTED_REVIEWERS,
   MAX_REVIEW_BODY_LENGTH,
+  MAX_TEAM_REVIEWERS,
   REVIEW_EVENTS,
 } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
+import { TeamSlug } from "./access.js";
 import { PullRequest } from "./pulls.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 
@@ -48,16 +51,28 @@ export const Review = z.object({
 });
 
 const Reviewer = z.object({ id: z.string(), login: z.string() });
+const RequestedTeam = z
+  .object({
+    id: z.string().describe("The team's id (it keeps it when renamed)."),
+    slug: z.string(),
+    name: z.string(),
+  })
+  .describe("A team as it was when asked (Fyrden shows these fields only).");
 const Logins = z
   .array(z.string().min(1).max(MAX_HANDLE_LENGTH).regex(HANDLE_SHAPE))
-  .min(1)
   .max(MAX_REQUESTED_REVIEWERS)
-  .describe("Handles of users and agents who can read the repository.");
-const NoTeams = z
-  .array(z.never())
-  .max(0)
   .optional()
-  .describe("Team reviewers are not supported yet: empty or left out.");
+  .describe("Handles of users and agents who can read the repository.");
+const TeamSlugs = z
+  .array(TeamSlug)
+  .max(MAX_REQUESTED_REVIEWERS)
+  .optional()
+  .describe("Slugs of teams of the repository's organization.");
+/** Someone to ask or withdraw: a reviewer or a team. */
+const someone = (input: {
+  reviewers?: string[] | undefined;
+  team_reviewers?: string[] | undefined;
+}) => (input.reviewers?.length ?? 0) + (input.team_reviewers?.length ?? 0) > 0;
 
 export const listReviews = defineOperation({
   id: "pulls.reviews.list",
@@ -168,9 +183,10 @@ export const listRequestedReviewers = defineOperation({
   method: "GET",
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers",
   summary: "List requested reviewers",
-  description: "Who a review of the pull request is requested of and has not reviewed yet.",
+  description:
+    "Who a review of the pull request is requested of and has not reviewed yet: users and agents, and teams (a team's request ends when one of the members it asked reviews).",
   input: z.object(PullInput),
-  output: z.object({ users: z.array(Reviewer), teams: z.array(z.never()) }),
+  output: z.object({ users: z.array(Reviewer), teams: z.array(RequestedTeam) }),
   permission: "pull_requests:read",
   principals: ["user", "agent"],
   rateLimit: "read",
@@ -183,8 +199,16 @@ export const requestReviewers = defineOperation({
   method: "POST",
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers",
   summary: "Request reviewers",
-  description: `Requests a review of users or agents who can read the repository (not the author). The author may request reviews; on someone else's pull request it needs triage access. At most ${MAX_REQUESTED_REVIEWERS} at once; a request ends when that reviewer submits a review. Past the limit, requests of users or agents being deleted give up their places first, with no event.`,
-  input: z.object({ ...PullInput, reviewers: Logins, team_reviewers: NoTeams }),
+  description: `Requests a review of users or agents who can read the repository (not the author), and of teams of the repository's organization. A team asks each member it has now (the author aside), at most ${MAX_TEAM_REVIEWERS}, and keeps those members: one of them reviewing ends its request; someone who joins the team later does not. The author may request reviews; on someone else's pull request it needs triage access. At most ${MAX_REQUESTED_REVIEWERS} at once, a team counting as one, and ${MAX_PULL_TEAM_REVIEWERS} members across a pull request's teams; a request ends when its reviewer submits a review. Past the limit, requests of users or agents being deleted give up their places first, with no event.`,
+  input: z
+    .object({ ...PullInput, reviewers: Logins, team_reviewers: TeamSlugs })
+    .refine(someone, { message: "Name a reviewer or a team." })
+    .refine(
+      (input) =>
+        (input.reviewers?.length ?? 0) + (input.team_reviewers?.length ?? 0) <=
+        MAX_REQUESTED_REVIEWERS,
+      { message: `At most ${MAX_REQUESTED_REVIEWERS} reviewers and teams together.` },
+    ),
   output: PullRequest,
   permission: "pull_requests:write",
   principals: ["user", "agent"],
@@ -194,7 +218,7 @@ export const requestReviewers = defineOperation({
   mcp: {
     tool: "request_reviewers",
     title: "Request reviewers",
-    description: `Ask users or agents who can read the repository to review an open pull request (not its author; at most ${MAX_REQUESTED_REVIEWERS} at once; past that, requests of users or agents being deleted give up their places first, with no event). The author may ask; on someone else's pull request it needs triage access.`,
+    description: `Ask users or agents who can read the repository, or teams of its organization (by slug: each member the team has now is asked), to review an open pull request (not its author; at most ${MAX_REQUESTED_REVIEWERS} at once, a team counting as one; past that, requests of users or agents being deleted give up their places first, with no event). The author may ask; on someone else's pull request it needs triage access.`,
     readOnly: false,
   },
 });
@@ -204,8 +228,11 @@ export const removeRequestedReviewers = defineOperation({
   method: "DELETE",
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers",
   summary: "Remove requested reviewers",
-  description: "Withdraws review requests; reviewers not requested are ignored.",
-  input: z.object({ ...PullInput, reviewers: Logins, team_reviewers: NoTeams }),
+  description:
+    "Withdraws review requests of users, agents and teams; ones not requested are ignored. Fyrden takes teams alone too (GitHub needs `reviewers`).",
+  input: z
+    .object({ ...PullInput, reviewers: Logins, team_reviewers: TeamSlugs })
+    .refine(someone, { message: "Name a reviewer or a team." }),
   output: PullRequest,
   permission: "pull_requests:write",
   principals: ["user", "agent"],
@@ -214,7 +241,7 @@ export const removeRequestedReviewers = defineOperation({
   mcp: {
     tool: "remove_requested_reviewers",
     title: "Remove requested reviewers",
-    description: "Withdraw review requests from a pull request.",
+    description: "Withdraw review requests of users, agents or teams from a pull request.",
     readOnly: false,
   },
 });
