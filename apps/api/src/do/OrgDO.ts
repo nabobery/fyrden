@@ -150,6 +150,18 @@ export interface AclSnapshot {
   readonly roles: Readonly<Record<string, RepoRole>>;
 }
 
+/** Principals' current roles on one repository, confirmed at one ACL version (see `confirmRoles`). */
+export interface RoleConfirmation {
+  readonly accountId: string;
+  readonly epochGen: number;
+  readonly version: number;
+  /** Principal id → role, null for none. */
+  readonly roles: Readonly<Record<string, RepoRole | null>>;
+}
+
+/** Most principals one confirmation reads (a merge's 512 reviewers and their owners). Proposed. */
+export const MAX_CONFIRMED_PRINCIPALS = 1_024;
+
 /** The role members of an organization get on its repositories (GitHub's default; not configurable yet). */
 export const BASE_ROLE: RepoRole = "read";
 
@@ -372,6 +384,28 @@ export class OrgDO extends MigratingDO {
       epochGen: meta.epoch_gen,
       version: meta.acl_version,
       roles: Object.fromEntries(this.#rolesFor(repoId, meta)),
+    };
+  }
+
+  /**
+   * Each of `principals`' strongest role on repository `repoId` now (null
+   * for none), as `snapshotFor` gives it, at the account's current ACL
+   * version and restore generation: read after the epoch check, all with
+   * no await between them, so a merge's confirmation of its reviewers is
+   * one linearized read here. At most `MAX_CONFIRMED_PRINCIPALS`.
+   */
+  async confirmRoles(repoId: string, principals: readonly string[]): Promise<RoleConfirmation> {
+    const unique = [...new Set(principals)];
+    if (unique.length > MAX_CONFIRMED_PRINCIPALS)
+      throw new Error(`more than ${MAX_CONFIRMED_PRINCIPALS} principals to confirm`);
+    await this.#checkEpoch();
+    const meta = this.#meta();
+    if (!meta) return { accountId: "", epochGen: 0, version: 0, roles: {} };
+    return {
+      accountId: meta.account_id,
+      epochGen: meta.epoch_gen,
+      version: meta.acl_version,
+      roles: Object.fromEntries(unique.map((p) => [p, this.#roleOn(repoId, p, meta)])),
     };
   }
 

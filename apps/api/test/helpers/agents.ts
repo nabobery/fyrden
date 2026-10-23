@@ -32,6 +32,7 @@ export async function agentFor(owner: Who, scopes: string[], repositories?: stri
   expect(res.status).toBe(200);
   return {
     id: agent.body.id,
+    handle: agent.body.handle,
     grantId: granted.body.id,
     own: own.body.token,
     delegated: (await res.json<{ access_token: string }>()).access_token,

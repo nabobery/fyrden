@@ -101,7 +101,7 @@ import {
 } from "./base/audit-archiver.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
-import type { AclSnapshot, TeamAudience } from "./OrgDO.js";
+import type { AclSnapshot, RoleConfirmation, TeamAudience } from "./OrgDO.js";
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { RepoAdministration, type RepoDetails, type RulesetChange } from "./repo/administration.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
@@ -193,6 +193,11 @@ import { REBASE_POLICY, type RebasePolicy } from "./repo/rebase-replay.js";
 import { RebaseSagas } from "./repo/rebase-saga.js";
 import { type IncomingReferences, RepoReferences } from "./repo/references.js";
 import { RepoReviewComments } from "./repo/review-comments.js";
+import {
+  MERGE_CONFIRM_POLICY,
+  type MergeConfirmPolicy,
+  ReviewerConfirmations,
+} from "./repo/reviewer-confirmation.js";
 import { RepoReviews } from "./repo/reviews.js";
 import { RepoRulesets, type RuleSuite, type RulesetRecord } from "./repo/rulesets.js";
 import { StorageCharges } from "./repo/storage-charges.js";
@@ -304,6 +309,12 @@ export class RepoDO extends MigratingDO {
 
   /** Pulls the account's ACL snapshot for this repository. Tests may replace it. */
   pullAcl: (accountId: string) => Promise<AclSnapshot>;
+
+  /** The organization's confirmation of principals' roles here, at a merge. Tests may replace it. */
+  confirmRoles: (accountId: string, principals: readonly string[]) => Promise<RoleConfirmation>;
+
+  /** Limits of a merge's confirmation of its reviewers. Tests may replace them. */
+  mergeConfirmPolicy: MergeConfirmPolicy = MERGE_CONFIRM_POLICY;
 
   /** Where audit records are archived. Tests may replace it. */
   auditBucket: Pick<R2Bucket, "put">;
@@ -519,9 +530,16 @@ export class RepoDO extends MigratingDO {
     this.events.routeFeed((type, actor, data, row, event) =>
       this.feed.blockFor(type, actor, data, row, event),
     );
+    const reviewers = new ReviewerConfirmations({
+      acl: () => this.acl,
+      account: () => this.events.account(),
+      confirmRoles: (accountId, principals) => this.confirmRoles(accountId, principals),
+      policy: () => this.mergeConfirmPolicy,
+    });
     this.rebases = new RebaseSagas(
       {
         writeDeps: () => this.#writeDeps(),
+        reviewers,
         pulls: this.pulls,
         repoId: () => this.#repoId(),
         standing: (number, pull, method, upToDate) =>
@@ -592,6 +610,10 @@ export class RepoDO extends MigratingDO {
     this.pullAcl = async (accountId) => {
       this.git.context.metrics.count("do.request", { class: "OrgDO", method: "snapshotFor" });
       return env.ORG.getByName(accountId).snapshotFor(this.#repoId());
+    };
+    this.confirmRoles = async (accountId, principals) => {
+      this.git.context.metrics.count("do.request", { class: "OrgDO", method: "confirmRoles" });
+      return env.ORG.getByName(accountId).confirmRoles(this.#repoId(), principals);
     };
     this.acl = new RepoAcl({
       storage: ctx.storage,
@@ -720,6 +742,7 @@ export class RepoDO extends MigratingDO {
       feed: this.feed,
       mergePolicy: () => this.mergePolicy,
       rebasePolicy: () => this.rebasePolicy,
+      reviewers,
       hooks: () => this.mergeHooks,
     });
     this.#headWrites = new HeadBranchWrites({

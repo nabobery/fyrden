@@ -59,6 +59,8 @@ export interface ApprovalSettings {
 export interface ApprovalOutcome {
   /** Distinct roots whose standing review approves. */
   readonly approvals: number;
+  /** Those roots, sorted: whose access a merge's confirmation asks about. */
+  readonly approvers: readonly string[];
   /** Roots whose standing review requests changes. */
   readonly changesRequested: readonly string[];
   /**
@@ -112,6 +114,7 @@ export function evaluateApprovals(
     reasons.push("the last push must be approved by someone other than its pusher");
   return {
     approvals: approving.length,
+    approvers: approving.map((r) => r.reviewerRoot).sort(),
     changesRequested,
     lastPushApproved,
     satisfied: reasons.length === 0,

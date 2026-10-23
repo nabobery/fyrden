@@ -83,6 +83,8 @@ export interface MergeStamps {
 /** The pull request's merge context and stamps, as `mergePull` works them out. */
 export interface MergeStanding {
   readonly merge: MergeContext;
+  /** Each eligible reviewer's root → the owners capping it (an agent's owner), for its confirmation. */
+  readonly ceilings: ReadonlyMap<string, readonly string[]>;
   /** The stamps now (called again in the commit's transaction). */
   readonly stamps: () => MergeStamps;
 }
@@ -181,6 +183,7 @@ export class PullDiscussion {
     };
     return {
       merge,
+      ceilings: new Map([...reviewerOwners].filter(([root]) => eligibleRoots.has(root))),
       asRead: {
         reviews: standing.stamp,
         threads: threadsThen,

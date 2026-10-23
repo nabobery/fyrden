@@ -56,6 +56,28 @@ describe("evaluateApprovals", () => {
     expect(outcome.reasons).toEqual(["2 approving reviews are required (1 given)"]);
   });
 
+  it("names the people whose approvals it counts, sorted, and only them", () => {
+    const outcome = evaluateApprovals(
+      input(
+        [
+          review("author", "APPROVED"),
+          review("carol", "APPROVED", { commitSha: OLD }),
+          review("dave", "APPROVED"),
+          review("bob", "APPROVED", { byAgent: true }),
+          review("eve", "APPROVED"),
+          review("eve", "CHANGES_REQUESTED"),
+          review("alice", "APPROVED"),
+          review("frank", "APPROVED"),
+        ],
+        { eligibleRoots: new Set(["author", "alice", "bob", "carol", "eve", "frank"]) },
+      ),
+      settings({ dismissStale: true }),
+    );
+    // Not the author's, a stale one, one without write access, an agent's, nor one replaced.
+    expect(outcome.approvers).toEqual(["alice", "frank"]);
+    expect(outcome.approvals).toBe(2);
+  });
+
   it("takes each person's latest review: approve then request changes blocks, and back again", () => {
     const blocked = evaluateApprovals(
       input([

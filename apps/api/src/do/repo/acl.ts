@@ -179,6 +179,15 @@ export class RepoAcl {
   }
 
   /**
+   * Whether `(epochGen, version)` of account `accountId` is older than one
+   * the repository has seen (its floor): an answer from it is stale.
+   */
+  isBelowFloor(accountId: string, epochGen: number, version: number): boolean {
+    const row = this.#row(accountId);
+    return row !== undefined && below(epochGen, version, row.floor_epoch, row.floor_version);
+  }
+
+  /**
    * The repository moved to another account: the old account's snapshot
    * and version floor mean nothing there; the next decision pulls afresh.
    */

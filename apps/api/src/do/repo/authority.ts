@@ -20,6 +20,7 @@ import type { RepoAcl } from "./acl.js";
 import { BROWSE_POLICY } from "./browse.js";
 import {
   checkPushRules,
+  countedApprovals,
   hasPrecheckRules,
   precheckPushRules,
   type RuleSnapshot,
@@ -304,6 +305,8 @@ export class RepoAuthority {
         }
         this.deps.rulesets().recordEvaluated(input.uploadId, input.principal, checked.evaluated);
         const { refusals } = checked;
+        // A merge is one update: the approvals its rules count, from this same snapshot.
+        const merged = input.merge && input.commands[0]?.name;
         return {
           stamp,
           restamp: () => this.#ruleSnapshot(input.principal, ceilings).stamp,
@@ -311,6 +314,16 @@ export class RepoAuthority {
             snapshot.role !== null &&
             REPO_ROLES.indexOf(snapshot.role) >= REPO_ROLES.indexOf("write"),
           refusals,
+          ...(input.merge &&
+            merged && {
+              approvals: countedApprovals(snapshot, {
+                principal: input.principal,
+                delegated: input.grantId !== null,
+                ref: merged,
+                head: input.head,
+                merge: input.merge,
+              }),
+            }),
         };
       },
     };

@@ -1,9 +1,11 @@
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import {
   applicableRules,
+  evaluateApprovals,
   type MergeContext,
   PRECHECK_RULES,
   principalTypeOf,
+  pullRequestParameters,
   type RepoRole,
   type RuleActor,
   type Ruleset,
@@ -156,6 +158,62 @@ export function precheckPushRules(
     if (found.length > 0) refusals.set(cmd.index, refusalOf(found));
   }
   return refusals;
+}
+
+/**
+ * The approvals a merge's rules count, and how to judge them again: for
+ * the merger, the active rulesets' `pull_request` rules that apply to `ref`
+ * (actor types and bypasses honoured) and read approvals (some required,
+ * or one after the last push), the roots each counts as approving under
+ * its own settings; `recheck` judges the merge's rules again, from the
+ * same snapshot and with no await, as if `revoked` had no write access.
+ */
+export function countedApprovals(
+  snapshot: RuleSnapshot,
+  input: {
+    readonly principal: string;
+    readonly delegated: boolean;
+    readonly ref: string;
+    readonly head: string | undefined;
+    readonly merge: MergeContext;
+  },
+): {
+  readonly approvers: readonly string[];
+  readonly recheck: (revoked: ReadonlySet<string>) => string | undefined;
+} {
+  const rulesets = snapshot.rulesets.filter((r) => r.enforcement === "active");
+  const actor = actorOf(snapshot, input.principal, input.delegated);
+  const branches = defaultBranches(snapshot.head, input.head);
+  const approvers = new Set<string>();
+  for (const branch of branches)
+    for (const { rule } of applicableRules(rulesets, input.ref, actor, branch)) {
+      if (rule.type !== "pull_request") continue;
+      const p = pullRequestParameters(rule);
+      if (p.required_approving_review_count === 0 && !p.require_last_push_approval) continue;
+      const outcome = evaluateApprovals(input.merge.approvals, {
+        required: p.required_approving_review_count,
+        dismissStale: p.dismiss_stale_reviews_on_push,
+        requireLastPushApproval: p.require_last_push_approval,
+        allowAgentApprovals: p.allow_agent_approvals,
+      });
+      for (const root of outcome.approvers) approvers.add(root);
+    }
+  return {
+    approvers: [...approvers].sort(),
+    recheck: (revoked) => {
+      const { approvals } = input.merge;
+      const eligibleRoots = new Set([...approvals.eligibleRoots].filter((r) => !revoked.has(r)));
+      const merge = { ...input.merge, approvals: { ...approvals, eligibleRoots } };
+      const found = blocking(
+        rulesets,
+        { ref: input.ref, kind: "update", pullRequest: merge },
+        actor,
+        branches,
+        "precheck",
+      );
+      return found.length === 0 ? undefined : refusalOf(found);
+    },
+  };
 }
 
 /** What an `evaluate` ruleset would have refused of one ref update. */
