@@ -479,6 +479,109 @@ describe("code owners of a pull request", () => {
     expect(streak).toEqual([0]);
   });
 
+  it("work one heavy slice an alarm (a large file parsed)", async () => {
+    // A file of 64 KiB or more makes every slice heavy: each ends its invocation.
+    await commit("main", { CODEOWNERS: `# ${"x".repeat(70_000)}\n* @me\n` });
+    await branchAt("feature", await commit("main", { "a.txt": "a\n" }));
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 5; i++) files[`f${i}.txt`] = `${i}\n`;
+    await commit("feature", files);
+    await open();
+    await runJobs();
+    await inRepo(stub(), (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      for (const table of ["code_owner_rules", "code_owner_evaluations", "code_owner_pointers"])
+        sql.exec(`DELETE FROM ${table}`);
+      r.codeOwners.limits = { ...r.codeOwners.limits, sliceChanges: 1 };
+      r.codeOwners.stale(1, true);
+    });
+    const slicesAfter = async () =>
+      inRepo(stub(), (r: RepoDO) => {
+        const row = r.git.context.storage.sql
+          .exec<{ totals: string | null }>("SELECT totals FROM code_owner_evaluations")
+          .toArray()[0];
+        return row?.totals ? (JSON.parse(row.totals) as { slices: number }).slices : 0;
+      });
+    await inRepo(stub(), (r: RepoDO) => r.alarm());
+    expect(await slicesAfter()).toBe(1);
+    await inRepo(stub(), (r: RepoDO) => r.alarm());
+    expect(await slicesAfter()).toBe(2);
+  });
+
+  it("end the invocation after a slice that made no progress (a budget spent), not repeat it", async () => {
+    await commit("main", { CODEOWNERS: "* @me\n" });
+    await branchAt("feature", await commit("main", { "a.txt": "a\n" }));
+    await commit("feature", { "d/a.txt": "b\n" });
+    await open();
+    await runJobs();
+    await inRepo(stub(), (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      for (const table of ["code_owner_rules", "code_owner_evaluations", "code_owner_pointers"])
+        sql.exec(`DELETE FROM ${table}`);
+      // Too few entries a slice to read past the root: every slice stops with no progress.
+      r.codeOwners.limits = { ...r.codeOwners.limits, sliceScanned: 1 };
+      r.codeOwners.stale(1, true);
+    });
+    await inRepo(stub(), (r: RepoDO) => r.alarm());
+    const stalled = await inRepo(stub(), (r: RepoDO) => {
+      const row = r.git.context.storage.sql
+        .exec<{ totals: string | null; state: string }>(
+          "SELECT totals, state FROM code_owner_evaluations",
+        )
+        .one();
+      return {
+        state: row.state,
+        stalled: (JSON.parse(row.totals ?? "{}") as { stalled?: number }).stalled,
+      };
+    });
+    // One such slice an alarm: three would have ended it stuck in this one.
+    expect(stalled).toEqual({ state: "pending", stalled: 1 });
+  });
+
+  it("end the invocation after a slice whose matcher spent all its steps, even on its first path", async () => {
+    await commit("main", { CODEOWNERS: "* @me\n" });
+    const base = await commit("main", { "a.txt": "a\n" });
+    await branchAt("feature", base);
+    await branchAt("other", base);
+    await commit("feature", { "a.txt": "b\n" });
+    await commit("other", { "a.txt": "c\n" });
+    await open();
+    await open({ head: "other" });
+    await runJobs();
+    await inRepo(stub(), (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      for (const table of ["code_owner_rules", "code_owner_evaluations", "code_owner_pointers"])
+        sql.exec(`DELETE FROM ${table}`);
+      // Too few steps a slice to decide even one path.
+      r.codeOwners.limits = { ...r.codeOwners.limits, sliceSteps: 2 };
+      r.codeOwners.stale(1, true);
+      r.codeOwners.stale(2, true);
+    });
+    await inRepo(stub(), (r: RepoDO) => r.alarm());
+    // The first ends `too_large` (path); its slice spent its steps, so the second waits.
+    expect((await ownersOf(1)).state).toBe("too_large");
+    expect(await rows("code_owner_pointers")).toBe(1);
+  });
+
+  it("run light slices together in one alarm (a small file, a few changes)", async () => {
+    await commit("main", { CODEOWNERS: "* @me\n" });
+    await branchAt("feature", await commit("main", { "a.txt": "a\n" }));
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 5; i++) files[`f${i}.txt`] = `${i}\n`;
+    await commit("feature", files);
+    await open();
+    await runJobs();
+    await inRepo(stub(), (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      for (const table of ["code_owner_rules", "code_owner_evaluations", "code_owner_pointers"])
+        sql.exec(`DELETE FROM ${table}`);
+      r.codeOwners.limits = { ...r.codeOwners.limits, sliceChanges: 1 };
+      r.codeOwners.stale(1, true);
+    });
+    await inRepo(stub(), (r: RepoDO) => r.alarm());
+    expect((await ownersOf()).state).toBe("complete");
+  });
+
   it("never take a cursor for a result made after its own was pruned", async () => {
     await commit("main", { CODEOWNERS: "* @a\n*.md @b\n" });
     await branchAt("feature", await commit("main", { "a.txt": "a\n" }));

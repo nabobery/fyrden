@@ -367,6 +367,7 @@ export {
   ObjectReader,
   type ObjectReaderOptions,
   type ReaderLimits,
+  ReaderWorkSpent,
   type StoredObject,
   type WalkedObject,
 } from "./reader/object-reader.js";
