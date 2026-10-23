@@ -144,6 +144,21 @@ const fatal = (message: string, sideband: boolean): PushProgress => ({
 
 type Planned = NonNullable<PushRecord["planned"]>;
 
+/** A merge's reviewers' access could not be confirmed (see `PushLogMeta.confirm`). */
+export const AUTHORIZATION_UNAVAILABLE =
+  "the reviewers' access could not be confirmed; try the merge again";
+
+/** What a merge's confirmation of the reviewers its approvals count learned (see `PushLogMeta.confirm`). */
+export interface ApprovalConfirmation {
+  /**
+   * In the commit's transaction: a refusal when the answer no longer binds
+   * the repository, or the roots asked about that no longer have write access.
+   */
+  readonly revoked: () => string | ReadonlySet<string>;
+  /** After the commit attempt, committed or not. */
+  readonly settle: () => void;
+}
+
 export interface PushLogMeta {
   readonly requestId?: string;
   readonly repoId?: string;
@@ -161,6 +176,13 @@ export interface PushLogMeta {
   readonly merge?: MergeContext;
   /** A last refusal of the caller's, checked in the commit's transaction after the push's own. */
   readonly fence?: () => string | undefined;
+  /**
+   * A merge's confirmation of the roots its rules count approvals of, by
+   * whoever decides their access: the last await before the commit (after
+   * the rule check). In the commit's transaction the rules are judged again
+   * with the roots it confirms; a throw refuses the commit.
+   */
+  readonly confirm?: (approvers: readonly string[]) => Promise<ApprovalConfirmation>;
   /** How the change is made, for the reflog (a pull request's merge: `merge`). */
   readonly via?: RefActor["via"];
   /**
@@ -220,6 +242,14 @@ export class RepoPush {
           restamp: () => string;
           writable: boolean;
           refusals: ReadonlyMap<number, string>;
+          /**
+           * A merge's: the roots its rules count approvals of, and its rules
+           * judged again (with no await) as if `revoked` could not write.
+           */
+          approvals?: {
+            readonly approvers: readonly string[];
+            readonly recheck: (revoked: ReadonlySet<string>) => string | undefined;
+          };
         }>;
       }
     | undefined;
@@ -526,8 +556,19 @@ export class RepoPush {
     const committed: CommittedTransaction[] = [];
     const merged: TailMergeOutcome[] = [];
     let rulesStamp:
-      | { readonly stamp: string; readonly restamp: () => string; readonly writable: boolean }
+      | Pick<
+          Awaited<ReturnType<NonNullable<RepoPush["rules"]>["check"]>>,
+          "stamp" | "restamp" | "writable" | "approvals"
+        >
       | undefined;
+    // The merge's confirmation of its approvers: what it learned, or why it failed.
+    let confirmed: ApprovalConfirmation | string | undefined;
+    const confirmedRefusal = (): string | undefined => {
+      if (confirmed === undefined || typeof confirmed === "string") return confirmed;
+      const revoked = confirmed.revoked();
+      if (typeof revoked === "string") return revoked;
+      return revoked.size === 0 ? undefined : rulesStamp?.approvals?.recheck(revoked);
+    };
     const rules = this.rules;
     const outcome = await this.git.locks.withLock(
       LOCK_REF_COMMIT,
@@ -582,7 +623,8 @@ export class RepoPush {
                   : rulesStamp.restamp() !== rulesStamp.stamp
                     ? RULESETS_CHANGED
                     : undefined) ??
-              meta.fence?.(),
+              meta.fence?.() ??
+              confirmedRefusal(),
             // In the commit's transaction: the account is owed its confirmation (told after,
             // or later should that fail), and the caller's own writes.
             () => {
@@ -591,11 +633,22 @@ export class RepoPush {
             },
             meta.via,
             meta.maintainerFor,
+            async () => {
+              const approvers = rulesStamp?.approvals?.approvers ?? [];
+              if (!meta.confirm || approvers.length === 0) return;
+              try {
+                confirmed = await meta.confirm(approvers);
+              } catch {
+                confirmed = AUTHORIZATION_UNAVAILABLE;
+              }
+            },
           ),
         });
         return { plan, indexed, result };
       },
     );
+    // Newer access it learned decides from now on, whether it committed or not.
+    if (typeof confirmed === "object") confirmed.settle();
     if (!outcome.ok) {
       if (!meta.yields?.()) await this.#discard(uploadId);
       return encodeFatalError(PUSH_BUSY, sideband);

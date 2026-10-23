@@ -25,6 +25,7 @@ import {
   type Replayed,
   replayCommits,
 } from "./rebase-replay.js";
+import type { ReviewerConfirmations } from "./reviewer-confirmation.js";
 
 /*
  * Rebase merges, as sagas. A rebase replays each of the pull request's
@@ -64,6 +65,8 @@ export interface RebaseDeps {
     method: "rebase",
     upToDate: boolean,
   ) => Promise<MergeStanding>;
+  /** Confirms, at the commit, the reviewers whose approvals the merge counts. */
+  readonly reviewers: ReviewerConfirmations;
   /** Internal-service calls the invocation has made so far. */
   readonly internalCalls: () => number;
   /** After a commit: what the object does after any commit it makes (outbox, audit). */
@@ -474,6 +477,8 @@ export class RebaseSagas {
       return this.#later(row, this.policy.waitMs);
     const pull = JSON.parse(row.pull_json) as PullRecord;
     const standing = await this.deps.standing(number, pull, "rebase", row.up_to_date === 1);
+    // Bound, with no await since, to the ownership the reviewers were just judged under.
+    const confirm = this.deps.reviewers.for(standing.ceilings);
     const decision = await reauthorizeByToken(writeDeps.db, writer, writeDeps.writerRole);
     const tip = oidFromHex(row.tip);
     // A runner that lost the job leaves the push to the one that took it over.
@@ -487,6 +492,7 @@ export class RebaseSagas {
         via: "merge",
         yields,
         merge: standing.merge,
+        confirm,
         fence: () => {
           if (!this.git.jobs.checkpoint(job, this.#cursor(row))) return PULL_CHANGED;
           const now = this.#row(number);
