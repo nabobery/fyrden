@@ -61,7 +61,8 @@ jobs:
   check:
     name: Lint, typecheck, test, dry-run
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # About 16 minutes as a rule; room for the browser's install to recover (up to 14).
+    timeout-minutes: 32
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -84,9 +85,33 @@ jobs:
       - name: Dry-run deploy of both Workers
         run: pnpm turbo run deploy:dry-run
       # The web UI's end-to-end test drives Chromium: the headless shell of
-      # the pinned Playwright, with the system libraries it needs.
+      # the pinned Playwright, with the system libraries it needs. A stalled
+      # mirror or download once held this job to its timeout: apt gets its own
+      # network timeouts and retries (its package transaction is never cut
+      # short), and the browser, cached by the lockfile, is downloaded again
+      # when an attempt stalls.
+      - name: Playwright's browser cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Chromium's system libraries
+        timeout-minutes: 6
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+            | sudo tee /etc/apt/apt.conf.d/80-ci-network > /dev/null
+          pnpm --filter @fyrden/ci-tools exec playwright install-deps chromium-headless-shell
       - name: Playwright's Chromium
-        run: pnpm --filter @fyrden/ci-tools exec playwright install --with-deps --only-shell chromium
+        timeout-minutes: 8
+        run: |
+          for attempt in 1 2 3; do
+            if timeout --kill-after=10 120 pnpm --filter @fyrden/ci-tools exec playwright install --only-shell chromium; then
+              exit 0
+            fi
+            echo "::warning::Playwright's Chromium: attempt $attempt failed or stalled"
+            sleep 5
+          done
+          exit 1
       - name: Both Workers together locally, through the service binding
         run: pnpm turbo run test:e2e
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -139,11 +164,19 @@ jobs:
 
   # The workerd suites again in random file and test order, several seeds:
   # an order-dependent test fails here, with its seed, instead of flaking
-  # later. Its own job: three full passes outgrow the check job's budget.
-  shuffle:
-    name: Shuffle guard (order-dependent workerd tests)
+  # later. One seed a job, the jobs side by side: one full pass of the API's
+  # suite takes about 11 minutes on a runner, so passes in one job outgrew
+  # any budget kept for it as the suite grew.
+  shuffle-run:
+    name: Shuffle guard, seed ${{ matrix.run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3]
+    env:
+      SHUFFLE_RUNS: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -155,6 +188,22 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo run test:shuffle --continue=dependencies-successful
+
+  # The check the main branch's ruleset requires, by this name: passed only
+  # when every seed's job passed (one cancelled or skipped fails it too).
+  shuffle:
+    name: Shuffle guard (order-dependent workerd tests)
+    needs: [shuffle-run]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every seed passed
+        env:
+          RESULT: ${{ needs.shuffle-run.result }}
+        run: |
+          echo "shuffle seeds: $RESULT"
+          test "$RESULT" = success
 
   # The API's contracts, against fyrden-api under wrangler dev: the MCP
   # conformance suite (pinned, with its baseline of known failures) and
