@@ -467,6 +467,7 @@ keeps it a week.
 | Zip entries | 65,535 (no ZIP64); use tar.gz past that |
 | Directory depth | A path's directories, with their names, fit in 1 MiB of build state (about 2,500 levels of 255-byte names); deeper fails with `archive_failed` |
 | Building | 8 MiB encoded or 5,000 entries per slice (a file that would take a slice past 8 MiB starts the next, alone if it is larger), at most 300 slices (a commit with very many small files fails: clone it); a file of 1 MiB or more has its bytes reserved while it is compressed, and waits for them; a request builds for up to 5 seconds, then answers 202 with `Retry-After: 5` until it is ready |
+| Bookkeeping | A zip's central directory records wait for its last slice in rows of up to 1 MiB of them (about one a slice), written once and deleted with the last slice: rows written grow with slices, not files (they count toward Workers Free's 100,000 a day) |
 | Kept | 7 days, then deleted when the repository next builds one (not while a download that started in the last hour may still read it); deleted with the repository |
 | Dates | tar holds dates up to 2242, zip 1980 to 2107; later or earlier commit dates are written as the nearest one |
 | Zip names | Flagged UTF-8 when they are; other bytes are written as they are, without the flag (as git does) |

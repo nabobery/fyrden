@@ -1291,4 +1291,23 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 42,
+    // A zip's records wait for its last slice in rows of many
+    // (`archive_zip_chunks`, keyed by each row's first entry), not a row
+    // an entry. Records of builds under way are copied, a row each;
+    // `archive_zip_records` is read no more, and is dropped by a later
+    // contract step.
+    name: "archive_zip_chunks",
+    sql: `
+      CREATE TABLE archive_zip_chunks (
+        run_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        records TEXT NOT NULL CHECK (json_valid(records)),
+        PRIMARY KEY (run_id, seq)
+      ) STRICT;
+      INSERT INTO archive_zip_chunks (run_id, seq, records)
+        SELECT run_id, seq, json_array(json(record)) FROM archive_zip_records;
+    `,
+  },
 ];
