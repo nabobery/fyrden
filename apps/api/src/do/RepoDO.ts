@@ -101,7 +101,7 @@ import {
 } from "./base/audit-archiver.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
-import type { AclSnapshot } from "./OrgDO.js";
+import type { AclSnapshot, TeamAudience } from "./OrgDO.js";
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { RepoAdministration, type RepoDetails, type RulesetChange } from "./repo/administration.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
@@ -203,6 +203,7 @@ import {
   RepoSubjectMeta,
   type SubjectMeta,
 } from "./repo/subject-meta.js";
+import { RepoTeamRequests } from "./repo/team-requests.js";
 import {
   TemplateGeneration,
   type TemplateTree,
@@ -233,6 +234,10 @@ const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
 const FEED_PAGES_JOB = "feed_pages_prune";
 const FEED_PAGES_PRUNE_BATCH = 500;
 const WEBHOOK_BLOBS_JOB = "webhook_blobs_prune";
+/** The job that settles team review requests no longer standing (see `RepoTeamRequests`). */
+const REVIEW_TEAMS_JOB = "review_teams";
+/** When the check of requested teams tries again after the organization could not answer. Proposed. */
+const REVIEW_TEAMS_RETRY_MS = 60_000;
 /** Webhook capture blobs one slice of their pruning deletes at most. Proposed. */
 const WEBHOOK_BLOBS_PRUNE_BATCH = 200;
 
@@ -316,6 +321,7 @@ export class RepoDO extends MigratingDO {
 
   /** Reviews of pull requests, and reviews requested. */
   readonly reviews: RepoReviews;
+  readonly teamRequests: RepoTeamRequests;
 
   /** Issues, numbered with pull requests. */
   readonly issues: RepoIssues;
@@ -389,6 +395,8 @@ export class RepoDO extends MigratingDO {
       () => {
         this.pullSource.restored();
         reclaimAfterRestore(this.git);
+        // An ownership repaired may leave team requests of another owner to settle.
+        this.#scheduleReviewTeams();
       },
     );
     this.changeLists = new ChangeLists(this.git);
@@ -513,10 +521,19 @@ export class RepoDO extends MigratingDO {
       },
       this.git,
     );
+    this.teamRequests = new RepoTeamRequests({
+      git: this.git,
+      events: this.events,
+      feed: this.feed,
+      pulls: this.pulls,
+      schedule: () => this.#scheduleReviewTeams(),
+    });
     this.reviews = new RepoReviews({
       git: this.git,
       events: this.events,
       pulls: this.pulls,
+      feed: this.feed,
+      teams: this.teamRequests,
       repoId: () => this.#repoId(),
     });
     this.issues = new RepoIssues({
@@ -565,6 +582,7 @@ export class RepoDO extends MigratingDO {
       metrics: this.git.context.metrics,
       account: () => this.events.account(),
       pull: (accountId) => this.pullAcl(accountId),
+      observed: (accountId, epochGen) => this.teamRequests.observe(accountId, epochGen),
     });
     this.#generation = new TemplateGeneration({
       git: this.git,
@@ -624,8 +642,44 @@ export class RepoDO extends MigratingDO {
       authority: this.#authority,
       memoryBlocks: () => this.#memoryBlocks(),
       viewed: (pull) => this.#viewed(pull),
-      pullChange: (method, actor, change, prepare, texts) =>
-        this.#pullChange(method, actor, change, prepare, texts),
+      pullChange: (method, actor, change, prepare, texts, last) =>
+        this.#pullChange(method, actor, change, prepare, texts, last),
+      teamAudience: async (slugs) => {
+        const account = this.events.account();
+        if (!account)
+          return { accountId: "", epochGen: 0, version: 0, teams: [], missing: [...slugs] };
+        this.git.context.metrics.count("do.request", { class: "OrgDO", method: "teamAudience" });
+        let audience: TeamAudience;
+        try {
+          audience = await this.env.ORG.getByName(account.accountId).teamAudience(
+            this.#repoId(),
+            slugs,
+          );
+        } catch (error) {
+          this.#log().warn("reading the teams asked to review failed", { error });
+          return "unavailable" as const;
+        }
+        this.teamRequests.observe(audience.accountId, audience.epochGen);
+        return audience;
+      },
+      audienceFit: (audience) => {
+        // No team found: nothing was read with the ACL (the request is refused for that).
+        if (audience.teams.length === 0) return "same";
+        const account = this.events.account();
+        if (!account || audience.accountId !== account.accountId) return "unavailable";
+        const basis = this.acl.basis();
+        if (basis === "none") return "unavailable";
+        // None to decide by now (too old, or a pull failed): the answer's is pulled.
+        if (basis === "unknown") return "newer";
+        if (basis.epochGen === audience.epochGen && basis.version === audience.version)
+          return "same";
+        return basis.epochGen < audience.epochGen ||
+          (basis.epochGen === audience.epochGen && basis.version < audience.version)
+          ? "newer"
+          : "older";
+      },
+      adoptAudience: (audience) =>
+        this.acl.invalidate(audience.accountId, audience.epochGen, audience.version),
     });
     const writes: WriteContext = {
       git: this.git,
@@ -1270,12 +1324,23 @@ export class RepoDO extends MigratingDO {
     );
   }
 
-  /** The principals reviews of a pull request are requested of; undefined without it. */
+  /** Queues the settling of team review requests no longer standing (see `RepoTeamRequests`). */
+  #scheduleReviewTeams(): void {
+    this.git.jobs.ensure("review_teams", REVIEW_TEAMS_JOB);
+  }
+
+  /**
+   * The principals and teams reviews of a pull request are requested of
+   * (the teams asked under the owner it has now); undefined without it.
+   */
   requestedReviewers(number: number) {
     return this.#measured("requestedReviewers", () => {
       if (this.#refusesReads()) return null;
       if (!this.pulls.get(number)) return undefined;
-      return this.reviews.requested(number);
+      return {
+        users: this.reviews.requested(number),
+        teams: this.reviews.requestedTeams(number).map((request) => request.team),
+      };
     });
   }
 
@@ -1336,6 +1401,8 @@ export class RepoDO extends MigratingDO {
    * credential (none without a token to check there).
    */
   #closeOnMerge(pull: PullRecord, actor: RefActor): void {
+    // Merged, it cannot reopen: its teams' members are settled and no longer kept.
+    this.teamRequests.releaseMerged(pull.number, actor);
     if (this.git.refStore.head() !== `refs/heads/${pull.baseRef}`) return;
     const { here, elsewhere } = this.references.closing(pull.number, pull.body);
     for (const number of here) this.issues.closeByReference(number, pull.number, actor);
@@ -1834,14 +1901,27 @@ export class RepoDO extends MigratingDO {
     return this.#pullChange("deleteIssue", actor, (caller) => this.issues.delete(number, caller));
   }
 
-  /** Requests reviews of principals, each one's access checked here (see `PullDiscussion`). */
-  requestReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
-    return this.#discussion.requestReviewers(number, reviewerIds, actor);
+  /**
+   * Requests reviews of principals and of teams of the repository's
+   * organization (by slug), each one's access checked here (see `PullDiscussion`).
+   */
+  requestReviewers(
+    number: number,
+    reviewerIds: readonly string[],
+    actor: RefActor,
+    teamSlugs: readonly string[] = [],
+  ) {
+    return this.#discussion.requestReviewers(number, reviewerIds, actor, teamSlugs);
   }
 
-  /** Withdraws review requests. */
-  removeRequestedReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
-    return this.#discussion.removeRequestedReviewers(number, reviewerIds, actor);
+  /** Withdraws review requests of principals and of teams (by the slugs they were asked by). */
+  removeRequestedReviewers(
+    number: number,
+    reviewerIds: readonly string[],
+    actor: RefActor,
+    teamSlugs: readonly string[] = [],
+  ) {
+    return this.#discussion.removeRequestedReviewers(number, reviewerIds, actor, teamSlugs);
   }
 
   /**
@@ -1946,13 +2026,15 @@ export class RepoDO extends MigratingDO {
    * before `change`, whether the repository takes changes and the caller's
    * role now.
    */
-  #pullChange<R, P = undefined>(
+  #pullChange<R, P = undefined, L = undefined>(
     method: string,
     actor: RefActor,
-    change: (caller: PullCaller, prepared: P) => R,
+    change: (caller: PullCaller, prepared: P, last: L) => R,
     prepare?: () => Promise<P>,
     /** Texts the change writes, whose mentions its activity-feed entries name. */
     texts: readonly (string | null | undefined)[] = [],
+    /** Read after everything else, right before the change (its answer goes to `change`). */
+    last?: () => Promise<L>,
   ): Promise<R | { ok: false; code: PullChangeRefusal }> {
     return this.#measured(method, async () => {
       await this.checkEpoch();
@@ -1965,13 +2047,14 @@ export class RepoDO extends MigratingDO {
       const prepared = (prepare ? await prepare() : undefined) as P;
       const mentioned = await this.feed.prepare(texts);
       await this.changeHooks.beforeChange?.(method);
+      const lastly = (last ? await last() : undefined) as L;
       const refused = this.#writeRefusal();
       if (refused)
         return { ok: false as const, code: refused.code as "repo_not_found" | "repo_transferring" };
       const role = this.#authority.roleNow(actor.principal, ceilings);
       if (role === null) return { ok: false as const, code: "access_lost" as const };
       const result = this.feed.within({ root, role, mentioned }, () =>
-        change({ actor, root, role }, prepared),
+        change({ actor, root, role }, prepared, lastly),
       );
       this.#armOutbox();
       this.#ensureAuditArchive();
@@ -2018,6 +2101,8 @@ export class RepoDO extends MigratingDO {
   /** Transfer `transferId` called off: the repository takes changes again. */
   unfreezeTransfer(transferId: string): void {
     this.events.unfreezeTransfer(transferId);
+    // Team requests are settled or checked by nothing while it moves: what was left resumes.
+    this.#scheduleReviewTeams();
   }
 
   /** The owner generation transfer `transferId` lands the repository in (for the read model's fence). */
@@ -2042,9 +2127,11 @@ export class RepoDO extends MigratingDO {
     return this.#measured("completeTransfer", async () => {
       await this.checkEpoch();
       const { ownerGen, changed } = this.events.completeTransfer(to, actor);
-      // Only when it moved: the old account's snapshot and floor mean nothing now.
+      // Only when it moved: the old account's snapshot and floor mean nothing now, nor its
+      // teams' review requests (settled by a job).
       if (changed) {
         this.acl.reset();
+        this.#scheduleReviewTeams();
         this.#armOutbox();
         this.#ensureAuditArchive();
       }
@@ -2633,6 +2720,36 @@ export class RepoDO extends MigratingDO {
       import: this.#imports().handler(),
       archive: this.#archives().handler(),
       audit_archive: this.#auditArchiver(),
+      review_teams: {
+        runSlice: async () => {
+          await this.checkEpoch();
+          if (this.teamRequests.settleSlice()) {
+            this.#armOutbox();
+            return { done: false, cursor: null };
+          }
+          let more: boolean;
+          try {
+            more = await this.teamRequests.reconcileSlice((accountId, teamIds) => {
+              this.git.context.metrics.count("do.request", {
+                class: "OrgDO",
+                method: "teamsPresent",
+              });
+              return this.env.ORG.getByName(accountId).teamsPresent(teamIds);
+            });
+          } catch (error) {
+            // The organization could not answer (or answered from an older restore generation):
+            // tried again later however long that takes, never given up as a failed job.
+            this.#log().warn("checking the requested teams failed", { error });
+            return { done: false, cursor: null, runAfterMs: REVIEW_TEAMS_RETRY_MS };
+          }
+          this.#armOutbox();
+          // Done only if nothing is left now, read with no await before the job records it: a
+          // transfer or restore landing while the organization was asked left work behind.
+          return more || this.teamRequests.hasWork()
+            ? { done: false, cursor: null }
+            : { done: true };
+        },
+      },
       feed_pages_prune: {
         runSlice: async () => {
           const now = this.git.context.now();

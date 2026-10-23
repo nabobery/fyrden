@@ -96,8 +96,14 @@ export interface RepoFeedDeps {
 }
 
 type Row = Record<string, unknown>;
-/** A recipient as a plan names it, with the root identity it counts as. */
-type Named = Omit<FeedRecipient, "silent"> & { readonly root: string };
+/**
+ * A recipient as a plan names it, with the root identity it counts as;
+ * `standing`: a request of it stands again (a reopening), told whatever its access now.
+ */
+type Named = Omit<FeedRecipient, "silent"> & {
+  readonly root: string;
+  readonly standing?: boolean;
+};
 
 /**
  * Participants of a thread kept at most, the first to join kept. A join
@@ -184,7 +190,7 @@ export class RepoFeed {
     row: Row | null,
     event: { readonly id: EventId; readonly at: number; readonly ownerGen: number },
   ): FeedBlock | undefined {
-    const plan = this.#plan(type, data ?? {}, row);
+    const plan = this.#plan(type, data ?? {}, row, event.ownerGen);
     if (!plan) return undefined;
     const subject = this.#subject(plan.number);
     if (!subject) return undefined;
@@ -201,9 +207,12 @@ export class RepoFeed {
       if (self && !ACTION_KINDS.has(r.kind)) return;
       const key = `${r.principal}|${r.kind}`;
       if (named.has(key)) return;
-      if (!readers.mayRead(r.principal)) return;
+      // A request settled, or standing again, reaches everyone it asks, whether they still read
+      // the repository or not (feeds check access when read): one who reads it again must find
+      // it as it is.
+      if (!readers.mayRead(r.principal) && !settlesRequest(r) && !r.standing) return;
       named.add(key);
-      const { root: _root, ...recipient } = r;
+      const { root: _root, standing: _standing, ...recipient } = r;
       audience.push({ ...recipient, silent: self });
     };
     for (const r of plan.direct) add(r, plan.exact);
@@ -236,19 +245,14 @@ export class RepoFeed {
     audience.sort((a, b) => (a.priority === b.priority ? 0 : a.priority === "P0" ? -1 : 1));
     const pages = this.#keepPages(audience.slice(MAX_FEED_AUDIENCE), event);
     const threadKey = `${subject.kind}/${plan.number}`;
-    const [bumped] = this.#exec<{ version: number }>(
-      "feed.version",
-      `INSERT INTO feed_threads (thread_key, version) VALUES (?, 1)
-       ON CONFLICT (thread_key) DO UPDATE SET version = version + 1 RETURNING version`,
-      threadKey,
-    );
+    const version = this.#bump(threadKey);
     return {
       threadKey,
       subject: {
         kind: subject.kind,
         number: plan.number,
         title: String(subject.title ?? "").slice(0, MAX_FEED_TITLE),
-        version: (bumped as { version: number }).version,
+        version,
       },
       action: plan.action,
       actorRoot,
@@ -366,8 +370,67 @@ export class RepoFeed {
     return { pruned, nextAt: next?.at ?? null };
   }
 
+  /**
+   * In a change's transaction: entries settling the review requests of
+   * `recipients` on pull request `number` (nothing of them is left to act
+   * on), in blocks of at most `MAX_FEED_AUDIENCE` that carry all they
+   * deliver, so they travel in the event's data and are delivered
+   * whoever owns the repository by then. No reader filter: a feed checks
+   * access when read. Bumps the thread's version once; none for no one.
+   */
+  settlements(
+    number: number,
+    recipients: readonly FeedPrincipal[],
+    actor: string | null,
+    action: string,
+  ): FeedBlock[] {
+    const unique = [...new Map(recipients.map((r) => [r.id, r])).values()];
+    const subject = unique.length > 0 ? this.#subject(number) : undefined;
+    if (!subject) return [];
+    const actorRoot = this.#actor?.root ?? actor;
+    const threadKey = `${subject.kind}/${number}`;
+    const version = this.#bump(threadKey);
+    const blocks: FeedBlock[] = [];
+    for (let at = 0; at < unique.length; at += MAX_FEED_AUDIENCE)
+      blocks.push({
+        threadKey,
+        subject: {
+          kind: subject.kind,
+          number,
+          title: String(subject.title ?? "").slice(0, MAX_FEED_TITLE),
+          version,
+        },
+        action,
+        actorRoot,
+        actorTrust: this.#trust(actor),
+        member: null,
+        excerpt: null,
+        audience: unique.slice(at, at + MAX_FEED_AUDIENCE).map((who) => ({
+          principal: who.id,
+          kind: "review_requested",
+          reasons: ["requested_reviewer"],
+          priority: "P0",
+          state: "resolved",
+          // Their own action: settled without telling them.
+          silent: who.id === actor || who.id === actorRoot || who.root === actorRoot,
+        })),
+      });
+    return blocks;
+  }
+
+  /** In a change's transaction: the thread's feed version, bumped. */
+  #bump(threadKey: string): number {
+    const [bumped] = this.#exec<{ version: number }>(
+      "feed.version",
+      `INSERT INTO feed_threads (thread_key, version) VALUES (?, 1)
+       ON CONFLICT (thread_key) DO UPDATE SET version = version + 1 RETURNING version`,
+      threadKey,
+    );
+    return (bumped as { version: number }).version;
+  }
+
   /** What an event means, before its audience is filtered; undefined for nothing. */
-  #plan(type: string, data: Row, row: Row | null): Plan | undefined {
+  #plan(type: string, data: Row, row: Row | null, ownerGen: number): Plan | undefined {
     const mentioned = (handles: readonly string[]) => {
       const known = this.#actor?.mentioned;
       return known ? handles.flatMap((h) => known.get(h) ?? []) : [];
@@ -455,11 +518,15 @@ export class RepoFeed {
         if (!row) return undefined;
         return {
           ...nothing(row.number as number, row.state === "merged" ? "merged" : "closed"),
-          // Nothing on it is still to act on.
+          // Nothing on it is still to act on (a merge settles the teams' members on its own).
           direct: [
             ...this.#requested(row.number as number).map((who) =>
               settledAs(who, "review_requested", "requested_reviewer"),
             ),
+            ...(row.state === "merged"
+              ? []
+              : this.#teamMembers(row.number as number, ownerGen)
+            ).map((who) => settledAs(who, "review_requested", "requested_team")),
             ...this.#assigned(row.number as number).map((who) =>
               settledAs(who, "assigned", "assignee"),
             ),
@@ -488,6 +555,12 @@ export class RepoFeed {
             ...this.#requested(number).map((who) => ({
               ...settledAs(who, "review_requested", "requested_reviewer"),
               state: "open" as const,
+              standing: true,
+            })),
+            ...this.#teamMembers(number, ownerGen).map((who) => ({
+              ...settledAs(who, "review_requested", "requested_team"),
+              state: "open" as const,
+              standing: true,
             })),
             ...this.#assigned(number).map((who) => ({
               ...settledAs(who, "assigned", "assignee"),
@@ -504,22 +577,27 @@ export class RepoFeed {
           activity: true,
         };
       }
-      case "pull_request.review_requested":
-      case "pull_request.review_request_removed": {
+      case "pull_request.review_requested": {
+        const number = data.number as number;
+        // A team's: each member it had when asked (kept with the request), not joining the thread.
+        if (typeof data.request_id === "number" && data.team)
+          return {
+            ...nothing(number, "review_requested"),
+            direct: this.#audience(data.request_id).map((id) => ({
+              ...settledAs({ id, root: id }, "review_requested", "requested_team"),
+              state: "open" as const,
+            })),
+          };
         const reviewer = {
           id: String(data.reviewer),
           root: String(data.reviewer_root ?? data.reviewer),
         };
-        const open = type === "pull_request.review_requested";
         return {
-          ...nothing(data.number as number, open ? "review_requested" : "review_request_removed"),
+          ...nothing(number, "review_requested"),
           direct: [
-            {
-              ...settledAs(reviewer, "review_requested", "requested_reviewer"),
-              state: open ? "open" : "resolved",
-            },
+            { ...settledAs(reviewer, "review_requested", "requested_reviewer"), state: "open" },
           ],
-          joins: open ? [[reviewer, "requested_reviewer"]] : [],
+          joins: [[reviewer, "requested_reviewer"]],
         };
       }
       case "pull_request_review.submitted":
@@ -530,11 +608,8 @@ export class RepoFeed {
         const reviewer = { id: String(row.reviewerId), root: String(row.reviewerRoot) };
         return {
           ...nothing(number, submitted ? "review" : "review_dismissed"),
-          // A review given settles the request of it (its reviewer's own action: silently).
-          direct: [
-            ...(submitted ? [settledAs(reviewer, "review_requested", "requested_reviewer")] : []),
-            ...this.#outcomes(number),
-          ],
+          // A review given settles the requests of it in the event's own entries (`settlements`).
+          direct: this.#outcomes(number),
           // Outcomes reach the author even when its own agent reviewed (terminal outcomes).
           exact: true,
           activity: submitted,
@@ -660,6 +735,31 @@ export class RepoFeed {
        FROM review_requests WHERE pr_number = ?`,
       number,
     );
+  }
+
+  /**
+   * The members the pull request's teams asked under ownership generation
+   * `ownerGen` still keep (once each), the root identity each counts as
+   * being itself (members are users).
+   */
+  #teamMembers(number: number, ownerGen: number): FeedPrincipal[] {
+    return this.#exec<{ id: string }>(
+      "feed.read",
+      `SELECT DISTINCT m.value AS id FROM review_team_requests t
+       JOIN review_request_audiences a ON a.request_id = t.request_id, json_each(a.members) m
+       WHERE t.pr_number = ? AND t.owner_gen = ? AND t.audience = 1`,
+      number,
+      ownerGen,
+    ).map((row) => ({ id: row.id, root: row.id }));
+  }
+
+  /** The members a team's request kept, in the order kept. */
+  #audience(requestId: number): string[] {
+    return this.#exec<{ members: string }>(
+      "feed.read",
+      "SELECT members FROM review_request_audiences WHERE request_id = ? ORDER BY page",
+      requestId,
+    ).flatMap((row) => JSON.parse(row.members) as string[]);
   }
 
   /** The thread's participants in the order they joined, a page at a time. */
@@ -811,6 +911,11 @@ function settledAs(who: FeedPrincipal, kind: FeedKind, reason: string): Named {
     priority: "P0",
     state: "resolved",
   };
+}
+
+/** Whether a recipient's entry settles a review request (reaching it whatever its access). */
+function settlesRequest(r: Named): boolean {
+  return r.kind === "review_requested" && r.state === "resolved";
 }
 
 /** The issue's or pull request's author, and the user its agent author acts for. */

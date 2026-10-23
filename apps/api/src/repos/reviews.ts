@@ -154,10 +154,12 @@ export async function listRequestedReviewersOperation(
   input: Input<typeof listRequestedReviewers>,
 ): Promise<Output<typeof listRequestedReviewers>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:read");
-  const ids = await repo(ctx, entry, "requestedReviewers").requestedReviewers(input.pull_number);
-  if (ids === null) throw failure(entry, "repo_not_found");
-  if (ids === undefined) throw failure(entry, "not_found", input.pull_number);
-  return { users: await loginsOf(ctx, ids), teams: [] };
+  const requested = await repo(ctx, entry, "requestedReviewers").requestedReviewers(
+    input.pull_number,
+  );
+  if (requested === null) throw failure(entry, "repo_not_found");
+  if (requested === undefined) throw failure(entry, "not_found", input.pull_number);
+  return { users: await loginsOf(ctx, requested.users), teams: requested.teams };
 }
 
 /** The `pulls.requested_reviewers.add` operation. */
@@ -166,11 +168,12 @@ export async function requestReviewersOperation(
   input: Input<typeof requestReviewers>,
 ): Promise<Output<typeof requestReviewers>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:write");
-  const ids = await reviewersByLogin(ctx, input.reviewers);
+  const ids = await reviewersByLogin(ctx, input.reviewers ?? []);
   const result = await repo(ctx, entry, "requestReviewers").requestReviewers(
     input.pull_number,
     ids,
     actorOf(ctx),
+    input.team_reviewers ?? [],
   );
   if (!result.ok) throw failure(entry, result.code, input.pull_number);
   return pullOutput(result.pull, readable(ctx, entry));
@@ -183,11 +186,12 @@ export async function removeRequestedReviewersOperation(
 ): Promise<Output<typeof removeRequestedReviewers>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:write");
   // A handle that names no one cannot have been requested: nothing to withdraw for it.
-  const ids = [...(await principalsByLogin(ctx, input.reviewers, true)).values()];
+  const ids = [...(await principalsByLogin(ctx, input.reviewers ?? [], true)).values()];
   const result = await repo(ctx, entry, "removeRequestedReviewers").removeRequestedReviewers(
     input.pull_number,
     ids,
     actorOf(ctx),
+    input.team_reviewers ?? [],
   );
   if (!result.ok) throw failure(entry, result.code, input.pull_number);
   return pullOutput(result.pull, readable(ctx, entry));

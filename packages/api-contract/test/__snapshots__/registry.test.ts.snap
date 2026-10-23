@@ -24252,7 +24252,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers": {
       "delete": {
-        "description": "Withdraws review requests; reviewers not requested are ignored.",
+        "description": "Withdraws review requests of users, agents and teams; ones not requested are ignored. Fyrden takes teams alone too (GitHub needs \`reviewers\`).",
         "operationId": "pulls.requested_reviewers.remove",
         "parameters": [
           {
@@ -24303,21 +24303,21 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "string",
                     },
                     "maxItems": 15,
-                    "minItems": 1,
                     "type": "array",
                   },
                   "team_reviewers": {
-                    "description": "Team reviewers are not supported yet: empty or left out.",
+                    "description": "Slugs of teams of the repository's organization.",
                     "items": {
-                      "not": {},
+                      "description": "The team's slug (lowercase letters, digits and inner hyphens).",
+                      "maxLength": 100,
+                      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                      "type": "string",
                     },
-                    "maxItems": 0,
+                    "maxItems": 15,
                     "type": "array",
                   },
                 },
-                "required": [
-                  "reviewers",
-                ],
+                "required": [],
                 "type": "object",
               },
             },
@@ -24863,7 +24863,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
       "get": {
-        "description": "Who a review of the pull request is requested of and has not reviewed yet.",
+        "description": "Who a review of the pull request is requested of and has not reviewed yet: users and agents, and teams (a team's request ends when one of the members it asked reviews).",
         "operationId": "pulls.requested_reviewers.list",
         "parameters": [
           {
@@ -24909,7 +24909,26 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                   "properties": {
                     "teams": {
                       "items": {
-                        "not": {},
+                        "additionalProperties": false,
+                        "description": "A team as it was when asked (Fyrden shows these fields only).",
+                        "properties": {
+                          "id": {
+                            "description": "The team's id (it keeps it when renamed).",
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "slug": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "slug",
+                          "name",
+                        ],
+                        "type": "object",
                       },
                       "type": "array",
                     },
@@ -24967,7 +24986,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "post": {
-        "description": "Requests a review of users or agents who can read the repository (not the author). The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once; a request ends when that reviewer submits a review. Past the limit, requests of users or agents being deleted give up their places first, with no event.",
+        "description": "Requests a review of users or agents who can read the repository (not the author), and of teams of the repository's organization. A team asks each member it has now (the author aside), at most 2000, and keeps those members: one of them reviewing ends its request; someone who joins the team later does not. The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once, a team counting as one, and 10000 members across a pull request's teams; a request ends when its reviewer submits a review. Past the limit, requests of users or agents being deleted give up their places first, with no event.",
         "operationId": "pulls.requested_reviewers.add",
         "parameters": [
           {
@@ -25018,21 +25037,21 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "string",
                     },
                     "maxItems": 15,
-                    "minItems": 1,
                     "type": "array",
                   },
                   "team_reviewers": {
-                    "description": "Team reviewers are not supported yet: empty or left out.",
+                    "description": "Slugs of teams of the repository's organization.",
                     "items": {
-                      "not": {},
+                      "description": "The team's slug (lowercase letters, digits and inner hyphens).",
+                      "maxLength": 100,
+                      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                      "type": "string",
                     },
-                    "maxItems": 0,
+                    "maxItems": 15,
                     "type": "array",
                   },
                 },
-                "required": [
-                  "reviewers",
-                ],
+                "required": [],
                 "type": "object",
               },
             },

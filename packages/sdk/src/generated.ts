@@ -2946,7 +2946,12 @@ export type PullsRequestedReviewersListOutput = {
     id: string;
     login: string;
   }[];
-  teams: unknown[];
+  teams: {
+    /** The team's id (it keeps it when renamed). */
+    id: string;
+    slug: string;
+    name: string;
+  }[];
 };
 
 /** Input of `pulls.requested_reviewers.add`: Request reviewers. */
@@ -2958,9 +2963,9 @@ export type PullsRequestedReviewersAddInput = {
   /** The pull request's number. */
   pull_number: number;
   /** Handles of users and agents who can read the repository. */
-  reviewers: string[];
-  /** Team reviewers are not supported yet: empty or left out. */
-  team_reviewers?: unknown[];
+  reviewers?: string[];
+  /** Slugs of teams of the repository's organization. */
+  team_reviewers?: string[];
 };
 
 /** Output of `pulls.requested_reviewers.add`. */
@@ -3081,9 +3086,9 @@ export type PullsRequestedReviewersRemoveInput = {
   /** The pull request's number. */
   pull_number: number;
   /** Handles of users and agents who can read the repository. */
-  reviewers: string[];
-  /** Team reviewers are not supported yet: empty or left out. */
-  team_reviewers?: unknown[];
+  reviewers?: string[];
+  /** Slugs of teams of the repository's organization. */
+  team_reviewers?: string[];
 };
 
 /** Output of `pulls.requested_reviewers.remove`. */
@@ -6711,11 +6716,11 @@ export interface Operations {
   "pulls.reviews.create": { input: PullsReviewsCreateInput; output: PullsReviewsCreateOutput };
   /** Dismiss a review. Dismisses an approval or a request for changes, with a reason: it no longer counts toward or blocks a merge. Needs write access. */
   "pulls.reviews.dismiss": { input: PullsReviewsDismissInput; output: PullsReviewsDismissOutput };
-  /** List requested reviewers. Who a review of the pull request is requested of and has not reviewed yet. */
+  /** List requested reviewers. Who a review of the pull request is requested of and has not reviewed yet: users and agents, and teams (a team's request ends when one of the members it asked reviews). */
   "pulls.requested_reviewers.list": { input: PullsRequestedReviewersListInput; output: PullsRequestedReviewersListOutput };
-  /** Request reviewers. Requests a review of users or agents who can read the repository (not the author). The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once; a request ends when that reviewer submits a review. Past the limit, requests of users or agents being deleted give up their places first, with no event. */
+  /** Request reviewers. Requests a review of users or agents who can read the repository (not the author), and of teams of the repository's organization. A team asks each member it has now (the author aside), at most 2000, and keeps those members: one of them reviewing ends its request; someone who joins the team later does not. The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once, a team counting as one, and 10000 members across a pull request's teams; a request ends when its reviewer submits a review. Past the limit, requests of users or agents being deleted give up their places first, with no event. */
   "pulls.requested_reviewers.add": { input: PullsRequestedReviewersAddInput; output: PullsRequestedReviewersAddOutput };
-  /** Remove requested reviewers. Withdraws review requests; reviewers not requested are ignored. */
+  /** Remove requested reviewers. Withdraws review requests of users, agents and teams; ones not requested are ignored. Fyrden takes teams alone too (GitHub needs `reviewers`). */
   "pulls.requested_reviewers.remove": { input: PullsRequestedReviewersRemoveInput; output: PullsRequestedReviewersRemoveOutput };
   /** List issues. The repository's issues and pull requests (marked with `pull_request`), as GitHub's issue listing; `type` narrows it to one kind. Each kind is listed only for a caller that may read it: issues need the `issues:read` permission, pull requests `pull_requests:read`. A listing sorted by `updated` may move an item changed between pages. */
   "issues.list": { input: IssuesListInput; output: IssuesListOutput };

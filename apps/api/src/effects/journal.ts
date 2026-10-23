@@ -18,6 +18,8 @@ import { eventKey } from "@fyrden/domain";
 export interface PlannedEffect {
   readonly target: string;
   readonly payload: Record<string, unknown>;
+  /** This effect stands across a transfer of its source, as a sink's `acrossTransfers` says of all its own. */
+  readonly acrossTransfers?: boolean;
 }
 
 /** A journaled effect, as the sink delivers it. */
@@ -291,7 +293,7 @@ export function planEffects(
           payload: JSON.stringify(planned.payload),
           epoch: event.id.epochGen,
           ownerGen: event.ownerGen,
-          anyOwner: sink.acrossTransfers ? 1 : 0,
+          anyOwner: sink.acrossTransfers === true || planned.acrossTransfers === true ? 1 : 0,
           calls: effectCalls(sink, planned),
           inline: sink.inline === true && sink.inlineable?.(planned) !== false,
         });

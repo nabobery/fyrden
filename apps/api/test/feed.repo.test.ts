@@ -59,19 +59,20 @@ async function collaborator(permission: "pull" | "push"): Promise<Who> {
   return who;
 }
 
+/** The outbox's events since `from`. */
+const events = (from = 0) =>
+  inRepo(stub(), (r: RepoDO) =>
+    r.git.context.storage.sql
+      .exec<{ event: string }>(
+        "SELECT event FROM outbox WHERE source_seq > ? ORDER BY source_seq",
+        from,
+      )
+      .toArray()
+      .map((row) => JSON.parse(row.event) as DomainEvent),
+  );
 /** The feed blocks of the outbox's events since `from`, with their event types. */
 const blocks = async (from = 0) =>
-  (
-    await inRepo(stub(), (r: RepoDO) =>
-      r.git.context.storage.sql
-        .exec<{ event: string }>(
-          "SELECT event FROM outbox WHERE source_seq > ? ORDER BY source_seq",
-          from,
-        )
-        .toArray()
-        .map((row) => JSON.parse(row.event) as DomainEvent),
-    )
-  )
+  (await events(from))
     .filter((e) => e.feed)
     .map((e) => ({ type: e.type, ...(e.feed as FeedBlock) }));
 const seq = () =>
@@ -137,16 +138,22 @@ describe("feed blocks", () => {
     expect(reviewed.status).toBe(200);
     const [review] = await blocks(after);
     expect(review?.action).toBe("review");
-    // The reviewer's own request settles silently; the author hears of the approval.
+    // The author hears of the approval; the reviewer's own request settles silently, in entries
+    // the event carries (standing across a transfer).
     expect(told(review)).toEqual(
       [
-        `${writer.principalId}:review_requested:resolved:silent`,
         `${owner.principalId}:approved:open`,
         `${owner.principalId}:changes_requested:resolved`,
         `${owner.principalId}:activity:open`,
       ].sort(),
     );
     expect(review?.subject.version).toBeGreaterThan(requested?.subject.version as number);
+    const [settling] = (await events(after)).filter(
+      (e) => e.type === "pull_request_review.submitted",
+    );
+    const settled = (settling?.data?.resolutions ?? []) as FeedBlock[];
+    expect(settled.map(told)).toEqual([[`${writer.principalId}:review_requested:resolved:silent`]]);
+    expect(settled[0]?.subject.version).toBeGreaterThan(requested?.subject.version as number);
   });
 
   it("keep changes requested open until that reviewer's latest review is not one", async () => {

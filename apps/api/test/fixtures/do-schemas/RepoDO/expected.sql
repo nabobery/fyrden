@@ -42,6 +42,9 @@ CREATE INDEX refs_oid ON refs (oid);
 CREATE INDEX resolved_repos_at ON resolved_repos (resolved_at);
 CREATE INDEX review_comments_pr ON review_comments (pr_number, comment_id);
 CREATE INDEX review_comments_thread ON review_comments (thread_id, comment_id);
+CREATE UNIQUE INDEX review_requests_id ON review_requests (request_id);
+CREATE INDEX review_team_requests_owner ON review_team_requests (owner_gen);
+CREATE INDEX review_team_requests_pr ON review_team_requests (pr_number, owner_gen);
 CREATE INDEX review_threads_pr ON review_threads (pr_number, thread_id);
 CREATE INDEX reviews_pr ON reviews (pr_number, review_id);
 CREATE INDEX reviews_standing
@@ -568,12 +571,43 @@ CREATE TABLE review_comments (
         updated_at INTEGER NOT NULL,
         version INTEGER NOT NULL DEFAULT 1
       ) STRICT;
+CREATE TABLE review_request_audiences (
+        request_id INTEGER NOT NULL,
+        page INTEGER NOT NULL CHECK (page >= 1),
+        members TEXT NOT NULL,
+        PRIMARY KEY (request_id, page)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE review_request_ids (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        next_id INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE review_requests (
         pr_number INTEGER NOT NULL,
         reviewer_id TEXT NOT NULL,
         requested_by TEXT NOT NULL,
-        requested_at INTEGER NOT NULL, reviewer_root TEXT,
+        requested_at INTEGER NOT NULL, reviewer_root TEXT, reasons INTEGER NOT NULL DEFAULT 1, request_id INTEGER,
         PRIMARY KEY (pr_number, reviewer_id)
+      ) STRICT;
+CREATE TABLE review_team_epochs (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        account_id TEXT NOT NULL,
+        owner_gen INTEGER NOT NULL,
+        observed INTEGER NOT NULL,
+        reconciled INTEGER,
+        cursor INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+CREATE TABLE review_team_requests (
+        request_id INTEGER PRIMARY KEY,
+        pr_number INTEGER NOT NULL,
+        team_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        name TEXT NOT NULL,
+        reasons INTEGER NOT NULL DEFAULT 1,
+        owner_gen INTEGER NOT NULL,
+        members INTEGER NOT NULL,
+        audience INTEGER NOT NULL CHECK (audience IN (0, 1)),
+        requested_by TEXT NOT NULL,
+        requested_at INTEGER NOT NULL
       ) STRICT;
 CREATE TABLE review_threads (
         thread_id INTEGER PRIMARY KEY AUTOINCREMENT,
