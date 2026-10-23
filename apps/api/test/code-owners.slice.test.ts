@@ -218,6 +218,29 @@ describe("a code owners slice", () => {
     ).toMatchObject({ state: "too_large", reason: "path" });
   });
 
+  it("reads no tree past the last change a slice's matcher can afford (the largest file's shape, measured)", async () => {
+    const s = new Store();
+    const spec: Spec = {};
+    for (let d = 0; d < 200; d++) {
+      const dir: Spec = {};
+      for (let f = 0; f < 10; f++) dir[`f${f}.txt`] = d * 10 + f;
+      spec[`d${String(d).padStart(3, "0")}`] = dir;
+    }
+    const head = s.tree(spec);
+    // Rules that cost every path a few steps each, as the largest accepted file's do.
+    const costly = file(
+      Array.from({ length: 200 }, (_, r) => `/r${r}${"x".repeat(300)}?/y* @o`).join("\n"),
+    );
+    const one = await evaluateSlice(s.read, null, head, costly, freshEvaluation(), {
+      ...CODE_OWNER_LIMITS,
+      sliceSteps: 20_000,
+    });
+    expect(one.state).toBe("pending");
+    // A tree read for every ten changes matched, not for the 2,000 a slice may list.
+    expect(one.totals.changes).toBeGreaterThan(0);
+    expect(one.totals.trees).toBeLessThanOrEqual(Math.ceil(one.totals.changes / 10) + 2);
+  });
+
   it("keeps every byte of a checkpoint's paths and cursor across storing it", () => {
     const evaluation = freshEvaluation();
     evaluation.rules.set(3, { paths: 2, example: "\ufeffa.txt" });

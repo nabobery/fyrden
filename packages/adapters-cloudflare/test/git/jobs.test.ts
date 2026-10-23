@@ -306,6 +306,52 @@ describe("JobQueue and the reflog prune job", () => {
   });
 });
 
+describe("slices that end their invocation", () => {
+  it("run once an invocation, in runDue and in runJob: its clock may not have moved, its CPU has", async () => {
+    const { stub } = await newProbe();
+    const result = await inProbe(stub, async ({ git }) => {
+      // The clock does not move (as in Workers while code runs without I/O).
+      const clock = { now: 1_000_000 };
+      const context = withClock(git.context, clock);
+      const alarms: number[] = [];
+      const jobs = new JobQueue(context, (at) => alarms.push(at), policy);
+      const memory = createDoMemoryBudget(1024);
+      // The heavy job is due first, so the order does not depend on ids.
+      const heavy = jobs.enqueue("archive", new Uint8Array([0]), clock.now - 1);
+      jobs.enqueue("compact", new Uint8Array([0]), clock.now);
+      const ran: string[] = [];
+      const step = (name: string, end: boolean) => ({
+        async runSlice(job: { cursor: Uint8Array | null }) {
+          ran.push(name);
+          const at = (job.cursor?.[0] ?? 0) + 1;
+          return at === 3
+            ? { done: true as const }
+            : { done: false as const, cursor: new Uint8Array([at]), endInvocation: end };
+        },
+      });
+      const handlers = { archive: step("heavy", true), compact: step("light", false) };
+      const first = await jobs.runDue(handlers, memory, clock.now + 10_000);
+      const firstRan = [...ran];
+      // runJob stops after an ending slice too: a fresh job, its first slice ending.
+      const fresh = jobs.enqueue("archive", new Uint8Array([0]));
+      const viaRunJob = await jobs.runJob(fresh, handlers.archive, memory, clock.now + 10_000);
+      return {
+        first,
+        firstRan,
+        viaRunJob,
+        heavy: jobs.get(heavy)?.state,
+        rearmed: alarms.at(-1),
+      };
+    });
+    // The first heavy slice ends the run, however much time is left; the alarm is set again at once.
+    expect(result.first).toBe(1);
+    expect(result.firstRan).toEqual(["heavy"]);
+    expect(result.heavy).toBe("queued");
+    expect(result.rearmed).toBe(1_000_000);
+    expect(result.viaRunJob).toEqual({ slices: 1, state: "queued" });
+  });
+});
+
 describe("memory admission and delays", () => {
   it("lets a run whose lease expired keep its claim while the pool is short", async () => {
     const { stub } = await newProbe();

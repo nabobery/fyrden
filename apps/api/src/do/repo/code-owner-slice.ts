@@ -145,41 +145,29 @@ export async function evaluateSlice(
     totals: { ...evaluation.totals, slices },
   });
   if (slices > limits.maxSlices) return tooLarge("work");
-  let listed: Awaited<ReturnType<typeof diffTreesFrom>>;
-  try {
-    listed = await diffTreesFrom(readTree, base, head, evaluation.cursor, {
-      maxChanges: limits.sliceChanges,
-      maxScanned: limits.sliceScanned,
-      maxDepth: limits.maxDepth,
-    });
-  } catch (error) {
-    if (error instanceof TreeDiffLimitError)
-      return tooLarge(error.limit === "depth" ? "depth" : "path");
-    if (error instanceof ReadsTooLargeError) return tooLarge("tree");
-    throw error;
-  }
   const rules = new Map(evaluation.rules);
   let { unmatched, unmatchable, unmatchableExample } = evaluation;
   const budget = new MatchBudget(limits.sliceSteps);
-  let cursor: DiffCursor | null = listed.next;
   let matched = 0;
-  for (const change of listed.changes) {
+  /** Whether the matcher could not decide the change: the slice stops right before it. */
+  let spent = false;
+  // Each change is matched as the diff finds it: past the slice's steps, the diff stops there,
+  // reading no tree for a change no one matches.
+  const take = (change: ResumedChange): boolean => {
     const text = pathText(change.pathBytes);
     if (text === undefined) {
       unmatchable++;
       unmatchableExample ??= base64(change.pathBytes.subarray(0, EXAMPLE_BYTES));
       matched++;
-      continue;
+      return true;
     }
     let decided: ReturnType<typeof ownershipOf>;
     try {
       decided = ownershipOf(file, text, budget);
     } catch (error) {
       if (!(error instanceof MatchBudgetExceeded)) throw error;
-      // A path a whole slice's steps cannot decide is never decided.
-      if (matched === 0) return tooLarge("path");
-      cursor = (listed.changes[matched - 1] as ResumedChange).cursor;
-      break;
+      spent = true;
+      return false;
     }
     matched++;
     if (decided.kind === "unmatched") unmatched++;
@@ -190,7 +178,29 @@ export async function evaluateSlice(
         example: counted?.example ?? cutText(text),
       });
     }
+    return true;
+  };
+  let listed: Awaited<ReturnType<typeof diffTreesFrom>>;
+  try {
+    listed = await diffTreesFrom(readTree, base, head, evaluation.cursor, {
+      maxChanges: limits.sliceChanges,
+      maxScanned: limits.sliceScanned,
+      maxDepth: limits.maxDepth,
+      accept: take,
+    });
+  } catch (error) {
+    if (error instanceof TreeDiffLimitError)
+      return tooLarge(error.limit === "depth" ? "depth" : "path");
+    if (error instanceof ReadsTooLargeError) return tooLarge("tree");
+    throw error;
   }
+  // A path a whole slice's steps cannot decide is never decided (the steps it took counted).
+  if (spent && matched === 0)
+    return {
+      ...tooLarge("path"),
+      totals: { ...evaluation.totals, slices, steps: evaluation.totals.steps + budget.spent },
+    };
+  const cursor: DiffCursor | null = listed.next;
   const totals: EvaluationTotals = {
     trees: evaluation.totals.trees + listed.trees,
     scanned: evaluation.totals.scanned + listed.scanned,

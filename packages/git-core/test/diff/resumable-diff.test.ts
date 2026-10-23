@@ -67,7 +67,7 @@ async function resumed(
   store: Store,
   oldTree: Oid | null,
   newTree: Oid | null,
-  limits: { maxChanges: number; maxScanned: number },
+  limits: { maxChanges: number; maxScanned: number; takes?: number },
   defer: (n: number) => boolean = () => false,
 ) {
   const paths: string[] = [];
@@ -84,7 +84,18 @@ async function resumed(
       oldTree,
       newTree,
       from,
-      { maxChanges: limits.maxChanges, maxScanned, maxDepth: 64 },
+      {
+        maxChanges: limits.maxChanges,
+        maxScanned,
+        maxDepth: 64,
+        // A taker that takes `takes` changes a slice (at least one: each slice progresses).
+        ...(limits.takes !== undefined && {
+          accept: (() => {
+            let taken = 0;
+            return () => taken++ < (limits.takes as number);
+          })(),
+        }),
+      },
     );
     for (const change of result.changes) paths.push(`${change.status} ${change.path}`);
     if (result.next === null) return paths;
@@ -212,6 +223,37 @@ describe("diffTreesFrom", () => {
     expect(result.next).toEqual({ path: [], enter: true });
   });
 
+  it("stops right before a change its taker refuses, reading no further, and resumes there", async () => {
+    const s = new Store();
+    const b = s.tree({ a: { x: [FILE, 1] }, b: { y: [FILE, 2] }, c: { z: [FILE, 3] } });
+    let taken = 0;
+    const first = await diffTreesFrom(s.read, null, b, null, {
+      maxChanges: 100,
+      maxScanned: 1_000,
+      maxDepth: 64,
+      accept: () => ++taken <= 1,
+    });
+    expect(first.stop).toBe("accept");
+    expect(first.changes.map((c) => c.path)).toEqual(["a/x"]);
+    // The root and `a`, `b` read; `c` never.
+    expect(first.trees).toBe(3);
+    const rest = await diffTreesFrom(s.read, null, b, first.next, {
+      maxChanges: 100,
+      maxScanned: 1_000,
+      maxDepth: 64,
+    });
+    expect(rest.changes.map((c) => c.path)).toEqual(["b/y", "c/z"]);
+    // Refusing the first change of a slice is no progress: it resumes where it started.
+    const none = await diffTreesFrom(s.read, null, b, first.next, {
+      maxChanges: 100,
+      maxScanned: 1_000,
+      maxDepth: 64,
+      accept: () => false,
+    });
+    expect(none.changes).toEqual([]);
+    expect(none.next).toEqual(first.next);
+  });
+
   it("refuses to go deeper than its depth", async () => {
     const s = new Store();
     let spec: Spec = { f: [FILE, 1] };
@@ -237,7 +279,8 @@ describe("diffTreesFrom", () => {
         fc.integer({ min: 1, max: 6 }),
         fc.integer({ min: 0, max: 40 }),
         fc.array(fc.boolean(), { minLength: 1, maxLength: 20 }),
-        async (oldSpec, newSpec, maxChanges, scanBudget, deferrals) => {
+        fc.option(fc.integer({ min: 1, max: 4 }), { nil: undefined }),
+        async (oldSpec, newSpec, maxChanges, scanBudget, deferrals, takes) => {
           const s = new Store();
           const a = s.tree(oldSpec);
           const b = s.tree(newSpec);
@@ -246,7 +289,7 @@ describe("diffTreesFrom", () => {
             s,
             a,
             b,
-            { maxChanges, maxScanned: 1 + scanBudget },
+            { maxChanges, maxScanned: 1 + scanBudget, ...(takes !== undefined && { takes }) },
             // Some reads deferred early on (later ones never: every run must end).
             (n) => n < 200 && n % 7 === 6 && (deferrals[n % deferrals.length] ?? false),
           );

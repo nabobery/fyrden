@@ -41,6 +41,12 @@ export interface ResumableDiffLimits {
   readonly maxDepth: number;
   /** The longest path, in bytes (`DEFAULT_MAX_PATH_BYTES` when not said). */
   readonly maxPathBytes?: number;
+  /**
+   * Takes each change as it is found (its caller's own work on it, done):
+   * false stops the call right before that change, which the next call
+   * lists first. Nothing past it is read.
+   */
+  readonly accept?: (change: ResumedChange) => boolean;
 }
 
 /** A change, with the cursor that resumes right after it. */
@@ -52,8 +58,8 @@ export interface ResumedDiff {
   readonly changes: readonly ResumedChange[];
   /** Where to resume; null once the diff is done. */
   readonly next: DiffCursor | null;
-  /** What stopped it: nothing (`done`), or the budget it reached. */
-  readonly stop: "done" | "changes" | "scanned" | "read";
+  /** What stopped it: nothing (`done`), the budget it reached, or a change not taken (`accept`). */
+  readonly stop: "done" | "changes" | "scanned" | "read" | "accept";
   /** Entries read (every entry of every tree read). */
   readonly scanned: number;
   /** Trees read. */
@@ -76,7 +82,7 @@ const TREE_MODE = 0o40000;
 /** Stops the walk, with where to resume. */
 class Stop {
   constructor(
-    readonly stop: "changes" | "scanned" | "read",
+    readonly stop: "changes" | "scanned" | "read" | "accept",
     readonly next: DiffCursor,
   ) {}
 }
@@ -140,7 +146,11 @@ export async function diffTreesFrom(
     if (dirBytes + name.length > maxPathBytes) throw new TreeDiffLimitError("path", maxPathBytes);
     const pathBytes = pathOf(name);
     const cursor = { path: [...dirs, { name, tree: false }], enter: false };
-    changes.push({ ...change, pathBytes, path: utf8.decode(pathBytes), cursor });
+    const listed: ResumedChange = { ...change, pathBytes, path: utf8.decode(pathBytes), cursor };
+    // Not taken: the next call starts right after the last change taken (or where this one did).
+    if (limits.accept && !limits.accept(listed))
+      throw new Stop("accept", changes.at(-1)?.cursor ?? start);
+    changes.push(listed);
     if (changes.length >= limits.maxChanges) throw new Stop("changes", cursor);
   };
 

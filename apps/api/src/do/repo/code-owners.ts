@@ -14,6 +14,7 @@ import {
   oidFromHex,
   oidToHex,
   ReadDeferred,
+  ReaderWorkSpent,
   type TreeEntry,
 } from "@fyrden/git-core";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
@@ -53,7 +54,7 @@ import type { PullRecord, RepoPulls } from "./pulls.js";
  */
 
 /** Bumped with any change of what an evaluation answers for the same inputs (parser, matcher, locations, diff). */
-export const CODEOWNERS_EVALUATION_VERSION = 2;
+export const CODEOWNERS_EVALUATION_VERSION = 3;
 
 export const CODE_OWNERS_JOB_ID = "code_owners";
 
@@ -61,6 +62,11 @@ export const CODE_OWNERS_JOB_ID = "code_owners";
 export const CODE_OWNERS_POLICY = {
   /** Storage reads one slice makes at most (the queue may start a slice with 800 of 1,000 calls spent). */
   maxReads: 150,
+  /**
+   * Bytes one slice's reads may build: objects inflated, delta programs and
+   * what deltas build, a chain's intermediate objects included (64 MiB).
+   */
+  maxBuiltBytes: 64 * 1024 * 1024,
   /** The largest tree read (about 37,000 entries, about 26 MiB held while parsed). */
   maxTreeBytes: 1024 * 1024,
   /** Tree bytes one slice reads in all (about 39 MiB held). */
@@ -166,6 +172,8 @@ export class RepoCodeOwners {
   policy: typeof CODE_OWNERS_POLICY = CODE_OWNERS_POLICY;
   /** Errors in a row the job waited out (in memory: a restart starts the delays over). */
   #failures = 0;
+  /** Whether the slice just run did about what an invocation's CPU allows (see `heavySlice`). */
+  #heavy = false;
 
   constructor(private readonly deps: CodeOwnersDeps) {}
 
@@ -310,9 +318,10 @@ export class RepoCodeOwners {
         // Results are written: not while the repository takes no changes.
         if (!this.deps.writable()) return { done: false, cursor: null, runAfterMs: 60_000 };
         try {
-          const more = await this.#slice();
+          const { more, evaluated } = await this.#slice();
           this.#failures = 0;
-          if (more) return { done: false, cursor: null };
+          // A slice that did much (see `heavySlice`) ends the invocation: the next runs in another.
+          if (more) return { done: false, cursor: null, endInvocation: evaluated };
           const next = this.#nextAt();
           return next === null
             ? { done: true }
@@ -322,20 +331,27 @@ export class RepoCodeOwners {
           // tried again later, never given up: the job's attempts are never spent.
           this.deps.log().warn("working out code owners failed", { error });
           this.#failures++;
-          return { done: false, cursor: null, runAfterMs: this.#retryDelay(this.#failures) };
+          // Failed after heavy work: no other slice in this invocation either.
+          return {
+            done: false,
+            cursor: null,
+            runAfterMs: this.#retryDelay(this.#failures),
+            endInvocation: this.#heavy,
+          };
         }
       },
     };
   }
 
-  /** One slice of the job's work; whether more is to do at once. */
-  async #slice(): Promise<boolean> {
+  /** One slice of the job's work: whether more is to do at once, and whether it evaluated. */
+  async #slice(): Promise<{ more: boolean; evaluated: boolean }> {
+    this.#heavy = false;
     const restore = this.#rows<{ after: number }>(
       "SELECT after FROM code_owner_restore WHERE id = 1",
     )[0];
     if (restore) {
       this.#restorePage(restore.after);
-      return true;
+      return { more: true, evaluated: false };
     }
     const job = this.#rows<Job>(
       `SELECT pr_number, seq, asked FROM code_owner_jobs WHERE requested_at <= ?
@@ -344,9 +360,9 @@ export class RepoCodeOwners {
     )[0];
     if (job) {
       await this.#work(job);
-      return true;
+      return { more: true, evaluated: this.#heavy };
     }
-    return this.#prune() > 0;
+    return { more: this.#prune() > 0, evaluated: false };
   }
 
   /** One page of a restore's scan: open ready pull requests not shown for their pair are queued. */
@@ -409,6 +425,7 @@ export class RepoCodeOwners {
         deltaBaseCacheBytes: 4 * 1024 * 1024,
         maxCacheCalls: BROWSE_POLICY.cacheCalls,
         maxReads: policy.maxReads,
+        maxBuiltBytes: policy.maxBuiltBytes,
         counts,
       },
     );
@@ -424,7 +441,12 @@ export class RepoCodeOwners {
             this.#defer(job.pr_number, this.#now() + MEMORY_RETRY_MS);
             return STOPPED;
           }
-          if (error instanceof ReadBudgetError || error instanceof ReadsBudgetSpent) {
+          if (
+            error instanceof ReadBudgetError ||
+            error instanceof ReaderWorkSpent ||
+            error instanceof ReadsBudgetSpent
+          ) {
+            this.#heavy = true;
             await this.#withoutProgress(job, target);
             return STOPPED;
           }
@@ -479,12 +501,13 @@ export class RepoCodeOwners {
       // The parsed file is held from the object's memory while the slice uses it.
       const held = memory.tryReserve(Math.max(1, bytes.length * policy.fileMemoryPerByte));
       if (!held) return this.#defer(job.pr_number, this.#now() + MEMORY_RETRY_MS);
+      let current: Evaluation;
       let next: Evaluation;
       let file: CodeOwnersFile;
       try {
         file = parseCodeOwners(bytes);
         // A checkpoint keeps its cursor, counts and totals together.
-        const current =
+        current =
           row.partial === null || row.totals === null
             ? freshEvaluation()
             : deserializeEvaluation({
@@ -507,8 +530,15 @@ export class RepoCodeOwners {
                   // tried again shortly (not a slice without progress).
                   if (error instanceof ReadsMemoryBusy) throw new SliceInterrupted();
                   // A budget of the slice's spent: the next slice resumes before this tree.
-                  if (error instanceof ReadBudgetError || error instanceof ReadsBudgetSpent)
+                  if (
+                    error instanceof ReadBudgetError ||
+                    error instanceof ReaderWorkSpent ||
+                    error instanceof ReadsBudgetSpent
+                  ) {
+                    // Its reads' budget spent: about what an invocation allows, whatever else.
+                    this.#heavy = true;
                     throw new ReadDeferred();
+                  }
                   throw error;
                 }
               },
@@ -522,6 +552,7 @@ export class RepoCodeOwners {
       } finally {
         held.release();
       }
+      this.#heavy ||= heavySlice(bytes.length, current, next, this.limits.sliceSteps);
       if (next.state === "pending") {
         this.#checkpoint(row.eval_id, next);
         // It got further: a streak of slices that could not read what the diff needs first ends.
@@ -925,6 +956,32 @@ async function locate(
 
 const utf8 = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
 const decode = (name: Uint8Array) => utf8.decode(name);
+
+/**
+ * Whether a slice did enough that no other slice should share its
+ * invocation's CPU: a large file parsed (64 KiB or more), many trees read,
+ * changes matched or matcher steps spent, or no progress (a budget stopped
+ * it: the next slice would repeat its work). A typical evaluation (a small
+ * file, a few changes: about 30 ms of CPU, measured on Free) is not.
+ * Proposed thresholds.
+ */
+function heavySlice(
+  fileBytes: number,
+  before: Evaluation,
+  after: Evaluation,
+  sliceSteps: number,
+): boolean {
+  const steps = after.totals.steps - before.totals.steps;
+  return (
+    fileBytes >= 64 * 1024 ||
+    after.totals.stalled > before.totals.stalled ||
+    after.totals.trees - before.totals.trees > 64 ||
+    after.totals.changes - before.totals.changes > 1_000 ||
+    // Many steps, or every step the slice had (its matcher stopped it).
+    steps > 100_000 ||
+    steps >= sliceSteps
+  );
+}
 
 /** An owner as CODEOWNERS writes it. */
 function token(owner: CodeOwner): string {
