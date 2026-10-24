@@ -9,6 +9,7 @@ import type {
 } from "@fyrden/api-contract";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { pageOf } from "../ops/pages.js";
 import type { RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
 import { commentOutput } from "./shapes.js";
@@ -34,22 +35,22 @@ export async function listCommentsOperation(
   ctx: OpContext,
   input: Input<typeof listComments>,
 ): Promise<Output<typeof listComments>> {
-  // The cursor is the last comment's id.
-  const after = decodeCursor(input.cursor, (n) => /^[1-9][0-9]{0,15}$/.test(n));
+  // The cursor is the last comment's id; `after` names one directly.
+  const cursor = decodeCursor(input.cursor, (n) => /^[1-9][0-9]{0,15}$/.test(n));
+  const after = input.after ?? (cursor === "" ? 0 : Number(cursor));
   const { entry, kinds } = await subjectAccess(ctx, input.owner, input.repo, "read");
   const comments = await repo(ctx, entry, "listComments").listComments(
     input.issue_number,
-    after === "" ? 0 : Number(after),
+    after,
     input.per_page + 1,
     kinds,
   );
   if (comments === null) throw failure(entry, "repo_not_found");
   if (comments === undefined) throw subjectNotFound(input.issue_number);
-  const page = comments.slice(0, input.per_page);
-  const last = page.at(-1);
+  const page = pageOf(comments, input.per_page, commentOutput);
   return {
-    comments: page.map(commentOutput),
-    next_cursor: comments.length > input.per_page && last ? encodeCursor(String(last.id)) : null,
+    comments: page.shown,
+    next_cursor: page.more && page.last ? encodeCursor(String(page.last.id)) : null,
   };
 }
 

@@ -14,6 +14,7 @@ import { SHOWN_HANDLE } from "../accounts/handles.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { hasPermission, type OpContext, OperationError } from "../ops/execute.js";
+import { pageOf } from "../ops/pages.js";
 import type { RepoEntry } from "./directory.js";
 import { authorize } from "./directory.js";
 import { actorOf, failure, readable } from "./pulls.js";
@@ -89,21 +90,20 @@ export async function listReviewsOperation(
   ctx: OpContext,
   input: Input<typeof listReviews>,
 ): Promise<Output<typeof listReviews>> {
-  // The cursor is the last review's id.
-  const after = decodeCursor(input.cursor, (n) => /^[1-9][0-9]{0,15}$/.test(n));
+  // The cursor is the last review's id; `after` names one directly.
+  const cursor = decodeCursor(input.cursor, (n) => /^[1-9][0-9]{0,15}$/.test(n));
   const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:read");
   const reviews = await repo(ctx, entry, "listReviews").listReviews(
     input.pull_number,
-    after === "" ? 0 : Number(after),
+    input.after ?? (cursor === "" ? 0 : Number(cursor)),
     input.per_page + 1,
   );
   if (reviews === null) throw failure(entry, "repo_not_found");
   if (reviews === undefined) throw failure(entry, "not_found", input.pull_number);
-  const page = reviews.slice(0, input.per_page);
-  const last = page.at(-1);
+  const page = pageOf(reviews, input.per_page, reviewOutput);
   return {
-    reviews: page.map(reviewOutput),
-    next_cursor: reviews.length > input.per_page && last ? encodeCursor(String(last.id)) : null,
+    reviews: page.shown,
+    next_cursor: page.more && page.last ? encodeCursor(String(page.last.id)) : null,
   };
 }
 

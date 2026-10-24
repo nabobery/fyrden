@@ -23,6 +23,7 @@ import {
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { pageOf } from "../ops/pages.js";
 import { resolveOne } from "../signing/verification.js";
 import type { RepoEntry } from "./directory.js";
 import { commitIdentityOf, noReplyPeople } from "./file-writes.js";
@@ -95,7 +96,7 @@ export async function listReviewCommentsOperation(
   ctx: OpContext,
   input: Input<typeof listReviewComments>,
 ): Promise<Output<typeof listReviewComments>> {
-  const after = afterOf(input.cursor);
+  const after = input.after ?? afterOf(input.cursor);
   const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:read");
   const listed = await repo(ctx, entry, "listReviewComments").listReviewComments(
     input.pull_number,
@@ -104,12 +105,10 @@ export async function listReviewCommentsOperation(
   );
   if (listed === null) throw failure(entry, "repo_not_found");
   if (listed === undefined) throw failure(entry, "not_found", input.pull_number);
-  const page = listed.comments.slice(0, input.per_page);
-  const last = page.at(-1);
+  const page = pageOf(listed.comments, input.per_page, (c) => commentOutput(c, listed.comparison));
   return {
-    comments: page.map((c) => commentOutput(c, listed.comparison)),
-    next_cursor:
-      listed.comments.length > input.per_page && last ? encodeCursor(String(last.id)) : null,
+    comments: page.shown,
+    next_cursor: page.more && page.last ? encodeCursor(String(page.last.id)) : null,
   };
 }
 

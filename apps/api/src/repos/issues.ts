@@ -14,6 +14,7 @@ import type { SubjectBoundary, SubjectFilter, SubjectKind } from "../do/repo/iss
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { pageOf } from "../ops/pages.js";
 import { authorize, findReposById, type RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
 import { principalsByLogin } from "./reviews.js";
@@ -241,9 +242,16 @@ export async function listIssuesOperation(
     filter: filtering.filter,
   });
   if (listing === null) throw failure(entry, "repo_not_found");
+  const page = pageOf(listing.subjects, input.per_page, (s) => subjectOutput(s, kinds));
+  // Cut short by its bytes: the next page starts after the last item carried.
+  const last = page.last && (page.last.kind === "issue" ? page.last.issue : page.last.pull);
+  const next =
+    page.more && last
+      ? { key: input.sort === "created" ? last.number : last.updatedAt, number: last.number }
+      : listing.next;
   return {
-    issues: listing.subjects.map((s) => subjectOutput(s, kinds)),
-    next_cursor: listing.next ? encodeListingCursor(context, listing.next) : null,
+    issues: page.shown,
+    next_cursor: next ? encodeListingCursor(context, next) : null,
   };
 }
 

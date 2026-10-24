@@ -11,6 +11,7 @@ import {
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { TeamSlug } from "./access.js";
+import { AfterId, BoundedPerPage } from "./pages.js";
 import { PullRequest } from "./pulls.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 
@@ -80,11 +81,16 @@ export const listReviews = defineOperation({
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews",
   summary: "List reviews",
   description: "A pull request's reviews, in the order submitted.",
-  input: z.object({
-    ...PullInput,
-    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
-    cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
-  }),
+  input: z
+    .object({
+      ...PullInput,
+      per_page: BoundedPerPage,
+      cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
+      after: AfterId,
+    })
+    .refine((input) => input.cursor === undefined || input.after === undefined, {
+      message: "Pass cursor or after, not both.",
+    }),
   output: z.object({
     reviews: z.array(Review),
     next_cursor: z

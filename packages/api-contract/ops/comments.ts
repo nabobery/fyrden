@@ -1,6 +1,7 @@
 import { HANDLE_SHAPE, MAX_COMMENT_BODY_LENGTH, MAX_HANDLE_LENGTH } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
+import { AfterId, BoundedPerPage } from "./pages.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 import { ReactionRollup } from "./subject-meta.js";
 
@@ -47,12 +48,17 @@ export const listComments = defineOperation({
   summary: "List comments",
   description:
     "An issue's or pull request's conversation comments, oldest first, for a caller that may read that kind (`issues:read` or `pull_requests:read`).",
-  input: z.object({
-    ...RepoInput,
-    issue_number: IssueNumber,
-    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
-    cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
-  }),
+  input: z
+    .object({
+      ...RepoInput,
+      issue_number: IssueNumber,
+      per_page: BoundedPerPage,
+      cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
+      after: AfterId,
+    })
+    .refine((input) => input.cursor === undefined || input.after === undefined, {
+      message: "Pass cursor or after, not both.",
+    }),
   output: z.object({
     comments: z.array(Comment),
     next_cursor: z

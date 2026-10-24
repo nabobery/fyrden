@@ -8,6 +8,7 @@ import {
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { CommitObject } from "./browse.js";
+import { BoundedPerPage } from "./pages.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 import { ReactionRollup, SortingOutput } from "./subject-meta.js";
 
@@ -113,7 +114,7 @@ export const listPulls = defineOperation({
   input: z.object({
     ...RepoInput,
     state: z.enum(["open", "closed", "all"]).default("open"),
-    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+    per_page: BoundedPerPage,
     cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
   }),
   output: z.object({

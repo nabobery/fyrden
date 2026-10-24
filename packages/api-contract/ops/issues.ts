@@ -11,6 +11,7 @@ import {
 } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
+import { BoundedPerPage } from "./pages.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 import { ReactionRollup, SortingOutput } from "./subject-meta.js";
 
@@ -158,7 +159,7 @@ export const listIssues = defineOperation({
         .describe(
           "A handle: items opened by that user or agent (as `user` shows them: the user when agents acted for one).",
         ),
-      per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+      per_page: BoundedPerPage,
       cursor: z
         .string()
         .max(400)

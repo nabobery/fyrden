@@ -21,6 +21,7 @@ import {
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, decodeCursor, encodeBytesCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { pageOf } from "../ops/pages.js";
 import { resolveVerification } from "../signing/verification.js";
 import { authorize, findReposById, networkReposOf, type RepoEntry } from "./directory.js";
 import { commitIdentityFor, commitIdentityOf } from "./file-writes.js";
@@ -198,11 +199,10 @@ export async function listPullsOperation(
     input.per_page + 1,
   );
   if (!pulls) throw repoNotFound(entry);
-  const page = pulls.slice(0, input.per_page);
-  const last = page.at(-1);
+  const page = pageOf(pulls, input.per_page, (p) => pullOutput(p, readable(ctx, entry)));
   return {
-    pull_requests: page.map((p) => pullOutput(p, readable(ctx, entry))),
-    next_cursor: pulls.length > input.per_page && last ? encodeCursor(String(last.number)) : null,
+    pull_requests: page.shown,
+    next_cursor: page.more && page.last ? encodeCursor(String(page.last.number)) : null,
   };
 }
 

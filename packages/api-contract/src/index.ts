@@ -15,6 +15,7 @@ export * from "../ops/labels.js";
 export * from "../ops/meta.js";
 export * from "../ops/milestones.js";
 export * from "../ops/orgs.js";
+export * from "../ops/pages.js";
 export * from "../ops/pulls.js";
 export * from "../ops/quotas.js";
 export * from "../ops/reactions.js";

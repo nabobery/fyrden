@@ -1648,7 +1648,7 @@ export type PullsListInput = {
   /** The repository's name. */
   repo: string;
   state?: "open" | "closed" | "all";
-  /** Page size, 1-100. */
+  /** Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with `next_cursor` to go on. */
   per_page?: number;
   /** From a previous page's `next_cursor`. */
   cursor?: string;
@@ -2351,10 +2351,12 @@ export type PullsCommentsListInput = {
   repo: string;
   /** The pull request's number. */
   pull_number: number;
-  /** Page size, 1-100. */
+  /** Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with `next_cursor` to go on. */
   per_page?: number;
   /** From a previous page's `next_cursor`. */
   cursor?: string;
+  /** Fyrden: only items whose id is greater than this (not with `cursor`). */
+  after?: number;
 };
 
 /** Output of `pulls.comments.list`. */
@@ -2783,10 +2785,12 @@ export type PullsReviewsListInput = {
   repo: string;
   /** The pull request's number. */
   pull_number: number;
-  /** Page size, 1-100. */
+  /** Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with `next_cursor` to go on. */
   per_page?: number;
   /** From a previous page's `next_cursor`. */
   cursor?: string;
+  /** Fyrden: only items whose id is greater than this (not with `cursor`). */
+  after?: number;
 };
 
 /** Output of `pulls.reviews.list`. */
@@ -3269,7 +3273,7 @@ export type IssuesListInput = {
   milestone?: string;
   /** A handle: items opened by that user or agent (as `user` shows them: the user when agents acted for one). */
   creator?: string;
-  /** Page size, 1-100. */
+  /** Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with `next_cursor` to go on. */
   per_page?: number;
   /** From a previous page's `next_cursor`, with the same filters. */
   cursor?: string;
@@ -4261,7 +4265,7 @@ export type MilestonesListInput = {
   state?: "open" | "closed" | "all";
   sort?: "due_on";
   direction?: "asc" | "desc";
-  /** Page size, 1-100. */
+  /** Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with `next_cursor` to go on. */
   per_page?: number;
   /** From a previous page's `next_cursor`, with the same filters. */
   cursor?: string;
@@ -4434,10 +4438,12 @@ export type IssuesCommentsListInput = {
   repo: string;
   /** The issue's or pull request's number. */
   issue_number: number;
-  /** Page size, 1-100. */
+  /** Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with `next_cursor` to go on. */
   per_page?: number;
   /** From a previous page's `next_cursor`. */
   cursor?: string;
+  /** Fyrden: only items whose id is greater than this (not with `cursor`). */
+  after?: number;
 };
 
 /** Output of `issues.comments.list`. */
