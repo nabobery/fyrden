@@ -42,6 +42,7 @@ const CASES: Record<
   // The repository is empty: listings answer, a named ref is not found.
   "repos.branches.list": { input: {}, expected: { status: 200 } },
   "repos.branches.get": { input: {}, expected: { status: 404, code: "branch_not_found" } },
+  "repos.codeowners.errors": { input: {}, expected: { status: 404, code: "not_found" } },
   "repos.tags.list": { input: {}, expected: { status: 200 } },
   "repos.commits.list": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.commits.get": { input: {}, expected: { status: 404, code: "ref_not_found" } },

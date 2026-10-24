@@ -87,6 +87,7 @@ export const METRICS = {
   "feed.audience_dropped": [],
   "feed.participants_overflow": [],
   "code_owners.request_skipped": ["reason"],
+  "d1.invocation_statements": ["where", "op"],
   // Wall time of one stage of making webhook deliveries, in ms: an event's
   // rows, body, claim and hooks once per event; post and record once per
   // attempt the event's effect makes. The clock advances only on I/O.
@@ -128,6 +129,7 @@ export const METRIC_AGGREGATION: Partial<Record<MetricName, MetricAggregation>> 
   "feed.stage_ms": "each",
   "acl.snapshot_age_ms": "each",
   "worker.cpu_ms": "each",
+  "d1.invocation_statements": "each",
   "worker.wall_ms": "each",
   "metrics.dropped": "each",
 };

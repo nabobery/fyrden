@@ -63,6 +63,11 @@ export interface HeldReadLimits {
   readonly maxTreeBytes: number;
   /** Bytes of the objects read, in all. */
   readonly maxReadBytes: number;
+  /**
+   * Bytes read so far, shared with other scopes of the same work (each
+   * holding its memory only while it runs): `maxReadBytes` bounds them all.
+   */
+  readonly spent?: { readBytes: number };
 }
 
 export interface HeldReads {
@@ -85,7 +90,7 @@ export async function withHeldReads<T>(
 ): Promise<T> {
   const holds: { release(): void }[] = [];
   const trees = new Map<string, readonly TreeEntry[]>();
-  let readBytes = 0;
+  const spent = limits.spent ?? { readBytes: 0 };
   // Set once `use` is done: a read still under way then holds and parses nothing.
   let done = false;
   // Reads under way: cleanup waits for them before it lets their memory go.
@@ -101,8 +106,8 @@ export async function withHeldReads<T>(
     return running;
   };
   const hold = (read: number, bytes: number) => {
-    readBytes += read;
-    if (readBytes > limits.maxReadBytes) throw new ReadsBudgetSpent();
+    spent.readBytes += read;
+    if (spent.readBytes > limits.maxReadBytes) throw new ReadsBudgetSpent();
     let held: { release(): void } | undefined;
     try {
       held = memory.tryReserve(Math.max(1, bytes));

@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CODEOWNERS_PATHS,
+  codeOwnersTooLarge,
   compilePattern,
   MAX_CODEOWNERS_BYTES,
   MAX_CODEOWNERS_RULES,
@@ -20,6 +21,7 @@ import {
   parseCodeOwners,
   pathText,
   preparePath,
+  quoteExcerpt,
 } from "../../src/index.js";
 import hmarr from "./hmarr-patterns.json" with { type: "json" };
 
@@ -513,5 +515,21 @@ describe("paths", () => {
     const file = parse("* @security\n/docs/\n");
     expect(ownershipOf(file, "docs/private", budget())).toEqual({ kind: "ownerless", line: 2 });
     expect(ownershipOf(file, marked ?? "", budget())).toMatchObject({ kind: "owned", line: 1 });
+  });
+});
+
+describe("what errors quote", () => {
+  it("cuts a quoted owner to 256 characters at a code point, marking the cut", () => {
+    const token = `${"é".repeat(255)}😀😀😀`;
+    const { errors } = parseCodeOwners(new TextEncoder().encode(`/a/ ${token}\n`));
+    const message = errors[0]?.message ?? "";
+    expect(message).toContain(`${"é".repeat(255)}😀…`);
+    expect(message).not.toContain("😀😀");
+    expect(quoteExcerpt("short", 256)).toBe("short");
+  });
+
+  it("answers a file too large with one whole-file error, as parsing it would", () => {
+    const size = MAX_CODEOWNERS_BYTES + 5;
+    expect(codeOwnersTooLarge(size)).toEqual(parseCodeOwners(new Uint8Array(size)));
   });
 });

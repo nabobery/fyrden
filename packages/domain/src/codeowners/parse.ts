@@ -168,21 +168,56 @@ function tokensOf(line: string, max: number): { tokens: Token[]; tooLong?: numbe
   return { tokens };
 }
 
+/** Characters of a token a message quotes at most (a token is as long as its line may be). */
+export const MAX_QUOTED_CHARACTERS = 256;
+
+/**
+ * `text` cut to its first `max` code points, `…` marking a cut: what an
+ * error message or answer quotes of a line or token.
+ */
+export function quoteExcerpt(text: string, max: number): string {
+  let units = 0;
+  let points = 0;
+  while (units < text.length && points < max) {
+    units += (text.codePointAt(units) as number) > 0xffff ? 2 : 1;
+    points++;
+  }
+  return units < text.length ? `${text.slice(0, units)}…` : text;
+}
+
+/** A file of `size` bytes, too large to read: no rules, and its whole-file error (read no further). */
+export function codeOwnersTooLarge(size: number): CodeOwnersFile {
+  return {
+    rules: [],
+    errors: [
+      {
+        line: 0,
+        column: 0,
+        kind: "File too large",
+        source: "",
+        message: `The file is ${size} bytes; it must be under ${MAX_CODEOWNERS_BYTES}.`,
+        suggestion: null,
+      },
+    ],
+  };
+}
+
 /** An owner token as an owner, or why it is not one. */
 function ownerOf(
   token: string,
 ): { ok: true; owner: CodeOwner } | { ok: false; kind: CodeOwnersError["kind"]; message: string } {
+  const quoted = quoteExcerpt(token, MAX_QUOTED_CHARACTERS);
   if (!token.startsWith("@")) {
     return token.includes("@")
       ? {
           ok: false,
           kind: "Unsupported owner",
-          message: `Email owners (${token}) are not supported.`,
+          message: `Email owners (${quoted}) are not supported.`,
         }
       : {
           ok: false,
           kind: "Invalid owner",
-          message: `${token} is not an owner: use @user or @org/team.`,
+          message: `${quoted} is not an owner: use @user or @org/team.`,
         };
   }
   const name = token.slice(1);
@@ -190,14 +225,14 @@ function ownerOf(
   if (slash < 0)
     return HANDLE_PATTERN.test(name)
       ? { ok: true, owner: { kind: "user", handle: name } }
-      : { ok: false, kind: "Invalid owner", message: `${token} is not a valid user.` };
+      : { ok: false, kind: "Invalid owner", message: `${quoted} is not a valid user.` };
   const org = name.slice(0, slash);
   const slug = name.slice(slash + 1);
   return HANDLE_PATTERN.test(org) &&
     slug.length <= MAX_TEAM_SLUG_LENGTH &&
     TEAM_SLUG.test(slug.toLowerCase())
     ? { ok: true, owner: { kind: "team", org, slug: slug.toLowerCase() } }
-    : { ok: false, kind: "Invalid owner", message: `${token} is not a valid team.` };
+    : { ok: false, kind: "Invalid owner", message: `${quoted} is not a valid team.` };
 }
 
 /**
@@ -209,11 +244,7 @@ export function parseCodeOwners(bytes: Uint8Array): CodeOwnersFile {
     rules: [],
     errors: [{ line: 0, column: 0, kind, source: "", message, suggestion: null }],
   });
-  if (bytes.length >= MAX_CODEOWNERS_BYTES)
-    return whole(
-      "File too large",
-      `The file is ${bytes.length} bytes; it must be under ${MAX_CODEOWNERS_BYTES}.`,
-    );
+  if (bytes.length >= MAX_CODEOWNERS_BYTES) return codeOwnersTooLarge(bytes.length);
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);

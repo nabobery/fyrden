@@ -5560,6 +5560,140 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
     },
+    "/repos/{owner}/{repo}/codeowners/errors": {
+      "get": {
+        "description": "The errors of the CODEOWNERS file a pull request onto a branch, tag or commit would read (\`.github/\`, the root, \`docs/\`: the first location holding a regular file), in line order. Syntax only: owners that do not exist or cannot write are not listed (a merge needing code owners' review names them when a rule's owners all fail to qualify). Each error's \`source\` is cut to 1,024 characters; an answer of more than 1 MiB stops early with Fyrden's \`truncated: true\`. 404 when the ref names no commit or no CODEOWNERS file is there.",
+        "operationId": "repos.codeowners.errors",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "description": "A branch, a tag or a full commit SHA; the default branch when absent.",
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "errors": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "column": {
+                            "description": "From 1, where the error starts; 0 for the file as a whole.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "kind": {
+                            "type": "string",
+                          },
+                          "line": {
+                            "description": "From 1; 0 for the file as a whole.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "message": {
+                            "type": "string",
+                          },
+                          "path": {
+                            "description": "The CODEOWNERS file's path.",
+                            "type": "string",
+                          },
+                          "source": {
+                            "description": "The line as written (cut to 1,024 characters).",
+                            "type": "string",
+                          },
+                          "suggestion": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                        },
+                        "required": [
+                          "line",
+                          "column",
+                          "kind",
+                          "source",
+                          "suggestion",
+                          "message",
+                          "path",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "truncated": {
+                      "description": "Fyrden: more errors than one answer carries.",
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "errors",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List CODEOWNERS errors",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/repos/{owner}/{repo}/collaborators": {
       "get": {
         "description": "Lists the users given a role on this repository directly, by handle (owners, organization members and teams are not listed).",

@@ -69,6 +69,7 @@ import {
   compareCommitsOperation,
   getArchiveOperation,
   getBranchOperation,
+  getCodeOwnersErrorsOperation,
   getCommitOperation,
   getContentsOperation,
   getReadmeOperation,
@@ -528,6 +529,7 @@ export const handlers: Handlers = {
   "repos.contents.get": getContentsOperation,
   "repos.contents.root": getRootContentsOperation,
   "repos.readme.get": getReadmeOperation,
+  "repos.codeowners.errors": getCodeOwnersErrorsOperation,
   "repos.trees.get": getTreeOperation,
   "repos.archives.get": getArchiveOperation,
 

@@ -112,6 +112,7 @@ import {
   type CommitView,
   type CompareView,
   fail,
+  guarded,
   type LogInput,
   type LogView,
   type RefView,
@@ -131,6 +132,12 @@ import {
   CodeOwnerRequests,
 } from "./repo/code-owner-requests.js";
 import { RepoCodeOwners } from "./repo/code-owners.js";
+import {
+  CODEOWNERS_ERRORS_POLICY,
+  type CodeOwnersErrors,
+  type CodeOwnersErrorsPolicy,
+  codeOwnersErrors,
+} from "./repo/code-owners-errors.js";
 import { type CommentRecord, RepoComments } from "./repo/comments.js";
 import type { ConflictsView, MergedIntoHead } from "./repo/conflicts.js";
 import {
@@ -341,6 +348,9 @@ export class RepoDO extends MigratingDO {
 
   /** Limits of the code owners a merge resolves. Tests may replace them. */
   codeOwnerMergePolicy: CodeOwnerMergePolicy = CODE_OWNER_MERGE_POLICY;
+
+  /** The CODEOWNERS errors endpoint's budgets. Tests may replace them. */
+  codeOwnersErrorsPolicy: CodeOwnersErrorsPolicy = CODEOWNERS_ERRORS_POLICY;
 
   /** Asking code owners to review: a slice's budgets. Tests may replace them. */
   codeOwnerRequestPolicy: CodeOwnerRequestPolicy = CODE_OWNER_REQUEST_POLICY;
@@ -2474,6 +2484,23 @@ export class RepoDO extends MigratingDO {
 
   browseReadme(ref: string | undefined): Promise<Browsed<{ commit: string; view: ContentsView }>> {
     return this.#browse("browseReadme", (b) => readme(b, ref));
+  }
+
+  /** The errors of the CODEOWNERS file at `ref` (see `code-owners-errors.ts`). */
+  codeOwnersErrors(ref: string | undefined): Promise<Browsed<CodeOwnersErrors>> {
+    const policy = this.codeOwnersErrorsPolicy;
+    const browse = new RepoBrowse({
+      git: this.git,
+      memoryBlocks: this.#memoryBlocks(),
+      policy: { maxBuiltBytes: policy.maxBuiltBytes },
+    });
+    return this.#measured("codeOwnersErrors", async () => {
+      try {
+        return await guarded(() => codeOwnersErrors(browse, this.git.memory, ref, policy));
+      } finally {
+        browse.close();
+      }
+    });
   }
 
   browseTree(ref: string | undefined, recursive: boolean): Promise<Browsed<TreeListing>> {

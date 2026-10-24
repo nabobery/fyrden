@@ -2,6 +2,7 @@ import type {
   compareCommits,
   getArchive,
   getBranch,
+  getCodeOwnersErrors,
   getCommit,
   getContents,
   getReadme,
@@ -277,6 +278,17 @@ export async function getReadmeOperation(
   const stub = await repoStub(ctx, input.owner, input.repo);
   ctx.metrics.count("do.request", { class: "RepoDO", method: "browseReadme" });
   return contentsOutput(ctx, input, value(await stub.browseReadme(input.ref)));
+}
+
+/** The `repos.codeowners.errors` operation (GitHub's). */
+export async function getCodeOwnersErrorsOperation(
+  ctx: OpContext,
+  input: Input<typeof getCodeOwnersErrors>,
+): Promise<Output<typeof getCodeOwnersErrors>> {
+  const stub = await repoStub(ctx, input.owner, input.repo);
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "codeOwnersErrors" });
+  const { errors, truncated } = value(await stub.codeOwnersErrors(input.ref));
+  return { errors: errors.map((e) => ({ ...e })), ...(truncated && { truncated: true }) };
 }
 
 /** The `repos.trees.get` operation. */
