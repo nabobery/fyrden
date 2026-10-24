@@ -28036,9 +28036,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                       "type": "boolean",
                                     },
                                     "require_code_owner_review": {
-                                      "const": false,
                                       "default": false,
-                                      "description": "Code owners are not supported yet: must be false.",
+                                      "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
                                       "type": "boolean",
                                     },
                                     "require_last_push_approval": {
@@ -28334,9 +28333,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "type": "boolean",
                             },
                             "require_code_owner_review": {
-                              "const": false,
                               "default": false,
-                              "description": "Code owners are not supported yet: must be false.",
+                              "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
                               "type": "boolean",
                             },
                             "require_last_push_approval": {
@@ -28580,9 +28578,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "type": "boolean",
                               },
                               "require_code_owner_review": {
-                                "const": false,
                                 "default": false,
-                                "description": "Code owners are not supported yet: must be false.",
+                                "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
                                 "type": "boolean",
                               },
                               "require_last_push_approval": {
@@ -29216,9 +29213,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "type": "boolean",
                               },
                               "require_code_owner_review": {
-                                "const": false,
                                 "default": false,
-                                "description": "Code owners are not supported yet: must be false.",
+                                "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
                                 "type": "boolean",
                               },
                               "require_last_push_approval": {
@@ -29517,9 +29513,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "type": "boolean",
                             },
                             "require_code_owner_review": {
-                              "const": false,
                               "default": false,
-                              "description": "Code owners are not supported yet: must be false.",
+                              "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
                               "type": "boolean",
                             },
                             "require_last_push_approval": {
@@ -29763,9 +29758,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "type": "boolean",
                               },
                               "require_code_owner_review": {
-                                "const": false,
                                 "default": false,
-                                "description": "Code owners are not supported yet: must be false.",
+                                "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
                                 "type": "boolean",
                               },
                               "require_last_push_approval": {

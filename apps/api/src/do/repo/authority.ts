@@ -19,7 +19,9 @@ import { type SignedFact, verdicts } from "../../signing/verification.js";
 import type { RepoAcl } from "./acl.js";
 import { BROWSE_POLICY } from "./browse.js";
 import {
+  type CodeOwnerDemand,
   checkPushRules,
+  codeOwnerDemand,
   countedApprovals,
   hasPrecheckRules,
   precheckPushRules,
@@ -39,6 +41,9 @@ import { factOf } from "./signature.js";
 /** Principals one directory query looks up (D1 binds at most 100 parameters). */
 const OWNER_BATCH = 50;
 
+/** Principals one activity query reads, as one JSON array. */
+const ACTIVE_BATCH = 1_000;
+
 /** Stands for a commit not made yet in a ruleset precheck (only the update's kind matters there). */
 export const ZERO_ID = "0".repeat(40);
 
@@ -53,6 +58,25 @@ export interface AuthorityDeps {
 
 export class RepoAuthority {
   constructor(private readonly deps: AuthorityDeps) {}
+
+  /**
+   * Whether a merge into `ref` by `principal` (under `grantId`) is asked
+   * for code owners' review by its rules: by an applicable `active` rule,
+   * only by `evaluate` ones, or not at all (a bypass included).
+   */
+  async codeOwnerDemand(
+    principal: string,
+    grantId: string | null,
+    ref: string,
+  ): Promise<CodeOwnerDemand | null> {
+    const ceilings = await this.rolesPulled(principal, grantId);
+    return codeOwnerDemand(
+      this.#ruleSnapshot(principal, ceilings).snapshot,
+      principal,
+      grantId !== null,
+      ref,
+    );
+  }
 
   /** The strongest role the current ACL snapshot allows (an owner's: admin). */
   #ruleRoleNow(principal: string): RepoRole | null {
@@ -104,16 +128,18 @@ export class RepoAuthority {
     const owners = new Map<string, string[]>();
     const unique = [...new Set(principals)];
     const db = this.deps.env().DIRECTORY.withSession("first-primary");
-    for (let at = 0; at < unique.length; at += OWNER_BATCH) {
-      const batch = unique.slice(at, at + OWNER_BATCH);
+    // As one JSON array a query (one bound parameter), so reviewers, their roots and the agents
+    // their reviews went through cost a query a thousand, within Free's 50 a request.
+    for (let at = 0; at < unique.length; at += ACTIVE_BATCH) {
+      const batch = unique.slice(at, at + ACTIVE_BATCH);
       this.deps.git.context.metrics.count("d1.query", { db: "directory", op: "active_owners" });
       const { results } = await db
         .prepare(
           `SELECT p.id, p.owner_id FROM principals p LEFT JOIN principals o ON o.id = p.owner_id
-           WHERE p.id IN (${batch.map(() => "?").join(", ")}) AND p.disabled_at IS NULL
+           WHERE p.id IN (SELECT value FROM json_each(?)) AND p.disabled_at IS NULL
              AND o.disabled_at IS NULL`,
         )
-        .bind(...batch)
+        .bind(JSON.stringify(batch))
         .all<{ id: string; owner_id: string | null }>();
       for (const row of results)
         owners.set(

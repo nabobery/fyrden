@@ -23,6 +23,7 @@ const input = (reviews: ReviewFact[], over: Partial<ApprovalInput> = {}): Approv
   authorRoot: "author",
   lastPush: { pusherRoot: "author", at: 0 },
   eligibleRoots: new Set(["author", "alice", "bob", "carol"]),
+  eligiblePrincipals: new Set(["author", "alice", "bob", "carol"]),
   ...over,
 });
 let clock = 0;
@@ -32,6 +33,8 @@ const review = (
   over: Partial<ReviewFact> = {},
 ) => ({
   reviewerRoot,
+  reviewerId: reviewerRoot,
+  active: true,
   byAgent: false,
   commitSha: HEAD,
   state,
@@ -76,6 +79,28 @@ describe("evaluateApprovals", () => {
     // Not the author's, a stale one, one without write access, an agent's, nor one replaced.
     expect(outcome.approvers).toEqual(["alice", "frank"]);
     expect(outcome.approvals).toBe(2);
+  });
+
+  it("counts no root whose standing review is by a reviewer since disabled, not even its earlier one", () => {
+    const outcome = evaluateApprovals(
+      input([
+        review("alice", "APPROVED"),
+        // Alice's agent approves later, then is disabled: her earlier approval does not stand in.
+        review("alice", "APPROVED", { reviewerId: "agt_a", byAgent: true, active: false }),
+        review("bob", "APPROVED"),
+      ]),
+      settings({ allowAgentApprovals: true }),
+    );
+    expect(outcome.approvers).toEqual(["bob"]);
+    // Agents' approvals not counted: the agent's review is passed over, alice's own stands.
+    const people = evaluateApprovals(
+      input([
+        review("alice", "APPROVED"),
+        review("alice", "APPROVED", { reviewerId: "agt_a", byAgent: true, active: false }),
+      ]),
+      settings(),
+    );
+    expect(people.approvers).toEqual(["alice"]);
   });
 
   it("takes each person's latest review: approve then request changes blocks, and back again", () => {
@@ -249,15 +274,18 @@ describe("evaluateApprovals", () => {
     ).toMatchObject({ approvals: 1, lastPushApproved: false, satisfied: false });
   });
 
-  const reviewArb = fc.record({
-    reviewerRoot: fc.constantFrom("author", "alice", "bob", "carol", "dave"),
-    byAgent: fc.boolean(),
-    commitSha: fc.constantFrom(HEAD, OLD),
-    state: fc.constantFrom(...REVIEW_STATES),
-    submittedAt: fc.nat(1_000),
-    seq: fc.nat(1_000),
-    dismissed: fc.boolean(),
-  });
+  const reviewArb = fc
+    .record({
+      reviewerRoot: fc.constantFrom("author", "alice", "bob", "carol", "dave"),
+      byAgent: fc.boolean(),
+      active: fc.boolean(),
+      commitSha: fc.constantFrom(HEAD, OLD),
+      state: fc.constantFrom(...REVIEW_STATES),
+      submittedAt: fc.nat(1_000),
+      seq: fc.nat(1_000),
+      dismissed: fc.boolean(),
+    })
+    .map((r) => ({ ...r, reviewerId: r.byAgent ? `agt_${r.reviewerRoot}` : r.reviewerRoot }));
   const settingsArb = fc.record({
     required: fc.integer({ min: 0, max: 10 }),
     dismissStale: fc.boolean(),

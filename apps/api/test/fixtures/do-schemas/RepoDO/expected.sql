@@ -50,6 +50,12 @@ CREATE UNIQUE INDEX review_requests_id ON review_requests (request_id);
 CREATE INDEX review_team_requests_owner ON review_team_requests (owner_gen);
 CREATE INDEX review_team_requests_pr ON review_team_requests (pr_number, owner_gen);
 CREATE INDEX review_threads_pr ON review_threads (pr_number, thread_id);
+CREATE INDEX reviews_by_reviewer
+        ON reviews (pr_number, reviewer_id, by_agent, state, review_id)
+        WHERE dismissed_at IS NULL;
+CREATE INDEX reviews_by_reviewer_head
+        ON reviews (pr_number, reviewer_id, by_agent, commit_sha, state, review_id)
+        WHERE dismissed_at IS NULL;
 CREATE INDEX reviews_pr ON reviews (pr_number, review_id);
 CREATE INDEX reviews_standing
         ON reviews (pr_number, reviewer_root, by_agent, state, review_id)

@@ -4,6 +4,7 @@ import {
   GITHUB_DEFAULT_LABELS,
   type LabelSpec,
   MAX_TEAM_REVIEWERS,
+  membershipKey,
   type OrgRole,
   orgRepoRole,
   REPO_ROLES,
@@ -150,17 +151,37 @@ export interface AclSnapshot {
   readonly roles: Readonly<Record<string, RepoRole>>;
 }
 
-/** Principals' current roles on one repository, confirmed at one ACL version (see `confirmRoles`). */
+/**
+ * Principals' and teams' current roles on one repository and team
+ * memberships, confirmed at one ACL version (see `confirmRoles`).
+ */
 export interface RoleConfirmation {
   readonly accountId: string;
   readonly epochGen: number;
   readonly version: number;
   /** Principal id → role, null for none. */
   readonly roles: Readonly<Record<string, RepoRole | null>>;
+  /** Team id → its role, null for none (or no such team). */
+  readonly teamRoles: Readonly<Record<string, RepoRole | null>>;
+  /** The memberships asked about (`membershipKey`s) that hold. */
+  readonly members: readonly string[];
 }
 
-/** Most principals one confirmation reads (a merge's 512 reviewers and their owners). Proposed. */
+/** An organization's teams as a merge's code owners name them (see `codeOwnerTeams`). */
+export interface CodeOwnerTeams {
+  /** Slug → its team and role on the repository; a slug left out names no team. */
+  readonly teams: Readonly<
+    Record<string, { readonly teamId: string; readonly role: RepoRole | null }>
+  >;
+  /** Memberships (`membershipKey`s) of the principals asked about. */
+  readonly members: readonly string[];
+}
+
+/** Most principals one confirmation reads (a merge's reviewers, owners and their owners). Proposed. */
 export const MAX_CONFIRMED_PRINCIPALS = 1_024;
+
+/** Most team memberships one confirmation reads. Proposed. */
+export const MAX_CONFIRMED_PAIRS = 4_096;
 
 /** The role members of an organization get on its repositories (GitHub's default; not configurable yet). */
 export const BASE_ROLE: RepoRole = "read";
@@ -389,24 +410,106 @@ export class OrgDO extends MigratingDO {
 
   /**
    * Each of `principals`' strongest role on repository `repoId` now (null
-   * for none), as `snapshotFor` gives it, at the account's current ACL
-   * version and restore generation: read after the epoch check, all with
-   * no await between them, so a merge's confirmation of its reviewers is
-   * one linearized read here. At most `MAX_CONFIRMED_PRINCIPALS`.
+   * for none), as `snapshotFor` gives it, each of `teams`' role on it (null
+   * for none, or no such team) and which of the `pairs` (`membershipKey`s)
+   * are memberships, at the account's current ACL version and restore
+   * generation: read after the epoch check, all with no await between
+   * them, so a merge's confirmation of its reviewers and code owners is one
+   * linearized read here. At most `MAX_CONFIRMED_PRINCIPALS` principals and
+   * `MAX_CONFIRMED_PAIRS` pairs.
    */
-  async confirmRoles(repoId: string, principals: readonly string[]): Promise<RoleConfirmation> {
+  async confirmRoles(
+    repoId: string,
+    principals: readonly string[],
+    teams: readonly string[] = [],
+    pairs: readonly string[] = [],
+  ): Promise<RoleConfirmation> {
     const unique = [...new Set(principals)];
     if (unique.length > MAX_CONFIRMED_PRINCIPALS)
       throw new Error(`more than ${MAX_CONFIRMED_PRINCIPALS} principals to confirm`);
+    if (pairs.length > MAX_CONFIRMED_PAIRS)
+      throw new Error(`more than ${MAX_CONFIRMED_PAIRS} memberships to confirm`);
     await this.#checkEpoch();
     const meta = this.#meta();
-    if (!meta) return { accountId: "", epochGen: 0, version: 0, roles: {} };
+    if (!meta)
+      return { accountId: "", epochGen: 0, version: 0, roles: {}, teamRoles: {}, members: [] };
     return {
       accountId: meta.account_id,
       epochGen: meta.epoch_gen,
       version: meta.acl_version,
       roles: Object.fromEntries(unique.map((p) => [p, this.#roleOn(repoId, p, meta)])),
+      teamRoles: Object.fromEntries(
+        [...new Set(teams)].map((t) => [t, this.#teamRoleOn(repoId, t)]),
+      ),
+      members: this.#memberships(pairs),
     };
+  }
+
+  /**
+   * What a merge's code owners need of the organization's teams: for each
+   * of `slugs`, its id and role on repository `repoId` (absent: no such
+   * team), and which of `principals` are members of those found. An
+   * account that is not an organization has no teams.
+   */
+  async codeOwnerTeams(
+    repoId: string,
+    slugs: readonly string[],
+    principals: readonly string[],
+  ): Promise<CodeOwnerTeams> {
+    await this.#checkEpoch();
+    const meta = this.#meta();
+    if (meta?.kind !== "org") return { teams: {}, members: [] };
+    const sql = this.ctx.storage.sql;
+    const teams: Record<string, { teamId: string; role: RepoRole | null }> = {};
+    for (const slug of new Set(slugs)) {
+      const found = sql
+        // Slugs are stored lowercase: matched by the slug's own (binary) index.
+        .exec<{ team_id: string }>("SELECT team_id FROM teams WHERE slug = ?", slug.toLowerCase())
+        .toArray()[0];
+      if (found)
+        teams[slug] = { teamId: found.team_id, role: this.#teamRoleOn(repoId, found.team_id) };
+    }
+    const ids = Object.values(teams).map((t) => t.teamId);
+    const members = sql
+      .exec<{ team_id: string; principal_id: string }>(
+        `SELECT team_id, principal_id FROM team_members
+         WHERE team_id IN (SELECT value FROM json_each(?))
+           AND principal_id IN (SELECT value FROM json_each(?))`,
+        JSON.stringify(ids),
+        JSON.stringify([...new Set(principals)]),
+      )
+      .toArray()
+      .map((m) => membershipKey(m.team_id, m.principal_id));
+    return { teams, members };
+  }
+
+  /** Team `teamId`'s role on repository `repoId`, or null (no grant, or no such team). */
+  #teamRoleOn(repoId: string, teamId: string): RepoRole | null {
+    const row = this.ctx.storage.sql
+      .exec<{ role: RepoRole }>(
+        "SELECT role FROM team_repos WHERE team_id = ? AND repo_id = ?",
+        teamId,
+        repoId,
+      )
+      .toArray()[0];
+    return row?.role ?? null;
+  }
+
+  /** Which of `pairs` (`membershipKey`s) are memberships now. */
+  #memberships(pairs: readonly string[]): string[] {
+    const sql = this.ctx.storage.sql;
+    return pairs.filter((pair) => {
+      const at = pair.indexOf(" ");
+      return (
+        sql
+          .exec(
+            "SELECT 1 FROM team_members WHERE team_id = ? AND principal_id = ?",
+            pair.slice(0, at),
+            pair.slice(at + 1),
+          )
+          .toArray().length > 0
+      );
+    });
   }
 
   /** Whether the account is recorded (a user's is created when something first needs it). */

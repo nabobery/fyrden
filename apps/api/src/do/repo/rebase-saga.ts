@@ -58,12 +58,13 @@ export interface RebaseDeps {
   readonly writeDeps: () => Promise<FileWriteDeps>;
   readonly pulls: RepoPulls;
   readonly repoId: () => string;
-  /** The pull request's merge context now, for `method`. */
+  /** The pull request's merge context now, for `method`, by `merger`. */
   readonly standing: (
     number: number,
     pull: PullRecord,
     method: "rebase",
     upToDate: boolean,
+    merger: { readonly principal: string; readonly grantId: string | null },
   ) => Promise<MergeStanding>;
   /** Confirms, at the commit, the reviewers whose approvals the merge counts. */
   readonly reviewers: ReviewerConfirmations;
@@ -476,9 +477,21 @@ export class RebaseSagas {
     if (this.deps.internalCalls() > this.policy.commitCalls)
       return this.#later(row, this.policy.waitMs);
     const pull = JSON.parse(row.pull_json) as PullRecord;
-    const standing = await this.deps.standing(number, pull, "rebase", row.up_to_date === 1);
+    const standing = await this.deps.standing(number, pull, "rebase", row.up_to_date === 1, {
+      principal: actor.principal,
+      grantId: actor.grantId ?? null,
+    });
     // Bound, with no await since, to the ownership the reviewers were just judged under.
     const confirm = this.deps.reviewers.for(standing.ceilings);
+    if (standing.refusal) {
+      const { status, code, error } = standing.refusal;
+      // With the upload this run may have just stored, so failing discards it.
+      return this.#fail(
+        job,
+        { ...row, upload_json: JSON.stringify(upload) },
+        fail(status, code, error),
+      );
+    }
     const decision = await reauthorizeByToken(writeDeps.db, writer, writeDeps.writerRole);
     const tip = oidFromHex(row.tip);
     // A runner that lost the job leaves the push to the one that took it over.

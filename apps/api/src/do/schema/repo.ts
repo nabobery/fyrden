@@ -1310,4 +1310,20 @@ export const repoSchema: readonly DoMigration[] = [
         SELECT run_id, seq, json_array(json(record)) FROM archive_zip_records;
     `,
   },
+  {
+    version: 43,
+    // A merge reads each reviewer's latest reviews (code owners tell a
+    // person's agents apart), not each root's: seeks by reviewer.
+    // `reviews_standing` and `reviews_standing_head` are read no more and
+    // are dropped by a later contract step.
+    name: "reviews_by_reviewer",
+    sql: `
+      CREATE INDEX reviews_by_reviewer
+        ON reviews (pr_number, reviewer_id, by_agent, state, review_id)
+        WHERE dismissed_at IS NULL;
+      CREATE INDEX reviews_by_reviewer_head
+        ON reviews (pr_number, reviewer_id, by_agent, commit_sha, state, review_id)
+        WHERE dismissed_at IS NULL;
+    `,
+  },
 ];

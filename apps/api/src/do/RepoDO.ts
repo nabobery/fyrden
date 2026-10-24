@@ -118,6 +118,11 @@ import {
   type TagPage,
 } from "./repo/browse.js";
 import { ChangeLists } from "./repo/change-lists.js";
+import {
+  CODE_OWNER_MERGE_POLICY,
+  CodeOwnerFacts,
+  type CodeOwnerMergePolicy,
+} from "./repo/code-owner-facts.js";
 import { RepoCodeOwners } from "./repo/code-owners.js";
 import { type CommentRecord, RepoComments } from "./repo/comments.js";
 import type { ConflictsView, MergedIntoHead } from "./repo/conflicts.js";
@@ -310,11 +315,22 @@ export class RepoDO extends MigratingDO {
   /** Pulls the account's ACL snapshot for this repository. Tests may replace it. */
   pullAcl: (accountId: string) => Promise<AclSnapshot>;
 
-  /** The organization's confirmation of principals' roles here, at a merge. Tests may replace it. */
-  confirmRoles: (accountId: string, principals: readonly string[]) => Promise<RoleConfirmation>;
+  /**
+   * The organization's confirmation of principals' and teams' roles here
+   * and of team memberships, at a merge. Tests may replace it.
+   */
+  confirmRoles: (
+    accountId: string,
+    principals: readonly string[],
+    teams?: readonly string[],
+    pairs?: readonly string[],
+  ) => Promise<RoleConfirmation>;
 
   /** Limits of a merge's confirmation of its reviewers. Tests may replace them. */
   mergeConfirmPolicy: MergeConfirmPolicy = MERGE_CONFIRM_POLICY;
+
+  /** Limits of the code owners a merge resolves. Tests may replace them. */
+  codeOwnerMergePolicy: CodeOwnerMergePolicy = CODE_OWNER_MERGE_POLICY;
 
   /** Where audit records are archived. Tests may replace it. */
   auditBucket: Pick<R2Bucket, "put">;
@@ -533,7 +549,8 @@ export class RepoDO extends MigratingDO {
     const reviewers = new ReviewerConfirmations({
       acl: () => this.acl,
       account: () => this.events.account(),
-      confirmRoles: (accountId, principals) => this.confirmRoles(accountId, principals),
+      confirmRoles: (accountId, principals, teams, pairs) =>
+        this.confirmRoles(accountId, principals, teams, pairs),
       policy: () => this.mergeConfirmPolicy,
     });
     this.rebases = new RebaseSagas(
@@ -542,8 +559,8 @@ export class RepoDO extends MigratingDO {
         reviewers,
         pulls: this.pulls,
         repoId: () => this.#repoId(),
-        standing: (number, pull, method, upToDate) =>
-          this.#discussion.standing(number, pull, method, upToDate),
+        standing: (number, pull, method, upToDate, merger) =>
+          this.#discussion.standing(number, pull, method, upToDate, merger),
         internalCalls: () => currentInvocation()?.tally.internal ?? 0,
         committed: () => {
           this.#armOutbox();
@@ -611,9 +628,9 @@ export class RepoDO extends MigratingDO {
       this.git.context.metrics.count("do.request", { class: "OrgDO", method: "snapshotFor" });
       return env.ORG.getByName(accountId).snapshotFor(this.#repoId());
     };
-    this.confirmRoles = async (accountId, principals) => {
+    this.confirmRoles = async (accountId, principals, teams = [], pairs = []) => {
       this.git.context.metrics.count("do.request", { class: "OrgDO", method: "confirmRoles" });
-      return env.ORG.getByName(accountId).confirmRoles(this.#repoId(), principals);
+      return env.ORG.getByName(accountId).confirmRoles(this.#repoId(), principals, teams, pairs);
     };
     this.acl = new RepoAcl({
       storage: ctx.storage,
@@ -679,6 +696,18 @@ export class RepoDO extends MigratingDO {
       reviewComments: this.reviewComments,
       reacted: (comments) => this.reactions.attach("review_comment", comments),
       authority: this.#authority,
+      codeOwnerFacts: new CodeOwnerFacts({
+        codeOwners: this.codeOwners,
+        env: () => this.env,
+        account: () => this.events.account(),
+        acl: () => this.acl,
+        authority: this.#authority,
+        teams: (accountId, slugs, principals) =>
+          this.env.ORG.getByName(accountId).codeOwnerTeams(this.#repoId(), slugs, principals),
+        policy: () => this.codeOwnerMergePolicy,
+        metrics: this.git.context.metrics,
+      }),
+      codeOwnersStamp: (pull) => this.codeOwners.stampFor(pull),
       memoryBlocks: () => this.#memoryBlocks(),
       viewed: (pull) => this.#viewed(pull),
       pullChange: (method, actor, change, prepare, texts, last) =>

@@ -278,6 +278,7 @@ describe("pull request merges", () => {
       authorRoot: "author",
       lastPush: null,
       eligibleRoots: new Set(["alice", "bob"]),
+      eligiblePrincipals: new Set(["alice", "bob"]),
     },
     unresolvedThreads: 0,
     upToDate: true,
@@ -288,7 +289,9 @@ describe("pull request merges", () => {
       approvals: {
         ...merge().approvals,
         reviews: roots.map((reviewerRoot, i) => ({
+          reviewerId: reviewerRoot,
           reviewerRoot,
+          active: true,
           byAgent: false,
           commitSha: head,
           state: "APPROVED" as const,
@@ -322,6 +325,33 @@ describe("pull request merges", () => {
     expect(violations(protect(undefined), merge())).toEqual([]);
   });
 
+  it("asks code owners' review only where a rule sets it, refusing when they could not be worked out", () => {
+    const owned = (pr: MergeContext): MergeContext => ({
+      ...pr,
+      codeOwners: {
+        state: "complete",
+        requirements: [
+          {
+            line: 2,
+            example: "src/a.ts",
+            owners: [{ kind: "user", token: "@bob", principal: "bob", qualified: true }],
+          },
+        ],
+        memberships: new Set(),
+        asked: new Set(),
+      },
+    });
+    const required = protect({ require_code_owner_review: true });
+    expect(violations(protect({}), owned(approved(["alice"])))).toEqual([]);
+    expect(violations(required, owned(approved(["alice"])))).toEqual([
+      'pull request #7: code owners must approve: line 2 (src/a.ts: @bob) (ruleset "protect main")',
+    ]);
+    expect(violations(required, owned(approved(["bob"])))).toEqual([]);
+    expect(violations(required, approved(["bob"]))).toEqual([
+      'pull request #7: code owners could not be worked out for this merge (ruleset "protect main")',
+    ]);
+  });
+
   it("counts approvals against each ruleset's own requirement", () => {
     const rulesets = protect({ required_approving_review_count: 2 });
     expect(violations(rulesets, approved(["alice"]))).toEqual([
@@ -348,12 +378,12 @@ describe("pull request merges", () => {
     expect(violations(upToDate)).toEqual([]);
   });
 
-  it("never reads a code-owner requirement from stored parameters", () => {
-    const stored = { require_code_owner_review: true } as unknown as NonNullable<
-      Rule["parameters"]
-    >;
-    expect(
-      pullRequestParameters({ type: "pull_request", parameters: stored }).require_code_owner_review,
-    ).toBe(false);
+  it("reads a stored code-owner requirement, and defaults it off for rules stored without one", () => {
+    const read = (parameters: Rule["parameters"]) =>
+      pullRequestParameters({ type: "pull_request", ...(parameters && { parameters }) })
+        .require_code_owner_review;
+    expect(read({ require_code_owner_review: true })).toBe(true);
+    expect(read({ required_approving_review_count: 1 })).toBe(false);
+    expect(read(undefined)).toBe(false);
   });
 });
