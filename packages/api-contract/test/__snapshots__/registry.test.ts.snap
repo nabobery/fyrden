@@ -11370,7 +11370,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "required": false,
             "schema": {
               "default": 30,
-              "description": "Page size, 1-100.",
+              "description": "Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with \`next_cursor\` to go on.",
               "maximum": 100,
               "minimum": 1,
               "type": "integer",
@@ -15729,7 +15729,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "required": false,
             "schema": {
               "default": 30,
-              "description": "Page size, 1-100.",
+              "description": "Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with \`next_cursor\` to go on.",
               "maximum": 100,
               "minimum": 1,
               "type": "integer",
@@ -15743,6 +15743,17 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               "description": "From a previous page's \`next_cursor\`.",
               "maxLength": 200,
               "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "description": "Fyrden: only items whose id is greater than this (not with \`cursor\`).",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
             },
           },
         ],
@@ -18412,7 +18423,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "required": false,
             "schema": {
               "default": 30,
-              "description": "Page size, 1-100.",
+              "description": "Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with \`next_cursor\` to go on.",
               "maximum": 100,
               "minimum": 1,
               "type": "integer",
@@ -19342,7 +19353,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "required": false,
             "schema": {
               "default": 30,
-              "description": "Page size, 1-100.",
+              "description": "Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with \`next_cursor\` to go on.",
               "maximum": 100,
               "minimum": 1,
               "type": "integer",
@@ -23184,7 +23195,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "required": false,
             "schema": {
               "default": 30,
-              "description": "Page size, 1-100.",
+              "description": "Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with \`next_cursor\` to go on.",
               "maximum": 100,
               "minimum": 1,
               "type": "integer",
@@ -23198,6 +23209,17 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               "description": "From a previous page's \`next_cursor\`.",
               "maxLength": 200,
               "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "description": "Fyrden: only items whose id is greater than this (not with \`cursor\`).",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
             },
           },
         ],
@@ -26095,7 +26117,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "required": false,
             "schema": {
               "default": 30,
-              "description": "Page size, 1-100.",
+              "description": "Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with \`next_cursor\` to go on.",
               "maximum": 100,
               "minimum": 1,
               "type": "integer",
@@ -26109,6 +26131,17 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               "description": "From a previous page's \`next_cursor\`.",
               "maxLength": 200,
               "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "description": "Fyrden: only items whose id is greater than this (not with \`cursor\`).",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
             },
           },
         ],

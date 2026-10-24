@@ -152,6 +152,28 @@ describe("FyrdenClient", () => {
     ]);
   });
 
+  it("starts a paginated stream after an id, then follows next_cursor alone", async () => {
+    const { sent, fetchFn } = fake([
+      { body: { comments: [{ id: 3 }], next_cursor: "c1" } },
+      { body: { comments: [{ id: 4 }], next_cursor: null } },
+    ]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test/api", fetch: fetchFn });
+    const ids: number[] = [];
+    for await (const c of client.paginate("issues.comments.list", {
+      owner: "me",
+      repo: "r",
+      issue_number: 1,
+      after: 2,
+      per_page: 1,
+    }))
+      ids.push(c.id);
+    expect(ids).toEqual([3, 4]);
+    expect(sent.map((s) => new URL(s.url).search)).toEqual([
+      "?after=2&per_page=1",
+      "?per_page=1&cursor=c1",
+    ]);
+  });
+
   it("refuses dot segments in path parameters before sending anything", async () => {
     const { sent, fetchFn } = fake([]);
     const client = new FyrdenClient({ baseUrl: "https://f.test/api", fetch: fetchFn });

@@ -10,6 +10,7 @@ import type {
 import { NO_DUE_DATE } from "../do/repo/subject-meta.js";
 import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { pageOf } from "../ops/pages.js";
 import type { RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
 import { milestoneOutput } from "./shapes.js";
@@ -113,13 +114,12 @@ export async function listMilestonesOperation(
     limit: input.per_page + 1,
   });
   if (milestones === null) throw failure(entry, "repo_not_found");
-  const page = milestones.slice(0, input.per_page);
-  const last = page.at(-1);
+  const page = pageOf(milestones, input.per_page, (m) => milestoneOutput(m, kinds));
   return {
-    milestones: page.map((m) => milestoneOutput(m, kinds)),
+    milestones: page.shown,
     next_cursor:
-      milestones.length > input.per_page && last
-        ? encodeListingCursor(context, last.dueOn ?? NO_DUE_DATE, last.number)
+      page.more && page.last
+        ? encodeListingCursor(context, page.last.dueOn ?? NO_DUE_DATE, page.last.number)
         : null,
   };
 }

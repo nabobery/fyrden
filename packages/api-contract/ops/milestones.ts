@@ -7,6 +7,7 @@ import {
 } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
+import { BoundedPerPage } from "./pages.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 import { Milestone } from "./subject-meta.js";
 
@@ -45,7 +46,7 @@ export const listMilestones = defineOperation({
     state: z.enum(["open", "closed", "all"]).default("open"),
     sort: z.enum(["due_on"]).default("due_on"),
     direction: z.enum(["asc", "desc"]).default("asc"),
-    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+    per_page: BoundedPerPage,
     cursor: z
       .string()
       .max(400)

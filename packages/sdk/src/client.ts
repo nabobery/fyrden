@@ -164,9 +164,12 @@ export class FyrdenClient {
     const field = (OPERATIONS[id] as { readonly items: string }).items;
     let cursor: string | null | undefined;
     do {
+      // Once a page answered, its cursor carries on from where `after` (a start given by id)
+      // began: the two are never sent together.
+      const { after: _after, ...rest } = input as Record<string, unknown>;
       const page = (await this.call(
         id,
-        { ...input, ...(cursor ? { cursor } : {}) } as InputOf<K>,
+        (cursor ? { ...rest, cursor } : input) as InputOf<K>,
         options,
       )) as Record<string, unknown>;
       for (const item of (page[field] as ItemOf<K>[] | undefined) ?? []) yield item;
