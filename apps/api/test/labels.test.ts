@@ -895,3 +895,39 @@ describe("a repository's permissions for its caller", () => {
     expect(await perms(await collaborator("push"))).toMatchObject({ push: true, maintain: false });
   });
 });
+
+describe("the caller's own reactions", () => {
+  it("come with an issue read alone and with a page of comments, never another's", async () => {
+    const other = await collaborator("triage");
+    const issue = (await openIssue(owner)).body;
+    const comment = await json<{ id: number }>(
+      api("POST", `${path}/issues/${issue.number}/comments`, owner.token, { body: "c" }),
+    );
+    const mine = await json<{ id: number }>(
+      api("POST", `${path}/issues/${issue.number}/reactions`, owner.token, { content: "heart" }),
+    );
+    await api("POST", `${path}/issues/${issue.number}/reactions`, other.token, { content: "+1" });
+    const onComment = await json<{ id: number }>(
+      api("POST", `${path}/issues/comments/${comment.body.id}/reactions`, owner.token, {
+        content: "eyes",
+      }),
+    );
+    type Rolled = {
+      reactions: { total_count: number; viewer?: { id: number; content: string }[] };
+    };
+    const read = await json<Rolled>(api("GET", `${path}/issues/${issue.number}`, owner.token));
+    expect(read.body.reactions.total_count).toBe(2);
+    expect(read.body.reactions.viewer).toEqual([{ id: mine.body.id, content: "heart" }]);
+    const theirs = await json<Rolled>(api("GET", `${path}/issues/${issue.number}`, other.token));
+    expect(theirs.body.reactions.viewer?.map((r) => r.content)).toEqual(["+1"]);
+    const comments = await json<{ comments: Rolled[] }>(
+      api("GET", `${path}/issues/${issue.number}/comments`, owner.token),
+    );
+    expect(comments.body.comments[0]?.reactions.viewer).toEqual([
+      { id: onComment.body.id, content: "eyes" },
+    ]);
+    // A listing carries counts only.
+    const listed = await json<{ issues: Rolled[] }>(api("GET", `${path}/issues`, owner.token));
+    expect(listed.body.issues[0]?.reactions.viewer).toBeUndefined();
+  });
+});

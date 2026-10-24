@@ -320,8 +320,11 @@ describe("full webhook bodies", () => {
       // The issue as the API shows it, after the last change.
       const shown = await ok<Body>(api("GET", `${t.path}/issues/1`, t.owner.token));
       const issue = unassigned?.issue as Body;
-      for (const field of ["number", "title", "body", "state", "labels", "reactions"])
+      // The reader's own reactions (`viewer`) are the API's, read alone, not the event's.
+      const { viewer: _viewer, ...counts } = shown.reactions as Body;
+      for (const field of ["number", "title", "body", "state", "labels"])
         expect(issue[field], field).toEqual(shown[field]);
+      expect(issue.reactions).toEqual(counts);
       expect((issue.assignees as Body[]).map((a) => a.id)).toEqual(
         (shown.assignees as Body[]).map((a) => a.id),
       );

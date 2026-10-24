@@ -287,8 +287,16 @@ export async function getCodeOwnersErrorsOperation(
 ): Promise<Output<typeof getCodeOwnersErrors>> {
   const stub = await repoStub(ctx, input.owner, input.repo);
   ctx.metrics.count("do.request", { class: "RepoDO", method: "codeOwnersErrors" });
-  const { errors, truncated } = value(await stub.codeOwnersErrors(input.ref));
-  return { errors: errors.map((e) => ({ ...e })), ...(truncated && { truncated: true }) };
+  const { errors, truncated, file, commit } = value(await stub.codeOwnersErrors(input.ref));
+  // An earlier object (while a deploy rolls out) answers without the file read: try again.
+  if (!file || typeof commit !== "string")
+    throw new OperationError(409, "busy", "The repository is busy; try again.");
+  return {
+    errors: errors.map((e) => ({ ...e })),
+    ...(truncated && { truncated: true }),
+    file: { path: file.path, sha: file.sha },
+    sha: commit,
+  };
 }
 
 /** The `repos.trees.get` operation. */

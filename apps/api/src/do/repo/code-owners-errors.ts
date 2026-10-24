@@ -7,7 +7,7 @@ import {
   quoteExcerpt,
 } from "@fyrden/domain";
 import type { MemoryBudget } from "@fyrden/git-core";
-import { ReaderWorkSpent } from "@fyrden/git-core";
+import { oidToHex, ReaderWorkSpent } from "@fyrden/git-core";
 import { ReadBudgetError } from "../../git/live-reader.js";
 import { type Browsed, BUSY, fail, type RepoBrowse, TOO_EXPENSIVE } from "./browse.js";
 import { locateCodeOwners } from "./code-owners.js";
@@ -47,6 +47,9 @@ export interface CodeOwnersErrors {
   readonly errors: readonly CodeOwnersErrorView[];
   /** More errors than one answer carries (Fyrden's). */
   readonly truncated: boolean;
+  /** The file read (the effective one, by GitHub's locations) and the commit it was read at. */
+  readonly file: { readonly path: string; readonly sha: string };
+  readonly commit: string;
 }
 
 const NOT_FOUND = fail(404, "not_found", "No CODEOWNERS file was found at that ref.");
@@ -78,13 +81,17 @@ export async function codeOwnersErrors(
       spent,
     });
     if (!located) return NOT_FOUND;
+    const read = {
+      file: { path: located.path, sha: oidToHex(located.blob) },
+      commit: oidToHex(resolved.value.commit),
+    };
     const header = await reader.readHeader(located.blob);
     if (header?.type !== "blob") throw new Error("the CODEOWNERS entry names no blob");
     // Too large to read: its whole-file error, its body never read.
     if (header.size >= MAX_CODEOWNERS_BYTES)
       return {
         ok: true,
-        value: bounded(codeOwnersTooLarge(header.size).errors, located.path, policy),
+        value: bounded(codeOwnersTooLarge(header.size).errors, read, policy),
       };
     // The parse's memory, held until the answer is built from it.
     const parsing = reserve(memory, header.size * policy.fileMemoryPerByte);
@@ -99,7 +106,7 @@ export async function codeOwnersErrors(
         async (reads) => {
           const bytes = await reads.readBlob(located.blob, MAX_CODEOWNERS_BYTES - 1);
           const file = bytes ? parseCodeOwners(bytes) : codeOwnersTooLarge(header.size);
-          return bounded(file.errors, located.path, policy);
+          return bounded(file.errors, read, policy);
         },
       );
       return { ok: true, value: answer };
@@ -124,20 +131,23 @@ export async function codeOwnersErrors(
  */
 function bounded(
   errors: readonly CodeOwnersError[],
-  path: string,
+  read: Pick<CodeOwnersErrors, "file" | "commit">,
   policy: CodeOwnersErrorsPolicy,
 ): CodeOwnersErrors {
-  // `{"errors":[` … `],"truncated":true}`: the most the frame may take.
-  let bytes = encoder.encode('{"errors":[],"truncated":true}').length;
+  const path = read.file.path;
+  // The answer as the API sends it, with no errors and `truncated`: the most the frame may take.
+  let bytes = encoder.encode(
+    JSON.stringify({ errors: [], truncated: true, file: read.file, sha: read.commit }),
+  ).length;
   const kept: CodeOwnersErrorView[] = [];
   for (const error of errors) {
     const view = { ...error, source: quoteExcerpt(error.source, policy.maxSourceCharacters), path };
     const size = encoder.encode(JSON.stringify(view)).length + (kept.length > 0 ? 1 : 0);
-    if (bytes + size > policy.maxAnswerBytes) return { errors: kept, truncated: true };
+    if (bytes + size > policy.maxAnswerBytes) return { errors: kept, truncated: true, ...read };
     bytes += size;
     kept.push(view);
   }
-  return { errors: kept, truncated: false };
+  return { errors: kept, truncated: false, ...read };
 }
 
 /** `bytes` held from `memory`: undefined while not free now, `never` past its whole budget. */

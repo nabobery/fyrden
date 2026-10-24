@@ -12,7 +12,7 @@ import type { CommentRecord } from "../do/repo/comments.js";
 import type { IssueRecord, Subject, SubjectKind } from "../do/repo/issues.js";
 import type { PullView } from "../do/repo/mergeability.js";
 import type { PullRecord } from "../do/repo/pulls.js";
-import type { Reacted, ReactionCounts } from "../do/repo/reactions.js";
+import type { OwnReaction, Reacted, ReactionCounts } from "../do/repo/reactions.js";
 import type { ReviewCommentRecord } from "../do/repo/review-comments.js";
 import type { ReviewRecord } from "../do/repo/reviews.js";
 import type { LabelRecord, MilestoneRecord, SubjectMeta } from "../do/repo/subject-meta.js";
@@ -63,9 +63,16 @@ export function milestoneOutput(
   };
 }
 
-/** A target's reactions as the API answers them (GitHub's rollup). */
-export function reactionRollup(counts: ReactionCounts): Output<typeof getIssue>["reactions"] {
-  return { total_count: Object.values(counts).reduce((a, b) => a + b, 0), ...counts };
+/** A target's reactions as the API answers them (GitHub's rollup), with the reader's own when read for one. */
+export function reactionRollup(
+  counts: ReactionCounts,
+  viewer?: readonly OwnReaction[],
+): Output<typeof getIssue>["reactions"] {
+  return {
+    total_count: Object.values(counts).reduce((a, b) => a + b, 0),
+    ...counts,
+    ...(viewer && { viewer: viewer.map((r) => ({ id: r.id, content: r.content })) }),
+  };
 }
 
 /** An issue's or pull request's labels, assignees and milestone, as both answer them, for a caller reading `readable`. */
@@ -79,7 +86,7 @@ export function sortingOutput(
     assignee: assignees[0] ?? null,
     assignees,
     milestone: meta.milestone && milestoneOutput(meta.milestone, readable),
-    reactions: reactionRollup(meta.reactions),
+    reactions: reactionRollup(meta.reactions, meta.viewerReactions),
   };
 }
 
@@ -158,7 +165,7 @@ export function commentOutput(comment: Reacted<CommentRecord>): Output<typeof ge
     created_at: comment.createdAt,
     updated_at: comment.updatedAt,
     version: comment.version,
-    reactions: reactionRollup(comment.reactions),
+    reactions: reactionRollup(comment.reactions, comment.viewerReactions),
   };
 }
 

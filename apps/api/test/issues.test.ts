@@ -128,7 +128,12 @@ describe("issues", () => {
     expect(first.body.pull_request).toBeUndefined();
     expect(await openPull()).toBe(2);
     expect((await open(owner)).body.number).toBe(3);
-    expect((await get(reader, 1)).body).toEqual(first.body);
+    // Read alone, it also carries the reader's own reactions (none yet).
+    const opened = first.body as typeof first.body & { reactions: Record<string, unknown> };
+    expect((await get(reader, 1)).body).toEqual({
+      ...opened,
+      reactions: { ...opened.reactions, viewer: [] },
+    });
     // A stranger reads nothing of a private repository.
     expect((await open(await user())).status).toBe(404);
   });

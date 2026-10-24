@@ -261,7 +261,11 @@ export async function getIssueOperation(
   input: Input<typeof getIssue>,
 ): Promise<Output<typeof getIssue>> {
   const { entry, kinds } = await subjectAccess(ctx, input.owner, input.repo, "read");
-  const subject = await repo(ctx, entry, "getSubject").getSubject(input.issue_number, kinds);
+  const subject = await repo(ctx, entry, "getSubject").getSubject(
+    input.issue_number,
+    kinds,
+    ctx.auth.principalId,
+  );
   if (subject === null) throw failure(entry, "repo_not_found");
   if (!subject) throw subjectNotFound(input.issue_number);
   return subjectOutput(subject, kinds);

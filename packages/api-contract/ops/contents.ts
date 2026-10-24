@@ -169,6 +169,12 @@ export const getCodeOwnersErrors = defineOperation({
       }),
     ),
     truncated: z.boolean().optional().describe("Fyrden: more errors than one answer carries."),
+    file: z
+      .object({ path: z.string(), sha: z.string().describe("The file's blob SHA.") })
+      .describe(
+        "Fyrden: the file read, the one GitHub's locations make effective (errors or none).",
+      ),
+    sha: z.string().describe("Fyrden: the commit the file was read at."),
   }),
   permission: "contents:read",
   principals: ["user", "agent"],
