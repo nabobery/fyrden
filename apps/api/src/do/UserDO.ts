@@ -12,6 +12,7 @@ import {
   type FeedPosition,
   type FeedPurge,
   feedEpochSource,
+  type GoneThread,
   type SyncPosition,
   type ThreadVersion,
 } from "./user/feed.js";
@@ -80,13 +81,23 @@ export class UserDO extends MigratingDO {
     return { deleted };
   }
 
-  /** Forgets threads a read found gone for good (see `Feed.forgetThreads`), in one transaction. */
-  async forgetThreads(
-    threads: readonly { readonly repoId: string; readonly threadKey: string }[],
-  ): Promise<{ deleted: number }> {
+  /**
+   * Forgets threads a read found gone for good, each only as far as the
+   * restore generation it was found gone in (see `Feed.forgetThreads`), in
+   * one transaction.
+   */
+  async forgetGoneThreads(threads: readonly GoneThread[]): Promise<{ deleted: number }> {
     await this.#checkEpoch();
     const feed = this.#feed();
     return { deleted: this.ctx.storage.transactionSync(() => feed.forgetThreads(threads)) };
+  }
+
+  /**
+   * The earlier name, for Workers of the earlier version while a deploy
+   * rolls out: their threads carry no generation, so nothing is forgotten.
+   */
+  async forgetThreads(threads: readonly GoneThread[]): Promise<{ deleted: number }> {
+    return this.forgetGoneThreads(threads);
   }
 
   async listFeed(since: FeedPosition | null, limit: number, filter: FeedFilter): Promise<FeedPage> {

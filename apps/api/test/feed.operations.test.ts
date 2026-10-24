@@ -15,6 +15,7 @@ import { createApp } from "../src/app.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { ACL_POLICY } from "../src/do/repo/acl.js";
+import { type FeedMember, memberKey } from "../src/do/repo/feed-view.js";
 import { FEED_POLICY } from "../src/do/user/feed.js";
 import { decodeFeedCursor, encodeFeedCursor, FEED_POLL } from "../src/feed/operations.js";
 import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
@@ -25,6 +26,7 @@ import { DAY, type EntryInit, entry } from "./helpers/feed.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
+import { inRepo } from "./helpers/repo-git.js";
 
 /**
  * Texts the members of a test's feed items stand for, by
@@ -33,6 +35,7 @@ import { scopedToken } from "./helpers/principals.js";
  * `feedView` calls the reads took, by repository.
  */
 const said = new Map<string, string | null>();
+/** Each `feedView` call's members, as `memberKey` gives them, by repository. */
 const viewCalls = new Map<string, string[][]>();
 /** Repositories that exist only in the directory (no object behind them): readable as their owner's. */
 const directoryOnly = new Set<string>();
@@ -40,6 +43,11 @@ const directoryOnly = new Set<string>();
 const unreadable = new Set<string>();
 /** Repositories whose checks of issue threads alone (no members) cannot say. */
 const unsureThreads = new Set<string>();
+/**
+ * Repositories whose object answers as the earlier version did (while a deploy rolls out): no
+ * generation in its answer, every thread asked gone.
+ */
+const earlierObject = new Set<string>();
 
 /**
  * `env` whose repository objects count their `feedView` calls and lay
@@ -51,16 +59,25 @@ function withFeedView(base: Env): Env {
     async (
       principal: string,
       grantId: string | null,
-      members: readonly string[],
+      members: readonly FeedMember[],
       threads: readonly string[] = [],
     ) => {
-      viewCalls.set(repoId, [...(viewCalls.get(repoId) ?? []), [...members]]);
+      viewCalls.set(repoId, [...(viewCalls.get(repoId) ?? []), members.map(memberKey)]);
+      if (earlierObject.has(repoId))
+        return {
+          readable: true,
+          role: "admin" as const,
+          excerpts: {},
+          gone: [...threads],
+          denial: null,
+        };
       if (unsureThreads.has(repoId) && members.length === 0 && threads.length > 0)
         return {
           readable: false,
           role: null,
           excerpts: {},
           gone: [],
+          epoch: 0,
           denial: { kind: "unknown" as const },
         };
       if (directoryOnly.has(repoId))
@@ -70,19 +87,27 @@ function withFeedView(base: Env): Env {
               role: null,
               excerpts: {},
               gone: [],
+              epoch: 0,
               // As a fresh snapshot of an account's ACL would say it.
               denial: {
                 kind: "lost" as const,
                 loss: { accountId: "acct_double", epochGen: 1, aclVersion: 1, until: Date.now() },
               },
             }
-          : { readable: true, role: "admin" as const, excerpts: {}, gone: [], denial: null };
+          : {
+              readable: true,
+              role: "admin" as const,
+              excerpts: {},
+              gone: [],
+              epoch: 0,
+              denial: null,
+            };
       const real = await stub.feedView(principal, grantId, members, threads);
       if (!real.readable) return real;
       const excerpts = { ...real.excerpts };
       for (const m of members) {
-        const known = said.get(`${repoId}:${m}`);
-        if (known !== undefined) excerpts[m] = known;
+        const known = said.get(`${repoId}:${memberKey(m)}`);
+        if (known !== undefined) excerpts[memberKey(m)] = known;
       }
       return { ...real, excerpts };
     };
@@ -721,8 +746,8 @@ describe("the feed operations", () => {
       entry({ ...to, kind: "mention", version: 3, member: "review_comment/7", priority: "P0" }),
       entry({ ...to, kind: "review_requested", version: 3, member: null, priority: "P0" }),
     ]);
-    said.set(`${made.id}:comment/2`, "second");
-    said.set(`${made.id}:review_comment/7`, null);
+    said.set(`${made.id}:1 pull/1 comment/2`, "second");
+    said.set(`${made.id}:1 pull/1 review_comment/7`, null);
     const excerpts = async (path: string) =>
       (
         await json<{ items: { kind: string; excerpt: string | null }[] }>(
@@ -736,10 +761,217 @@ describe("the feed operations", () => {
       ["mention", null],
       ["review_requested", null],
     ]);
-    expect(viewCalls.get(made.id)).toEqual([["comment/2", "review_comment/7"]]);
+    expect(viewCalls.get(made.id)).toEqual([["1 pull/1 comment/2", "1 pull/1 review_comment/7"]]);
     // An edit shows at once.
-    said.set(`${made.id}:comment/2`, "second, edited");
+    said.set(`${made.id}:1 pull/1 comment/2`, "second, edited");
     expect(await excerpts("/feed/sync")).toContainEqual(["activity", "second, edited"]);
+  });
+
+  it("read a member for each thread and generation that names it, past the first batch too", async () => {
+    const someone = await user();
+    const made = await repoOf(someone);
+    const to = { repoId: made.id, principal: someone.principalId };
+    // 105 threads each naming its own comment (past one call's 100 members), then one id named
+    // by two threads and, on one thread, by items of two restore generations (as after a
+    // restore set the repository's ids back).
+    const filler = Array.from({ length: 105 }, (_, i) =>
+      entry({ ...to, thread: 10 + i, version: 1, member: `comment/${1000 + i}` }),
+    );
+    await env.USER.getByName(someone.principalId).applyFeed([
+      entry({ ...to, thread: 1, version: 2, member: "comment/7" }),
+      entry({
+        ...to,
+        thread: 1,
+        kind: "mention",
+        priority: "P0",
+        epochGen: 2,
+        version: 1,
+        member: "comment/7",
+      }),
+      entry({ ...to, thread: 2, subject: "issue", version: 2, member: "comment/7" }),
+    ]);
+    // The filler after: newer, so the pairs above fall past the first 100 members asked.
+    await env.USER.getByName(someone.principalId).applyFeed(filler);
+    for (let i = 0; i < 105; i++)
+      said.set(`${made.id}:1 pull/${10 + i} comment/${1000 + i}`, `c${i}`);
+    // What the repository says of each pair (its binding of members is its own tests'): each
+    // pair's answer must reach its own item.
+    said.set(`${made.id}:1 pull/1 comment/7`, "told before the restore");
+    said.set(`${made.id}:2 pull/1 comment/7`, "told after the restore");
+    said.set(`${made.id}:1 issue/2 comment/7`, "on issue 2");
+    viewCalls.delete(made.id);
+    const items = async (path: string) => {
+      const shown = new Map<string, string | null>();
+      let cursor: string | null = null;
+      for (let page = 0; page < 10; page++) {
+        const at: string =
+          cursor === null ? path : `${path}${path.includes("?") ? "&" : "?"}since=${cursor}`;
+        const body = (
+          await json<{
+            items: { thread_key: string; kind: string; excerpt: string | null }[];
+            next_cursor: string | null;
+          }>(feedApi("GET", at, someone.token))
+        ).body;
+        for (const i of body.items) shown.set(`${i.thread_key} ${i.kind}`, i.excerpt);
+        if (body.items.length === 0 || body.next_cursor === null) break;
+        cursor = body.next_cursor;
+      }
+      return shown;
+    };
+    for (const path of ["/feed?limit=100", "/feed/sync"]) {
+      const shown = await items(path);
+      expect(shown.get("pull/1 activity"), path).toBe("told before the restore");
+      expect(shown.get("pull/1 mention"), path).toBe("told after the restore");
+      expect(shown.get("issue/2 activity"), path).toBe("on issue 2");
+      for (let i = 0; i < 105; i++)
+        expect(shown.get(`pull/${10 + i} activity`), path).toBe(`c${i}`);
+    }
+    // Every call within 100 members; each pair asked once an answer.
+    const calls = viewCalls.get(made.id) ?? [];
+    for (const call of calls) {
+      expect(call.length).toBeLessThanOrEqual(100);
+      expect(new Set(call).size).toBe(call.length);
+    }
+    expect(new Set(calls.flat())).toEqual(
+      new Set([
+        ...filler.map((_, i) => `1 pull/${10 + i} comment/${1000 + i}`),
+        "1 pull/1 comment/7",
+        "2 pull/1 comment/7",
+        "1 issue/2 comment/7",
+      ]),
+    );
+  });
+
+  it("stop before a gone thread's item told in a later generation, never hiding or skipping it", async () => {
+    const someone = await user();
+    const made = await repoOf(someone);
+    const path = `/repos/${made.fullName}`;
+    // Issue n deleted: its thread is gone in the repository's generation now.
+    const issue = await json<{ number: number }>(
+      api("POST", `${path}/issues`, someone.token, { title: "Gone soon" }),
+    );
+    expect((await api("DELETE", `${path}/issues/${issue.body.number}`, someone.token)).ok).toBe(
+      true,
+    );
+    const epoch = await inRepo(env.REPO.getByName(made.id), (r: RepoDO) => r.events.epochGen());
+    const to = { repoId: made.id, principal: someone.principalId };
+    const feed = env.USER.getByName(someone.principalId);
+    // Told before: the deleted issue's item. Told in a later generation (a restore gave the number
+    // to a new conversation): its item. Then unrelated activity.
+    await feed.applyFeed([
+      entry({ ...to, thread: issue.body.number, subject: "issue", epochGen: epoch, version: 1 }),
+    ]);
+    await feed.applyFeed([
+      entry({
+        ...to,
+        thread: issue.body.number,
+        subject: "issue",
+        kind: "mention",
+        priority: "P0",
+        epochGen: epoch + 1,
+        version: 1,
+      }),
+    ]);
+    await feed.applyFeed([entry({ ...to, thread: 1, epochGen: epoch, version: 1 })]);
+    for (const read of ["/feed", "/feed/sync"]) {
+      const answer = await json<{ items: { thread_key: string; kind: string }[] }>(
+        feedApi("GET", read, someone.token),
+      );
+      expect(answer.status, read).toBe(200);
+      // The later generation's item is neither shown nor passed: the answer ends before it.
+      const shown = answer.body.items.map((i) => `${i.thread_key} ${i.kind}`);
+      expect(shown, read).not.toContain(`issue/${issue.body.number} mention`);
+      expect(shown, read).not.toContain("pull/1 activity");
+    }
+    // Only the gone generation's item was forgotten.
+    const left = await feed.listFeed(null, 100, {});
+    if (left.expired) throw new Error("expired");
+    expect(left.items.map((i) => `${i.threadKey} ${i.kind} ${i.epoch}`).sort()).toEqual(
+      [`issue/${issue.body.number} mention ${epoch + 1}`, `pull/1 activity ${epoch}`].sort(),
+    );
+  });
+
+  it("take the earlier call shapes during a deploy, showing and forgetting nothing", async () => {
+    const someone = await user();
+    const made = await repoOf(someone);
+    const comment = await json<{ id: number }>(
+      api("POST", `/repos/${made.fullName}/issues`, someone.token, { title: "Here" }),
+    );
+    expect(comment.status).toBe(201);
+    // An earlier Worker: members alone.
+    const view = await env.REPO.getByName(made.id).feedView(someone.principalId, null, [
+      "issue/1",
+      "comment/1",
+    ] as never);
+    expect(view.readable).toBe(true);
+    expect(view.excerpts).toEqual({});
+    // An earlier Worker: gone threads without their generation.
+    const to = { repoId: made.id, principal: someone.principalId };
+    const feed = env.USER.getByName(someone.principalId);
+    await feed.applyFeed([entry({ ...to, thread: 1, subject: "issue", version: 1 })]);
+    expect(await feed.forgetThreads([{ repoId: made.id, threadKey: "issue/1" }] as never)).toEqual({
+      deleted: 0,
+    });
+  });
+
+  it("take an earlier object's answer without its generation as no check, ending the answer there", async () => {
+    const someone = await user();
+    const made = await repoOf(someone);
+    earlierObject.add(made.id);
+    const to = { repoId: made.id, principal: someone.principalId };
+    const feed = env.USER.getByName(someone.principalId);
+    // An assignment (no member) on an issue the earlier object says is gone, then later activity.
+    await feed.applyFeed([
+      entry({
+        ...to,
+        thread: 7,
+        subject: "issue",
+        kind: "assigned",
+        priority: "P0",
+        member: null,
+        version: 1,
+      }),
+    ]);
+    await feed.applyFeed([entry({ ...to, thread: 1, version: 1 })]);
+    for (const read of ["/feed", "/feed/sync"]) {
+      const answer = await json<{ items: { thread_key: string }[] }>(
+        feedApi("GET", read, someone.token),
+      );
+      expect(answer.status, read).toBe(200);
+      expect(
+        answer.body.items.map((i) => i.thread_key),
+        read,
+      ).toEqual([]);
+    }
+    // Nothing forgotten on its word.
+    const left = await feed.listFeed(null, 100, {});
+    if (left.expired) throw new Error("expired");
+    expect(left.items).toHaveLength(2);
+    earlierObject.delete(made.id);
+  });
+
+  it("forget a gone thread's items only of the generation it was found gone in, or earlier", async () => {
+    const someone = await user();
+    const made = await repoOf(someone);
+    const to = { repoId: made.id, principal: someone.principalId };
+    const feed = env.USER.getByName(someone.principalId);
+    // Issue 7 deleted in generation 1; after a restore a new issue 7 is told in generation 2.
+    await feed.applyFeed([
+      entry({ ...to, thread: 7, subject: "issue", version: 1 }),
+      entry({
+        ...to,
+        thread: 7,
+        subject: "issue",
+        kind: "mention",
+        priority: "P0",
+        epochGen: 2,
+        version: 1,
+      }),
+    ]);
+    const gone = { repoId: made.id, threadKey: "issue/7" };
+    expect(await feed.forgetGoneThreads([{ ...gone, epoch: 1 }])).toEqual({ deleted: 1 });
+    expect(await feed.forgetGoneThreads([{ ...gone, epoch: 1 }])).toEqual({ deleted: 0 });
+    expect(await feed.forgetGoneThreads([{ ...gone, epoch: 2 }])).toEqual({ deleted: 1 });
   });
 
   it("give a token shown nothing cursors it can follow after retention deleted what it did not see", async () => {

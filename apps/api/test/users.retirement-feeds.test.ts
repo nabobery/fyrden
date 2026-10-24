@@ -137,7 +137,7 @@ describe("a retired feed", () => {
   it("is retired by any call that comes first after a restore", async () => {
     for (const first of [
       (feed: DurableObjectStub<UserDO>) =>
-        feed.forgetThreads([{ repoId: "rep_x", threadKey: "pull/1" }]),
+        feed.forgetGoneThreads([{ repoId: "rep_x", threadKey: "pull/1", epoch: 1 }]),
       (feed: DurableObjectStub<UserDO>) =>
         feed.ackFeed(
           { repoId: "rep_feedretire", threadKey: "pull/1", kind: "activity" },
