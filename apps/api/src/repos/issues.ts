@@ -16,7 +16,7 @@ import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/curs
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { pageOf } from "../ops/pages.js";
 import { authorize, findReposById, type RepoEntry } from "./directory.js";
-import { actorOf, failure } from "./pulls.js";
+import { actorOf, failure, refusedVersion, staleError } from "./pulls.js";
 import { principalsByLogin } from "./reviews.js";
 import { subjectOutput } from "./shapes.js";
 import { sortingFailure, sortingInput } from "./sorting.js";
@@ -291,20 +291,35 @@ export async function updateIssueOperation(
   const { entry, kinds } = await subjectAccess(ctx, input.owner, input.repo, "write");
   // Its role was checked for writing: the kinds it reads differ by its token only.
   const readable = tokenKinds(ctx, entry, "read");
-  const result = await repo(ctx, entry, "changeIssue").changeIssue(
-    input.issue_number,
-    {
-      ...(input.title !== undefined && { title: input.title }),
-      ...(input.body !== undefined && { body: input.body }),
-      ...(input.state !== undefined && { state: input.state }),
-      ...(input.state_reason != null && { stateReason: input.state_reason }),
-      ...(input.duplicate_of !== undefined && { duplicateOf: input.duplicate_of }),
-    },
-    actorOf(ctx),
-    readable,
-    kinds,
-    await sortingInput(ctx, input),
-  );
+  const patch = {
+    ...(input.title !== undefined && { title: input.title }),
+    ...(input.body !== undefined && { body: input.body }),
+    ...(input.state !== undefined && { state: input.state }),
+    ...(input.state_reason != null && { stateReason: input.state_reason }),
+    ...(input.duplicate_of !== undefined && { duplicateOf: input.duplicate_of }),
+  };
+  const meta = await sortingInput(ctx, input);
+  // With a precondition, through a method an earlier object lacks (it fails, never skips it).
+  const result =
+    input.expected_version === undefined
+      ? await repo(ctx, entry, "changeIssue").changeIssue(
+          input.issue_number,
+          patch,
+          actorOf(ctx),
+          readable,
+          kinds,
+          meta,
+        )
+      : await repo(ctx, entry, "changeIssueAt").changeIssueAt(
+          input.expected_version,
+          input.issue_number,
+          patch,
+          actorOf(ctx),
+          readable,
+          kinds,
+          meta,
+        );
+  if (!result.ok && result.code === "stale") throw staleError(refusedVersion(result));
   if (!result.ok) throw issueFailure(entry, result.code, input.issue_number);
   return subjectOutput(result.subject, readable);
 }

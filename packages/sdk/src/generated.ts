@@ -1766,6 +1766,8 @@ export type PullsListOutput = {
     created_at: number;
     /** Unix time in milliseconds. */
     updated_at: number;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
     /** Unix time in milliseconds. */
@@ -1783,6 +1785,8 @@ export type PullsListOutput = {
       description: string | null;
       /** Copied in from a default set. */
       default: boolean;
+      /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+      version: number;
     })[];
     /** The first of `assignees` (GitHub's older field); null for none. */
     assignee: {
@@ -1813,6 +1817,8 @@ export type PullsListOutput = {
       updated_at: number;
       /** Unix time in milliseconds. */
       closed_at: number | null;
+      /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+      version: number;
     } | null;
     /** Its reactions counted by content, as they stand. */
     reactions: {
@@ -1898,6 +1904,8 @@ export type PullsCreateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   /** Unix time in milliseconds. */
@@ -1915,6 +1923,8 @@ export type PullsCreateOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
   /** The first of `assignees` (GitHub's older field); null for none. */
   assignee: {
@@ -1945,6 +1955,8 @@ export type PullsCreateOutput = {
     updated_at: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   } | null;
   /** Its reactions counted by content, as they stand. */
   reactions: {
@@ -2017,6 +2029,8 @@ export type PullsGetOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   /** Unix time in milliseconds. */
@@ -2034,6 +2048,8 @@ export type PullsGetOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
   /** The first of `assignees` (GitHub's older field); null for none. */
   assignee: {
@@ -2064,6 +2080,8 @@ export type PullsGetOutput = {
     updated_at: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   } | null;
   /** Its reactions counted by content, as they stand. */
   reactions: {
@@ -2097,6 +2115,8 @@ export type PullsUpdateInput = {
   draft?: boolean;
   /** The author only: let the base's maintainers change a head branch in a fork. */
   maintainer_can_modify?: boolean;
+  /** Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since. */
+  expected_version?: number;
 };
 
 /** Output of `pulls.update`. */
@@ -2146,6 +2166,8 @@ export type PullsUpdateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   /** Unix time in milliseconds. */
@@ -2163,6 +2185,8 @@ export type PullsUpdateOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
   /** The first of `assignees` (GitHub's older field); null for none. */
   assignee: {
@@ -2193,6 +2217,8 @@ export type PullsUpdateOutput = {
     updated_at: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   } | null;
   /** Its reactions counted by content, as they stand. */
   reactions: {
@@ -3083,6 +3109,8 @@ export type PullsRequestedReviewersAddOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   /** Unix time in milliseconds. */
@@ -3100,6 +3128,8 @@ export type PullsRequestedReviewersAddOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
   /** The first of `assignees` (GitHub's older field); null for none. */
   assignee: {
@@ -3130,6 +3160,8 @@ export type PullsRequestedReviewersAddOutput = {
     updated_at: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   } | null;
   /** Its reactions counted by content, as they stand. */
   reactions: {
@@ -3210,6 +3242,8 @@ export type PullsRequestedReviewersRemoveOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   /** Unix time in milliseconds. */
@@ -3227,6 +3261,8 @@ export type PullsRequestedReviewersRemoveOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
   /** The first of `assignees` (GitHub's older field); null for none. */
   assignee: {
@@ -3257,6 +3293,8 @@ export type PullsRequestedReviewersRemoveOutput = {
     updated_at: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   } | null;
   /** Its reactions counted by content, as they stand. */
   reactions: {
@@ -3377,6 +3415,8 @@ export type IssuesListOutput = {
     created_at: number;
     /** Unix time in milliseconds. */
     updated_at: number;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
     labels: ({
@@ -3386,6 +3426,8 @@ export type IssuesListOutput = {
       description: string | null;
       /** Copied in from a default set. */
       default: boolean;
+      /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+      version: number;
     })[];
     /** The first of `assignees` (GitHub's older field); null for none. */
     assignee: {
@@ -3416,6 +3458,8 @@ export type IssuesListOutput = {
       updated_at: number;
       /** Unix time in milliseconds. */
       closed_at: number | null;
+      /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+      version: number;
     } | null;
     /** Its reactions counted by content, as they stand. */
     reactions: {
@@ -3484,6 +3528,8 @@ export type IssuesCreateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   labels: ({
@@ -3493,6 +3539,8 @@ export type IssuesCreateOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
   /** The first of `assignees` (GitHub's older field); null for none. */
   assignee: {
@@ -3523,6 +3571,8 @@ export type IssuesCreateOutput = {
     updated_at: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   } | null;
   /** Its reactions counted by content, as they stand. */
   reactions: {
@@ -3582,6 +3632,8 @@ export type IssuesGetOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   labels: ({
@@ -3591,6 +3643,8 @@ export type IssuesGetOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
   /** The first of `assignees` (GitHub's older field); null for none. */
   assignee: {
@@ -3621,6 +3675,8 @@ export type IssuesGetOutput = {
     updated_at: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   } | null;
   /** Its reactions counted by content, as they stand. */
   reactions: {
@@ -3657,6 +3713,8 @@ export type IssuesUpdateInput = {
   state_reason?: "completed" | "not_planned" | "duplicate" | "reopened" | null;
   /** Fyrden: with `state_reason: duplicate`, the issue or pull request this one duplicates; the caller must be able to read it. */
   duplicate_of?: number;
+  /** Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since. */
+  expected_version?: number;
   /** Label names (ignoring case), each one the repository has; replaces its labels. */
   labels?: string[];
   /** Handles of users and agents who can read the repository; replaces its assignees. */
@@ -3694,6 +3752,8 @@ export type IssuesUpdateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   labels: ({
@@ -3703,6 +3763,8 @@ export type IssuesUpdateOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
   /** The first of `assignees` (GitHub's older field); null for none. */
   assignee: {
@@ -3733,6 +3795,8 @@ export type IssuesUpdateOutput = {
     updated_at: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   } | null;
   /** Its reactions counted by content, as they stand. */
   reactions: {
@@ -3857,6 +3921,8 @@ export type LabelsListOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -3880,6 +3946,8 @@ export type LabelsGetOutput = {
   description: string | null;
   /** Copied in from a default set. */
   default: boolean;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
 };
 
 /** Input of `labels.create`: Create a label. */
@@ -3903,6 +3971,8 @@ export type LabelsCreateOutput = {
   description: string | null;
   /** Copied in from a default set. */
   default: boolean;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
 };
 
 /** Input of `labels.update`: Update a label. */
@@ -3919,6 +3989,10 @@ export type LabelsUpdateInput = {
   color?: string;
   /** Null clears it. */
   description?: string | null;
+  /** Fyrden: the id of the label `name` named when the change was made; refused with 409 `stale` when the name names another now (renamed, then taken). `expected_version` needs it. */
+  expected_id?: number;
+  /** Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since. */
+  expected_version?: number;
 };
 
 /** Output of `labels.update`. */
@@ -3929,6 +4003,8 @@ export type LabelsUpdateOutput = {
   description: string | null;
   /** Copied in from a default set. */
   default: boolean;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
 };
 
 /** Input of `labels.delete`: Delete a label. */
@@ -3939,6 +4015,10 @@ export type LabelsDeleteInput = {
   repo: string;
   /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
   name: string;
+  /** Fyrden: the id of the label `name` named when the change was made; refused with 409 `stale` when the name names another now (renamed, then taken). `expected_version` needs it. */
+  expected_id?: number;
+  /** Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since. */
+  expected_version?: number;
 };
 
 /** Output of `labels.delete`. */
@@ -3964,6 +4044,8 @@ export type LabelsCopyDefaultsOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
 };
 
@@ -3986,6 +4068,8 @@ export type IssuesLabelsListOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
 };
 
@@ -3999,6 +4083,8 @@ export type IssuesLabelsAddInput = {
   issue_number: number;
   /** Label names, matched ignoring case; each must exist in the repository. */
   labels: string[];
+  /** Fyrden: the id of each label of `labels`, in order, as a form showed it; refused with 409 `stale` when a name names another label now (renamed, then taken). */
+  expected_ids?: number[];
 };
 
 /** Output of `issues.labels.add`. */
@@ -4010,6 +4096,8 @@ export type IssuesLabelsAddOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
 };
 
@@ -4034,6 +4122,8 @@ export type IssuesLabelsSetOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
 };
 
@@ -4047,6 +4137,8 @@ export type IssuesLabelsRemoveInput = {
   issue_number: number;
   /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
   name: string;
+  /** Fyrden: the id of the label `name` named when the change was made; refused with 409 `stale` when the name names another now (renamed, then taken). `expected_version` needs it. */
+  expected_id?: number;
 };
 
 /** Output of `issues.labels.remove`. */
@@ -4058,6 +4150,8 @@ export type IssuesLabelsRemoveOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
 };
 
@@ -4080,6 +4174,8 @@ export type IssuesLabelsClearOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
 };
 
@@ -4124,6 +4220,8 @@ export type IssuesAssigneesAddOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   labels: ({
@@ -4133,6 +4231,8 @@ export type IssuesAssigneesAddOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
   /** The first of `assignees` (GitHub's older field); null for none. */
   assignee: {
@@ -4163,6 +4263,8 @@ export type IssuesAssigneesAddOutput = {
     updated_at: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   } | null;
   /** Its reactions counted by content, as they stand. */
   reactions: {
@@ -4226,6 +4328,8 @@ export type IssuesAssigneesRemoveOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   labels: ({
@@ -4235,6 +4339,8 @@ export type IssuesAssigneesRemoveOutput = {
     description: string | null;
     /** Copied in from a default set. */
     default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
   /** The first of `assignees` (GitHub's older field); null for none. */
   assignee: {
@@ -4265,6 +4371,8 @@ export type IssuesAssigneesRemoveOutput = {
     updated_at: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   } | null;
   /** Its reactions counted by content, as they stand. */
   reactions: {
@@ -4365,6 +4473,8 @@ export type MilestonesListOutput = {
     updated_at: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -4403,6 +4513,8 @@ export type MilestonesGetOutput = {
   updated_at: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
 };
 
 /** Input of `milestones.create`: Create a milestone. */
@@ -4441,6 +4553,8 @@ export type MilestonesCreateOutput = {
   updated_at: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
 };
 
 /** Input of `milestones.update`: Update a milestone. */
@@ -4457,6 +4571,8 @@ export type MilestonesUpdateInput = {
   description?: string | null;
   /** Null clears it. */
   due_on?: number | null;
+  /** Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since. */
+  expected_version?: number;
 };
 
 /** Output of `milestones.update`. */
@@ -4482,6 +4598,8 @@ export type MilestonesUpdateOutput = {
   updated_at: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
 };
 
 /** Input of `milestones.delete`: Delete a milestone. */
@@ -4533,6 +4651,8 @@ export type IssuesCommentsListOutput = {
     created_at: number;
     /** Unix time in milliseconds. */
     updated_at: number;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
     /** Its reactions counted by content, as they stand. */
     reactions: {
       total_count: number;
@@ -4577,6 +4697,8 @@ export type IssuesCommentsCreateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Its reactions counted by content, as they stand. */
   reactions: {
     total_count: number;
@@ -4617,6 +4739,8 @@ export type IssuesCommentsGetOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Its reactions counted by content, as they stand. */
   reactions: {
     total_count: number;
@@ -4640,6 +4764,8 @@ export type IssuesCommentsUpdateInput = {
   /** The comment's id. */
   comment_id: number;
   body: string;
+  /** Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since. */
+  expected_version?: number;
 };
 
 /** Output of `issues.comments.update`. */
@@ -4658,6 +4784,8 @@ export type IssuesCommentsUpdateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Its reactions counted by content, as they stand. */
   reactions: {
     total_count: number;

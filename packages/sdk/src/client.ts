@@ -41,6 +41,8 @@ export class FyrdenError extends Error {
     readonly missingPermission: string | undefined,
     /** Where to start over, for `cursor_expired` (a REST path). */
     readonly resync?: string,
+    /** For `stale` (Fyrden's): the version it is at now. */
+    readonly currentVersion?: number,
   ) {
     super(`${code}: ${detail}`);
   }
@@ -144,6 +146,7 @@ export class FyrdenClient {
         typeof problem.request_id === "string" ? problem.request_id : undefined,
         typeof problem.missing_permission === "string" ? problem.missing_permission : undefined,
         typeof problem.resync === "string" ? problem.resync : undefined,
+        typeof problem.current_version === "number" ? problem.current_version : undefined,
       );
     }
     // An operation that answers nothing (204) gives null, as its output type says.

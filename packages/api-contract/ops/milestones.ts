@@ -9,7 +9,7 @@ import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { BoundedPerPage } from "./pages.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
-import { Milestone } from "./subject-meta.js";
+import { ExpectedVersion, Milestone } from "./subject-meta.js";
 
 const RepoInput = {
   owner: z
@@ -132,6 +132,7 @@ export const updateMilestone = defineOperation({
     state: z.enum(MILESTONE_STATES).optional(),
     description: Description.nullable().optional().describe("Null clears it."),
     due_on: DueOn.nullable().optional().describe("Null clears it."),
+    expected_version: ExpectedVersion,
   }),
   output: Milestone,
   permission: "metadata:read",

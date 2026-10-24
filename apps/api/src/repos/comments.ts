@@ -11,7 +11,7 @@ import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { pageOf } from "../ops/pages.js";
 import type { RepoEntry } from "./directory.js";
-import { actorOf, failure } from "./pulls.js";
+import { actorOf, failure, refusedVersion, staleError } from "./pulls.js";
 import { commentOutput } from "./shapes.js";
 import { subjectAccess, subjectNotFound } from "./subjects.js";
 
@@ -88,12 +88,23 @@ export async function updateCommentOperation(
   input: Input<typeof updateComment>,
 ): Promise<Output<typeof updateComment>> {
   const { entry, kinds } = await subjectAccess(ctx, input.owner, input.repo, "write");
-  const result = await repo(ctx, entry, "editComment").editComment(
-    input.comment_id,
-    input.body,
-    actorOf(ctx),
-    kinds,
-  );
+  // With a precondition, through a method an earlier object lacks (it fails, never skips it).
+  const result =
+    input.expected_version === undefined
+      ? await repo(ctx, entry, "editComment").editComment(
+          input.comment_id,
+          input.body,
+          actorOf(ctx),
+          kinds,
+        )
+      : await repo(ctx, entry, "editCommentAt").editCommentAt(
+          input.expected_version,
+          input.comment_id,
+          input.body,
+          actorOf(ctx),
+          kinds,
+        );
+  if (!result.ok && result.code === "stale") throw staleError(refusedVersion(result));
   if (!result.ok) throw commentFailure(entry, result.code, input.comment_id);
   return commentOutput(result.comment);
 }

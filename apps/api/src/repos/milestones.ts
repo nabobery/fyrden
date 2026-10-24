@@ -12,7 +12,7 @@ import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/curs
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { pageOf } from "../ops/pages.js";
 import type { RepoEntry } from "./directory.js";
-import { actorOf, failure } from "./pulls.js";
+import { actorOf, failure, refusedVersion, staleError } from "./pulls.js";
 import { milestoneOutput } from "./shapes.js";
 import { sortingFailure } from "./sorting.js";
 import { subjectAccess, tokenKinds } from "./subjects.js";
@@ -161,16 +161,27 @@ export async function updateMilestoneOperation(
   input: Input<typeof updateMilestone>,
 ): Promise<Output<typeof updateMilestone>> {
   const { entry } = await subjectAccess(ctx, input.owner, input.repo, "write");
-  const result = await repo(ctx, entry, "updateMilestone").updateMilestone(
-    input.milestone_number,
-    {
-      ...(input.title !== undefined && { title: input.title }),
-      ...(input.description !== undefined && { description: input.description }),
-      ...(input.state !== undefined && { state: input.state }),
-      ...(input.due_on !== undefined && { dueOn: input.due_on }),
-    },
-    actorOf(ctx),
-  );
+  const patch = {
+    ...(input.title !== undefined && { title: input.title }),
+    ...(input.description !== undefined && { description: input.description }),
+    ...(input.state !== undefined && { state: input.state }),
+    ...(input.due_on !== undefined && { dueOn: input.due_on }),
+  };
+  // With a precondition, through a method an earlier object lacks (it fails, never skips it).
+  const result =
+    input.expected_version === undefined
+      ? await repo(ctx, entry, "updateMilestone").updateMilestone(
+          input.milestone_number,
+          patch,
+          actorOf(ctx),
+        )
+      : await repo(ctx, entry, "updateMilestoneAt").updateMilestoneAt(
+          input.expected_version,
+          input.milestone_number,
+          patch,
+          actorOf(ctx),
+        );
+  if (!result.ok && result.code === "stale") throw staleError(refusedVersion(result));
   if (!result.ok) throw milestoneFailure(entry, result.code, input.milestone_number);
   return milestoneOutput(result.milestone, tokenKinds(ctx, entry, "read"));
 }

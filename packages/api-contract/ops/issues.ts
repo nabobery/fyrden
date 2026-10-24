@@ -13,7 +13,7 @@ import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { BoundedPerPage } from "./pages.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
-import { ReactionRollup, SortingOutput } from "./subject-meta.js";
+import { ExpectedVersion, ReactionRollup, SortingOutput, Version } from "./subject-meta.js";
 
 const RepoInput = {
   owner: z
@@ -91,6 +91,7 @@ export const Issue = z.object({
     .describe("Who closed it last, while closed; null for pull requests."),
   created_at: z.number().int().describe("Unix time in milliseconds."),
   updated_at: z.number().int().describe("Unix time in milliseconds."),
+  version: Version,
   closed_at: z.number().int().nullable().describe("Unix time in milliseconds."),
   ...SortingOutput,
   reactions: ReactionRollup,
@@ -258,6 +259,7 @@ export const updateIssue = defineOperation({
       .describe(
         "Fyrden: with `state_reason: duplicate`, the issue or pull request this one duplicates; the caller must be able to read it.",
       ),
+    expected_version: ExpectedVersion,
     ...SortingInput,
   }),
   output: Issue,

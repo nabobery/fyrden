@@ -12,6 +12,13 @@ export const Problem = z.object({
     .string()
     .optional()
     .describe("Where to start over when a cursor expired (`cursor_expired`): a REST path."),
+  current_version: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      "Fyrden: with `stale`, the version it is at now (read it again to see what changed).",
+    ),
 });
 
 export type Problem = z.infer<typeof Problem>;
@@ -24,6 +31,7 @@ export interface ProblemInit {
   type?: string;
   missingPermission?: string;
   resync?: string;
+  currentVersion?: number;
 }
 
 /**
@@ -39,5 +47,6 @@ export function makeProblem(init: ProblemInit): Problem {
     ...(init.requestId !== undefined && { request_id: init.requestId }),
     ...(init.missingPermission !== undefined && { missing_permission: init.missingPermission }),
     ...(init.resync !== undefined && { resync: init.resync }),
+    ...(init.currentVersion !== undefined && { current_version: init.currentVersion }),
   };
 }

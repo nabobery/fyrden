@@ -337,11 +337,11 @@ describe("full webhook bodies", () => {
     });
 
   // An issue with 100 labels whose descriptions are `length` control characters: each adds about
-  // 600 bytes to its labeled event's capture, which 94 keep just under the inline bound and 95
+  // 600 bytes to its labeled event's capture, which 92 keep just under the inline bound and 93
   // take just over it (measured; the test fails if the shapes change enough to move it).
   for (const [length, falls] of [
-    [94, false],
-    [95, true],
+    [92, false],
+    [93, true],
   ] as const)
     it(`keep a capture just ${falls ? "over" : "under"} the inline bound ${falls ? "fallen back" : "whole"}`, async () => {
       await t.createHook({ events: ["issues"] });

@@ -277,6 +277,16 @@ const DELETION_SLICE = {
 } as const;
 
 /** One repository: refs, packs, its events and audit log. Keyed by the immutable repo id. */
+/** A label's change as `updateLabel` takes it. */
+type LabelPatch = {
+  readonly name?: string;
+  readonly color?: string;
+  readonly description?: string | null;
+};
+
+/** The label a form showed: its id, and the version it was at (when given). */
+type LabelExpectation = { readonly id: number; readonly version?: number };
+
 export class RepoDO extends MigratingDO {
   static readonly schema = repoSchema;
 
@@ -1333,7 +1343,17 @@ export class RepoDO extends MigratingDO {
    * Changes a pull request as the mutation matrix allows the caller, with
    * its role and root identity worked out here (no await before the change).
    */
-  changePull(
+  changePull(number: number, patch: PullPatch, actor: RefActor) {
+    return this.#changePull(undefined, number, patch, actor);
+  }
+
+  /** As `changePull`, only while the pull request is still at `expected` (see `changeIssueAt`). */
+  changePullAt(expected: number, number: number, patch: PullPatch, actor: RefActor) {
+    return this.#changePull(expected, number, patch, actor);
+  }
+
+  #changePull(
+    expected: number | undefined,
     number: number,
     patch: PullPatch,
     actor: RefActor,
@@ -1342,13 +1362,17 @@ export class RepoDO extends MigratingDO {
     | { ok: false; code: "already_exists"; number: number }
     | {
         ok: false;
-        code: Exclude<PullChangeFailure, "already_exists"> | PullChangeRefusal | "busy";
+        code: Exclude<PullChangeFailure, "already_exists"> | PullChangeRefusal | "busy" | "stale";
       }
   > {
     return this.#pullChange(
       "changePull",
       actor,
       (caller) => {
+        // A missing pull request is the change's to refuse (not found), never stale.
+        const current = this.pulls.get(number);
+        if (expected !== undefined && current && current.version !== expected)
+          return { ok: false as const, code: "stale" as const, version: current.version };
         const changed = this.pulls.change(number, patch, caller);
         // Nothing awaits between the read and the commit: a conflict means a
         // concurrent change no retry here could see past.
@@ -1545,10 +1569,45 @@ export class RepoDO extends MigratingDO {
   }
 
   editComment(id: number, body: string, actor: RefActor, kinds: readonly SubjectKind[]) {
+    return this.#editComment(undefined, id, body, actor, kinds);
+  }
+
+  /** As `editComment`, only while the comment is still at `expected` (see `changeIssueAt`). */
+  editCommentAt(
+    expected: number,
+    id: number,
+    body: string,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#editComment(expected, id, body, actor, kinds);
+  }
+
+  #editComment(
+    expected: number | undefined,
+    id: number,
+    body: string,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
     return this.#pullChange(
       "editComment",
       actor,
-      (caller) => this.#reacted(this.comments.edit(id, body, caller, kinds)),
+      (caller) => {
+        // Only a comment the caller may see is compared (the edit refuses any other as not
+        // found): a version must not tell of one on a kind it cannot read.
+        const current = this.comments.get(id);
+        const kind = current && this.issues.kindOf(current.number);
+        if (
+          expected !== undefined &&
+          current &&
+          kind &&
+          kinds.includes(kind) &&
+          current.version !== expected
+        )
+          return { ok: false as const, code: "stale" as const, version: current.version };
+        return this.#reacted(this.comments.edit(id, body, caller, kinds));
+      },
       undefined,
       [body],
     );
@@ -1668,6 +1727,36 @@ export class RepoDO extends MigratingDO {
     kinds: readonly SubjectKind[] = ["issue"],
     meta: MetaInput = {},
   ) {
+    return this.#changeIssue(undefined, number, patch, actor, readable, kinds, meta);
+  }
+
+  /**
+   * As `changeIssue`, only while the issue (or pull request) is still at
+   * `expected` (its `version`), checked in the change; `stale` when it moved
+   * on. A method of its own: an earlier object (while a deploy rolls out)
+   * refuses it rather than ignore the precondition.
+   */
+  changeIssueAt(
+    expected: number,
+    number: number,
+    patch: IssuePatch,
+    actor: RefActor,
+    readable: readonly SubjectKind[],
+    kinds: readonly SubjectKind[],
+    meta: MetaInput,
+  ) {
+    return this.#changeIssue(expected, number, patch, actor, readable, kinds, meta);
+  }
+
+  #changeIssue(
+    expected: number | undefined,
+    number: number,
+    patch: IssuePatch,
+    actor: RefActor,
+    readable: readonly SubjectKind[],
+    kinds: readonly SubjectKind[],
+    meta: MetaInput,
+  ) {
     return this.#pullChange(
       "changeIssue",
       actor,
@@ -1675,6 +1764,9 @@ export class RepoDO extends MigratingDO {
         const kind = this.issues.kindOf(number);
         if (!kind || !kinds.includes(kind))
           return { ok: false as const, code: "not_found" as const };
+        const current = kind === "pull" ? this.pulls.get(number) : this.issues.get(number);
+        if (expected !== undefined && current && current.version !== expected)
+          return { ok: false as const, code: "stale" as const, version: current.version };
         const planned = hasMeta(meta)
           ? this.subjectMeta.plan(number, this.#metaPatch(meta, ceilings), caller, kinds)
           : undefined;
@@ -1712,6 +1804,31 @@ export class RepoDO extends MigratingDO {
     actor: RefActor,
     kinds: readonly SubjectKind[],
   ) {
+    return this.#changeSubjectMeta([], number, meta, actor, kinds);
+  }
+
+  /**
+   * As `changeSubjectMeta`, only while each name of `expected` still names
+   * the label of its id (a picker's labels, renamed and their names taken
+   * since: `stale`); a method of its own, as `changeIssueAt`'s.
+   */
+  changeSubjectMetaAt(
+    expected: readonly { readonly name: string; readonly id: number }[],
+    number: number,
+    meta: MetaInput,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#changeSubjectMeta(expected, number, meta, actor, kinds);
+  }
+
+  #changeSubjectMeta(
+    expected: readonly { readonly name: string; readonly id: number }[],
+    number: number,
+    meta: MetaInput,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
     return this.#pullChange(
       "changeSubjectMeta",
       actor,
@@ -1722,7 +1839,11 @@ export class RepoDO extends MigratingDO {
           caller,
           kinds,
         );
+        // Planned first: a subject the caller cannot see, or a label the repository lacks,
+        // answers as without the precondition.
         if (!planned.ok) return planned;
+        if (expected.some((e) => this.subjectMeta.label(e.name)?.id !== e.id))
+          return { ok: false as const, code: "stale" as const };
         if (planned.plan.changes)
           this.git.context.storage.transactionSync(() => planned.plan.apply(true));
         return {
@@ -1939,25 +2060,64 @@ export class RepoDO extends MigratingDO {
   }
 
   /** Changes a label (write). */
-  updateLabel(
+  updateLabel(name: string, patch: LabelPatch, actor: RefActor) {
+    return this.#updateLabel(undefined, name, patch, actor);
+  }
+
+  /**
+   * As `updateLabel`, only while `name` still names label `expected.id`
+   * at `expected.version` (see `changeIssueAt`).
+   */
+  updateLabelAt(expected: LabelExpectation, name: string, patch: LabelPatch, actor: RefActor) {
+    return this.#updateLabel(expected, name, patch, actor);
+  }
+
+  #updateLabel(
+    expected: LabelExpectation | undefined,
     name: string,
-    patch: {
-      readonly name?: string;
-      readonly color?: string;
-      readonly description?: string | null;
-    },
+    patch: LabelPatch,
     actor: RefActor,
   ) {
     return this.#pullChange("updateLabel", actor, (caller) =>
-      this.#withIdentity(() => this.subjectMeta.updateLabel(name, patch, caller)),
+      this.#withIdentity(
+        () => this.#labelStale(name, expected) ?? this.subjectMeta.updateLabel(name, patch, caller),
+      ),
     );
   }
 
   /** Deletes a label (write). */
   deleteLabel(name: string, actor: RefActor) {
+    return this.#deleteLabel(undefined, name, actor);
+  }
+
+  /** As `deleteLabel`, only while `name` still names label `expected.id` at `expected.version`. */
+  deleteLabelAt(expected: LabelExpectation, name: string, actor: RefActor) {
+    return this.#deleteLabel(expected, name, actor);
+  }
+
+  #deleteLabel(expected: LabelExpectation | undefined, name: string, actor: RefActor) {
     return this.#pullChange("deleteLabel", actor, (caller) =>
-      this.#withIdentity(() => this.subjectMeta.deleteLabel(name, caller)),
+      this.#withIdentity(
+        () => this.#labelStale(name, expected) ?? this.subjectMeta.deleteLabel(name, caller),
+      ),
     );
+  }
+
+  /**
+   * The stale refusal when `name` no longer names the label `expected`
+   * describes, with the version of the label it names now; none with no
+   * expectation, or no such label (the change's to refuse as not found).
+   */
+  #labelStale(name: string, expected: LabelExpectation | undefined) {
+    const label = expected && this.subjectMeta.label(name);
+    if (
+      !expected ||
+      !label ||
+      (label.id === expected.id &&
+        (expected.version === undefined || label.version === expected.version))
+    )
+      return undefined;
+    return { ok: false as const, code: "stale" as const, version: label.version };
   }
 
   /** Copies labels in (an account's defaults; write): names already here are kept. */
@@ -1998,8 +2158,32 @@ export class RepoDO extends MigratingDO {
     patch: Parameters<RepoSubjectMeta["updateMilestone"]>[1],
     actor: RefActor,
   ) {
+    return this.#updateMilestone(undefined, number, patch, actor);
+  }
+
+  /** As `updateMilestone`, only while the milestone is still at `expected` (see `changeIssueAt`). */
+  updateMilestoneAt(
+    expected: number,
+    number: number,
+    patch: Parameters<RepoSubjectMeta["updateMilestone"]>[1],
+    actor: RefActor,
+  ) {
+    return this.#updateMilestone(expected, number, patch, actor);
+  }
+
+  #updateMilestone(
+    expected: number | undefined,
+    number: number,
+    patch: Parameters<RepoSubjectMeta["updateMilestone"]>[1],
+    actor: RefActor,
+  ) {
     return this.#pullChange("updateMilestone", actor, (caller) =>
-      this.#withIdentity(() => this.subjectMeta.updateMilestone(number, patch, caller)),
+      this.#withIdentity(() => {
+        const current = this.subjectMeta.milestone(number);
+        if (expected !== undefined && current && current.version !== expected)
+          return { ok: false as const, code: "stale" as const, version: current.version };
+        return this.subjectMeta.updateMilestone(number, patch, caller);
+      }),
     );
   }
 

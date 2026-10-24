@@ -3,7 +3,7 @@ import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { AfterId, BoundedPerPage } from "./pages.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
-import { ReactionRollup } from "./subject-meta.js";
+import { ExpectedVersion, ReactionRollup, Version } from "./subject-meta.js";
 
 const RepoInput = {
   owner: z
@@ -38,6 +38,7 @@ export const Comment = z.object({
   body: z.string(),
   created_at: z.number().int().describe("Unix time in milliseconds."),
   updated_at: z.number().int().describe("Unix time in milliseconds."),
+  version: Version,
   reactions: ReactionRollup,
 });
 
@@ -124,7 +125,12 @@ export const updateComment = defineOperation({
   summary: "Update a comment",
   description:
     "Replaces a comment's body. Its author may edit its own; write access and above, anyone's (only they while the conversation is locked). Takes the permission for its kind.",
-  input: z.object({ ...RepoInput, comment_id: CommentId, body: Body }),
+  input: z.object({
+    ...RepoInput,
+    comment_id: CommentId,
+    body: Body,
+    expected_version: ExpectedVersion,
+  }),
   output: Comment,
   permission: "metadata:read",
   principals: ["user", "agent"],

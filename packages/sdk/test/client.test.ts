@@ -137,6 +137,19 @@ describe("FyrdenClient", () => {
     expect(error).toMatchObject({ status: 410, code: "cursor_expired", resync: "/api/feed/sync" });
   });
 
+  it("carries a stale refusal's current version, and none when it has none", async () => {
+    const { fetchFn } = fake([
+      { status: 409, body: { status: 409, code: "stale", detail: "d", current_version: 7 } },
+      { status: 409, body: { status: 409, code: "stale", detail: "d" } },
+    ]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test/api", fetch: fetchFn });
+    const input = { owner: "me", repo: "r", issue_number: 1, body: "x", expected_version: 1 };
+    const first = await client.call("issues.update", input).catch((e: unknown) => e);
+    expect(first).toMatchObject({ status: 409, code: "stale", currentVersion: 7 });
+    const second = await client.call("issues.update", input).catch((e: unknown) => e);
+    expect(second).toMatchObject({ code: "stale", currentVersion: undefined });
+  });
+
   it("iterates every item of a paginated operation, following next_cursor", async () => {
     const { sent, fetchFn } = fake([
       { body: { repos: [{ name: "a" }, { name: "b" }], next_cursor: "c1" } },
