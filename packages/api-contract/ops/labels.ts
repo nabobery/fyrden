@@ -67,6 +67,12 @@ export const listLabels = defineOperation({
   description: `The repository's labels by name, ignoring case. ${READ}`,
   input: z.object({
     ...RepoInput,
+    q: z
+      .string()
+      .min(1)
+      .max(MAX_LABEL_NAME_LENGTH)
+      .optional()
+      .describe("Fyrden: only labels whose name starts with this, ignoring case."),
     per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
     cursor: z.string().max(400).optional().describe("From a previous page's `next_cursor`."),
   }),

@@ -11311,6 +11311,61 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
           {
             "in": "query",
+            "name": "labels",
+            "required": false,
+            "schema": {
+              "description": "Label names separated by commas, ignoring case: only items with all of them (none when one is not the repository's). A name holding a comma: use \`label_ids\`.",
+              "maxLength": 1019,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "label_ids",
+            "required": false,
+            "schema": {
+              "description": "Fyrden: label ids separated by commas (at most 20): only items with all of them. Not with \`labels\`.",
+              "pattern": "^[1-9][0-9]{0,14}(?:,[1-9][0-9]{0,14}){0,19}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "assignee",
+            "required": false,
+            "schema": {
+              "description": "A handle: items assigned to that user or agent; \`none\`: unassigned; \`*\`: assigned.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^(?:none|\\*|[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "milestone",
+            "required": false,
+            "schema": {
+              "description": "A milestone's number; \`none\`: in no milestone; \`*\`: in any.",
+              "pattern": "^(?:[1-9][0-9]{0,14}|none|\\*)$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "creator",
+            "required": false,
+            "schema": {
+              "description": "A handle: items opened by that user or agent (as \`user\` shows them: the user when agents acted for one).",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
             "name": "per_page",
             "required": false,
             "schema": {
@@ -17594,6 +17649,17 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "schema": {
               "description": "The repository's name.",
               "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "description": "Fyrden: only labels whose name starts with this, ignoring case.",
+              "maxLength": 50,
+              "minLength": 1,
               "type": "string",
             },
           },

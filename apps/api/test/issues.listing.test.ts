@@ -8,7 +8,13 @@ import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import type { SubjectKind, SubjectQuery } from "../src/do/repo/issues.js";
+import {
+  FILTER_RANGE_READS,
+  type SubjectBoundary,
+  type SubjectFilter,
+  type SubjectKind,
+  type SubjectQuery,
+} from "../src/do/repo/issues.js";
 import { HEAD_MOVED } from "../src/do/repo/pulls.js";
 import { inRepo } from "./helpers/repo-git.js";
 
@@ -74,22 +80,17 @@ function listed(stub: DurableObjectStub<RepoDO>, query: SubjectQuery) {
   return inRepo(stub, (r: RepoDO) => {
     const sql = r.git.context.storage.sql;
     const exec = sql.exec.bind(sql);
-    let rowsRead = 0;
+    const cursors: { rowsRead: number }[] = [];
     sql.exec = ((query: string, ...bindings: unknown[]) => {
       const cursor = exec(query, ...bindings);
-      const toArray = cursor.toArray.bind(cursor);
-      cursor.toArray = () => {
-        const rows = toArray();
-        rowsRead += cursor.rowsRead;
-        return rows;
-      };
+      cursors.push(cursor);
       return cursor;
     }) as typeof sql.exec;
     try {
-      const page = r.issues.list(query);
+      const page = r.issues.list(query).subjects;
       return {
         numbers: page.map((s) => (s.kind === "issue" ? s.issue.number : s.pull.number)),
-        rowsRead,
+        rowsRead: cursors.reduce((sum, c) => sum + c.rowsRead, 0),
       };
     } finally {
       sql.exec = exec;
@@ -144,9 +145,12 @@ describe("the issue listing", () => {
                 const label = JSON.stringify(query);
                 expect(page.numbers, label).toEqual(expected(held, query));
                 // At most five ranges (issues: two states; pull requests: three), each split in
-                // two, each taking a page; the page's rows read back, and its labels, assignees
-                // and reaction counts sought by number: never the 2N held.
-                expect(page.rowsRead, label).toBeLessThanOrEqual(5 * 2 * (LIMIT + 1) + 4 * LIMIT);
+                // two, each taking a page and one more (to know whether more follow); the page's
+                // rows read back, and its labels, assignees and reaction counts sought by number:
+                // never the 2N held.
+                expect(page.rowsRead, label).toBeLessThanOrEqual(
+                  5 * 2 * (LIMIT + 1) + 4 * (LIMIT + 1),
+                );
               }
     },
   );
@@ -211,5 +215,249 @@ describe("the issue listing", () => {
     // storage bills index rows as rows written:
     // https://developers.cloudflare.com/durable-objects/platform/pricing/).
     expect(written.withIndex - written.without).toBe(1);
+  });
+});
+
+/** What each held subject carries, by number: chosen so filters cut the listing unevenly. */
+const labelsOf = (n: number) => [
+  ...(n % 3 === 0 ? [1] : []),
+  ...(n % 5 === 0 ? [2] : []),
+  // Rare: one subject in the whole repository.
+  ...(n === N + 1 ? [3] : []),
+];
+const assigneeOf = (n: number) => (n % 7 === 0 ? "usr_x" : null);
+const milestoneOf = (n: number) => (n % 4 === 0 ? 1 : null);
+const authorOf = (n: number) => (n % 11 === 0 ? "usr_b" : "usr_a");
+
+/** A repository as `holding` makes it, its subjects given labels, assignees, milestones and authors. */
+async function holdingSorted(
+  tied = false,
+): Promise<{ stub: DurableObjectStub<RepoDO>; held: Held[] }> {
+  const { stub, held } = await holding(tied);
+  await inRepo(stub, (r: RepoDO) => {
+    const sql = r.git.context.storage.sql;
+    sql.exec(
+      `INSERT INTO milestones (number, title, state, creator, created_at, updated_at)
+       VALUES (1, 'v1', 'open', 'usr_a', 1, 1)`,
+    );
+    for (const [id, name] of [
+      [1, "bug"],
+      [2, "needs,discussion"],
+      [3, "rare"],
+    ] as const)
+      sql.exec(
+        "INSERT INTO labels (id, name, color, created_at, updated_at) VALUES (?, ?, 'ffffff', 1, 1)",
+        id,
+        name,
+      );
+    for (const h of held) {
+      const table = h.kind === "issue" ? "issues" : "pull_requests";
+      sql.exec(
+        `UPDATE ${table} SET milestone = ?, author_id = ? WHERE number = ?`,
+        milestoneOf(h.number),
+        authorOf(h.number),
+        h.number,
+      );
+      for (const label of labelsOf(h.number))
+        sql.exec("INSERT INTO subject_labels (number, label_id) VALUES (?, ?)", h.number, label);
+      const assignee = assigneeOf(h.number);
+      if (assignee)
+        sql.exec(
+          "INSERT INTO subject_assignees (number, principal, root, assigned_at) VALUES (?, ?, ?, 1)",
+          h.number,
+          assignee,
+          assignee,
+        );
+    }
+  });
+  return { stub, held };
+}
+
+/** Whether held subject `n` matches `filter` (label names as the fixture names them). */
+function matches(n: number, filter: SubjectFilter): boolean {
+  const names: Record<string, number> = { bug: 1, "needs,discussion": 2, rare: 3 };
+  const ids = [
+    ...(filter.labelIds ?? []),
+    ...(filter.labelNames ?? []).map((name) => names[name] ?? -1),
+  ];
+  const assignee = assigneeOf(n);
+  const milestone = milestoneOf(n);
+  return (
+    ids.every((id) => labelsOf(n).includes(id)) &&
+    (filter.assignee === undefined ||
+      (filter.assignee === "none"
+        ? assignee === null
+        : filter.assignee === "any"
+          ? assignee !== null
+          : assignee === filter.assignee.principal)) &&
+    (filter.milestone === undefined ||
+      (filter.milestone === "none"
+        ? milestone === null
+        : filter.milestone === "any"
+          ? milestone !== null
+          : milestone === filter.milestone)) &&
+    (filter.creator === undefined || authorOf(n) === filter.creator)
+  );
+}
+
+/** Every page of `query`, followed to the end: the numbers in order, pages taken, most rows one read. */
+async function walk(stub: DurableObjectStub<RepoDO>, query: SubjectQuery) {
+  const numbers: number[] = [];
+  let after: SubjectBoundary | null = null;
+  let pages = 0;
+  let mostRead = 0;
+  do {
+    const page = await inRepo(stub, (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      const exec = sql.exec.bind(sql);
+      // Every cursor's rows read, once the listing is done with it (iterated or read whole).
+      const cursors: { rowsRead: number }[] = [];
+      sql.exec = ((q: string, ...bindings: unknown[]) => {
+        const cursor = exec(q, ...bindings);
+        cursors.push(cursor);
+        return cursor;
+      }) as typeof sql.exec;
+      try {
+        const listed = r.issues.list({ ...query, after });
+        return {
+          numbers: listed.subjects.map((s) =>
+            s.kind === "issue" ? s.issue.number : s.pull.number,
+          ),
+          next: listed.next,
+          rowsRead: cursors.reduce((sum, c) => sum + c.rowsRead, 0),
+        };
+      } finally {
+        sql.exec = exec;
+      }
+    });
+    expect(page.numbers.length).toBeLessThanOrEqual(query.limit);
+    numbers.push(...page.numbers);
+    after = page.next;
+    pages++;
+    mostRead = Math.max(mostRead, page.rowsRead);
+  } while (after !== null && pages < 200);
+  return { numbers, pages, mostRead, ended: after === null };
+}
+
+/** The page size filtered walks take (the largest the API allows: fewer pages to walk). */
+const WALK_LIMIT = 100;
+
+/**
+ * Rows a filtered page of these fixtures reads at most: five ranges, each split in two, each
+ * stopping once it has read its budget (the row that crosses it can bring a filter's lookups with
+ * it: up to 22 more), and the page's records read back with their few labels and assignees (a
+ * page's items cost as an unfiltered page's do, which grows with the labels each carries).
+ */
+const MOST_FILTERED_READS = 5 * 2 * (FILTER_RANGE_READS + 22) + 4 * (WALK_LIMIT + 1);
+
+describe("the issue listing's filters", () => {
+  const FILTERS: [string, SubjectFilter][] = [
+    ["a common label by name", { labelNames: ["bug"] }],
+    ["a label whose name holds a comma, by id", { labelIds: [2] }],
+    ["two labels", { labelIds: [1, 2] }],
+    ["a label one subject has", { labelNames: ["rare"] }],
+    ["an assignee", { assignee: { principal: "usr_x" } }],
+    ["no assignee", { assignee: "none" }],
+    ["any assignee", { assignee: "any" }],
+    ["a milestone", { milestone: 1 }],
+    ["no milestone", { milestone: "none" }],
+    [
+      "a creator, with a label and any milestone",
+      { creator: "usr_b", labelIds: [1], milestone: "any" },
+    ],
+  ];
+
+  it.each(FILTERS)(
+    "walks %s to the end in order, each page reading a bounded number of rows",
+    async (_, filter) => {
+      for (const tied of [false, true]) {
+        const { stub, held } = await holdingSorted(tied);
+        for (const kinds of KINDS)
+          for (const state of ["open", "closed", "all"] as const)
+            for (const sort of ["created", "updated"] as const)
+              for (const direction of ["asc", "desc"] as const) {
+                const query: SubjectQuery = {
+                  kinds,
+                  state,
+                  sort,
+                  direction,
+                  after: null,
+                  limit: WALK_LIMIT,
+                  filter,
+                };
+                const label = JSON.stringify({ tied, kinds, state, sort, direction, filter });
+                const all = expected(held, { ...query, filter: undefined, limit: 2 * N });
+                const walked = await walk(stub, query);
+                expect(walked.ended, label).toBe(true);
+                expect(walked.numbers, label).toEqual(all.filter((n) => matches(n, filter)));
+                expect(walked.mostRead, label).toBeLessThanOrEqual(MOST_FILTERED_READS);
+              }
+      }
+    },
+    120_000,
+  );
+
+  it("reads within its bound when every subject carries all twenty labels a filter names, or all but one", async () => {
+    const { stub, held } = await holding(false);
+    const ids = Array.from({ length: 20 }, (_, i) => i + 10);
+    await inRepo(stub, (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      for (const id of ids)
+        sql.exec(
+          "INSERT INTO labels (id, name, color, created_at, updated_at) VALUES (?, ?, 'ffffff', 1, 1)",
+          id,
+          `l${id}`,
+        );
+      // Odd numbers carry all twenty; even ones all but the last.
+      for (const h of held)
+        for (const id of h.number % 2 ? ids : ids.slice(0, -1))
+          sql.exec("INSERT INTO subject_labels (number, label_id) VALUES (?, ?)", h.number, id);
+    });
+    for (const kinds of KINDS) {
+      const query: SubjectQuery = {
+        kinds,
+        state: "all",
+        sort: "updated",
+        direction: "desc",
+        after: null,
+        limit: WALK_LIMIT,
+        filter: { labelIds: ids },
+      };
+      const walked = await walk(stub, query);
+      expect(walked.numbers).toEqual(
+        expected(held, { ...query, filter: undefined, limit: 2 * N }).filter((n) => n % 2 === 1),
+      );
+      expect(walked.mostRead).toBeLessThanOrEqual(MOST_FILTERED_READS);
+    }
+  });
+
+  it("answers nothing for a label name the repository lacks, reading only the labels", async () => {
+    const { stub } = await holdingSorted();
+    const walked = await walk(stub, {
+      kinds: ["issue", "pull"],
+      state: "all",
+      sort: "created",
+      direction: "desc",
+      after: null,
+      limit: LIMIT,
+      filter: { labelNames: ["bug", "missing"] },
+    });
+    expect(walked).toMatchObject({ numbers: [], pages: 1, ended: true });
+    expect(walked.mostRead).toBeLessThanOrEqual(2);
+  });
+
+  it("lists as before with an empty filter", async () => {
+    const { stub, held } = await holdingSorted();
+    const query: SubjectQuery = {
+      kinds: ["issue", "pull"],
+      state: "open",
+      sort: "updated",
+      direction: "asc",
+      after: null,
+      limit: LIMIT,
+      filter: {},
+    };
+    const page = await listed(stub, query);
+    expect(page.numbers).toEqual(expected(held, query));
   });
 });

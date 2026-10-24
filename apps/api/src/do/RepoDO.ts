@@ -1916,10 +1916,10 @@ export class RepoDO extends MigratingDO {
     });
   }
 
-  /** A page of the repository's labels by name, after `after`; null when gone. */
-  listLabels(after: string | null, limit: number) {
+  /** A page of the repository's labels by name, after `after`, those starting with `prefix` only when given; null when gone. */
+  listLabels(after: string | null, limit: number, prefix: string | null = null) {
     return this.#measured("listLabels", () =>
-      this.#refusesReads() ? null : this.subjectMeta.labels(after, limit),
+      this.#refusesReads() ? null : this.subjectMeta.labels(after, limit, prefix),
     );
   }
 

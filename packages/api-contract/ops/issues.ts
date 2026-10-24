@@ -23,6 +23,14 @@ const RepoInput = {
     .describe("The owner's handle."),
   repo: z.string().regex(REPO_NAME_PATTERN).describe("The repository's name."),
 };
+/** Characters of `issues.list`'s `labels` filter at most: 20 names and their commas. */
+const MAX_LABEL_FILTER_LENGTH = 20 * MAX_LABEL_NAME_LENGTH + 19;
+/** Up to 20 label ids, comma-separated. */
+const LABEL_IDS_SHAPE = /^[1-9][0-9]{0,14}(?:,[1-9][0-9]{0,14}){0,19}$/;
+/** A handle, or `none` or `*`. */
+const ASSIGNEE_FILTER_SHAPE = new RegExp(
+  `^(?:none|\\*|${HANDLE_SHAPE.source.replace(/^\^|\$$/g, "")})$`,
+);
 const IssueNumber = z.coerce
   .number()
   .int()
@@ -102,22 +110,64 @@ export const listIssues = defineOperation({
   summary: "List issues",
   description:
     "The repository's issues and pull requests (marked with `pull_request`), as GitHub's issue listing; `type` narrows it to one kind. Each kind is listed only for a caller that may read it: issues need the `issues:read` permission, pull requests `pull_requests:read`. A listing sorted by `updated` may move an item changed between pages.",
-  input: z.object({
-    ...RepoInput,
-    state: z.enum(["open", "closed", "all"]).default("open"),
-    type: z
-      .enum(["issues", "pulls"])
-      .optional()
-      .describe("Fyrden (as Gitea's): only issues, or only pull requests; both when left out."),
-    sort: z.enum(["created", "updated"]).default("created"),
-    direction: z.enum(["asc", "desc"]).default("desc"),
-    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
-    cursor: z
-      .string()
-      .max(400)
-      .optional()
-      .describe("From a previous page's `next_cursor`, with the same filters."),
-  }),
+  input: z
+    .object({
+      ...RepoInput,
+      state: z.enum(["open", "closed", "all"]).default("open"),
+      type: z
+        .enum(["issues", "pulls"])
+        .optional()
+        .describe("Fyrden (as Gitea's): only issues, or only pull requests; both when left out."),
+      sort: z.enum(["created", "updated"]).default("created"),
+      direction: z.enum(["asc", "desc"]).default("desc"),
+      labels: z
+        .string()
+        .min(1)
+        .max(MAX_LABEL_FILTER_LENGTH)
+        .optional()
+        .describe(
+          "Label names separated by commas, ignoring case: only items with all of them (none when one is not the repository's). A name holding a comma: use `label_ids`.",
+        ),
+      label_ids: z
+        .string()
+        .regex(LABEL_IDS_SHAPE)
+        .optional()
+        .describe(
+          "Fyrden: label ids separated by commas (at most 20): only items with all of them. Not with `labels`.",
+        ),
+      assignee: z
+        .string()
+        .min(1)
+        .max(MAX_HANDLE_LENGTH)
+        .regex(ASSIGNEE_FILTER_SHAPE)
+        .optional()
+        .describe(
+          "A handle: items assigned to that user or agent; `none`: unassigned; `*`: assigned.",
+        ),
+      milestone: z
+        .string()
+        .regex(/^(?:[1-9][0-9]{0,14}|none|\*)$/)
+        .optional()
+        .describe("A milestone's number; `none`: in no milestone; `*`: in any."),
+      creator: z
+        .string()
+        .min(1)
+        .max(MAX_HANDLE_LENGTH)
+        .regex(HANDLE_SHAPE)
+        .optional()
+        .describe(
+          "A handle: items opened by that user or agent (as `user` shows them: the user when agents acted for one).",
+        ),
+      per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+      cursor: z
+        .string()
+        .max(400)
+        .optional()
+        .describe("From a previous page's `next_cursor`, with the same filters."),
+    })
+    .refine((input) => input.labels === undefined || input.label_ids === undefined, {
+      message: "Filter by labels or by label_ids, not both.",
+    }),
   output: z.object({
     issues: z.array(Issue),
     next_cursor: z

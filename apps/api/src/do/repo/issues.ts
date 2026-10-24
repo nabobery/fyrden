@@ -80,7 +80,40 @@ export interface SubjectQuery {
   readonly direction: "asc" | "desc";
   readonly after: SubjectBoundary | null;
   readonly limit: number;
+  /** What every listed item must match; none when absent. */
+  readonly filter?: SubjectFilter | undefined;
 }
+
+/** A listing's filters: each given one must hold. */
+export interface SubjectFilter {
+  /** Label names (as names compare): all of them; a name the repository lacks matches nothing. */
+  readonly labelNames?: readonly string[] | undefined;
+  /** Label ids: all of them. */
+  readonly labelIds?: readonly number[] | undefined;
+  /** An assignee's principal id, or none or any. */
+  readonly assignee?: { readonly principal: string } | "none" | "any" | undefined;
+  /** A milestone's number, or none or any. */
+  readonly milestone?: number | "none" | "any" | undefined;
+  /** The principal that opened it (the user an agent opened it for, or the agent). */
+  readonly creator?: string | undefined;
+}
+
+/** A listing page, and where the next one starts (null when it is the last). */
+export interface SubjectPage {
+  readonly subjects: Subject[];
+  readonly next: SubjectBoundary | null;
+}
+
+/**
+ * Rows a filtered page reads at most in each index range (the range's
+ * index and table rows and its filter's lookups, as the storage counts
+ * them): a filter is checked on rows as the range's index yields them, and
+ * a range stops once it has enough matches or has read this much, so a
+ * page may hold fewer matches than asked for (with a continuation) but
+ * never reads much more than this a range, however rare its matches or
+ * however many labels its filter names.
+ */
+export const FILTER_RANGE_READS = 1_000;
 
 /** A listed subject: an issue, or a pull request as the issue endpoints answer it, with its labels, assignees and milestone. */
 export type Subject =
@@ -457,21 +490,38 @@ export class RepoIssues {
    * A page of the repository's issues and pull requests of `kinds`, in the
    * listing's order, at most `limit`. Each kind and state is its own index
    * range (a continuation splits its boundary into two, so a page never
-   * walks rows sharing one sort key), each taking at most `limit` rows, and
-   * the ranges are merged here: a page reads at most a few `limit`s of
-   * rows, whatever the repository holds.
+   * walks rows sharing one sort key), and the ranges are merged here.
+   * Without a filter each range takes `limit + 1` rows; with one, each
+   * examines rows until it has `limit + 1` matches or has read
+   * `FILTER_RANGE_READS`, and the page stops at the earliest point a range
+   * stopped examining (what lies past it is not known yet): a page reads a
+   * bounded number of rows a range, whatever the repository holds and
+   * however rare the matches.
    */
-  list(query: SubjectQuery): Subject[] {
+  list(query: SubjectQuery): SubjectPage {
     const { sort, direction, after, limit } = query;
     const desc = direction === "desc";
     const cmp = desc ? "<" : ">";
     const order = desc ? "DESC" : "ASC";
     const keyColumn = sort === "created" ? "number" : "updated_at";
+    const before = (a: SubjectBoundary, b: SubjectBoundary) =>
+      a.key !== b.key
+        ? desc
+          ? a.key > b.key
+          : a.key < b.key
+        : desc
+          ? a.number > b.number
+          : a.number < b.number;
+    const test = query.filter && this.#filterTest(query.filter);
+    if (test === null) return { subjects: [], next: null };
     const found: { kind: SubjectKind; number: number; key: number }[] = [];
+    /** The earliest last row of a range that may hold more past it. */
+    let frontier: SubjectBoundary | null = null;
     for (const kind of query.kinds) {
       const table = TABLES[kind];
+      const matches = test ? `, (${test.sql}) AS hit` : "";
       for (const state of STATES[kind][query.state]) {
-        const select = `SELECT number, ${keyColumn} AS key FROM ${table} WHERE state = ?`;
+        const select = `SELECT number, ${keyColumn} AS key${matches} FROM ${table} AS t WHERE state = ?`;
         const ranges: [string, ...unknown[]][] =
           after === null
             ? [[`${select} ORDER BY ${keyColumn} ${order}, number ${order} LIMIT ?`, state]]
@@ -496,21 +546,112 @@ export class RepoIssues {
                     after.key,
                   ],
                 ];
-        for (const [sql, ...bindings] of ranges)
-          for (const row of this.#exec<{ number: number; key: number }>(sql, ...bindings, limit))
-            found.push({ kind, ...row });
+        for (const [sql, ...bindings] of ranges) {
+          // Unfiltered: a page and one more. Filtered: rows as the index yields them (no LIMIT),
+          // until the range has a page and one more of matches or has read its budget.
+          const cursor = this.deps.git.context.storage.sql.exec<{
+            number: number;
+            key: number;
+            hit?: number;
+          }>(
+            test ? sql.replace(/ LIMIT \?$/, "") : sql,
+            ...(test ? test.bindings : []),
+            ...bindings,
+            ...(test ? [] : [limit + 1]),
+          );
+          let examined = 0;
+          let hits = 0;
+          let last: SubjectBoundary | null = null;
+          let stopped = false;
+          for (const row of cursor) {
+            examined++;
+            last = { key: row.key, number: row.number };
+            if (!test || row.hit) {
+              hits++;
+              found.push({ kind, number: row.number, key: row.key });
+            }
+            if (test ? hits > limit || cursor.rowsRead >= FILTER_RANGE_READS : examined > limit) {
+              stopped = true;
+              break;
+            }
+          }
+          if (stopped && last && (frontier === null || before(last, frontier))) frontier = last;
+        }
       }
     }
-    found.sort((a, b) =>
-      a.key !== b.key
-        ? desc
-          ? b.key - a.key
-          : a.key - b.key
-        : desc
-          ? b.number - a.number
-          : a.number - b.number,
-    );
-    const page = found.slice(0, limit);
+    found.sort((a, b) => (before(a, b) ? -1 : before(b, a) ? 1 : 0));
+    // Only what precedes the frontier is known to be in order with everything unread.
+    const known = frontier ? found.filter((f) => !before(frontier as SubjectBoundary, f)) : found;
+    const pageRows = known.slice(0, limit);
+    const lastRow = pageRows.at(-1);
+    // A full page goes on after its last item; a short one after the frontier (nothing up to it
+    // matched beyond the page), or ends.
+    const next =
+      known.length > limit && lastRow ? { key: lastRow.key, number: lastRow.number } : frontier;
+    return { subjects: this.#hydrate(pageRows), next };
+  }
+
+  /**
+   * `filter` as an SQL expression over a listed row `t` (with its
+   * bindings): undefined when it asks nothing, null when nothing can match
+   * (a label name the repository lacks).
+   */
+  #filterTest(filter: SubjectFilter): { sql: string; bindings: unknown[] } | null | undefined {
+    const terms: string[] = [];
+    const bindings: unknown[] = [];
+    let labelIds = filter.labelIds ? [...filter.labelIds] : [];
+    for (const name of filter.labelNames ?? []) {
+      const [row] = this.#exec<{ id: number }>(
+        "SELECT id FROM labels WHERE name = ? COLLATE NOCASE",
+        name,
+      );
+      if (!row) return null;
+      labelIds.push(row.id);
+    }
+    labelIds = [...new Set(labelIds)];
+    // A deleted label leaves its associations behind (read as nothing): an id that is not a
+    // live label's matches nothing.
+    if (
+      labelIds.length > 0 &&
+      this.#exec<{ n: number }>(
+        "SELECT count(*) AS n FROM labels WHERE id IN (SELECT value FROM json_each(?))",
+        JSON.stringify(labelIds),
+      )[0]?.n !== labelIds.length
+    )
+      return null;
+    if (labelIds.length > 0) {
+      terms.push(
+        `(SELECT count(*) FROM subject_labels AS l WHERE l.number = t.number
+           AND l.label_id IN (SELECT value FROM json_each(?))) = ?`,
+      );
+      bindings.push(JSON.stringify(labelIds), labelIds.length);
+    }
+    const assigned = "SELECT 1 FROM subject_assignees AS a WHERE a.number = t.number";
+    if (filter.assignee === "none") terms.push(`NOT EXISTS (${assigned})`);
+    else if (filter.assignee === "any") terms.push(`EXISTS (${assigned})`);
+    else if (filter.assignee) {
+      terms.push(`EXISTS (${assigned} AND a.principal = ?)`);
+      bindings.push(filter.assignee.principal);
+    }
+    // A deleted milestone leaves its references behind (read as none).
+    const live = "SELECT 1 FROM milestones AS m WHERE m.number = t.milestone";
+    if (filter.milestone === "none") terms.push(`NOT EXISTS (${live})`);
+    else if (filter.milestone === "any") terms.push(`EXISTS (${live})`);
+    else if (filter.milestone !== undefined) {
+      if (this.#exec("SELECT 1 FROM milestones WHERE number = ?", filter.milestone).length === 0)
+        return null;
+      terms.push("t.milestone = ?");
+      bindings.push(filter.milestone);
+    }
+    if (filter.creator !== undefined) {
+      terms.push("t.author_id = ?");
+      bindings.push(filter.creator);
+    }
+    return terms.length === 0 ? undefined : { sql: terms.join(" AND "), bindings };
+  }
+
+  /** The page's subjects with their records and labels, assignees and milestone. */
+  #hydrate(page: readonly { kind: SubjectKind; number: number }[]): Subject[] {
     const pulls = new Map<number, PullRecord>();
     const issues = new Map(
       this.#rows(
