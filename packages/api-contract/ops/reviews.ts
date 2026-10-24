@@ -69,11 +69,24 @@ const TeamSlugs = z
   .max(MAX_REQUESTED_REVIEWERS)
   .optional()
   .describe("Slugs of teams of the repository's organization.");
-/** Someone to ask or withdraw: a reviewer or a team. */
+/** Someone to ask or withdraw: a reviewer or a team (by name, or by id when withdrawn). */
 const someone = (input: {
   reviewers?: string[] | undefined;
   team_reviewers?: string[] | undefined;
-}) => (input.reviewers?.length ?? 0) + (input.team_reviewers?.length ?? 0) > 0;
+  reviewer_ids?: string[] | undefined;
+  team_ids?: string[] | undefined;
+}) =>
+  (input.reviewers?.length ?? 0) +
+    (input.team_reviewers?.length ?? 0) +
+    (input.reviewer_ids?.length ?? 0) +
+    (input.team_ids?.length ?? 0) >
+  0;
+const Ids = (what: string) =>
+  z
+    .array(z.string().min(1).max(64))
+    .max(MAX_REQUESTED_REVIEWERS)
+    .optional()
+    .describe(`Fyrden: ${what} by id, as the requests name them.`);
 
 export const listReviews = defineOperation({
   id: "pulls.reviews.list",
@@ -301,9 +314,15 @@ export const removeRequestedReviewers = defineOperation({
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers",
   summary: "Remove requested reviewers",
   description:
-    "Withdraws review requests of users, agents and teams; ones not requested are ignored. Fyrden takes teams alone too (GitHub needs `reviewers`).",
+    "Withdraws review requests of users, agents and teams; ones not requested are ignored. Fyrden takes teams alone too (GitHub needs `reviewers`), and `reviewer_ids` and `team_ids` name them by id (a deleted user's handle names no one; two requests can carry one team slug, a team renamed and another named so since).",
   input: z
-    .object({ ...PullInput, reviewers: Logins, team_reviewers: TeamSlugs })
+    .object({
+      ...PullInput,
+      reviewers: Logins,
+      team_reviewers: TeamSlugs,
+      reviewer_ids: Ids("users and agents"),
+      team_ids: Ids("teams"),
+    })
     .refine(someone, { message: "Name a reviewer or a team." }),
   output: PullRequest,
   permission: "pull_requests:write",

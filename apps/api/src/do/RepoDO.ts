@@ -2091,6 +2091,27 @@ export class RepoDO extends MigratingDO {
   }
 
   /**
+   * As `removeRequestedReviewers`, teams named by id too. A method of its
+   * own: an earlier object (while a deploy rolls out) refuses it rather
+   * than ignore the ids it does not know.
+   */
+  removeRequestedReviewersById(
+    number: number,
+    reviewerIds: readonly string[],
+    actor: RefActor,
+    teamSlugs: readonly string[],
+    teamIds: readonly string[],
+  ) {
+    return this.#discussion.removeRequestedReviewers(
+      number,
+      reviewerIds,
+      actor,
+      teamSlugs,
+      teamIds,
+    );
+  }
+
+  /**
    * A pull request's diff comments, oldest first, with what its diff
    * compares now (whether each is outdated); null when the repository is
    * gone, undefined without the pull request.

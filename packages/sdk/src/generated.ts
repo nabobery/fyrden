@@ -610,6 +610,14 @@ export type ReposCreateOutput = {
   source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
+  /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+  permissions?: {
+    admin: boolean;
+    maintain: boolean;
+    push: boolean;
+    triage: boolean;
+    pull: boolean;
+  };
 };
 
 /** Input of `repos.list`: List your repositories. */
@@ -647,6 +655,14 @@ export type ReposListOutput = {
     source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
+    /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+    permissions?: {
+      admin: boolean;
+      maintain: boolean;
+      push: boolean;
+      triage: boolean;
+      pull: boolean;
+    };
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -686,6 +702,14 @@ export type ReposGetOutput = {
   source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
+  /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+  permissions?: {
+    admin: boolean;
+    maintain: boolean;
+    push: boolean;
+    triage: boolean;
+    pull: boolean;
+  };
 };
 
 /** Input of `repos.update`: Update a repository. */
@@ -732,6 +756,14 @@ export type ReposUpdateOutput = {
   source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
+  /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+  permissions?: {
+    admin: boolean;
+    maintain: boolean;
+    push: boolean;
+    triage: boolean;
+    pull: boolean;
+  };
 };
 
 /** Input of `repos.delete`: Delete a repository. */
@@ -806,6 +838,14 @@ export type ReposTransferOutput = {
     source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
+    /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+    permissions?: {
+      admin: boolean;
+      maintain: boolean;
+      push: boolean;
+      triage: boolean;
+      pull: boolean;
+    };
   };
 };
 
@@ -847,6 +887,14 @@ export type ReposForkOutput = {
   source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
+  /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+  permissions?: {
+    admin: boolean;
+    maintain: boolean;
+    push: boolean;
+    triage: boolean;
+    pull: boolean;
+  };
 };
 
 /** Input of `repos.forks.list`: List forks. */
@@ -888,6 +936,14 @@ export type ReposForksListOutput = {
     source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
+    /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+    permissions?: {
+      admin: boolean;
+      maintain: boolean;
+      push: boolean;
+      triage: boolean;
+      pull: boolean;
+    };
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -933,6 +989,14 @@ export type ReposGenerateOutput = {
   source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
+  /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+  permissions?: {
+    admin: boolean;
+    maintain: boolean;
+    push: boolean;
+    triage: boolean;
+    pull: boolean;
+  };
 };
 
 /** Input of `repos.rulesets.list`: List rulesets. */
@@ -3093,6 +3157,10 @@ export type PullsRequestedReviewersRemoveInput = {
   reviewers?: string[];
   /** Slugs of teams of the repository's organization. */
   team_reviewers?: string[];
+  /** Fyrden: users and agents by id, as the requests name them. */
+  reviewer_ids?: string[];
+  /** Fyrden: teams by id, as the requests name them. */
+  team_ids?: string[];
 };
 
 /** Output of `pulls.requested_reviewers.remove`. */
@@ -4124,7 +4192,9 @@ export type IssuesAssigneesRemoveInput = {
   /** The issue's or pull request's number. */
   issue_number: number;
   /** Handles of users and agents who can read the repository. */
-  assignees: string[];
+  assignees?: string[];
+  /** Fyrden: user and agent ids. */
+  assignee_ids?: string[];
 };
 
 /** Output of `issues.assignees.remove`. */
@@ -4914,6 +4984,14 @@ export type StarsListOutput = {
     source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
+    /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+    permissions?: {
+      admin: boolean;
+      maintain: boolean;
+      push: boolean;
+      triage: boolean;
+      pull: boolean;
+    };
     /** Unix time in milliseconds. */
     starred_at: number;
   })[];
@@ -6057,6 +6135,14 @@ export type OrgsReposCreateOutput = {
   source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
+  /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+  permissions?: {
+    admin: boolean;
+    maintain: boolean;
+    push: boolean;
+    triage: boolean;
+    pull: boolean;
+  };
 };
 
 /** Input of `orgs.repos.list`: List an organization's repositories. */
@@ -6096,6 +6182,14 @@ export type OrgsReposListOutput = {
     source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
+    /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+    permissions?: {
+      admin: boolean;
+      maintain: boolean;
+      push: boolean;
+      triage: boolean;
+      pull: boolean;
+    };
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -6817,7 +6911,7 @@ export interface Operations {
   "pulls.requested_reviewers.list": { input: PullsRequestedReviewersListInput; output: PullsRequestedReviewersListOutput };
   /** Request reviewers. Requests a review of users or agents who can read the repository (not the author), and of teams of the repository's organization. A team asks each member it has now (the author aside), at most 2000, and keeps those members: one of them reviewing ends its request; someone who joins the team later does not. The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once, a team counting as one, and 10000 members across a pull request's teams; a request ends when its reviewer submits a review. Past the limit, requests of users or agents being deleted give up their places first, with no event. */
   "pulls.requested_reviewers.add": { input: PullsRequestedReviewersAddInput; output: PullsRequestedReviewersAddOutput };
-  /** Remove requested reviewers. Withdraws review requests of users, agents and teams; ones not requested are ignored. Fyrden takes teams alone too (GitHub needs `reviewers`). */
+  /** Remove requested reviewers. Withdraws review requests of users, agents and teams; ones not requested are ignored. Fyrden takes teams alone too (GitHub needs `reviewers`), and `reviewer_ids` and `team_ids` name them by id (a deleted user's handle names no one; two requests can carry one team slug, a team renamed and another named so since). */
   "pulls.requested_reviewers.remove": { input: PullsRequestedReviewersRemoveInput; output: PullsRequestedReviewersRemoveOutput };
   /** Get a pull request's code owners. Fyrden: who owns what an open pull request changes, under its base branch's CODEOWNERS (`.github/`, the root, `docs/`: the first location holding a regular file), for every path the three-dot diff changes (a rename as its two sides). Worked out in the background for the pull request's current base branch, base tip and head: `pending` until then (a draft's is worked out once asked for). Rules are those that decide at least one path, with how many and the first; an ownerless rule's paths need no owner. `errors` counts the file's invalid lines and `unmatchable_paths` the paths that are not UTF-8: either makes a merge needing code owners refuse. `too_large` is final for the pair, with why; `unreadable` is tried again at `retry_at`. Needs `contents:read` too. */
   "pulls.code_owners.get": { input: PullsCodeOwnersGetInput; output: PullsCodeOwnersGetOutput };
@@ -6861,7 +6955,7 @@ export interface Operations {
   "issues.labels.clear": { input: IssuesLabelsClearInput; output: IssuesLabelsClearOutput };
   /** Add assignees to an issue. Assigns users or agents who can read the repository to an issue or pull request (at most 10 in all); ones assigned already are kept. Answers the issue (or pull request, as the issue endpoints show one). Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
   "issues.assignees.add": { input: IssuesAssigneesAddInput; output: IssuesAssigneesAddOutput };
-  /** Remove assignees from an issue. Unassigns users or agents from an issue or pull request; ones not assigned are ignored. Answers the issue. Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
+  /** Remove assignees from an issue. Unassigns users or agents from an issue or pull request; ones not assigned are ignored. Answers the issue. Fyrden's `assignee_ids` name them by id (a deleted user's handle names no one). Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
   "issues.assignees.remove": { input: IssuesAssigneesRemoveInput; output: IssuesAssigneesRemoveOutput };
   /** Get an organization's default labels. Fyrden: the labels the organization's new repositories get, in order; GitHub's nine until its owners set them. For its members. */
   "orgs.default_labels.get": { input: OrgsDefaultLabelsGetInput; output: OrgsDefaultLabelsGetOutput };

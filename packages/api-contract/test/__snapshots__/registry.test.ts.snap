@@ -3751,6 +3751,35 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "permissions": {
+                            "additionalProperties": false,
+                            "description": "Only from \`GET /repos/{owner}/{repo}\`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+                            "properties": {
+                              "admin": {
+                                "type": "boolean",
+                              },
+                              "maintain": {
+                                "type": "boolean",
+                              },
+                              "pull": {
+                                "type": "boolean",
+                              },
+                              "push": {
+                                "type": "boolean",
+                              },
+                              "triage": {
+                                "type": "boolean",
+                              },
+                            },
+                            "required": [
+                              "admin",
+                              "maintain",
+                              "push",
+                              "triage",
+                              "pull",
+                            ],
+                            "type": "object",
+                          },
                           "source_id": {
                             "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
                             "type": [
@@ -3933,6 +3962,35 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "permissions": {
+                      "additionalProperties": false,
+                      "description": "Only from \`GET /repos/{owner}/{repo}\`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+                      "properties": {
+                        "admin": {
+                          "type": "boolean",
+                        },
+                        "maintain": {
+                          "type": "boolean",
+                        },
+                        "pull": {
+                          "type": "boolean",
+                        },
+                        "push": {
+                          "type": "boolean",
+                        },
+                        "triage": {
+                          "type": "boolean",
+                        },
+                      },
+                      "required": [
+                        "admin",
+                        "maintain",
+                        "push",
+                        "triage",
+                        "pull",
+                      ],
+                      "type": "object",
                     },
                     "source_id": {
                       "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
@@ -4795,6 +4853,35 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "permissions": {
+                      "additionalProperties": false,
+                      "description": "Only from \`GET /repos/{owner}/{repo}\`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+                      "properties": {
+                        "admin": {
+                          "type": "boolean",
+                        },
+                        "maintain": {
+                          "type": "boolean",
+                        },
+                        "pull": {
+                          "type": "boolean",
+                        },
+                        "push": {
+                          "type": "boolean",
+                        },
+                        "triage": {
+                          "type": "boolean",
+                        },
+                      },
+                      "required": [
+                        "admin",
+                        "maintain",
+                        "push",
+                        "triage",
+                        "pull",
+                      ],
+                      "type": "object",
+                    },
                     "source_id": {
                       "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
                       "type": [
@@ -5006,6 +5093,35 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "permissions": {
+                      "additionalProperties": false,
+                      "description": "Only from \`GET /repos/{owner}/{repo}\`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+                      "properties": {
+                        "admin": {
+                          "type": "boolean",
+                        },
+                        "maintain": {
+                          "type": "boolean",
+                        },
+                        "pull": {
+                          "type": "boolean",
+                        },
+                        "push": {
+                          "type": "boolean",
+                        },
+                        "triage": {
+                          "type": "boolean",
+                        },
+                      },
+                      "required": [
+                        "admin",
+                        "maintain",
+                        "push",
+                        "triage",
+                        "pull",
+                      ],
+                      "type": "object",
                     },
                     "source_id": {
                       "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
@@ -8715,6 +8831,35 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "permissions": {
+                            "additionalProperties": false,
+                            "description": "Only from \`GET /repos/{owner}/{repo}\`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+                            "properties": {
+                              "admin": {
+                                "type": "boolean",
+                              },
+                              "maintain": {
+                                "type": "boolean",
+                              },
+                              "pull": {
+                                "type": "boolean",
+                              },
+                              "push": {
+                                "type": "boolean",
+                              },
+                              "triage": {
+                                "type": "boolean",
+                              },
+                            },
+                            "required": [
+                              "admin",
+                              "maintain",
+                              "push",
+                              "triage",
+                              "pull",
+                            ],
+                            "type": "object",
+                          },
                           "source_id": {
                             "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
                             "type": [
@@ -8905,6 +9050,35 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "permissions": {
+                      "additionalProperties": false,
+                      "description": "Only from \`GET /repos/{owner}/{repo}\`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+                      "properties": {
+                        "admin": {
+                          "type": "boolean",
+                        },
+                        "maintain": {
+                          "type": "boolean",
+                        },
+                        "pull": {
+                          "type": "boolean",
+                        },
+                        "push": {
+                          "type": "boolean",
+                        },
+                        "triage": {
+                          "type": "boolean",
+                        },
+                      },
+                      "required": [
+                        "admin",
+                        "maintain",
+                        "push",
+                        "triage",
+                        "pull",
+                      ],
+                      "type": "object",
                     },
                     "source_id": {
                       "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
@@ -14603,7 +14777,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/issues/{issue_number}/assignees": {
       "delete": {
-        "description": "Unassigns users or agents from an issue or pull request; ones not assigned are ignored. Answers the issue. Takes triage, and the permission for the subject's kind (\`issues:write\`, or \`pull_requests:write\` for a pull request's number).",
+        "description": "Unassigns users or agents from an issue or pull request; ones not assigned are ignored. Answers the issue. Fyrden's \`assignee_ids\` name them by id (a deleted user's handle names no one). Takes triage, and the permission for the subject's kind (\`issues:write\`, or \`pull_requests:write\` for a pull request's number).",
         "operationId": "issues.assignees.remove",
         "parameters": [
           {
@@ -14645,6 +14819,17 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "application/json": {
               "schema": {
                 "properties": {
+                  "assignee_ids": {
+                    "description": "Fyrden: user and agent ids.",
+                    "items": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string",
+                    },
+                    "maxItems": 10,
+                    "minItems": 1,
+                    "type": "array",
+                  },
                   "assignees": {
                     "description": "Handles of users and agents who can read the repository.",
                     "items": {
@@ -14658,9 +14843,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "type": "array",
                   },
                 },
-                "required": [
-                  "assignees",
-                ],
+                "required": [],
                 "type": "object",
               },
             },
@@ -24728,7 +24911,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers": {
       "delete": {
-        "description": "Withdraws review requests of users, agents and teams; ones not requested are ignored. Fyrden takes teams alone too (GitHub needs \`reviewers\`).",
+        "description": "Withdraws review requests of users, agents and teams; ones not requested are ignored. Fyrden takes teams alone too (GitHub needs \`reviewers\`), and \`reviewer_ids\` and \`team_ids\` name them by id (a deleted user's handle names no one; two requests can carry one team slug, a team renamed and another named so since).",
         "operationId": "pulls.requested_reviewers.remove",
         "parameters": [
           {
@@ -24770,12 +24953,32 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "application/json": {
               "schema": {
                 "properties": {
+                  "reviewer_ids": {
+                    "description": "Fyrden: users and agents by id, as the requests name them.",
+                    "items": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string",
+                    },
+                    "maxItems": 15,
+                    "type": "array",
+                  },
                   "reviewers": {
                     "description": "Handles of users and agents who can read the repository.",
                     "items": {
                       "maxLength": 39,
                       "minLength": 1,
                       "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+                      "type": "string",
+                    },
+                    "maxItems": 15,
+                    "type": "array",
+                  },
+                  "team_ids": {
+                    "description": "Fyrden: teams by id, as the requests name them.",
+                    "items": {
+                      "maxLength": 64,
+                      "minLength": 1,
                       "type": "string",
                     },
                     "maxItems": 15,
@@ -30363,6 +30566,35 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "null",
                           ],
                         },
+                        "permissions": {
+                          "additionalProperties": false,
+                          "description": "Only from \`GET /repos/{owner}/{repo}\`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+                          "properties": {
+                            "admin": {
+                              "type": "boolean",
+                            },
+                            "maintain": {
+                              "type": "boolean",
+                            },
+                            "pull": {
+                              "type": "boolean",
+                            },
+                            "push": {
+                              "type": "boolean",
+                            },
+                            "triage": {
+                              "type": "boolean",
+                            },
+                          },
+                          "required": [
+                            "admin",
+                            "maintain",
+                            "push",
+                            "triage",
+                            "pull",
+                          ],
+                          "type": "object",
+                        },
                         "source_id": {
                           "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
                           "type": [
@@ -31295,6 +31527,35 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "null",
                       ],
                     },
+                    "permissions": {
+                      "additionalProperties": false,
+                      "description": "Only from \`GET /repos/{owner}/{repo}\`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+                      "properties": {
+                        "admin": {
+                          "type": "boolean",
+                        },
+                        "maintain": {
+                          "type": "boolean",
+                        },
+                        "pull": {
+                          "type": "boolean",
+                        },
+                        "push": {
+                          "type": "boolean",
+                        },
+                        "triage": {
+                          "type": "boolean",
+                        },
+                      },
+                      "required": [
+                        "admin",
+                        "maintain",
+                        "push",
+                        "triage",
+                        "pull",
+                      ],
+                      "type": "object",
+                    },
                     "source_id": {
                       "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
                       "type": [
@@ -31780,6 +32041,35 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "null",
                             ],
                           },
+                          "permissions": {
+                            "additionalProperties": false,
+                            "description": "Only from \`GET /repos/{owner}/{repo}\`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+                            "properties": {
+                              "admin": {
+                                "type": "boolean",
+                              },
+                              "maintain": {
+                                "type": "boolean",
+                              },
+                              "pull": {
+                                "type": "boolean",
+                              },
+                              "push": {
+                                "type": "boolean",
+                              },
+                              "triage": {
+                                "type": "boolean",
+                              },
+                            },
+                            "required": [
+                              "admin",
+                              "maintain",
+                              "push",
+                              "triage",
+                              "pull",
+                            ],
+                            "type": "object",
+                          },
                           "source_id": {
                             "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
                             "type": [
@@ -31948,6 +32238,35 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "string",
                         "null",
                       ],
+                    },
+                    "permissions": {
+                      "additionalProperties": false,
+                      "description": "Only from \`GET /repos/{owner}/{repo}\`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+                      "properties": {
+                        "admin": {
+                          "type": "boolean",
+                        },
+                        "maintain": {
+                          "type": "boolean",
+                        },
+                        "pull": {
+                          "type": "boolean",
+                        },
+                        "push": {
+                          "type": "boolean",
+                        },
+                        "triage": {
+                          "type": "boolean",
+                        },
+                      },
+                      "required": [
+                        "admin",
+                        "maintain",
+                        "push",
+                        "triage",
+                        "pull",
+                      ],
+                      "type": "object",
                     },
                     "source_id": {
                       "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
@@ -32580,6 +32899,35 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "string",
                               "null",
                             ],
+                          },
+                          "permissions": {
+                            "additionalProperties": false,
+                            "description": "Only from \`GET /repos/{owner}/{repo}\`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+                            "properties": {
+                              "admin": {
+                                "type": "boolean",
+                              },
+                              "maintain": {
+                                "type": "boolean",
+                              },
+                              "pull": {
+                                "type": "boolean",
+                              },
+                              "push": {
+                                "type": "boolean",
+                              },
+                              "triage": {
+                                "type": "boolean",
+                              },
+                            },
+                            "required": [
+                              "admin",
+                              "maintain",
+                              "push",
+                              "triage",
+                              "pull",
+                            ],
+                            "type": "object",
                           },
                           "source_id": {
                             "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",

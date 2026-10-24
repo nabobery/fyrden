@@ -51,6 +51,13 @@ const Logins = z
   .max(MAX_ASSIGNEES)
   .describe("Handles of users and agents who can read the repository.");
 
+/** Principal ids (`usr_…`, `agt_…`), as an issue's or pull request's answer names them. */
+const PrincipalIds = z
+  .array(z.string().min(1).max(64))
+  .min(1)
+  .max(MAX_ASSIGNEES)
+  .describe("Fyrden: user and agent ids.");
+
 const Labels = z.object({ labels: z.array(Label) });
 
 const MANAGE =
@@ -333,8 +340,17 @@ export const removeAssignees = defineOperation({
   method: "DELETE",
   path: "/repos/{owner}/{repo}/issues/{issue_number}/assignees",
   summary: "Remove assignees from an issue",
-  description: `Unassigns users or agents from an issue or pull request; ones not assigned are ignored. Answers the issue. ${ON_SUBJECT}`,
-  input: z.object({ ...RepoInput, issue_number: IssueNumber, assignees: Logins }),
+  description: `Unassigns users or agents from an issue or pull request; ones not assigned are ignored. Answers the issue. Fyrden's \`assignee_ids\` name them by id (a deleted user's handle names no one). ${ON_SUBJECT}`,
+  input: z
+    .object({
+      ...RepoInput,
+      issue_number: IssueNumber,
+      assignees: Logins.optional(),
+      assignee_ids: PrincipalIds.optional(),
+    })
+    .refine((input) => (input.assignees?.length ?? 0) + (input.assignee_ids?.length ?? 0) > 0, {
+      message: "Name an assignee.",
+    }),
   output: Issue,
   permission: "metadata:read",
   principals: ["user", "agent"],

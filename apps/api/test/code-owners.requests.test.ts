@@ -6,12 +6,13 @@
 // requests are never taken back, and are taken back when their owner no
 // longer owns a changed path. Bounded slices, an invocation's directory
 // queries, and fences against what changed while the owners were read.
-import { runInDurableObject } from "cloudflare:test";
+import { createExecutionContext, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { currentInvocation, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { type DomainEvent, eventKey, MAX_REQUESTED_REVIEWERS } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, beforeEach, describe, expect, inject, it } from "vitest";
+import { createApp } from "../src/app.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { CODE_OWNER_REQUEST_POLICY, sliceQueries } from "../src/do/repo/code-owner-requests.js";
@@ -732,6 +733,73 @@ describe("asking code owners to review", () => {
     // Core no longer owns docs/ (its slug moved): only its automatic request goes.
     expect((await requested()).teams).toEqual([other.id]);
     expect(await reasons()).toEqual([`${other.id}:${OWNERS | MANUAL}`]);
+  });
+
+  it("withdraws one of two requests carrying one team slug by its team's id", async () => {
+    await pullChanging({ "docs/a.md": "b\n" });
+    const other = await team("Other", [bob]);
+    await inOrg((sql) => {
+      sql.exec("UPDATE teams SET slug = 'renamed-core' WHERE team_id = ?", core.id);
+      sql.exec("UPDATE teams SET slug = ? WHERE team_id = ?", core.slug, other.id);
+    });
+    await ask({ team_reviewers: [core.slug] });
+    expect((await requested()).teams).toEqual([core.id, other.id].sort());
+    // Both requests carry the slug they were asked by; the id names one.
+    await unask({ team_ids: [other.id] });
+    expect((await requested()).teams).toEqual([core.id]);
+  });
+
+  it("fails, never answers success, when an earlier object meets teams named by id", async () => {
+    await pullChanging({ "docs/a.md": "b\n" });
+    expect((await requested()).teams).toEqual([core.id]);
+    // An earlier object (while a deploy rolls out) has no method taking team ids.
+    const earlier = new Proxy(env.REPO, {
+      get(target, prop) {
+        if (prop === "getByName")
+          return (name: string) =>
+            new Proxy(target.getByName(name), {
+              get(inner, key) {
+                if (key === "removeRequestedReviewersById") return undefined;
+                // The stub's own RPC methods, unbound (binding one loses its call).
+                return Reflect.get(inner, key);
+              },
+            });
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const res = await createApp().fetch(
+      new Request(`https://fyrden.test/api${path}/pulls/1/requested_reviewers`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${owner.token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({ team_ids: [core.id] }),
+      }),
+      // Every binding as it is (some are not own properties a spread would copy), REPO swapped.
+      new Proxy(env, {
+        get: (target, key) => (key === "REPO" ? earlier : Reflect.get(target, key)),
+      }),
+      createExecutionContext(),
+    );
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect((await requested()).teams).toEqual([core.id]);
+  });
+
+  it("withdraws a principal's request by its id, whatever its handle says now", async () => {
+    await pullChanging({ "src/a.ts": "b\n" });
+    await ask({ reviewers: [bob.handle] });
+    expect((await requested()).users).toContain(bob.principalId);
+    // As a deleted user's: the handle becomes the id, the old one names no one.
+    await env.DIRECTORY.prepare("UPDATE principals SET handle = id WHERE id = ?")
+      .bind(bob.principalId)
+      .run();
+    await unask({ reviewers: [bob.handle] });
+    expect((await requested()).users).toContain(bob.principalId);
+    await unask({ reviewer_ids: [bob.principalId] });
+    expect((await requested()).users).not.toContain(bob.principalId);
   });
 
   for (const next of ["no CODEOWNERS", "only unmatched paths", "only ownerless paths"] as const)

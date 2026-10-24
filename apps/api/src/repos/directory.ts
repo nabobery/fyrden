@@ -8,6 +8,7 @@ import {
   ownsUserAccount,
   PERMISSIONS,
   principalTypeOf,
+  REPO_ROLES,
   type RepoPermission,
   type RepoRole,
 } from "@fyrden/domain";
@@ -831,21 +832,62 @@ export async function authorize(
   // The token's limits need no call: no role widens them.
   if (!allowedWithRole(auth, repo, permission, "admin")) return false;
   const purpose = PERMISSIONS[permission].writes ? "write" : "read";
-  const roleOf = async (principalId: string): Promise<RepoRole | null> => {
-    // Only from an answer that names the owner for sure; else the repository object decides.
-    if (currentOwner.has(repo) && principalId === repo.ownerId) return "admin";
-    metrics?.count("do.request", { class: "RepoDO", method: "roleOf" });
-    try {
-      return await env.REPO.getByName(repo.id).roleOf(principalId, purpose, repo.ownerId);
-    } catch {
-      // The repository object could not answer: deny (fail closed).
-      return null;
-    }
-  };
-  if (!allowedWithRole(auth, repo, permission, await roleOf(auth.principalId))) return false;
+  if (
+    !allowedWithRole(
+      auth,
+      repo,
+      permission,
+      await roleOf(env, repo, auth.principalId, purpose, metrics),
+    )
+  )
+    return false;
   for (const owner of new Set(auth.ceilingIds ?? []))
-    if (!allowedWithRole(auth, repo, permission, await roleOf(owner))) return false;
+    if (!allowedWithRole(auth, repo, permission, await roleOf(env, repo, owner, purpose, metrics)))
+      return false;
   return true;
+}
+
+/** `principalId`'s role on `repo` for `purpose`, as `authorize` reads it (null: none, or no answer). */
+async function roleOf(
+  env: Env,
+  repo: Pick<RepoEntry, "id" | "ownerId">,
+  principalId: string,
+  purpose: "read" | "write",
+  metrics?: Metrics,
+): Promise<RepoRole | null> {
+  // Only from an answer that names the owner for sure; else the repository object decides.
+  if (currentOwner.has(repo) && principalId === repo.ownerId) return "admin";
+  metrics?.count("do.request", { class: "RepoDO", method: "roleOf" });
+  try {
+    return await env.REPO.getByName(repo.id).roleOf(principalId, purpose, repo.ownerId);
+  } catch {
+    // The repository object could not answer: deny (fail closed).
+    return null;
+  }
+}
+
+/**
+ * The role the caller acts with on `repo`: its principal's, never above
+ * any acting agent's owner's (as `authorize` caps it); null for none. What
+ * a token's scopes allow is apart (`authorize` decides each operation).
+ */
+export async function effectiveRole(
+  env: Env,
+  auth: Caller,
+  repo: Pick<RepoEntry, "id" | "ownerId">,
+  metrics?: Metrics,
+): Promise<RepoRole | null> {
+  const roles = await Promise.all(
+    [auth.principalId, ...new Set(auth.ceilingIds ?? [])].map((id) =>
+      roleOf(env, repo, id, "read", metrics),
+    ),
+  );
+  if (roles.some((r) => r === null)) return null;
+  return roles.reduce<RepoRole>(
+    (low, r) =>
+      REPO_ROLES.indexOf(r as RepoRole) < REPO_ROLES.indexOf(low) ? (r as RepoRole) : low,
+    "admin",
+  );
 }
 
 /** Every repository starts with HEAD at this branch; the branch exists after the first push. */

@@ -1,6 +1,6 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
-import { principalTypeOf } from "@fyrden/domain";
+import { principalTypeOf, REPO_ROLES, type RepoRole } from "@fyrden/domain";
 import {
   createAgentOperation,
   createAgentTokenOperation,
@@ -88,7 +88,13 @@ import {
 } from "../repos/comments.js";
 import { createOwnRepoOperation } from "../repos/create.js";
 import { deleteRepoOperation, deleteReposOperation } from "../repos/delete.js";
-import { authorize, defaultBranchOf, ownListable, resolveRepo } from "../repos/directory.js";
+import {
+  authorize,
+  defaultBranchOf,
+  effectiveRole,
+  ownListable,
+  resolveRepo,
+} from "../repos/directory.js";
 import {
   createFileCommitOperation,
   deleteContentsOperation,
@@ -368,11 +374,14 @@ export const handlers: Handlers = {
     // HEAD is the repository object's (an import or a fork sets it from its source).
     metrics.count("do.request", { class: "RepoDO", method: "details" });
     const details = await env.REPO.getByName(entry.id).details();
-    const [parents, stars, source] = await Promise.all([
+    const [parents, stars, source, role] = await Promise.all([
       visibleParents(env, auth, [entry], metrics),
       starCounts(env, [entry.id], metrics),
       networkSource(env, auth, entry, metrics),
+      effectiveRole(env, auth, entry, metrics),
     ]);
+    const atLeast = (r: RepoRole) =>
+      role !== null && REPO_ROLES.indexOf(role) >= REPO_ROLES.indexOf(r);
     return {
       ...repoOutput(entry, {
         defaultBranch: defaultBranchOf(details.headTarget),
@@ -381,6 +390,13 @@ export const handlers: Handlers = {
         stars: stars.get(entry.id) ?? 0,
       }),
       source_id: source,
+      permissions: {
+        admin: atLeast("admin"),
+        maintain: atLeast("maintain"),
+        push: atLeast("write"),
+        triage: atLeast("triage"),
+        pull: atLeast("read") || entry.visibility === "public",
+      },
     };
   },
 
