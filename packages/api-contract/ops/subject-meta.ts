@@ -1,4 +1,4 @@
-import { MILESTONE_STATES } from "@fyrden/domain";
+import { MILESTONE_STATES, REACTION_CONTENTS } from "@fyrden/domain";
 import { z } from "zod";
 
 /** Fyrden's version of what an answer shows: an update's `expected_version`. */
@@ -75,5 +75,11 @@ export const ReactionRollup = z
     hooray: z.number().int(),
     rocket: z.number().int(),
     eyes: z.number().int(),
+    viewer: z
+      .array(z.object({ id: z.number().int(), content: z.enum(REACTION_CONTENTS) }))
+      .optional()
+      .describe(
+        "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere.",
+      ),
   })
   .describe("Its reactions counted by content, as they stand.");

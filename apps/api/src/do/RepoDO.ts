@@ -1539,12 +1539,19 @@ export class RepoDO extends MigratingDO {
    * repository is gone, undefined without that number among `kinds` (the
    * kinds the caller may read).
    */
-  listComments(number: number, after: number, limit: number, kinds: readonly SubjectKind[]) {
+  /** A page of a conversation's comments; with `viewer`, that principal's own reactions to each. */
+  listComments(
+    number: number,
+    after: number,
+    limit: number,
+    kinds: readonly SubjectKind[],
+    viewer?: string,
+  ) {
     return this.#measured("listComments", () => {
       if (this.#refusesReads()) return null;
       const kind = this.issues.kindOf(number);
       if (!kind || !kinds.includes(kind)) return undefined;
-      return this.reactions.attach("comment", this.comments.list(number, after, limit));
+      return this.reactions.attach("comment", this.comments.list(number, after, limit), viewer);
     });
   }
 
@@ -1657,12 +1664,16 @@ export class RepoDO extends MigratingDO {
   }
 
   /** The issue or pull request numbered `number`, of `kinds`; null when gone, undefined for none. */
-  getSubject(number: number, kinds: readonly SubjectKind[]) {
+  /** With `viewer`, that principal's own reactions to it too. */
+  getSubject(number: number, kinds: readonly SubjectKind[], viewer?: string) {
     return this.#measured("getSubject", (): Subject | null | undefined => {
       if (this.#refusesReads()) return null;
       const kind = this.issues.kindOf(number);
       if (!kind || !kinds.includes(kind)) return undefined;
-      return this.#subject(number, kind);
+      const subject = this.#subject(number, kind);
+      if (!subject || viewer === undefined) return subject;
+      const own = this.reactions.ownOf("subject", [number], viewer).get(number) ?? [];
+      return { ...subject, meta: { ...subject.meta, viewerReactions: own } } as Subject;
     });
   }
 

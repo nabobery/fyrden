@@ -1831,6 +1831,11 @@ export type PullsListOutput = {
       hooray: number;
       rocket: number;
       eyes: number;
+      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+      viewer?: ({
+        id: number;
+        content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+      })[];
     };
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
@@ -1969,6 +1974,11 @@ export type PullsCreateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
 };
 
@@ -2094,6 +2104,11 @@ export type PullsGetOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
 };
 
@@ -2231,6 +2246,11 @@ export type PullsUpdateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
 };
 
@@ -2497,6 +2517,11 @@ export type PullsCommentsListOutput = {
       hooray: number;
       rocket: number;
       eyes: number;
+      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+      viewer?: ({
+        id: number;
+        content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+      })[];
     };
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
@@ -2574,6 +2599,11 @@ export type PullsCommentsCreateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
 };
 
@@ -2634,6 +2664,11 @@ export type PullsCommentsGetOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
 };
 
@@ -2695,6 +2730,11 @@ export type PullsCommentsUpdateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
 };
 
@@ -3174,6 +3214,11 @@ export type PullsRequestedReviewersAddOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
 };
 
@@ -3307,6 +3352,11 @@ export type PullsRequestedReviewersRemoveOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
 };
 
@@ -3472,6 +3522,11 @@ export type IssuesListOutput = {
       hooray: number;
       rocket: number;
       eyes: number;
+      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+      viewer?: ({
+        id: number;
+        content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+      })[];
     };
     /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
     pull_request?: {
@@ -3585,6 +3640,11 @@ export type IssuesCreateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
   /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
   pull_request?: {
@@ -3689,6 +3749,11 @@ export type IssuesGetOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
   /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
   pull_request?: {
@@ -3809,6 +3874,11 @@ export type IssuesUpdateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
   /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
   pull_request?: {
@@ -4277,6 +4347,11 @@ export type IssuesAssigneesAddOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
   /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
   pull_request?: {
@@ -4385,6 +4460,11 @@ export type IssuesAssigneesRemoveOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
   /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
   pull_request?: {
@@ -4636,7 +4716,7 @@ export type IssuesCommentsListInput = {
 
 /** Output of `issues.comments.list`. */
 export type IssuesCommentsListOutput = {
-  comments: {
+  comments: ({
     id: number;
     /** The issue or pull request it is on. */
     issue_number: number;
@@ -4664,8 +4744,13 @@ export type IssuesCommentsListOutput = {
       hooray: number;
       rocket: number;
       eyes: number;
+      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+      viewer?: ({
+        id: number;
+        content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+      })[];
     };
-  }[];
+  })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
 };
@@ -4710,6 +4795,11 @@ export type IssuesCommentsCreateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
 };
 
@@ -4752,6 +4842,11 @@ export type IssuesCommentsGetOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
 };
 
@@ -4797,6 +4892,11 @@ export type IssuesCommentsUpdateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
   };
 };
 
@@ -5898,6 +5998,14 @@ export type ReposCodeownersErrorsOutput = {
   })[];
   /** Fyrden: more errors than one answer carries. */
   truncated?: boolean;
+  /** Fyrden: the file read, the one GitHub's locations make effective (errors or none). */
+  file: {
+    path: string;
+    /** The file's blob SHA. */
+    sha: string;
+  };
+  /** Fyrden: the commit the file was read at. */
+  sha: string;
 };
 
 /** Input of `repos.trees.get`: Get a tree. */

@@ -44,6 +44,7 @@ export async function listCommentsOperation(
     after,
     input.per_page + 1,
     kinds,
+    ctx.auth.principalId,
   );
   if (comments === null) throw failure(entry, "repo_not_found");
   if (comments === undefined) throw subjectNotFound(input.issue_number);

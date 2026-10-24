@@ -28,8 +28,17 @@ export interface ReactionRecord {
 /** A target's reactions counted by content, as they stand. */
 export type ReactionCounts = Readonly<Record<ReactionContent, number>>;
 
-/** A record as the API answers it: with its reactions counted. */
-export type Reacted<T> = T & { readonly reactions: ReactionCounts };
+/** A reaction of the reader's own: its id (to take it back) and content. */
+export interface OwnReaction {
+  readonly id: number;
+  readonly content: ReactionContent;
+}
+
+/** A record as the API answers it: with its reactions counted, and the reader's own when asked for. */
+export type Reacted<T> = T & {
+  readonly reactions: ReactionCounts;
+  readonly viewerReactions?: readonly OwnReaction[];
+};
 
 /** What a reaction is on, resolved by the object: its conversation's number and lock. */
 export interface ReactionSubject {
@@ -80,16 +89,47 @@ export class RepoReactions {
     return counts;
   }
 
-  /** Records of `target` with their reactions counted, in one query (for what the API answers). */
+  /**
+   * Records of `target` with their reactions counted, in one query (for
+   * what the API answers); with `viewer`, that principal's own reactions
+   * to each too, in one more.
+   */
   attach<T extends { readonly id: number }>(
     target: ReactionTarget,
     records: readonly T[],
+    viewer?: string,
   ): Reacted<T>[] {
-    const counts = this.countsOf(
+    const ids = records.map((r) => r.id);
+    const counts = this.countsOf(target, ids);
+    const own = viewer === undefined ? undefined : this.ownOf(target, ids, viewer);
+    return records.map((r) => ({
+      ...r,
+      reactions: counts.get(r.id) as ReactionCounts,
+      ...(own && { viewerReactions: own.get(r.id) ?? [] }),
+    }));
+  }
+
+  /** `principal`'s own reactions to each of `ids` of `target`, by content, in one query. */
+  ownOf(
+    target: ReactionTarget,
+    ids: readonly number[],
+    principal: string,
+  ): Map<number, OwnReaction[]> {
+    const own = new Map<number, OwnReaction[]>();
+    if (ids.length === 0) return own;
+    for (const row of this.#exec<{ id: number; target_id: number; content: ReactionContent }>(
+      `SELECT id, target_id, content FROM reactions
+       WHERE target = ? AND target_id IN (SELECT value FROM json_each(?)) AND principal = ?
+       ORDER BY content`,
       target,
-      records.map((r) => r.id),
-    );
-    return records.map((r) => ({ ...r, reactions: counts.get(r.id) as ReactionCounts }));
+      JSON.stringify([...new Set(ids)]),
+      principal,
+    ))
+      own.set(row.target_id, [
+        ...(own.get(row.target_id) ?? []),
+        { id: row.id, content: row.content },
+      ]);
+    return own;
   }
 
   /** A page of a target's reactions, oldest first, after reaction `after`, of one content if given. */

@@ -3,12 +3,14 @@
 // file's path; 404 without a ref or a file; whole-file errors without
 // reading the body; quoted lines and owners cut, and the answer bounded in
 // bytes; reads, built bytes and memory bounded; the same through MCP.
+import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
 import { MAX_CODEOWNERS_BYTES } from "@fyrden/domain";
 import { ReaderWorkSpent } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
+import { createApp } from "../src/app.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { RepoBrowse } from "../src/do/repo/browse.js";
 import { CODEOWNERS_ERRORS_POLICY, codeOwnersErrors } from "../src/do/repo/code-owners-errors.js";
@@ -305,5 +307,79 @@ describe("CODEOWNERS errors", () => {
 
     expect(body).toContain("Invalid owner");
     expect(body).toContain('"path":"CODEOWNERS"');
+  });
+});
+
+describe("the file the errors are of", () => {
+  it("keeps the whole answer, its file and commit included, within 1 MiB", async () => {
+    // Lines whose quoted sources fill the answer to just about its bound.
+    const lines = ["/p/ ", ...Array.from({ length: 899 }, () => `/p/ ${"\u0001".repeat(1_100)}`)];
+    await commit({ ".github/CODEOWNERS": `${lines.join("\n")}\n` });
+    const res = await api("GET", `${path}/codeowners/errors`, owner.token);
+    const text = await res.text();
+    expect(res.status).toBe(200);
+    expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(
+      CODEOWNERS_ERRORS_POLICY.maxAnswerBytes,
+    );
+    expect(JSON.parse(text)).toMatchObject({
+      truncated: true,
+      file: { path: ".github/CODEOWNERS" },
+    });
+  });
+
+  it("asks to try again when an earlier object answers without the file read", async () => {
+    await commit({ CODEOWNERS: "* @nobody\n" });
+    // An earlier object (while a deploy rolls out): its answer has errors only.
+    const earlier = new Proxy(env.REPO, {
+      get(target, prop) {
+        if (prop === "getByName")
+          return (name: string) =>
+            new Proxy(target.getByName(name), {
+              get(inner, key) {
+                if (key === "codeOwnersErrors")
+                  return async () => ({ ok: true, value: { errors: [], truncated: false } });
+                // The stub's own RPC methods, unbound (binding one loses its call).
+                return Reflect.get(inner, key);
+              },
+            });
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const res = await createApp().fetch(
+      new Request(`https://fyrden.test/api${path}/codeowners/errors`, {
+        headers: { Authorization: `Bearer ${owner.token}` },
+      }),
+      new Proxy(env, { get: (t, key) => (key === "REPO" ? earlier : Reflect.get(t, key)) }),
+      createExecutionContext(),
+    );
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { code: string }).code).toBe("busy");
+  });
+
+  it("names the effective file and the commit read, so a valid one is told from none", async () => {
+    // A valid file under .github/ (GitHub's first location) over an invalid one at the root.
+    const sha = await commit({
+      ".github/CODEOWNERS": `* @${owner.handle}\n`,
+      CODEOWNERS: "/a/ not-an-owner\n",
+    });
+    const answer = await errorsAt();
+    expect(answer.status).toBe(200);
+    const body = answer.body as unknown as {
+      errors: unknown[];
+      file: { path: string; sha: string };
+      sha: string;
+    };
+    expect(body.errors).toEqual([]);
+    expect(body.file.path).toBe(".github/CODEOWNERS");
+    expect(body.file.sha).toMatch(/^[0-9a-f]{40}$/);
+    expect(body.sha).toBe(sha);
+    // The root file, once it is the effective one: its errors and its blob.
+    const next = await commit({ ".github/CODEOWNERS": null });
+    const root = (await errorsAt()).body as unknown as typeof body;
+    expect(root.file.path).toBe("CODEOWNERS");
+    expect(root.errors.length).toBeGreaterThan(0);
+    expect(root.sha).toBe(next);
+    expect(root.file.sha).not.toBe(body.file.sha);
   });
 });

@@ -16,7 +16,7 @@ import { labelOutput, milestoneOutput } from "../../repos/shapes.js";
 import { capturable } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller } from "./pulls.js";
-import { NO_REACTIONS, type ReactionCounts } from "./reactions.js";
+import { NO_REACTIONS, type OwnReaction, type ReactionCounts } from "./reactions.js";
 
 /*
  * A repository's labels and milestones, and the labels, assignees and
@@ -67,6 +67,8 @@ export interface SubjectMeta {
   readonly milestone: MilestoneRecord | null;
   /** Its reactions counted by content, as they stand. */
   readonly reactions: ReactionCounts;
+  /** The reader's own reactions, when read for one. */
+  readonly viewerReactions?: readonly OwnReaction[];
 }
 
 /** An issue or pull request whose labels, assignees and milestone are read: its number, and its milestone as recorded. */

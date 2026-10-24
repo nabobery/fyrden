@@ -5778,6 +5778,28 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       },
                       "type": "array",
                     },
+                    "file": {
+                      "additionalProperties": false,
+                      "description": "Fyrden: the file read, the one GitHub's locations make effective (errors or none).",
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "The file's blob SHA.",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "path",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                    "sha": {
+                      "description": "Fyrden: the commit the file was read at.",
+                      "type": "string",
+                    },
                     "truncated": {
                       "description": "Fyrden: more errors than one answer carries.",
                       "type": "boolean",
@@ -5785,6 +5807,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                   },
                   "required": [
                     "errors",
+                    "file",
+                    "sha",
                   ],
                   "type": "object",
                 },
@@ -11947,6 +11971,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "minimum": -9007199254740991,
                                 "type": "integer",
                               },
+                              "viewer": {
+                                "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "content": {
+                                      "enum": [
+                                        "+1",
+                                        "-1",
+                                        "laugh",
+                                        "confused",
+                                        "heart",
+                                        "hooray",
+                                        "rocket",
+                                        "eyes",
+                                      ],
+                                      "type": "string",
+                                    },
+                                    "id": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer",
+                                    },
+                                  },
+                                  "required": [
+                                    "id",
+                                    "content",
+                                  ],
+                                  "type": "object",
+                                },
+                                "type": "array",
+                              },
                             },
                             "required": [
                               "total_count",
@@ -12544,6 +12600,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "minimum": -9007199254740991,
                           "type": "integer",
                         },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
                       },
                       "required": [
                         "total_count",
@@ -12877,6 +12965,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "minimum": -9007199254740991,
                           "type": "integer",
                         },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
                       },
                       "required": [
                         "total_count",
@@ -13102,6 +13222,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "maximum": 9007199254740991,
                           "minimum": -9007199254740991,
                           "type": "integer",
+                        },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
                         },
                       },
                       "required": [
@@ -14135,6 +14287,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "minimum": -9007199254740991,
                           "type": "integer",
                         },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
                       },
                       "required": [
                         "total_count",
@@ -14769,6 +14953,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "minimum": -9007199254740991,
                           "type": "integer",
                         },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
                       },
                       "required": [
                         "total_count",
@@ -15342,6 +15558,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "minimum": -9007199254740991,
                           "type": "integer",
                         },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
                       },
                       "required": [
                         "total_count",
@@ -15904,6 +16152,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "minimum": -9007199254740991,
                           "type": "integer",
                         },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
                       },
                       "required": [
                         "total_count",
@@ -16185,6 +16465,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "minimum": -9007199254740991,
                                 "type": "integer",
                               },
+                              "viewer": {
+                                "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "content": {
+                                      "enum": [
+                                        "+1",
+                                        "-1",
+                                        "laugh",
+                                        "confused",
+                                        "heart",
+                                        "hooray",
+                                        "rocket",
+                                        "eyes",
+                                      ],
+                                      "type": "string",
+                                    },
+                                    "id": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer",
+                                    },
+                                  },
+                                  "required": [
+                                    "id",
+                                    "content",
+                                  ],
+                                  "type": "object",
+                                },
+                                "type": "array",
+                              },
                             },
                             "required": [
                               "total_count",
@@ -16420,6 +16732,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "maximum": 9007199254740991,
                           "minimum": -9007199254740991,
                           "type": "integer",
+                        },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
                         },
                       },
                       "required": [
@@ -20352,6 +20696,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "minimum": -9007199254740991,
                                 "type": "integer",
                               },
+                              "viewer": {
+                                "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "content": {
+                                      "enum": [
+                                        "+1",
+                                        "-1",
+                                        "laugh",
+                                        "confused",
+                                        "heart",
+                                        "hooray",
+                                        "rocket",
+                                        "eyes",
+                                      ],
+                                      "type": "string",
+                                    },
+                                    "id": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer",
+                                    },
+                                  },
+                                  "required": [
+                                    "id",
+                                    "content",
+                                  ],
+                                  "type": "object",
+                                },
+                                "type": "array",
+                              },
                             },
                             "required": [
                               "total_count",
@@ -20999,6 +21375,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "minimum": -9007199254740991,
                           "type": "integer",
                         },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
                       },
                       "required": [
                         "total_count",
@@ -21368,6 +21776,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "minimum": -9007199254740991,
                           "type": "integer",
                         },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
                       },
                       "required": [
                         "total_count",
@@ -21681,6 +22121,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "maximum": 9007199254740991,
                           "minimum": -9007199254740991,
                           "type": "integer",
+                        },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
                         },
                       },
                       "required": [
@@ -22745,6 +23217,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "minimum": -9007199254740991,
                           "type": "integer",
                         },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
                       },
                       "required": [
                         "total_count",
@@ -23398,6 +23902,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "minimum": -9007199254740991,
                           "type": "integer",
                         },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
                       },
                       "required": [
                         "total_count",
@@ -23969,6 +24505,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "minimum": -9007199254740991,
                                 "type": "integer",
                               },
+                              "viewer": {
+                                "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "content": {
+                                      "enum": [
+                                        "+1",
+                                        "-1",
+                                        "laugh",
+                                        "confused",
+                                        "heart",
+                                        "hooray",
+                                        "rocket",
+                                        "eyes",
+                                      ],
+                                      "type": "string",
+                                    },
+                                    "id": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer",
+                                    },
+                                  },
+                                  "required": [
+                                    "id",
+                                    "content",
+                                  ],
+                                  "type": "object",
+                                },
+                                "type": "array",
+                              },
                             },
                             "required": [
                               "total_count",
@@ -24343,6 +24911,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "maximum": 9007199254740991,
                           "minimum": -9007199254740991,
                           "type": "integer",
+                        },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
                         },
                       },
                       "required": [
@@ -25881,6 +26481,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "minimum": -9007199254740991,
                           "type": "integer",
                         },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
                       },
                       "required": [
                         "total_count",
@@ -26635,6 +27267,38 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "maximum": 9007199254740991,
                           "minimum": -9007199254740991,
                           "type": "integer",
+                        },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
                         },
                       },
                       "required": [
