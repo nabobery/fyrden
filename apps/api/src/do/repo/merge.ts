@@ -22,7 +22,7 @@ import {
 } from "@fyrden/git-core";
 import type { PushReportSummary } from "../../git/chunked/head.js";
 import { type LiveReaderDeps, openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
-import type { PushLogMeta } from "../../git/push/repo-push.js";
+import { AUTHORIZATION_UNAVAILABLE, type PushLogMeta } from "../../git/push/repo-push.js";
 import { BROWSE_POLICY, type Browsed, fail } from "./browse.js";
 import {
   BUSY,
@@ -99,6 +99,8 @@ export interface MergeRun {
   /** What the commit point needs of the pull request: its rules' context, the fence and the record. */
   readonly merge: MergeContext;
   readonly fence: () => string | undefined;
+  /** The confirmation of the reviewers its approvals count (see `PushLogMeta.confirm`). */
+  readonly confirm?: PushLogMeta["confirm"];
   /** In the commit's transaction, with the commit made: the pull request becomes merged. */
   readonly inCommit: (commit: Oid) => void;
   /** Runs with the commit stored, before it is finished. For tests. */
@@ -135,6 +137,7 @@ export async function mergePull(
           meta: (commit) => ({
             merge: run.merge,
             fence: run.fence,
+            ...(run.confirm && { confirm: run.confirm }),
             inCommit: () => run.inCommit(commit),
             via: "merge",
           }),
@@ -455,6 +458,13 @@ export function mergeRefused(report: PushReportSummary): Browsed<never> {
       409,
       "pull_changed",
       "The pull request changed while it was being merged; review it and try the merge again.",
+    );
+  // Matched whole: a ruleset named with these words never makes a rule's refusal look like it.
+  if (!report.ok && report.refs.some((r) => r.reason === AUTHORIZATION_UNAVAILABLE))
+    return fail(
+      409,
+      "authorization_unavailable",
+      "The reviewers' access could not be confirmed; try the merge again.",
     );
   const answered = refused(report);
   return !answered.ok && answered.code === "write_refused"

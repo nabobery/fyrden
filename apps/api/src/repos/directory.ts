@@ -8,6 +8,7 @@ import {
   ownsUserAccount,
   PERMISSIONS,
   principalTypeOf,
+  REPO_ROLES,
   type RepoPermission,
   type RepoRole,
 } from "@fyrden/domain";
@@ -104,14 +105,14 @@ export async function resolveRepo(
       .prepare(
         `SELECT ${REPO_COLUMNS}, 0 AS redirected
          FROM principals p JOIN repos r ON r.owner_id = p.id
-         WHERE p.handle = ?1 COLLATE NOCASE AND p.disabled_at IS NULL
+         WHERE p.handle = ?1 COLLATE NOCASE AND p.lifecycle IN ('active', 'suspended')
            AND r.name = ?2 COLLATE NOCASE AND r.state <> 'deleted' AND r.state = 'active'
          UNION ALL
          SELECT ${REPO_COLUMNS}, 1
          FROM principals o JOIN repo_redirects d ON d.owner_id = o.id
            JOIN repos r ON r.id = d.repo_id JOIN principals p ON p.id = r.owner_id
-         WHERE o.handle = ?1 COLLATE NOCASE AND o.disabled_at IS NULL
-           AND d.name = ?2 AND r.state = 'active' AND p.disabled_at IS NULL
+         WHERE o.handle = ?1 COLLATE NOCASE AND o.lifecycle IN ('active', 'suspended')
+           AND d.name = ?2 AND r.state = 'active' AND p.lifecycle IN ('active', 'suspended')
          ORDER BY redirected LIMIT 1`,
       )
       .bind(owner, name)
@@ -170,7 +171,7 @@ export async function listOwnedForks(
       `SELECT ${REPO_COLUMNS}
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.parent_id = ? AND r.owner_id = ? AND r.state = 'active'
-         AND p.disabled_at IS NULL
+         AND p.lifecycle IN ('active', 'suspended')
          AND (r.created_at, r.id) > (?, ?)
          AND (? IS NULL OR r.id IN (SELECT value FROM json_each(?)))
        ORDER BY r.created_at, r.id LIMIT ?`,
@@ -219,7 +220,7 @@ export async function findReposById(
       `SELECT ${REPO_COLUMNS}
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.id IN (SELECT value FROM json_each(?)) AND r.state = 'active'
-         AND p.disabled_at IS NULL`,
+         AND p.lifecycle IN ('active', 'suspended')`,
     )
     .bind(JSON.stringify(ids))
     .all<RepoRow>();
@@ -249,7 +250,7 @@ export async function networkReposOf(
       `SELECT ${REPO_COLUMNS}
        FROM repos r JOIN principals p ON p.id = r.owner_id
        WHERE r.network_id = ? AND p.handle = ? COLLATE NOCASE AND r.state = 'active'
-         AND p.disabled_at IS NULL AND (?3 IS NULL OR r.name = ?3 COLLATE NOCASE)
+         AND p.lifecycle IN ('active', 'suspended') AND (?3 IS NULL OR r.name = ?3 COLLATE NOCASE)
        ORDER BY r.name LIMIT ?4`,
     )
     .bind(networkId, handle, name ?? null, MAX_HEAD_CANDIDATES)
@@ -268,7 +269,7 @@ export async function findNetworkSource(
     `SELECT ${REPO_COLUMNS}
      FROM repos r JOIN principals p ON p.id = r.owner_id
      WHERE r.network_id = ? AND r.parent_id IS NULL AND r.state = 'active'
-       AND p.disabled_at IS NULL
+       AND p.lifecycle IN ('active', 'suspended')
      LIMIT 1`,
   )
     .bind(networkId)
@@ -341,6 +342,16 @@ export interface NewRepoRow {
   readonly createdBy?: { readonly agentId: string; readonly maxRepos: number } | null;
 }
 
+/** Hooks into repository publication (a create, generation or fork). For tests. */
+export const publishHooks: { before?: () => Promise<void> } = {};
+
+/**
+ * An SQL condition: the account bound at `owner` may own repositories (not
+ * a user being deleted or deleted: a deletion that began meanwhile wins).
+ */
+export const OWNER_REMAINS = (owner: string) =>
+  `EXISTS (SELECT 1 FROM principals WHERE id = ${owner} AND lifecycle IN ('active', 'suspended'))`;
+
 /**
  * The statements of one directory batch that publishes a new repository:
  * its row, taking the name from any redirect holding it, and its audit
@@ -348,7 +359,7 @@ export interface NewRepoRow {
  * repositories and none of that name (checked in the batch, so concurrent
  * creates cannot pass the limit or take the name twice). Pass the batch's
  * results to `heldBack` for why it was held back, read in the same
- * transaction.
+ * transaction. Never for an owner being deleted (`OWNER_REMAINS`).
  */
 export function newRepoStatements(
   db: D1Database,
@@ -374,7 +385,8 @@ export function newRepoStatements(
                 (SELECT count(*) FROM repos WHERE owner_id = ?1 AND state <> 'deleted'
                   AND state = 'active') AS repos,
                 (SELECT count(*) FROM repos WHERE created_by = ?3 AND state = 'active')
-                  AS agent_repos`,
+                  AS agent_repos,
+                ${OWNER_REMAINS("?1")} AS owner`,
       )
       .bind(row.ownerId, row.name, agent?.agentId ?? null),
     db
@@ -387,7 +399,8 @@ export function newRepoStatements(
            AND NOT EXISTS (SELECT 1 FROM repos WHERE owner_id = ?2 AND name = ?3 COLLATE NOCASE
              AND state <> 'deleted')
            AND (?12 IS NULL
-             OR (SELECT count(*) FROM repos WHERE created_by = ?12 AND state = 'active') < ?13)`,
+             OR (SELECT count(*) FROM repos WHERE created_by = ?12 AND state = 'active') < ?13)
+           AND ${OWNER_REMAINS("?2")}`,
       )
       .bind(
         row.id,
@@ -426,17 +439,21 @@ export function newRepoStatements(
 }
 
 /**
- * Why a `newRepoStatements` batch did not publish its repository (the
- * name was taken, or the quota full), or undefined when it did.
+ * Why a `newRepoStatements` batch did not publish its repository (its
+ * owner is being deleted, the name was taken, or the quota full), or
+ * undefined when it did.
  */
 export function heldBack(
   results: readonly D1Result[],
   /** The creating agent's limit, when an agent creates it. */
   agentMaxRepos?: number,
-): "name_taken" | "quota_exceeded" | "agent_quota_exceeded" | undefined {
+): "owner_gone" | "name_taken" | "quota_exceeded" | "agent_quota_exceeded" | undefined {
   if ((results[1]?.meta.changes ?? 0) > 0) return undefined;
-  const seen = results[0]?.results[0] as { taken: number; agent_repos: number } | undefined;
-  if (seen?.taken) return "name_taken";
+  const seen = results[0]?.results[0] as
+    | { taken: number; agent_repos: number; owner: number }
+    | undefined;
+  if (seen?.owner !== 1) return "owner_gone";
+  if (seen.taken) return "name_taken";
   return agentMaxRepos !== undefined && (seen?.agent_repos ?? 0) >= agentMaxRepos
     ? "agent_quota_exceeded"
     : "quota_exceeded";
@@ -473,6 +490,9 @@ export async function checkNewRepo(
   if (createdBy && (row?.agent_repos ?? 0) >= createdBy.maxRepos)
     throw agentRepoQuotaError(createdBy.maxRepos);
 }
+
+export const ownerGoneError = (handle: string) =>
+  new OperationError(404, "owner_not_found", `No account ${handle} was found.`);
 
 export const nameTakenError = (handle: string, name: string) =>
   new OperationError(409, "name_taken", `${handle} already has a repository named ${name}.`);
@@ -812,21 +832,62 @@ export async function authorize(
   // The token's limits need no call: no role widens them.
   if (!allowedWithRole(auth, repo, permission, "admin")) return false;
   const purpose = PERMISSIONS[permission].writes ? "write" : "read";
-  const roleOf = async (principalId: string): Promise<RepoRole | null> => {
-    // Only from an answer that names the owner for sure; else the repository object decides.
-    if (currentOwner.has(repo) && principalId === repo.ownerId) return "admin";
-    metrics?.count("do.request", { class: "RepoDO", method: "roleOf" });
-    try {
-      return await env.REPO.getByName(repo.id).roleOf(principalId, purpose, repo.ownerId);
-    } catch {
-      // The repository object could not answer: deny (fail closed).
-      return null;
-    }
-  };
-  if (!allowedWithRole(auth, repo, permission, await roleOf(auth.principalId))) return false;
+  if (
+    !allowedWithRole(
+      auth,
+      repo,
+      permission,
+      await roleOf(env, repo, auth.principalId, purpose, metrics),
+    )
+  )
+    return false;
   for (const owner of new Set(auth.ceilingIds ?? []))
-    if (!allowedWithRole(auth, repo, permission, await roleOf(owner))) return false;
+    if (!allowedWithRole(auth, repo, permission, await roleOf(env, repo, owner, purpose, metrics)))
+      return false;
   return true;
+}
+
+/** `principalId`'s role on `repo` for `purpose`, as `authorize` reads it (null: none, or no answer). */
+async function roleOf(
+  env: Env,
+  repo: Pick<RepoEntry, "id" | "ownerId">,
+  principalId: string,
+  purpose: "read" | "write",
+  metrics?: Metrics,
+): Promise<RepoRole | null> {
+  // Only from an answer that names the owner for sure; else the repository object decides.
+  if (currentOwner.has(repo) && principalId === repo.ownerId) return "admin";
+  metrics?.count("do.request", { class: "RepoDO", method: "roleOf" });
+  try {
+    return await env.REPO.getByName(repo.id).roleOf(principalId, purpose, repo.ownerId);
+  } catch {
+    // The repository object could not answer: deny (fail closed).
+    return null;
+  }
+}
+
+/**
+ * The role the caller acts with on `repo`: its principal's, never above
+ * any acting agent's owner's (as `authorize` caps it); null for none. What
+ * a token's scopes allow is apart (`authorize` decides each operation).
+ */
+export async function effectiveRole(
+  env: Env,
+  auth: Caller,
+  repo: Pick<RepoEntry, "id" | "ownerId">,
+  metrics?: Metrics,
+): Promise<RepoRole | null> {
+  const roles = await Promise.all(
+    [auth.principalId, ...new Set(auth.ceilingIds ?? [])].map((id) =>
+      roleOf(env, repo, id, "read", metrics),
+    ),
+  );
+  if (roles.some((r) => r === null)) return null;
+  return roles.reduce<RepoRole>(
+    (low, r) =>
+      REPO_ROLES.indexOf(r as RepoRole) < REPO_ROLES.indexOf(low) ? (r as RepoRole) : low,
+    "admin",
+  );
 }
 
 /** Every repository starts with HEAD at this branch; the branch exists after the first push. */

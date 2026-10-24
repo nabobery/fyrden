@@ -1,4 +1,4 @@
-import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
+import { FEED_HORIZON_MS, type FeedEntry, type FeedKind, type FeedPriority } from "@fyrden/domain";
 
 /*
  * A principal's activity feed: one item per repository, thread and kind,
@@ -27,7 +27,7 @@ import type { FeedEntry, FeedKind, FeedPriority } from "@fyrden/domain";
 /** Proposed values. */
 export const FEED_POLICY = {
   /** Items whose last change is older are deleted; older entries are dropped on arrival. */
-  retentionMs: 7 * 24 * 60 * 60 * 1000,
+  retentionMs: FEED_HORIZON_MS,
   /** Items a feed keeps at most; the ones changed longest ago go first. */
   maxItems: 5_000,
   /**
@@ -53,6 +53,13 @@ export const feedEpochSource = (principalId: string) => `feed:${principalId}`;
 export interface FeedPosition {
   readonly epoch: string;
   readonly seq: number;
+}
+
+/** A thread a read found gone for good, in the repository's restore generation it was found in. */
+export interface GoneThread {
+  readonly repoId: string;
+  readonly threadKey: string;
+  readonly epoch: number;
 }
 
 export interface FeedItem {
@@ -110,6 +117,34 @@ export interface FeedFilter {
   readonly kind?: FeedKind | undefined;
   /** Only items of these repositories (a token's own list); null for any. */
   readonly repoIds?: readonly string[] | null | undefined;
+  /**
+   * Only threads about these kinds (`issue`, `pull`: what a token's scopes
+   * let it read); null for any. Left out before paging (one kind through
+   * its index), so items a token may never read neither use up a read's
+   * budget nor show in its answers.
+   */
+  readonly subjects?: readonly string[] | null | undefined;
+}
+
+/**
+ * The one kind of thread a filter reads, for the index by kind (`subjects`
+ * of both kinds, or none given: no filter, null). The empty list is
+ * answered before any query.
+ */
+function oneSubject(subjects: readonly string[] | null | undefined): string | null {
+  if (!subjects || subjects.length !== 1) return null;
+  return subjects[0] ?? null;
+}
+
+/**
+ * The condition reading one kind (bound as `?6`), in the query's text only
+ * when there is one: a condition the planner cannot tell apart from none
+ * (`?6 IS NULL OR ...`) would keep it from the index by kind.
+ */
+function bySubject(subjects: readonly string[] | null | undefined): string {
+  return oneSubject(subjects) === null
+    ? "AND ?6 IS NULL"
+    : "AND substr(thread_key, 1, instr(thread_key, '/') - 1) = ?6";
 }
 
 /** Where a sync page ends: whether its last item was an open P0 one, and its sequence number. */
@@ -456,17 +491,27 @@ export class Feed {
       (since.epoch !== meta.epoch || since.seq < meta.low_watermark || since.seq > meta.head_seq)
     )
       return { expired: true };
+    if (filter.subjects?.length === 0)
+      return {
+        expired: false,
+        head: { epoch: meta.epoch, seq: meta.head_seq },
+        lowWatermark: meta.low_watermark,
+        items: [],
+        more: false,
+      };
     const rows = this.sql
       .exec<Row>(
         `SELECT * FROM feed_items
          WHERE feed_seq > ?1 AND (?2 IS NULL OR priority = ?2) AND (?3 IS NULL OR kind = ?3)
            AND (?5 IS NULL OR repo_id IN (SELECT value FROM json_each(?5)))
+           ${bySubject(filter.subjects)}
          ORDER BY feed_seq LIMIT ?4`,
         since?.seq ?? 0,
         filter.priority ?? null,
         filter.kind ?? null,
         limit + 1,
         filter.repoIds ? JSON.stringify(filter.repoIds) : null,
+        oneSubject(filter.subjects),
       )
       .toArray();
     return {
@@ -486,22 +531,28 @@ export class Feed {
   sync(
     after: SyncPosition | null,
     limit: number,
-    repoIds: readonly string[] | null,
+    filter: Pick<FeedFilter, "repoIds" | "subjects">,
   ): { epoch: string; lowWatermark: number; items: FeedItem[]; more: boolean } {
+    if (filter.subjects?.length === 0) {
+      const meta = this.#meta();
+      return { epoch: meta.epoch, lowWatermark: meta.low_watermark, items: [], more: false };
+    }
     const rows = this.sql
       .exec<Row>(
         `SELECT * FROM (
            SELECT *, (priority = 'P0' AND state = 'open') AS open FROM feed_items
            WHERE feed_seq IS NOT NULL
              AND ((priority = 'P0' AND state = 'open') OR (priority = 'P1' AND last_event_at >= ?1))
-             AND (?5 IS NULL OR repo_id IN (SELECT value FROM json_each(?5))))
+             AND (?5 IS NULL OR repo_id IN (SELECT value FROM json_each(?5)))
+             ${bySubject(filter.subjects)})
          WHERE (open, feed_seq) < (?2, ?3)
          ORDER BY open DESC, feed_seq DESC LIMIT ?4`,
         this.now() - FEED_POLICY.retentionMs,
         after === null ? 2 : after.open ? 1 : 0,
         after?.seq ?? 0,
         limit + 1,
-        repoIds ? JSON.stringify(repoIds) : null,
+        filter.repoIds ? JSON.stringify(filter.repoIds) : null,
+        oneSubject(filter.subjects),
       )
       .toArray();
     const meta = this.#meta();
@@ -608,6 +659,30 @@ export class Feed {
         purge.aclVersion,
       );
     }
+    if (deleted > 0) this.sql.exec("UPDATE feed_meta SET items = items - ? WHERE id = 1", deleted);
+    return deleted;
+  }
+
+  /**
+   * Forgets threads a read found gone for good (a deleted issue: its number
+   * is never used again, so no later entry of the thread is news); a late
+   * entry of one comes back only to be found gone again. Call within a
+   * transaction. Returns the shown items deleted.
+   */
+  forgetThreads(threads: readonly GoneThread[]): number {
+    let deleted = 0;
+    // Only what was told in the generation the thread was found gone in, or before: a restore
+    // can give its number to a new conversation, whose items stay. A caller of the earlier shape
+    // (no generation, while a deploy rolls out) binds null, which matches nothing.
+    for (const { repoId, threadKey, epoch } of threads)
+      for (const row of this.sql.exec<{ feed_seq: number | null }>(
+        `DELETE FROM feed_items WHERE repo_id = ? AND thread_key = ? AND thread_epoch <= ?
+         RETURNING feed_seq`,
+        repoId,
+        threadKey,
+        epoch ?? null,
+      ))
+        if (row.feed_seq !== null) deleted++;
     if (deleted > 0) this.sql.exec("UPDATE feed_meta SET items = items - ? WHERE id = 1", deleted);
     return deleted;
   }

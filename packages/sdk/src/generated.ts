@@ -152,7 +152,7 @@ export type UsersTokensListOutput = {
 export type UsersTokensCreateInput = {
   type?: "pat" | "git";
   /** Permissions it is limited to (and what they imply). Empty: your token's. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -217,7 +217,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -232,6 +232,45 @@ export type AdminTokensCreateOutput = {
   scopes: string[];
   /** Unix time in milliseconds. */
   expires_at: number;
+};
+
+/** Input of `admin.users.suspend`: Suspend a user. */
+export type AdminUsersSuspendInput = {
+  username: string;
+  reason?: string;
+};
+
+/** Output of `admin.users.suspend`. */
+export type AdminUsersSuspendOutput = null;
+
+/** Input of `admin.users.unsuspend`: Unsuspend a user. */
+export type AdminUsersUnsuspendInput = {
+  username: string;
+  reason?: string;
+};
+
+/** Output of `admin.users.unsuspend`. */
+export type AdminUsersUnsuspendOutput = null;
+
+/** Input of `admin.users.delete`: Delete a user. */
+export type AdminUsersDeleteInput = {
+  username: string;
+};
+
+/** Output of `admin.users.delete`. */
+export type AdminUsersDeleteOutput = {
+  /** The user's id (usr_ prefix); their handle is released, and the id names them. */
+  id: string;
+  /** `deleting` while the deletion runs; `deleted` once it is done. */
+  state: "deleting" | "deleted";
+  /** Where it is: their repositories deleted, their access in every account removed, their stars and feed, then done. */
+  step: "repositories" | "accounts" | "stars" | "feeds" | "finalize" | "done";
+  /** Why it waits, or null: `sole_owner:<organization id>` while the user is an organization's only owner (make another user its owner with `PUT /admin/organizations/{org}/owners/{username}`). */
+  blocked: string | null;
+  /** When it began, Unix time in milliseconds. */
+  created_at: number;
+  /** When it last moved, Unix time in milliseconds. */
+  updated_at: number;
 };
 
 /** Input of `agents.create`: Create an agent. */
@@ -334,7 +373,7 @@ export type AgentsTokensCreateInput = {
   agent: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -402,7 +441,7 @@ export type GrantsCreateInput = {
   /** The agent's handle. */
   agent: string;
   /** Permissions the agent may use for you (and what they imply). */
-  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
   repositories?: string[];
   expires_in_days?: number;
@@ -571,6 +610,14 @@ export type ReposCreateOutput = {
   source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
+  /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+  permissions?: {
+    admin: boolean;
+    maintain: boolean;
+    push: boolean;
+    triage: boolean;
+    pull: boolean;
+  };
 };
 
 /** Input of `repos.list`: List your repositories. */
@@ -608,6 +655,14 @@ export type ReposListOutput = {
     source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
+    /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+    permissions?: {
+      admin: boolean;
+      maintain: boolean;
+      push: boolean;
+      triage: boolean;
+      pull: boolean;
+    };
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -647,6 +702,14 @@ export type ReposGetOutput = {
   source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
+  /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+  permissions?: {
+    admin: boolean;
+    maintain: boolean;
+    push: boolean;
+    triage: boolean;
+    pull: boolean;
+  };
 };
 
 /** Input of `repos.update`: Update a repository. */
@@ -693,6 +756,14 @@ export type ReposUpdateOutput = {
   source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
+  /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+  permissions?: {
+    admin: boolean;
+    maintain: boolean;
+    push: boolean;
+    triage: boolean;
+    pull: boolean;
+  };
 };
 
 /** Input of `repos.delete`: Delete a repository. */
@@ -767,6 +838,14 @@ export type ReposTransferOutput = {
     source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
+    /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+    permissions?: {
+      admin: boolean;
+      maintain: boolean;
+      push: boolean;
+      triage: boolean;
+      pull: boolean;
+    };
   };
 };
 
@@ -808,6 +887,14 @@ export type ReposForkOutput = {
   source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
+  /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+  permissions?: {
+    admin: boolean;
+    maintain: boolean;
+    push: boolean;
+    triage: boolean;
+    pull: boolean;
+  };
 };
 
 /** Input of `repos.forks.list`: List forks. */
@@ -849,6 +936,14 @@ export type ReposForksListOutput = {
     source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
+    /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+    permissions?: {
+      admin: boolean;
+      maintain: boolean;
+      push: boolean;
+      triage: boolean;
+      pull: boolean;
+    };
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -894,6 +989,14 @@ export type ReposGenerateOutput = {
   source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
+  /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+  permissions?: {
+    admin: boolean;
+    maintain: boolean;
+    push: boolean;
+    triage: boolean;
+    pull: boolean;
+  };
 };
 
 /** Input of `repos.rulesets.list`: List rulesets. */
@@ -932,8 +1035,8 @@ export type ReposRulesetsListOutput = {
         require_last_push_approval: boolean;
         /** Every review thread must be resolved. */
         required_review_thread_resolution: boolean;
-        /** Code owners are not supported yet: must be false. */
-        require_code_owner_review: false;
+        /** A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access). */
+        require_code_owner_review: boolean;
         allowed_merge_methods: ("merge" | "squash" | "rebase")[];
         /** Reviews required from specific teams are not supported yet: empty or left out. */
         required_reviewers?: unknown[];
@@ -1037,8 +1140,8 @@ export type ReposRulesetsGetOutput = {
       require_last_push_approval: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution: boolean;
-      /** Code owners are not supported yet: must be false. */
-      require_code_owner_review: false;
+      /** A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access). */
+      require_code_owner_review: boolean;
       allowed_merge_methods: ("merge" | "squash" | "rebase")[];
       /** Reviews required from specific teams are not supported yet: empty or left out. */
       required_reviewers?: unknown[];
@@ -1089,8 +1192,8 @@ export type ReposRulesetsCreateInput = {
       require_last_push_approval?: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution?: boolean;
-      /** Code owners are not supported yet: must be false. */
-      require_code_owner_review?: false;
+      /** A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access). */
+      require_code_owner_review?: boolean;
       allowed_merge_methods?: ("merge" | "squash" | "rebase")[];
       /** Reviews required from specific teams are not supported yet: empty or left out. */
       required_reviewers?: unknown[];
@@ -1135,8 +1238,8 @@ export type ReposRulesetsCreateOutput = {
       require_last_push_approval: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution: boolean;
-      /** Code owners are not supported yet: must be false. */
-      require_code_owner_review: false;
+      /** A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access). */
+      require_code_owner_review: boolean;
       allowed_merge_methods: ("merge" | "squash" | "rebase")[];
       /** Reviews required from specific teams are not supported yet: empty or left out. */
       required_reviewers?: unknown[];
@@ -1189,8 +1292,8 @@ export type ReposRulesetsUpdateInput = {
       require_last_push_approval?: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution?: boolean;
-      /** Code owners are not supported yet: must be false. */
-      require_code_owner_review?: false;
+      /** A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access). */
+      require_code_owner_review?: boolean;
       allowed_merge_methods?: ("merge" | "squash" | "rebase")[];
       /** Reviews required from specific teams are not supported yet: empty or left out. */
       required_reviewers?: unknown[];
@@ -1235,8 +1338,8 @@ export type ReposRulesetsUpdateOutput = {
       require_last_push_approval: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution: boolean;
-      /** Code owners are not supported yet: must be false. */
-      require_code_owner_review: false;
+      /** A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access). */
+      require_code_owner_review: boolean;
       allowed_merge_methods: ("merge" | "squash" | "rebase")[];
       /** Reviews required from specific teams are not supported yet: empty or left out. */
       required_reviewers?: unknown[];
@@ -1316,7 +1419,7 @@ export type ReposHooksCreateInput = {
     url: string;
     content_type?: "json";
   };
-  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
+  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "*")[];
   active?: boolean;
 };
 
@@ -1391,9 +1494,9 @@ export type ReposHooksUpdateInput = {
     url?: string;
     content_type?: "json";
   };
-  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
-  add_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
-  remove_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "*")[];
+  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "*")[];
+  add_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "*")[];
+  remove_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "*")[];
   active?: boolean;
 };
 
@@ -1609,7 +1712,7 @@ export type PullsListInput = {
   /** The repository's name. */
   repo: string;
   state?: "open" | "closed" | "all";
-  /** Page size, 1-100. */
+  /** Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with `next_cursor` to go on. */
   per_page?: number;
   /** From a previous page's `next_cursor`. */
   cursor?: string;
@@ -1632,6 +1735,9 @@ export type PullsListOutput = {
     draft: boolean;
     /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
     maintainer_can_modify: boolean;
+    /** Its conversation is locked: only write access and above comment and review. */
+    locked: boolean;
+    active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
     title: string;
     body: string | null;
     /** Who opened it (the user, when agents acted for one). */
@@ -1660,6 +1766,8 @@ export type PullsListOutput = {
     created_at: number;
     /** Unix time in milliseconds. */
     updated_at: number;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
     /** Unix time in milliseconds. */
     closed_at: number | null;
     /** Unix time in milliseconds. */
@@ -1670,6 +1778,65 @@ export type PullsListOutput = {
     merged_by: {
       id: string;
     } | null;
+    labels: ({
+      id: number;
+      name: string;
+      color: string;
+      description: string | null;
+      /** Copied in from a default set. */
+      default: boolean;
+      /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+      version: number;
+    })[];
+    /** The first of `assignees` (GitHub's older field); null for none. */
+    assignee: {
+      id: string;
+    } | null;
+    assignees: {
+      id: string;
+    }[];
+    milestone: {
+      /** Fyrden: the number again (milestones have no separate id space). */
+      id: number;
+      number: number;
+      title: string;
+      description: string | null;
+      state: "open" | "closed";
+      /** Open issues and pull requests in it, of the kinds the caller reads. */
+      open_issues: number;
+      /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+      closed_issues: number;
+      creator: {
+        id: string;
+      };
+      /** Unix time in milliseconds. */
+      due_on: number | null;
+      /** Unix time in milliseconds. */
+      created_at: number;
+      /** Unix time in milliseconds. */
+      updated_at: number;
+      /** Unix time in milliseconds. */
+      closed_at: number | null;
+      /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+      version: number;
+    } | null;
+    /** Its reactions counted by content, as they stand. */
+    reactions: {
+      total_count: number;
+      "+1": number;
+      "-1": number;
+      laugh: number;
+      confused: number;
+      heart: number;
+      hooray: number;
+      rocket: number;
+      eyes: number;
+      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+      viewer?: ({
+        id: number;
+        content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+      })[];
+    };
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -1711,6 +1878,9 @@ export type PullsCreateOutput = {
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
+  /** Its conversation is locked: only write access and above comment and review. */
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -1739,6 +1909,8 @@ export type PullsCreateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   /** Unix time in milliseconds. */
@@ -1749,6 +1921,65 @@ export type PullsCreateOutput = {
   merged_by: {
     id: string;
   } | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
 };
 
 /** Input of `pulls.get`: Get a pull request. */
@@ -1777,6 +2008,9 @@ export type PullsGetOutput = {
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
+  /** Its conversation is locked: only write access and above comment and review. */
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -1805,6 +2039,8 @@ export type PullsGetOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   /** Unix time in milliseconds. */
@@ -1815,6 +2051,65 @@ export type PullsGetOutput = {
   merged_by: {
     id: string;
   } | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
 };
 
 /** Input of `pulls.update`: Update a pull request. */
@@ -1835,6 +2130,8 @@ export type PullsUpdateInput = {
   draft?: boolean;
   /** The author only: let the base's maintainers change a head branch in a fork. */
   maintainer_can_modify?: boolean;
+  /** Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since. */
+  expected_version?: number;
 };
 
 /** Output of `pulls.update`. */
@@ -1853,6 +2150,9 @@ export type PullsUpdateOutput = {
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
+  /** Its conversation is locked: only write access and above comment and review. */
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -1881,6 +2181,8 @@ export type PullsUpdateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   /** Unix time in milliseconds. */
@@ -1891,6 +2193,65 @@ export type PullsUpdateOutput = {
   merged_by: {
     id: string;
   } | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
 };
 
 /** Input of `pulls.merge`: Merge a pull request. */
@@ -2100,10 +2461,12 @@ export type PullsCommentsListInput = {
   repo: string;
   /** The pull request's number. */
   pull_number: number;
-  /** Page size, 1-100. */
+  /** Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with `next_cursor` to go on. */
   per_page?: number;
   /** From a previous page's `next_cursor`. */
   cursor?: string;
+  /** Fyrden: only items whose id is greater than this (not with `cursor`). */
+  after?: number;
 };
 
 /** Output of `pulls.comments.list`. */
@@ -2143,6 +2506,23 @@ export type PullsCommentsListOutput = {
     created_at: number;
     /** Unix time in milliseconds. */
     updated_at: number;
+    /** Its reactions counted by content, as they stand. */
+    reactions: {
+      total_count: number;
+      "+1": number;
+      "-1": number;
+      laugh: number;
+      confused: number;
+      heart: number;
+      hooray: number;
+      rocket: number;
+      eyes: number;
+      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+      viewer?: ({
+        id: number;
+        content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+      })[];
+    };
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -2208,6 +2588,23 @@ export type PullsCommentsCreateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
 };
 
 /** Input of `pulls.comments.get`: Get a review comment. */
@@ -2256,6 +2653,23 @@ export type PullsCommentsGetOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
 };
 
 /** Input of `pulls.comments.update`: Update a review comment. */
@@ -2305,6 +2719,23 @@ export type PullsCommentsUpdateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
 };
 
 /** Input of `pulls.comments.delete`: Delete a review comment. */
@@ -2484,10 +2915,12 @@ export type PullsReviewsListInput = {
   repo: string;
   /** The pull request's number. */
   pull_number: number;
-  /** Page size, 1-100. */
+  /** Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with `next_cursor` to go on. */
   per_page?: number;
   /** From a previous page's `next_cursor`. */
   cursor?: string;
+  /** Fyrden: only items whose id is greater than this (not with `cursor`). */
+  after?: number;
 };
 
 /** Output of `pulls.reviews.list`. */
@@ -2647,7 +3080,12 @@ export type PullsRequestedReviewersListOutput = {
     id: string;
     login: string;
   }[];
-  teams: unknown[];
+  teams: {
+    /** The team's id (it keeps it when renamed). */
+    id: string;
+    slug: string;
+    name: string;
+  }[];
 };
 
 /** Input of `pulls.requested_reviewers.add`: Request reviewers. */
@@ -2659,9 +3097,9 @@ export type PullsRequestedReviewersAddInput = {
   /** The pull request's number. */
   pull_number: number;
   /** Handles of users and agents who can read the repository. */
-  reviewers: string[];
-  /** Team reviewers are not supported yet: empty or left out. */
-  team_reviewers?: unknown[];
+  reviewers?: string[];
+  /** Slugs of teams of the repository's organization. */
+  team_reviewers?: string[];
 };
 
 /** Output of `pulls.requested_reviewers.add`. */
@@ -2680,6 +3118,9 @@ export type PullsRequestedReviewersAddOutput = {
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
+  /** Its conversation is locked: only write access and above comment and review. */
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -2708,6 +3149,8 @@ export type PullsRequestedReviewersAddOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   /** Unix time in milliseconds. */
@@ -2718,6 +3161,65 @@ export type PullsRequestedReviewersAddOutput = {
   merged_by: {
     id: string;
   } | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
 };
 
 /** Input of `pulls.requested_reviewers.remove`: Remove requested reviewers. */
@@ -2729,9 +3231,13 @@ export type PullsRequestedReviewersRemoveInput = {
   /** The pull request's number. */
   pull_number: number;
   /** Handles of users and agents who can read the repository. */
-  reviewers: string[];
-  /** Team reviewers are not supported yet: empty or left out. */
-  team_reviewers?: unknown[];
+  reviewers?: string[];
+  /** Slugs of teams of the repository's organization. */
+  team_reviewers?: string[];
+  /** Fyrden: users and agents by id, as the requests name them. */
+  reviewer_ids?: string[];
+  /** Fyrden: teams by id, as the requests name them. */
+  team_ids?: string[];
 };
 
 /** Output of `pulls.requested_reviewers.remove`. */
@@ -2750,6 +3256,9 @@ export type PullsRequestedReviewersRemoveOutput = {
   draft: boolean;
   /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
   maintainer_can_modify: boolean;
+  /** Its conversation is locked: only write access and above comment and review. */
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
   title: string;
   body: string | null;
   /** Who opened it (the user, when agents acted for one). */
@@ -2778,6 +3287,8 @@ export type PullsRequestedReviewersRemoveOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
   /** Unix time in milliseconds. */
   closed_at: number | null;
   /** Unix time in milliseconds. */
@@ -2788,6 +3299,1403 @@ export type PullsRequestedReviewersRemoveOutput = {
   merged_by: {
     id: string;
   } | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
+};
+
+/** Input of `pulls.code_owners.get`: Get a pull request's code owners. */
+export type PullsCodeOwnersGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** Rules a page, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `pulls.code_owners.get`. */
+export type PullsCodeOwnersGetOutput = {
+  state: "pending" | "complete" | "none" | "too_large" | "unreadable";
+  /** Why it is `too_large`; null otherwise. */
+  reason: "file" | "tree" | "depth" | "scan" | "work" | "merge_base" | "stuck" | "path" | null;
+  /** When an `unreadable` result is worked out again (Unix time in milliseconds). */
+  retry_at: number | null;
+  /** The CODEOWNERS file used; null when there is none. */
+  file: {
+    path: string;
+    sha: string;
+  } | null;
+  /** Invalid lines in the file. */
+  errors: number;
+  rules: {
+    line: number;
+    /** As written (`@user`, `@org/team`); empty: ownerless. */
+    owners: string[];
+    /** Changed paths this rule decides. */
+    paths: number;
+    /** The first of them (at most 512 bytes). */
+    example_path: string;
+  }[];
+  ownerless_paths: number;
+  /** Changed paths no rule matches (no code owners). */
+  unmatched_paths: number;
+  /** Changed paths that are not UTF-8, never matched. */
+  unmatchable_paths: number;
+  /** The first such path's bytes (at most 512), base64. */
+  unmatchable_example: string | null;
+  /** Pass as `cursor` for the next page of rules; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `issues.list`: List issues. */
+export type IssuesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  state?: "open" | "closed" | "all";
+  /** Fyrden (as Gitea's): only issues, or only pull requests; both when left out. */
+  type?: "issues" | "pulls";
+  sort?: "created" | "updated";
+  direction?: "asc" | "desc";
+  /** Label names separated by commas, ignoring case: only items with all of them (none when one is not the repository's). A name holding a comma: use `label_ids`. */
+  labels?: string;
+  /** Fyrden: label ids separated by commas (at most 20): only items with all of them. Not with `labels`. */
+  label_ids?: string;
+  /** A handle: items assigned to that user or agent; `none`: unassigned; `*`: assigned. */
+  assignee?: string;
+  /** A milestone's number; `none`: in no milestone; `*`: in any. */
+  milestone?: string;
+  /** A handle: items opened by that user or agent (as `user` shows them: the user when agents acted for one). */
+  creator?: string;
+  /** Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with `next_cursor` to go on. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`, with the same filters. */
+  cursor?: string;
+};
+
+/** Output of `issues.list`. */
+export type IssuesListOutput = {
+  issues: ({
+    /** Fyrden: the number again (issues have no separate id space). */
+    id: number;
+    number: number;
+    /** A merged pull request is `closed`. */
+    state: "open" | "closed";
+    /** Why it is in its state; null for one never closed, and for pull requests. */
+    state_reason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+    /** Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted. */
+    duplicate_of: number | null;
+    title: string;
+    body: string | null;
+    /** Who opened it (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    locked: boolean;
+    active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+    /** Who closed it last, while closed; null for pull requests. */
+    closed_by: {
+      id: string;
+    } | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    labels: ({
+      id: number;
+      name: string;
+      color: string;
+      description: string | null;
+      /** Copied in from a default set. */
+      default: boolean;
+      /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+      version: number;
+    })[];
+    /** The first of `assignees` (GitHub's older field); null for none. */
+    assignee: {
+      id: string;
+    } | null;
+    assignees: {
+      id: string;
+    }[];
+    milestone: {
+      /** Fyrden: the number again (milestones have no separate id space). */
+      id: number;
+      number: number;
+      title: string;
+      description: string | null;
+      state: "open" | "closed";
+      /** Open issues and pull requests in it, of the kinds the caller reads. */
+      open_issues: number;
+      /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+      closed_issues: number;
+      creator: {
+        id: string;
+      };
+      /** Unix time in milliseconds. */
+      due_on: number | null;
+      /** Unix time in milliseconds. */
+      created_at: number;
+      /** Unix time in milliseconds. */
+      updated_at: number;
+      /** Unix time in milliseconds. */
+      closed_at: number | null;
+      /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+      version: number;
+    } | null;
+    /** Its reactions counted by content, as they stand. */
+    reactions: {
+      total_count: number;
+      "+1": number;
+      "-1": number;
+      laugh: number;
+      confused: number;
+      heart: number;
+      hooray: number;
+      rocket: number;
+      eyes: number;
+      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+      viewer?: ({
+        id: number;
+        content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+      })[];
+    };
+    /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
+    pull_request?: {
+      /** Unix time in milliseconds. */
+      merged_at: number | null;
+    };
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `issues.create`: Create an issue. */
+export type IssuesCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  title: string;
+  body?: string;
+  /** Label names (ignoring case), each one the repository has; replaces its labels. */
+  labels?: string[];
+  /** Handles of users and agents who can read the repository; replaces its assignees. */
+  assignees?: string[];
+  /** A milestone's number; null takes it out of its milestone. */
+  milestone?: number | null;
+};
+
+/** Output of `issues.create`. */
+export type IssuesCreateOutput = {
+  /** Fyrden: the number again (issues have no separate id space). */
+  id: number;
+  number: number;
+  /** A merged pull request is `closed`. */
+  state: "open" | "closed";
+  /** Why it is in its state; null for one never closed, and for pull requests. */
+  state_reason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted. */
+  duplicate_of: number | null;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+  /** Who closed it last, while closed; null for pull requests. */
+  closed_by: {
+    id: string;
+  } | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
+  /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
+  pull_request?: {
+    /** Unix time in milliseconds. */
+    merged_at: number | null;
+  };
+};
+
+/** Input of `issues.get`: Get an issue. */
+export type IssuesGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+};
+
+/** Output of `issues.get`. */
+export type IssuesGetOutput = {
+  /** Fyrden: the number again (issues have no separate id space). */
+  id: number;
+  number: number;
+  /** A merged pull request is `closed`. */
+  state: "open" | "closed";
+  /** Why it is in its state; null for one never closed, and for pull requests. */
+  state_reason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted. */
+  duplicate_of: number | null;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+  /** Who closed it last, while closed; null for pull requests. */
+  closed_by: {
+    id: string;
+  } | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
+  /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
+  pull_request?: {
+    /** Unix time in milliseconds. */
+    merged_at: number | null;
+  };
+};
+
+/** Input of `issues.update`: Update an issue. */
+export type IssuesUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+  title?: string;
+  /** Null clears it. */
+  body?: string | null;
+  state?: "open" | "closed";
+  /** Null is as leaving it out (GitHub's accepts null). */
+  state_reason?: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** Fyrden: with `state_reason: duplicate`, the issue or pull request this one duplicates; the caller must be able to read it. */
+  duplicate_of?: number;
+  /** Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since. */
+  expected_version?: number;
+  /** Label names (ignoring case), each one the repository has; replaces its labels. */
+  labels?: string[];
+  /** Handles of users and agents who can read the repository; replaces its assignees. */
+  assignees?: string[];
+  /** A milestone's number; null takes it out of its milestone. */
+  milestone?: number | null;
+};
+
+/** Output of `issues.update`. */
+export type IssuesUpdateOutput = {
+  /** Fyrden: the number again (issues have no separate id space). */
+  id: number;
+  number: number;
+  /** A merged pull request is `closed`. */
+  state: "open" | "closed";
+  /** Why it is in its state; null for one never closed, and for pull requests. */
+  state_reason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted. */
+  duplicate_of: number | null;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+  /** Who closed it last, while closed; null for pull requests. */
+  closed_by: {
+    id: string;
+  } | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
+  /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
+  pull_request?: {
+    /** Unix time in milliseconds. */
+    merged_at: number | null;
+  };
+};
+
+/** Input of `issues.delete`: Delete an issue. */
+export type IssuesDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+};
+
+/** Output of `issues.delete`. */
+export type IssuesDeleteOutput = {
+  number: number;
+  state: "deleted";
+};
+
+/** Input of `issues.lock`: Lock a conversation. */
+export type IssuesLockInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+  lock_reason?: "off-topic" | "too heated" | "resolved" | "spam";
+};
+
+/** Output of `issues.lock`. */
+export type IssuesLockOutput = {
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+};
+
+/** Input of `issues.unlock`: Unlock a conversation. */
+export type IssuesUnlockInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+};
+
+/** Output of `issues.unlock`. */
+export type IssuesUnlockOutput = {
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+};
+
+/** Input of `issues.references.list`: List what refers to an issue. */
+export type IssuesReferencesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `issues.references.list`. */
+export type IssuesReferencesListOutput = {
+  references: ({
+    source: {
+      /** `owner/name`, as the repository is named now. */
+      repository: string;
+      number: number;
+      kind: "issue" | "pull_request";
+      /** The comment naming it; null when it is the issue's or pull request's text. */
+      comment_id: number | null;
+    };
+    /** Unix time in milliseconds. */
+    created_at: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `labels.list`: List labels. */
+export type LabelsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** Fyrden: only labels whose name starts with this, ignoring case. */
+  q?: string;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `labels.list`. */
+export type LabelsListOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `labels.get`: Get a label. */
+export type LabelsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+  name: string;
+};
+
+/** Output of `labels.get`. */
+export type LabelsGetOutput = {
+  id: number;
+  name: string;
+  color: string;
+  description: string | null;
+  /** Copied in from a default set. */
+  default: boolean;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+};
+
+/** Input of `labels.create`: Create a label. */
+export type LabelsCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+  name: string;
+  /** Six hex digits, without `#` (kept lower-case). */
+  color: string;
+  description?: string;
+};
+
+/** Output of `labels.create`. */
+export type LabelsCreateOutput = {
+  id: number;
+  name: string;
+  color: string;
+  description: string | null;
+  /** Copied in from a default set. */
+  default: boolean;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+};
+
+/** Input of `labels.update`: Update a label. */
+export type LabelsUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+  name: string;
+  /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+  new_name?: string;
+  /** Six hex digits, without `#` (kept lower-case). */
+  color?: string;
+  /** Null clears it. */
+  description?: string | null;
+  /** Fyrden: the id of the label `name` named when the change was made; refused with 409 `stale` when the name names another now (renamed, then taken). `expected_version` needs it. */
+  expected_id?: number;
+  /** Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since. */
+  expected_version?: number;
+};
+
+/** Output of `labels.update`. */
+export type LabelsUpdateOutput = {
+  id: number;
+  name: string;
+  color: string;
+  description: string | null;
+  /** Copied in from a default set. */
+  default: boolean;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+};
+
+/** Input of `labels.delete`: Delete a label. */
+export type LabelsDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+  name: string;
+  /** Fyrden: the id of the label `name` named when the change was made; refused with 409 `stale` when the name names another now (renamed, then taken). `expected_version` needs it. */
+  expected_id?: number;
+  /** Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since. */
+  expected_version?: number;
+};
+
+/** Output of `labels.delete`. */
+export type LabelsDeleteOutput = {
+  name: string;
+  state: "deleted";
+};
+
+/** Input of `labels.copy_defaults`: Copy the default labels in. */
+export type LabelsCopyDefaultsInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+};
+
+/** Output of `labels.copy_defaults`. */
+export type LabelsCopyDefaultsOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+};
+
+/** Input of `issues.labels.list`: List an issue's labels. */
+export type IssuesLabelsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+};
+
+/** Output of `issues.labels.list`. */
+export type IssuesLabelsListOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+};
+
+/** Input of `issues.labels.add`: Add labels to an issue. */
+export type IssuesLabelsAddInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** Label names, matched ignoring case; each must exist in the repository. */
+  labels: string[];
+  /** Fyrden: the id of each label of `labels`, in order, as a form showed it; refused with 409 `stale` when a name names another label now (renamed, then taken). */
+  expected_ids?: number[];
+};
+
+/** Output of `issues.labels.add`. */
+export type IssuesLabelsAddOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+};
+
+/** Input of `issues.labels.set`: Set an issue's labels. */
+export type IssuesLabelsSetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** Label names, matched ignoring case; each must exist in the repository. */
+  labels: string[];
+};
+
+/** Output of `issues.labels.set`. */
+export type IssuesLabelsSetOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+};
+
+/** Input of `issues.labels.remove`: Remove a label from an issue. */
+export type IssuesLabelsRemoveInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+  name: string;
+  /** Fyrden: the id of the label `name` named when the change was made; refused with 409 `stale` when the name names another now (renamed, then taken). `expected_version` needs it. */
+  expected_id?: number;
+};
+
+/** Output of `issues.labels.remove`. */
+export type IssuesLabelsRemoveOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+};
+
+/** Input of `issues.labels.clear`: Remove all labels from an issue. */
+export type IssuesLabelsClearInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+};
+
+/** Output of `issues.labels.clear`. */
+export type IssuesLabelsClearOutput = {
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+};
+
+/** Input of `issues.assignees.add`: Add assignees to an issue. */
+export type IssuesAssigneesAddInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** Handles of users and agents who can read the repository. */
+  assignees: string[];
+};
+
+/** Output of `issues.assignees.add`. */
+export type IssuesAssigneesAddOutput = {
+  /** Fyrden: the number again (issues have no separate id space). */
+  id: number;
+  number: number;
+  /** A merged pull request is `closed`. */
+  state: "open" | "closed";
+  /** Why it is in its state; null for one never closed, and for pull requests. */
+  state_reason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted. */
+  duplicate_of: number | null;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+  /** Who closed it last, while closed; null for pull requests. */
+  closed_by: {
+    id: string;
+  } | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
+  /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
+  pull_request?: {
+    /** Unix time in milliseconds. */
+    merged_at: number | null;
+  };
+};
+
+/** Input of `issues.assignees.remove`: Remove assignees from an issue. */
+export type IssuesAssigneesRemoveInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** Handles of users and agents who can read the repository. */
+  assignees?: string[];
+  /** Fyrden: user and agent ids. */
+  assignee_ids?: string[];
+};
+
+/** Output of `issues.assignees.remove`. */
+export type IssuesAssigneesRemoveOutput = {
+  /** Fyrden: the number again (issues have no separate id space). */
+  id: number;
+  number: number;
+  /** A merged pull request is `closed`. */
+  state: "open" | "closed";
+  /** Why it is in its state; null for one never closed, and for pull requests. */
+  state_reason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** Fyrden: while closed as a duplicate, the issue or pull request it duplicates; null when there is none, or when the caller cannot read that one or it was deleted. */
+  duplicate_of: number | null;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+  /** Who closed it last, while closed; null for pull requests. */
+  closed_by: {
+    id: string;
+  } | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
+  /** Present when this is a pull request (as GitHub's issue endpoints answer them); `pulls.get` has the rest. */
+  pull_request?: {
+    /** Unix time in milliseconds. */
+    merged_at: number | null;
+  };
+};
+
+/** Input of `orgs.default_labels.get`: Get an organization's default labels. */
+export type OrgsDefaultLabelsGetInput = {
+  /** The organization's handle. */
+  org: string;
+};
+
+/** Output of `orgs.default_labels.get`. */
+export type OrgsDefaultLabelsGetOutput = {
+  labels: ({
+    /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+    name: string;
+    /** Six hex digits, without `#` (kept lower-case). */
+    color: string;
+    description: string | null;
+  })[];
+};
+
+/** Input of `orgs.default_labels.set`: Set an organization's default labels. */
+export type OrgsDefaultLabelsSetInput = {
+  /** The organization's handle. */
+  org: string;
+  labels: ({
+    /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+    name: string;
+    /** Six hex digits, without `#` (kept lower-case). */
+    color: string;
+    description?: string | null;
+  })[];
+};
+
+/** Output of `orgs.default_labels.set`. */
+export type OrgsDefaultLabelsSetOutput = {
+  labels: ({
+    /** A label's name (matched ignoring the case of ASCII letters); not `.` or `..`. */
+    name: string;
+    /** Six hex digits, without `#` (kept lower-case). */
+    color: string;
+    description: string | null;
+  })[];
+};
+
+/** Input of `milestones.list`: List milestones. */
+export type MilestonesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  state?: "open" | "closed" | "all";
+  sort?: "due_on";
+  direction?: "asc" | "desc";
+  /** Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with `next_cursor` to go on. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`, with the same filters. */
+  cursor?: string;
+};
+
+/** Output of `milestones.list`. */
+export type MilestonesListOutput = {
+  milestones: ({
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `milestones.get`: Get a milestone. */
+export type MilestonesGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The milestone's number. */
+  milestone_number: number;
+};
+
+/** Output of `milestones.get`. */
+export type MilestonesGetOutput = {
+  /** Fyrden: the number again (milestones have no separate id space). */
+  id: number;
+  number: number;
+  title: string;
+  description: string | null;
+  state: "open" | "closed";
+  /** Open issues and pull requests in it, of the kinds the caller reads. */
+  open_issues: number;
+  /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+  closed_issues: number;
+  creator: {
+    id: string;
+  };
+  /** Unix time in milliseconds. */
+  due_on: number | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+};
+
+/** Input of `milestones.create`: Create a milestone. */
+export type MilestonesCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  title: string;
+  state?: "open" | "closed";
+  description?: string;
+  /** Fyrden: Unix time in milliseconds (GitHub takes an ISO 8601 time). */
+  due_on?: number;
+};
+
+/** Output of `milestones.create`. */
+export type MilestonesCreateOutput = {
+  /** Fyrden: the number again (milestones have no separate id space). */
+  id: number;
+  number: number;
+  title: string;
+  description: string | null;
+  state: "open" | "closed";
+  /** Open issues and pull requests in it, of the kinds the caller reads. */
+  open_issues: number;
+  /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+  closed_issues: number;
+  creator: {
+    id: string;
+  };
+  /** Unix time in milliseconds. */
+  due_on: number | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+};
+
+/** Input of `milestones.update`: Update a milestone. */
+export type MilestonesUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The milestone's number. */
+  milestone_number: number;
+  title?: string;
+  state?: "open" | "closed";
+  /** Null clears it. */
+  description?: string | null;
+  /** Null clears it. */
+  due_on?: number | null;
+  /** Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since. */
+  expected_version?: number;
+};
+
+/** Output of `milestones.update`. */
+export type MilestonesUpdateOutput = {
+  /** Fyrden: the number again (milestones have no separate id space). */
+  id: number;
+  number: number;
+  title: string;
+  description: string | null;
+  state: "open" | "closed";
+  /** Open issues and pull requests in it, of the kinds the caller reads. */
+  open_issues: number;
+  /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+  closed_issues: number;
+  creator: {
+    id: string;
+  };
+  /** Unix time in milliseconds. */
+  due_on: number | null;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+};
+
+/** Input of `milestones.delete`: Delete a milestone. */
+export type MilestonesDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The milestone's number. */
+  milestone_number: number;
+};
+
+/** Output of `milestones.delete`. */
+export type MilestonesDeleteOutput = {
+  number: number;
+  state: "deleted";
 };
 
 /** Input of `issues.comments.list`: List comments. */
@@ -2796,19 +4704,21 @@ export type IssuesCommentsListInput = {
   owner: string;
   /** The repository's name. */
   repo: string;
-  /** The pull request's number (issues share these comments once they exist). */
+  /** The issue's or pull request's number. */
   issue_number: number;
-  /** Page size, 1-100. */
+  /** Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with `next_cursor` to go on. */
   per_page?: number;
   /** From a previous page's `next_cursor`. */
   cursor?: string;
+  /** Fyrden: only items whose id is greater than this (not with `cursor`). */
+  after?: number;
 };
 
 /** Output of `issues.comments.list`. */
 export type IssuesCommentsListOutput = {
-  comments: {
+  comments: ({
     id: number;
-    /** The pull request it is on. */
+    /** The issue or pull request it is on. */
     issue_number: number;
     /** Who wrote it (the user, when agents acted for one). */
     user: {
@@ -2821,7 +4731,26 @@ export type IssuesCommentsListOutput = {
     created_at: number;
     /** Unix time in milliseconds. */
     updated_at: number;
-  }[];
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+    /** Its reactions counted by content, as they stand. */
+    reactions: {
+      total_count: number;
+      "+1": number;
+      "-1": number;
+      laugh: number;
+      confused: number;
+      heart: number;
+      hooray: number;
+      rocket: number;
+      eyes: number;
+      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+      viewer?: ({
+        id: number;
+        content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+      })[];
+    };
+  })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
 };
@@ -2832,7 +4761,7 @@ export type IssuesCommentsCreateInput = {
   owner: string;
   /** The repository's name. */
   repo: string;
-  /** The pull request's number (issues share these comments once they exist). */
+  /** The issue's or pull request's number. */
   issue_number: number;
   body: string;
 };
@@ -2840,7 +4769,7 @@ export type IssuesCommentsCreateInput = {
 /** Output of `issues.comments.create`. */
 export type IssuesCommentsCreateOutput = {
   id: number;
-  /** The pull request it is on. */
+  /** The issue or pull request it is on. */
   issue_number: number;
   /** Who wrote it (the user, when agents acted for one). */
   user: {
@@ -2853,6 +4782,25 @@ export type IssuesCommentsCreateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
 };
 
 /** Input of `issues.comments.get`: Get a comment. */
@@ -2868,7 +4816,7 @@ export type IssuesCommentsGetInput = {
 /** Output of `issues.comments.get`. */
 export type IssuesCommentsGetOutput = {
   id: number;
-  /** The pull request it is on. */
+  /** The issue or pull request it is on. */
   issue_number: number;
   /** Who wrote it (the user, when agents acted for one). */
   user: {
@@ -2881,6 +4829,25 @@ export type IssuesCommentsGetOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
 };
 
 /** Input of `issues.comments.update`: Update a comment. */
@@ -2892,12 +4859,14 @@ export type IssuesCommentsUpdateInput = {
   /** The comment's id. */
   comment_id: number;
   body: string;
+  /** Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since. */
+  expected_version?: number;
 };
 
 /** Output of `issues.comments.update`. */
 export type IssuesCommentsUpdateOutput = {
   id: number;
-  /** The pull request it is on. */
+  /** The issue or pull request it is on. */
   issue_number: number;
   /** Who wrote it (the user, when agents acted for one). */
   user: {
@@ -2910,6 +4879,25 @@ export type IssuesCommentsUpdateOutput = {
   created_at: number;
   /** Unix time in milliseconds. */
   updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
 };
 
 /** Input of `issues.comments.delete`: Delete a comment. */
@@ -2924,6 +4912,237 @@ export type IssuesCommentsDeleteInput = {
 
 /** Output of `issues.comments.delete`. */
 export type IssuesCommentsDeleteOutput = {
+  id: number;
+  state: "deleted";
+};
+
+/** Input of `reactions.issue.list`: List reactions to an issue. */
+export type ReactionsIssueListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** Only reactions of this content. */
+  content?: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `reactions.issue.list`. */
+export type ReactionsIssueListOutput = {
+  reactions: ({
+    id: number;
+    /** Who reacted (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that reacted for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    /** Unix time in milliseconds. */
+    created_at: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `reactions.issue.create`: React to an issue. */
+export type ReactionsIssueCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+};
+
+/** Output of `reactions.issue.create`. */
+export type ReactionsIssueCreateOutput = {
+  id: number;
+  /** Who reacted (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that reacted for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+  /** Unix time in milliseconds. */
+  created_at: number;
+};
+
+/** Input of `reactions.issue.delete`: Delete a reaction to an issue. */
+export type ReactionsIssueDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's or pull request's number. */
+  issue_number: number;
+  /** The reaction's id. */
+  reaction_id: number;
+};
+
+/** Output of `reactions.issue.delete`. */
+export type ReactionsIssueDeleteOutput = {
+  id: number;
+  state: "deleted";
+};
+
+/** Input of `reactions.comment.list`: List reactions to a comment. */
+export type ReactionsCommentListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  /** Only reactions of this content. */
+  content?: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `reactions.comment.list`. */
+export type ReactionsCommentListOutput = {
+  reactions: ({
+    id: number;
+    /** Who reacted (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that reacted for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    /** Unix time in milliseconds. */
+    created_at: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `reactions.comment.create`: React to a comment. */
+export type ReactionsCommentCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+};
+
+/** Output of `reactions.comment.create`. */
+export type ReactionsCommentCreateOutput = {
+  id: number;
+  /** Who reacted (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that reacted for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+  /** Unix time in milliseconds. */
+  created_at: number;
+};
+
+/** Input of `reactions.comment.delete`: Delete a reaction to a comment. */
+export type ReactionsCommentDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  /** The reaction's id. */
+  reaction_id: number;
+};
+
+/** Output of `reactions.comment.delete`. */
+export type ReactionsCommentDeleteOutput = {
+  id: number;
+  state: "deleted";
+};
+
+/** Input of `reactions.review_comment.list`: List reactions to a diff comment. */
+export type ReactionsReviewCommentListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  /** Only reactions of this content. */
+  content?: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `reactions.review_comment.list`. */
+export type ReactionsReviewCommentListOutput = {
+  reactions: ({
+    id: number;
+    /** Who reacted (the user, when agents acted for one). */
+    user: {
+      id: string;
+    };
+    /** Fyrden: the agents that reacted for `user`, the acting one first; empty if none. */
+    performed_via_agents: string[];
+    content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    /** Unix time in milliseconds. */
+    created_at: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `reactions.review_comment.create`: React to a diff comment. */
+export type ReactionsReviewCommentCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+};
+
+/** Output of `reactions.review_comment.create`. */
+export type ReactionsReviewCommentCreateOutput = {
+  id: number;
+  /** Who reacted (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that reacted for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+  /** Unix time in milliseconds. */
+  created_at: number;
+};
+
+/** Input of `reactions.review_comment.delete`: Delete a reaction to a diff comment. */
+export type ReactionsReviewCommentDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The comment's id. */
+  comment_id: number;
+  /** The reaction's id. */
+  reaction_id: number;
+};
+
+/** Output of `reactions.review_comment.delete`. */
+export type ReactionsReviewCommentDeleteOutput = {
   id: number;
   state: "deleted";
 };
@@ -2993,6 +5212,14 @@ export type StarsListOutput = {
     source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
+    /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+    permissions?: {
+      admin: boolean;
+      maintain: boolean;
+      push: boolean;
+      triage: boolean;
+      pull: boolean;
+    };
     /** Unix time in milliseconds. */
     starred_at: number;
   })[];
@@ -3009,7 +5236,7 @@ export type FeedListInput = {
   /** Only items of this priority. */
   priority?: "P0" | "P1";
   /** Only items of this kind. */
-  kind?: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
+  kind?: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity";
 };
 
 /** Output of `feed.list`. */
@@ -3022,11 +5249,11 @@ export type FeedListOutput = {
       /** owner/name */
       full_name: string;
     };
-    /** The thread within the repository, e.g. `pull/12`. */
+    /** The thread within the repository, e.g. `pull/12` or `issue/7`. */
     thread_key: string;
-    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity";
     subject: {
-      kind: "pull";
+      kind: "issue" | "pull";
       number: number;
       title: string;
     };
@@ -3081,11 +5308,11 @@ export type FeedSyncOutput = {
       /** owner/name */
       full_name: string;
     };
-    /** The thread within the repository, e.g. `pull/12`. */
+    /** The thread within the repository, e.g. `pull/12` or `issue/7`. */
     thread_key: string;
-    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "mention" | "activity";
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity";
     subject: {
-      kind: "pull";
+      kind: "issue" | "pull";
       number: number;
       title: string;
     };
@@ -3744,6 +5971,43 @@ export type ReposReadmeGetOutput = {
   sha: string;
 };
 
+/** Input of `repos.codeowners.errors`: List CODEOWNERS errors. */
+export type ReposCodeownersErrorsInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A branch, a tag or a full commit SHA; the default branch when absent. */
+  ref?: string;
+};
+
+/** Output of `repos.codeowners.errors`. */
+export type ReposCodeownersErrorsOutput = {
+  errors: ({
+    /** From 1; 0 for the file as a whole. */
+    line: number;
+    /** From 1, where the error starts; 0 for the file as a whole. */
+    column: number;
+    kind: string;
+    /** The line as written (cut to 1,024 characters). */
+    source: string;
+    suggestion: string | null;
+    message: string;
+    /** The CODEOWNERS file's path. */
+    path: string;
+  })[];
+  /** Fyrden: more errors than one answer carries. */
+  truncated?: boolean;
+  /** Fyrden: the file read, the one GitHub's locations make effective (errors or none). */
+  file: {
+    path: string;
+    /** The file's blob SHA. */
+    sha: string;
+  };
+  /** Fyrden: the commit the file was read at. */
+  sha: string;
+};
+
 /** Input of `repos.trees.get`: Get a tree. */
 export type ReposTreesGetInput = {
   /** The owner's handle. */
@@ -4038,6 +6302,17 @@ export type OrgsMembershipsRemoveOutput = {
   state: "removed";
 };
 
+/** Input of `admin.orgs.owners.add`: Make a user an organization's owner. */
+export type AdminOrgsOwnersAddInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The user's handle. */
+  username: string;
+};
+
+/** Output of `admin.orgs.owners.add`. */
+export type AdminOrgsOwnersAddOutput = null;
+
 /** Input of `orgs.members.list`: List an organization's members. */
 export type OrgsMembersListInput = {
   /** The organization's handle. */
@@ -4096,6 +6371,14 @@ export type OrgsReposCreateOutput = {
   source_id?: string | null;
   /** Unix time in milliseconds. */
   created_at: number;
+  /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+  permissions?: {
+    admin: boolean;
+    maintain: boolean;
+    push: boolean;
+    triage: boolean;
+    pull: boolean;
+  };
 };
 
 /** Input of `orgs.repos.list`: List an organization's repositories. */
@@ -4135,6 +6418,14 @@ export type OrgsReposListOutput = {
     source_id?: string | null;
     /** Unix time in milliseconds. */
     created_at: number;
+    /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+    permissions?: {
+      admin: boolean;
+      maintain: boolean;
+      push: boolean;
+      triage: boolean;
+      pull: boolean;
+    };
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -4535,6 +6826,9 @@ export const OPERATIONS = {
   "users.git_tokens.create": { method: "POST", path: "/user/git-tokens", pathParams: [], idempotent: true },
   "admin.users.create": { method: "POST", path: "/admin/users", pathParams: [], idempotent: true },
   "admin.tokens.create": { method: "POST", path: "/admin/users/{user_id}/tokens", pathParams: ["user_id"], idempotent: true },
+  "admin.users.suspend": { method: "PUT", path: "/users/{username}/suspended", pathParams: ["username"], idempotent: true },
+  "admin.users.unsuspend": { method: "DELETE", path: "/users/{username}/suspended", pathParams: ["username"], idempotent: true },
+  "admin.users.delete": { method: "DELETE", path: "/admin/users/{username}", pathParams: ["username"], idempotent: true },
   "agents.create": { method: "POST", path: "/agents", pathParams: [], idempotent: true },
   "agents.list": { method: "GET", path: "/agents", pathParams: [], idempotent: false, items: "agents" },
   "agents.get": { method: "GET", path: "/agents/{agent}", pathParams: ["agent"], idempotent: false },
@@ -4601,11 +6895,49 @@ export const OPERATIONS = {
   "pulls.requested_reviewers.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: false },
   "pulls.requested_reviewers.add": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.requested_reviewers.remove": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.code_owners.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/code-owners", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "rules" },
+  "issues.list": { method: "GET", path: "/repos/{owner}/{repo}/issues", pathParams: ["owner","repo"], idempotent: false, items: "issues" },
+  "issues.create": { method: "POST", path: "/repos/{owner}/{repo}/issues", pathParams: ["owner","repo"], idempotent: true },
+  "issues.get": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}", pathParams: ["owner","repo","issue_number"], idempotent: false },
+  "issues.update": { method: "PATCH", path: "/repos/{owner}/{repo}/issues/{issue_number}", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.lock": { method: "PUT", path: "/repos/{owner}/{repo}/issues/{issue_number}/lock", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.unlock": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/lock", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.references.list": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}/references", pathParams: ["owner","repo","issue_number"], idempotent: false, items: "references" },
+  "labels.list": { method: "GET", path: "/repos/{owner}/{repo}/labels", pathParams: ["owner","repo"], idempotent: false, items: "labels" },
+  "labels.get": { method: "GET", path: "/repos/{owner}/{repo}/labels/{name}", pathParams: ["owner","repo","name"], idempotent: false },
+  "labels.create": { method: "POST", path: "/repos/{owner}/{repo}/labels", pathParams: ["owner","repo"], idempotent: true },
+  "labels.update": { method: "PATCH", path: "/repos/{owner}/{repo}/labels/{name}", pathParams: ["owner","repo","name"], idempotent: true },
+  "labels.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/labels/{name}", pathParams: ["owner","repo","name"], idempotent: true },
+  "labels.copy_defaults": { method: "POST", path: "/repos/{owner}/{repo}/labels/defaults", pathParams: ["owner","repo"], idempotent: true },
+  "issues.labels.list": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}/labels", pathParams: ["owner","repo","issue_number"], idempotent: false },
+  "issues.labels.add": { method: "POST", path: "/repos/{owner}/{repo}/issues/{issue_number}/labels", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.labels.set": { method: "PUT", path: "/repos/{owner}/{repo}/issues/{issue_number}/labels", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.labels.remove": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/labels/{name}", pathParams: ["owner","repo","issue_number","name"], idempotent: true },
+  "issues.labels.clear": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/labels", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.assignees.add": { method: "POST", path: "/repos/{owner}/{repo}/issues/{issue_number}/assignees", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "issues.assignees.remove": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/assignees", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "orgs.default_labels.get": { method: "GET", path: "/orgs/{org}/default-labels", pathParams: ["org"], idempotent: false },
+  "orgs.default_labels.set": { method: "PUT", path: "/orgs/{org}/default-labels", pathParams: ["org"], idempotent: true },
+  "milestones.list": { method: "GET", path: "/repos/{owner}/{repo}/milestones", pathParams: ["owner","repo"], idempotent: false, items: "milestones" },
+  "milestones.get": { method: "GET", path: "/repos/{owner}/{repo}/milestones/{milestone_number}", pathParams: ["owner","repo","milestone_number"], idempotent: false },
+  "milestones.create": { method: "POST", path: "/repos/{owner}/{repo}/milestones", pathParams: ["owner","repo"], idempotent: true },
+  "milestones.update": { method: "PATCH", path: "/repos/{owner}/{repo}/milestones/{milestone_number}", pathParams: ["owner","repo","milestone_number"], idempotent: true },
+  "milestones.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/milestones/{milestone_number}", pathParams: ["owner","repo","milestone_number"], idempotent: true },
   "issues.comments.list": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}/comments", pathParams: ["owner","repo","issue_number"], idempotent: false, items: "comments" },
   "issues.comments.create": { method: "POST", path: "/repos/{owner}/{repo}/issues/{issue_number}/comments", pathParams: ["owner","repo","issue_number"], idempotent: true },
   "issues.comments.get": { method: "GET", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: false },
   "issues.comments.update": { method: "PATCH", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: true },
   "issues.comments.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}", pathParams: ["owner","repo","comment_id"], idempotent: true },
+  "reactions.issue.list": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}/reactions", pathParams: ["owner","repo","issue_number"], idempotent: false, items: "reactions" },
+  "reactions.issue.create": { method: "POST", path: "/repos/{owner}/{repo}/issues/{issue_number}/reactions", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "reactions.issue.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/reactions/{reaction_id}", pathParams: ["owner","repo","issue_number","reaction_id"], idempotent: true },
+  "reactions.comment.list": { method: "GET", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions", pathParams: ["owner","repo","comment_id"], idempotent: false, items: "reactions" },
+  "reactions.comment.create": { method: "POST", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions", pathParams: ["owner","repo","comment_id"], idempotent: true },
+  "reactions.comment.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions/{reaction_id}", pathParams: ["owner","repo","comment_id","reaction_id"], idempotent: true },
+  "reactions.review_comment.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions", pathParams: ["owner","repo","comment_id"], idempotent: false, items: "reactions" },
+  "reactions.review_comment.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions", pathParams: ["owner","repo","comment_id"], idempotent: true },
+  "reactions.review_comment.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions/{reaction_id}", pathParams: ["owner","repo","comment_id","reaction_id"], idempotent: true },
   "stars.put": { method: "PUT", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.delete": { method: "DELETE", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.list": { method: "GET", path: "/user/starred", pathParams: [], idempotent: false, items: "repos" },
@@ -4624,6 +6956,7 @@ export const OPERATIONS = {
   "repos.contents.root": { method: "GET", path: "/repos/{owner}/{repo}/contents", pathParams: ["owner","repo"], idempotent: false, items: "entries" },
   "repos.contents.get": { method: "GET", path: "/repos/{owner}/{repo}/contents/{path+}", pathParams: ["owner","repo","path"], idempotent: false, items: "entries" },
   "repos.readme.get": { method: "GET", path: "/repos/{owner}/{repo}/readme", pathParams: ["owner","repo"], idempotent: false },
+  "repos.codeowners.errors": { method: "GET", path: "/repos/{owner}/{repo}/codeowners/errors", pathParams: ["owner","repo"], idempotent: false },
   "repos.trees.get": { method: "GET", path: "/repos/{owner}/{repo}/git/trees/{tree_sha+}", pathParams: ["owner","repo","tree_sha"], idempotent: false },
   "repos.archives.get": { method: "GET", path: "/repos/{owner}/{repo}/archives/{format}", pathParams: ["owner","repo","format"], idempotent: false },
   "repos.contents.put": { method: "PUT", path: "/repos/{owner}/{repo}/contents/{path+}", pathParams: ["owner","repo","path"], idempotent: true },
@@ -4631,6 +6964,7 @@ export const OPERATIONS = {
   "repos.file_commits.create": { method: "POST", path: "/repos/{owner}/{repo}/file-commits", pathParams: ["owner","repo"], idempotent: true },
   "orgs.memberships.set": { method: "PUT", path: "/orgs/{org}/memberships/{username}", pathParams: ["org","username"], idempotent: true },
   "orgs.memberships.remove": { method: "DELETE", path: "/orgs/{org}/memberships/{username}", pathParams: ["org","username"], idempotent: true },
+  "admin.orgs.owners.add": { method: "PUT", path: "/admin/organizations/{org}/owners/{username}", pathParams: ["org","username"], idempotent: true },
   "orgs.members.list": { method: "GET", path: "/orgs/{org}/members", pathParams: ["org"], idempotent: false, items: "members" },
   "orgs.repos.create": { method: "POST", path: "/orgs/{org}/repos", pathParams: ["org"], idempotent: true },
   "orgs.repos.list": { method: "GET", path: "/orgs/{org}/repos", pathParams: ["org"], idempotent: false, items: "repos" },
@@ -4677,6 +7011,12 @@ export interface Operations {
   "admin.users.create": { input: AdminUsersCreateInput; output: AdminUsersCreateOutput };
   /** Create a token for a user. Mints a personal access token (`pat`) or git token (`git`) for a user and returns it once. Instance administrators only. */
   "admin.tokens.create": { input: AdminTokensCreateInput; output: AdminTokensCreateOutput };
+  /** Suspend a user. Suspends a user, as GitHub Enterprise does: the user can no longer sign in, and none of their tokens, nor those of the agents they own, work while suspended; their sessions and OAuth tokens are revoked for good. Their repositories stay available to their collaborators. Suspending a suspended user changes nothing. Instance administrators only; not yourself, nor the last active administrator. */
+  "admin.users.suspend": { input: AdminUsersSuspendInput; output: AdminUsersSuspendOutput };
+  /** Unsuspend a user. Lifts a user's suspension: they can sign in again, and their tokens and their agents' work again (sessions and OAuth tokens revoked by the suspension stay revoked). Unsuspending a user who is not suspended changes nothing. Instance administrators only. */
+  "admin.users.unsuspend": { input: AdminUsersUnsuspendInput; output: AdminUsersUnsuspendOutput };
+  /** Delete a user. Deletes a user, as GitHub Enterprise does, with their repositories and everything else of theirs: from the request on they and their agents can do nothing (every credential revoked, their handles released and held for 90 days); the rest runs in the background, and the deletion answers 202 with where it is (GitHub Enterprise answers 204 and works at once). What they made in others' repositories stays, shown as `ghost`. An organization they solely own holds the deletion until an administrator makes someone else its owner. Asking again answers where the deletion is: by the released handle while it is held, and by the user's id at any time (a deleted user's handle is their id). Instance administrators only; not yourself, nor the last active administrator. */
+  "admin.users.delete": { input: AdminUsersDeleteInput; output: AdminUsersDeleteOutput };
   /** Create an agent. Creates an agent principal owned by you, or by an organization you own (`org`). An agent acts with its own tokens and collaborator roles, or for a user under a delegation grant; either way it never exceeds its owner. */
   "agents.create": { input: AgentsCreateInput; output: AgentsCreateOutput };
   /** List agents. Your agents, or those of an organization you own (`org`), oldest first. */
@@ -4733,27 +7073,27 @@ export interface Operations {
   "repos.rulesets.update": { input: ReposRulesetsUpdateInput; output: ReposRulesetsUpdateOutput };
   /** Delete a ruleset. Removes a ruleset. Administrators only. */
   "repos.rulesets.delete": { input: ReposRulesetsDeleteInput; output: ReposRulesetsDeleteOutput };
-  /** List repository webhooks. The repository's webhooks. Administrators only. */
+  /** List repository webhooks. The repository's webhooks. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.list": { input: ReposHooksListInput; output: ReposHooksListOutput };
-  /** Create a repository webhook. Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, or `*`. Administrators only. */
+  /** Create a repository webhook. Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, `issues`, `label`, `milestone`, or `*`. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.create": { input: ReposHooksCreateInput; output: ReposHooksCreateOutput };
-  /** Get a repository webhook. One webhook. Administrators only. */
+  /** Get a repository webhook. One webhook. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.get": { input: ReposHooksGetInput; output: ReposHooksGetOutput };
-  /** Update a repository webhook. Changes a webhook's URL, events or state (turning it on clears why the server turned it off). Deliveries waiting for an attempt go to the new URL. Administrators only. */
+  /** Update a repository webhook. Changes a webhook's URL, events or state (turning it on clears why the server turned it off). Deliveries waiting for an attempt go to the new URL. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.update": { input: ReposHooksUpdateInput; output: ReposHooksUpdateOutput };
-  /** Delete a repository webhook. Removes a webhook; its waiting deliveries are cancelled. Administrators only. */
+  /** Delete a repository webhook. Removes a webhook; its waiting deliveries are cancelled. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.delete": { input: ReposHooksDeleteInput; output: ReposHooksDeleteOutput };
-  /** Ping a repository webhook. Sends the webhook a `ping` delivery. Administrators only. */
+  /** Ping a repository webhook. Sends the webhook a `ping` delivery. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.pings.create": { input: ReposHooksPingsCreateInput; output: ReposHooksPingsCreateOutput };
-  /** Rotate a webhook's secret. Fyrden: a new signing secret (in this answer only). Deliveries are signed with both the new and the previous secret for a week, or until the previous one is dropped. Administrators only. */
+  /** Rotate a webhook's secret. Fyrden: a new signing secret (in this answer only). Deliveries are signed with both the new and the previous secret for a week, or until the previous one is dropped. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.secret.rotate": { input: ReposHooksSecretRotateInput; output: ReposHooksSecretRotateOutput };
-  /** Drop a webhook's previous secret. Fyrden: stops signing deliveries with the secret a rotation replaced. Administrators only. */
+  /** Drop a webhook's previous secret. Fyrden: stops signing deliveries with the secret a rotation replaced. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.secret.drop": { input: ReposHooksSecretDropInput; output: ReposHooksSecretDropOutput };
-  /** List deliveries for a repository webhook. The webhook's deliveries of the last 30 days, newest first. Administrators only. */
+  /** List deliveries for a repository webhook. The webhook's deliveries of the last 30 days, newest first. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.deliveries.list": { input: ReposHooksDeliveriesListInput; output: ReposHooksDeliveriesListOutput };
-  /** Get a delivery for a repository webhook. One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only. */
+  /** Get a delivery for a repository webhook. One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.deliveries.get": { input: ReposHooksDeliveriesGetInput; output: ReposHooksDeliveriesGetOutput };
-  /** Redeliver a delivery for a repository webhook. Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), once it has made 50 attempts (422 `too_many_attempts`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only. */
+  /** Redeliver a delivery for a repository webhook. Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), once it has made 50 attempts (422 `too_many_attempts`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
   "repos.hooks.deliveries.redeliver": { input: ReposHooksDeliveriesRedeliverInput; output: ReposHooksDeliveriesRedeliverOutput };
   /** Seal webhook secrets with the current key. Fyrden: seals again, with `WEBHOOKS_KEY`, webhook secrets sealed with a retired key, a batch of repositories at a time (call again with `cursor` until `next_cursor` is null and `remaining` is 0); `unreadable` counts secrets whose key is gone (rotate those hooks' secrets). Instance administrators only. */
   "admin.webhooks.reseal": { input: AdminWebhooksResealInput; output: AdminWebhooksResealOutput };
@@ -4803,22 +7143,98 @@ export interface Operations {
   "pulls.reviews.create": { input: PullsReviewsCreateInput; output: PullsReviewsCreateOutput };
   /** Dismiss a review. Dismisses an approval or a request for changes, with a reason: it no longer counts toward or blocks a merge. Needs write access. */
   "pulls.reviews.dismiss": { input: PullsReviewsDismissInput; output: PullsReviewsDismissOutput };
-  /** List requested reviewers. Who a review of the pull request is requested of and has not reviewed yet. */
+  /** List requested reviewers. Who a review of the pull request is requested of and has not reviewed yet: users and agents, and teams (a team's request ends when one of the members it asked reviews). */
   "pulls.requested_reviewers.list": { input: PullsRequestedReviewersListInput; output: PullsRequestedReviewersListOutput };
-  /** Request reviewers. Requests a review of users or agents who can read the repository (not the author). The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once; a request ends when that reviewer submits a review. */
+  /** Request reviewers. Requests a review of users or agents who can read the repository (not the author), and of teams of the repository's organization. A team asks each member it has now (the author aside), at most 2000, and keeps those members: one of them reviewing ends its request; someone who joins the team later does not. The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once, a team counting as one, and 10000 members across a pull request's teams; a request ends when its reviewer submits a review. Past the limit, requests of users or agents being deleted give up their places first, with no event. */
   "pulls.requested_reviewers.add": { input: PullsRequestedReviewersAddInput; output: PullsRequestedReviewersAddOutput };
-  /** Remove requested reviewers. Withdraws review requests; reviewers not requested are ignored. */
+  /** Remove requested reviewers. Withdraws review requests of users, agents and teams; ones not requested are ignored. Fyrden takes teams alone too (GitHub needs `reviewers`), and `reviewer_ids` and `team_ids` name them by id (a deleted user's handle names no one; two requests can carry one team slug, a team renamed and another named so since). */
   "pulls.requested_reviewers.remove": { input: PullsRequestedReviewersRemoveInput; output: PullsRequestedReviewersRemoveOutput };
-  /** List comments. A pull request's conversation comments, oldest first. */
+  /** Get a pull request's code owners. Fyrden: who owns what an open pull request changes, under its base branch's CODEOWNERS (`.github/`, the root, `docs/`: the first location holding a regular file), for every path the three-dot diff changes (a rename as its two sides). Worked out in the background for the pull request's current base branch, base tip and head: `pending` until then (a draft's is worked out once asked for). Rules are those that decide at least one path, with how many and the first; an ownerless rule's paths need no owner. `errors` counts the file's invalid lines and `unmatchable_paths` the paths that are not UTF-8: either makes a merge needing code owners refuse. `too_large` is final for the pair, with why; `unreadable` is tried again at `retry_at`. Needs `contents:read` too. */
+  "pulls.code_owners.get": { input: PullsCodeOwnersGetInput; output: PullsCodeOwnersGetOutput };
+  /** List issues. The repository's issues and pull requests (marked with `pull_request`), as GitHub's issue listing; `type` narrows it to one kind. Each kind is listed only for a caller that may read it: issues need the `issues:read` permission, pull requests `pull_requests:read`. A listing sorted by `updated` may move an item changed between pages. */
+  "issues.list": { input: IssuesListInput; output: IssuesListOutput };
+  /** Create an issue. Opens an issue. Anyone who can read the repository may; giving it labels, assignees or a milestone takes triage (refused without it, where GitHub drops them). */
+  "issues.create": { input: IssuesCreateInput; output: IssuesCreateOutput };
+  /** Get an issue. One issue, or a pull request by its number (marked with `pull_request`), for a caller that may read that kind. */
+  "issues.get": { input: IssuesGetInput; output: IssuesGetOutput };
+  /** Update an issue. Changes the title or body, closes or reopens it, marks it a duplicate, or sets its labels, assignees or milestone; fields left out are kept, and all of it happens or none. The author may edit, close and reopen its own issue; on anyone else's, triage closes and reopens, and write edits. Marking a duplicate (`state_reason: duplicate` with `duplicate_of`) and setting labels, assignees or the milestone take triage, the author's own issue included. As GitHub's, `state_reason` alone changes nothing unless the state changes, except moving a closed issue to or from `duplicate`. A pull request's number takes only labels, assignees and milestone (with `pull_requests:write`); its title, body and state change through `pulls.update`. */
+  "issues.update": { input: IssuesUpdateInput; output: IssuesUpdateOutput };
+  /** Delete an issue. Fyrden (GitHub offers this through GraphQL only): deletes an issue and its comments for good; its number is never used again, and activity feeds stop showing it. Takes admin. */
+  "issues.delete": { input: IssuesDeleteInput; output: IssuesDeleteOutput };
+  /** Lock a conversation. Locks an issue's or a pull request's conversation: from then on only write access and above may comment, or edit or delete comments. Takes write access, and the permission for that kind (`issues:write` or `pull_requests:write`). Answers the lock (GitHub answers 204). */
+  "issues.lock": { input: IssuesLockInput; output: IssuesLockOutput };
+  /** Unlock a conversation. Unlocks an issue's or a pull request's conversation. Takes write access, and the permission for that kind. Answers the lock (GitHub answers 204). */
+  "issues.unlock": { input: IssuesUnlockInput; output: IssuesUnlockOutput };
+  /** List what refers to an issue. Fyrden (GitHub shows these as cross-referenced events in its timeline): the issues, pull requests and comments whose text names this issue or pull request (`#12`, or `owner/repo#12` from another repository), by repository, then number. A reference shows only when the caller can read both its ends: this issue or pull request with its kind's permission, and the source's repository with the source's kind's permission; one whose repository is gone is left out. A page holds only references the caller sees, and checks at most 10 other repositories: past them it ends early, with a continuation. */
+  "issues.references.list": { input: IssuesReferencesListInput; output: IssuesReferencesListOutput };
+  /** List labels. The repository's labels by name, ignoring case. Takes the `issues:read` or `pull_requests:read` permission (labels serve both). */
+  "labels.list": { input: LabelsListInput; output: LabelsListOutput };
+  /** Get a label. One label by name, ignoring case. Takes the `issues:read` or `pull_requests:read` permission (labels serve both). */
+  "labels.get": { input: LabelsGetInput; output: LabelsGetOutput };
+  /** Create a label. Creates a label; its name must be new, ignoring case. Takes write access, and the `issues:write` or `pull_requests:write` permission (labels serve both). */
+  "labels.create": { input: LabelsCreateInput; output: LabelsCreateOutput };
+  /** Update a label. Renames a label (`new_name`), or changes its color or description; issues and pull requests keep it. Takes write access, and the `issues:write` or `pull_requests:write` permission (labels serve both). */
+  "labels.update": { input: LabelsUpdateInput; output: LabelsUpdateOutput };
+  /** Delete a label. Deletes a label; issues and pull requests carrying it no longer do. Answers what was deleted (GitHub answers 204). Takes write access, and the `issues:write` or `pull_requests:write` permission (labels serve both). */
+  "labels.delete": { input: LabelsDeleteInput; output: LabelsDeleteOutput };
+  /** Copy the default labels in. Fyrden: copies the account's default labels (its organization's set, or GitHub's) into the repository; names it has already are kept as they are. New repositories get them when created. Answers the labels added. Takes write access, and the `issues:write` or `pull_requests:write` permission (labels serve both). */
+  "labels.copy_defaults": { input: LabelsCopyDefaultsInput; output: LabelsCopyDefaultsOutput };
+  /** List an issue's labels. An issue's or a pull request's labels by name (at most 100, all on one page), for a caller that may read that kind. */
+  "issues.labels.list": { input: IssuesLabelsListInput; output: IssuesLabelsListOutput };
+  /** Add labels to an issue. Adds labels to an issue or pull request (it holds at most 100); ones it has are kept. Names that do not exist are refused (GitHub creates them). Answers its labels. Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
+  "issues.labels.add": { input: IssuesLabelsAddInput; output: IssuesLabelsAddOutput };
+  /** Set an issue's labels. Replaces an issue's or pull request's labels (empty takes them all off). Answers its labels. Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
+  "issues.labels.set": { input: IssuesLabelsSetInput; output: IssuesLabelsSetOutput };
+  /** Remove a label from an issue. Takes a label off an issue or pull request (one it does not have changes nothing; one the repository does not have is not found). Answers its labels. Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
+  "issues.labels.remove": { input: IssuesLabelsRemoveInput; output: IssuesLabelsRemoveOutput };
+  /** Remove all labels from an issue. Takes every label off an issue or pull request. Answers its labels, none (GitHub answers 204). Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
+  "issues.labels.clear": { input: IssuesLabelsClearInput; output: IssuesLabelsClearOutput };
+  /** Add assignees to an issue. Assigns users or agents who can read the repository to an issue or pull request (at most 10 in all); ones assigned already are kept. Answers the issue (or pull request, as the issue endpoints show one). Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
+  "issues.assignees.add": { input: IssuesAssigneesAddInput; output: IssuesAssigneesAddOutput };
+  /** Remove assignees from an issue. Unassigns users or agents from an issue or pull request; ones not assigned are ignored. Answers the issue. Fyrden's `assignee_ids` name them by id (a deleted user's handle names no one). Takes triage, and the permission for the subject's kind (`issues:write`, or `pull_requests:write` for a pull request's number). */
+  "issues.assignees.remove": { input: IssuesAssigneesRemoveInput; output: IssuesAssigneesRemoveOutput };
+  /** Get an organization's default labels. Fyrden: the labels the organization's new repositories get, in order; GitHub's nine until its owners set them. For its members. */
+  "orgs.default_labels.get": { input: OrgsDefaultLabelsGetInput; output: OrgsDefaultLabelsGetOutput };
+  /** Set an organization's default labels. Fyrden: replaces the labels the organization's new repositories get (at most 100, names unique ignoring case); repositories made before keep theirs. For its owners. */
+  "orgs.default_labels.set": { input: OrgsDefaultLabelsSetInput; output: OrgsDefaultLabelsSetOutput };
+  /** List milestones. The repository's milestones by due date, then number; one without a due date counts as due after every date (last ascending, first descending). GitHub's `completeness` order is not offered. Takes the `issues:read` or `pull_requests:read` permission (milestones serve both). */
+  "milestones.list": { input: MilestonesListInput; output: MilestonesListOutput };
+  /** Get a milestone. One milestone, with its open and closed counts as they stand. Takes the `issues:read` or `pull_requests:read` permission (milestones serve both). */
+  "milestones.get": { input: MilestonesGetInput; output: MilestonesGetOutput };
+  /** Create a milestone. Creates a milestone; its title must be new. Takes write access, and the `issues:write` or `pull_requests:write` permission (milestones serve both). */
+  "milestones.create": { input: MilestonesCreateInput; output: MilestonesCreateOutput };
+  /** Update a milestone. Changes a milestone's title, description or due date, or closes or reopens it. Takes write access, and the `issues:write` or `pull_requests:write` permission (milestones serve both). */
+  "milestones.update": { input: MilestonesUpdateInput; output: MilestonesUpdateOutput };
+  /** Delete a milestone. Deletes a milestone; its issues and pull requests are in none from then on. Answers what was deleted (GitHub answers 204). Takes write access, and the `issues:write` or `pull_requests:write` permission (milestones serve both). */
+  "milestones.delete": { input: MilestonesDeleteInput; output: MilestonesDeleteOutput };
+  /** List comments. An issue's or pull request's conversation comments, oldest first, for a caller that may read that kind (`issues:read` or `pull_requests:read`). */
   "issues.comments.list": { input: IssuesCommentsListInput; output: IssuesCommentsListOutput };
-  /** Create a comment. Adds a comment to a pull request's conversation, open or closed. Anyone who can read the repository may comment. */
+  /** Create a comment. Adds a comment to an issue's or pull request's conversation, open or closed. Anyone who can read the repository may comment, with the permission for that kind (`issues:write` or `pull_requests:write`); while the conversation is locked, only write access and above. */
   "issues.comments.create": { input: IssuesCommentsCreateInput; output: IssuesCommentsCreateOutput };
-  /** Get a comment. One conversation comment. */
+  /** Get a comment. One conversation comment, for a caller that may read its issue's or pull request's kind. */
   "issues.comments.get": { input: IssuesCommentsGetInput; output: IssuesCommentsGetOutput };
-  /** Update a comment. Replaces a comment's body. Its author may edit its own; write access and above, anyone's. */
+  /** Update a comment. Replaces a comment's body. Its author may edit its own; write access and above, anyone's (only they while the conversation is locked). Takes the permission for its kind. */
   "issues.comments.update": { input: IssuesCommentsUpdateInput; output: IssuesCommentsUpdateOutput };
-  /** Delete a comment. Deletes a comment. Its author may delete its own; write access and above, anyone's. */
+  /** Delete a comment. Deletes a comment. Its author may delete its own; write access and above, anyone's (only they while the conversation is locked). Takes the permission for its kind. */
   "issues.comments.delete": { input: IssuesCommentsDeleteInput; output: IssuesCommentsDeleteOutput };
+  /** List reactions to an issue. The reactions to an issue, oldest first. On an issue, or a pull request by its number. Takes the permission for the kind it is on (`issues:*`, or `pull_requests:*` for a pull request). */
+  "reactions.issue.list": { input: ReactionsIssueListInput; output: ReactionsIssueListOutput };
+  /** React to an issue. Reacts to an issue. Anyone who reads the repository reacts, once per content (posting it again answers the reaction it has: GitHub answers 200 for that, Fyrden 201); while the conversation is locked, write access and above. A reaction is taken back only by whoever made it (another's is not found). On an issue, or a pull request by its number. Takes the permission for the kind it is on (`issues:*`, or `pull_requests:*` for a pull request). */
+  "reactions.issue.create": { input: ReactionsIssueCreateInput; output: ReactionsIssueCreateOutput };
+  /** Delete a reaction to an issue. Takes the caller's own reaction to an issue back. Answers what was deleted (GitHub answers 204). On an issue, or a pull request by its number. Takes the permission for the kind it is on (`issues:*`, or `pull_requests:*` for a pull request). */
+  "reactions.issue.delete": { input: ReactionsIssueDeleteInput; output: ReactionsIssueDeleteOutput };
+  /** List reactions to a comment. The reactions to a comment, oldest first. On a conversation comment of an issue or a pull request. Takes the permission for the kind it is on (`issues:*`, or `pull_requests:*` for a pull request). */
+  "reactions.comment.list": { input: ReactionsCommentListInput; output: ReactionsCommentListOutput };
+  /** React to a comment. Reacts to a comment. Anyone who reads the repository reacts, once per content (posting it again answers the reaction it has: GitHub answers 200 for that, Fyrden 201); while the conversation is locked, write access and above. A reaction is taken back only by whoever made it (another's is not found). On a conversation comment of an issue or a pull request. Takes the permission for the kind it is on (`issues:*`, or `pull_requests:*` for a pull request). */
+  "reactions.comment.create": { input: ReactionsCommentCreateInput; output: ReactionsCommentCreateOutput };
+  /** Delete a reaction to a comment. Takes the caller's own reaction to a comment back. Answers what was deleted (GitHub answers 204). On a conversation comment of an issue or a pull request. Takes the permission for the kind it is on (`issues:*`, or `pull_requests:*` for a pull request). */
+  "reactions.comment.delete": { input: ReactionsCommentDeleteInput; output: ReactionsCommentDeleteOutput };
+  /** List reactions to a diff comment. The reactions to a diff comment, oldest first. On a pull request's diff comment. */
+  "reactions.review_comment.list": { input: ReactionsReviewCommentListInput; output: ReactionsReviewCommentListOutput };
+  /** React to a diff comment. Reacts to a diff comment. Anyone who reads the repository reacts, once per content (posting it again answers the reaction it has: GitHub answers 200 for that, Fyrden 201); while the conversation is locked, write access and above. A reaction is taken back only by whoever made it (another's is not found). On a pull request's diff comment. */
+  "reactions.review_comment.create": { input: ReactionsReviewCommentCreateInput; output: ReactionsReviewCommentCreateOutput };
+  /** Delete a reaction to a diff comment. Takes the caller's own reaction to a diff comment back. Answers what was deleted (GitHub answers 204). On a pull request's diff comment. */
+  "reactions.review_comment.delete": { input: ReactionsReviewCommentDeleteInput; output: ReactionsReviewCommentDeleteOutput };
   /** Star a repository. Stars a repository the caller can read. Starring one already starred changes nothing. The token also needs `metadata:read` for the repository. */
   "stars.put": { input: StarsPutInput; output: StarsPutOutput };
   /** Unstar a repository. Takes the caller's star off a repository it can read. Unstarring one not starred changes nothing. */
@@ -4855,6 +7271,8 @@ export interface Operations {
   "repos.contents.get": { input: ReposContentsGetInput; output: ReposContentsGetOutput };
   /** Get the README. The README file in the root directory at a branch, tag or commit (`README.md` first, then other README files). */
   "repos.readme.get": { input: ReposReadmeGetInput; output: ReposReadmeGetOutput };
+  /** List CODEOWNERS errors. The errors of the CODEOWNERS file a pull request onto a branch, tag or commit would read (`.github/`, the root, `docs/`: the first location holding a regular file), in line order. Syntax only: owners that do not exist or cannot write are not listed (a merge needing code owners' review names them when a rule's owners all fail to qualify). Each error's `source` is cut to 1,024 characters; an answer of more than 1 MiB stops early with Fyrden's `truncated: true`. 404 when the ref names no commit or no CODEOWNERS file is there. */
+  "repos.codeowners.errors": { input: ReposCodeownersErrorsInput; output: ReposCodeownersErrorsOutput };
   /** Get a tree. The root tree of a branch, tag or commit (`tree_sha` names one of them: a bare tree SHA is not accepted), with `recursive` every file and directory below it, as `git ls-tree -r -t` lists them. A listing of more than 10,000 entries, or of more trees than one request may read, is `truncated`. */
   "repos.trees.get": { input: ReposTreesGetInput; output: ReposTreesGetOutput };
   /** Get an archive link. Prepares the files of a branch, tag or commit as a tar.gz or zip archive and gives its link (`download_url`, GitHub's tarball or zipball route; the same token works). A large archive is built in the background: `state` is `building` until it is `ready`; ask again, or fetch the link, which answers 202 until then. Archives hold 1 GiB of files at most, each file 24 MiB at most, a zip 65,535 entries. */
@@ -4869,6 +7287,8 @@ export interface Operations {
   "orgs.memberships.set": { input: OrgsMembershipsSetInput; output: OrgsMembershipsSetOutput };
   /** Remove a member. Removes a user from an organization and its teams; collaborator roles on its repositories stay. Repositories told of the change stop counting the membership at once; every repository stops within 60 seconds for writes and 5 minutes for reads. The last owner cannot be removed. Owners only. */
   "orgs.memberships.remove": { input: OrgsMembershipsRemoveInput; output: OrgsMembershipsRemoveOutput };
+  /** Make a user an organization's owner. Makes a user an owner of an organization, a member or not, as GitHub Enterprise's `ghe-org-admin-promote` does: for an organization whose owners can no longer act (one being deleted: the deletion waits for another owner, and goes on as soon as one is made, or within the hour). Making an owner an owner changes nothing. Instance administrators only; the user must not be suspended or being deleted. */
+  "admin.orgs.owners.add": { input: AdminOrgsOwnersAddInput; output: AdminOrgsOwnersAddOutput };
   /** List an organization's members. Lists an organization's members by handle, ignoring case. Members only. */
   "orgs.members.list": { input: OrgsMembersListInput; output: OrgsMembersListOutput };
   /** Create an organization repository. Creates an empty private repository owned by an organization. Members may create them; owners administer every repository of the organization, and members can read them. */

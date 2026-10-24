@@ -13,44 +13,23 @@ import type {
   updatePull,
   updatePullBranch,
 } from "@fyrden/api-contract";
-import { MAX_REQUESTED_REVIEWERS } from "@fyrden/domain";
-import type { PullView } from "../do/repo/mergeability.js";
+import {
+  MAX_PULL_TEAM_REVIEWERS,
+  MAX_REQUESTED_REVIEWERS,
+  MAX_TEAM_REVIEWERS,
+} from "@fyrden/domain";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, decodeCursor, encodeBytesCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { pageOf } from "../ops/pages.js";
 import { resolveVerification } from "../signing/verification.js";
 import { authorize, findReposById, networkReposOf, type RepoEntry } from "./directory.js";
 import { commitIdentityFor, commitIdentityOf } from "./file-writes.js";
+import { pullOutput } from "./shapes.js";
+import { tokenKinds } from "./subjects.js";
 
-type PullOutput = Output<typeof getPull>;
-
-/** A pull request as the API returns it. */
-export function pullOutput(pull: PullView): PullOutput {
-  return {
-    number: pull.number,
-    state: pull.state === "open" ? "open" : "closed",
-    merged: pull.state === "merged",
-    head_repo_id: pull.headRepoId,
-    mergeable: pull.mergeable,
-    mergeable_state: pull.mergeableState,
-    mergeable_reason: pull.mergeableReason,
-    draft: pull.draft,
-    maintainer_can_modify: pull.maintainerCanModify,
-    title: pull.title,
-    body: pull.body,
-    user: { id: pull.authorId },
-    performed_via_agents: [...pull.authorAct],
-    head: { ref: pull.headRef, sha: pull.headSha },
-    base: { ref: pull.baseRef, sha: pull.baseSha },
-    head_ref_deleted: pull.headRefDeleted,
-    created_at: pull.createdAt,
-    updated_at: pull.updatedAt,
-    closed_at: pull.closedAt,
-    merged_at: pull.mergedAt,
-    merge_commit_sha: pull.mergeCommitSha,
-    merged_by: pull.mergedBy === null ? null : { id: pull.mergedBy },
-  };
-}
+/** The kinds the caller reads in `entry` (its token's limits; both take the same role). */
+export const readable = (ctx: OpContext, entry: RepoEntry) => tokenKinds(ctx, entry, "read");
 
 /** The caller as the repository object records it. */
 export function actorOf(ctx: OpContext): RefActor {
@@ -74,6 +53,24 @@ const pullNotFound = (number: number) =>
   new OperationError(404, "pull_not_found", `The repository has no pull request ${number}.`);
 
 /** The problem for a refusal the repository object answered with. */
+/**
+ * 409 `stale`: a change made from a version (or a label's id) that moved on,
+ * with the version it is at now when the refusal knows it.
+ */
+export function staleError(currentVersion?: number): OperationError {
+  return new OperationError(
+    409,
+    "stale",
+    "It changed since the version given (expected_version or expected_id): read it again.",
+    undefined,
+    currentVersion,
+  );
+}
+
+/** The version a refusal carries (`stale`'s), if any. */
+export const refusedVersion = (result: object): number | undefined =>
+  "version" in result && typeof result.version === "number" ? result.version : undefined;
+
 export function failure(entry: RepoEntry, code: string, number?: number): OperationError {
   switch (code) {
     case "not_found":
@@ -172,10 +169,36 @@ export function failure(entry: RepoEntry, code: string, number?: number): Operat
       return new OperationError(
         422,
         "too_many_reviewers",
-        `A pull request may have at most ${MAX_REQUESTED_REVIEWERS} reviews requested at once.`,
+        `A pull request may have at most ${MAX_REQUESTED_REVIEWERS} reviews requested at once, a team counting as one.`,
+      );
+    case "team_not_found":
+      return new OperationError(
+        422,
+        "team_not_found",
+        "A team named is not one of the repository's organization's teams that can read it.",
+      );
+    case "team_too_large":
+      return new OperationError(
+        422,
+        "team_too_large",
+        `A team may be asked with at most ${MAX_TEAM_REVIEWERS} members, and a pull request's teams with ${MAX_PULL_TEAM_REVIEWERS} in all.`,
+      );
+    case "team_audience_unavailable":
+      return new OperationError(
+        409,
+        "team_audience_unavailable",
+        "The teams' members could not be read just now; try again.",
+      );
+    case "locked":
+      return new OperationError(
+        403,
+        "conversation_locked",
+        "The conversation is locked: only write access and above may comment or review.",
       );
     case "busy":
       return new OperationError(409, "busy", "The repository is busy; try again.");
+    case "stale":
+      return staleError();
     default:
       return repoNotFound(entry);
   }
@@ -196,11 +219,10 @@ export async function listPullsOperation(
     input.per_page + 1,
   );
   if (!pulls) throw repoNotFound(entry);
-  const page = pulls.slice(0, input.per_page);
-  const last = page.at(-1);
+  const page = pageOf(pulls, input.per_page, (p) => pullOutput(p, readable(ctx, entry)));
   return {
-    pull_requests: page.map(pullOutput),
-    next_cursor: pulls.length > input.per_page && last ? encodeCursor(String(last.number)) : null,
+    pull_requests: page.shown,
+    next_cursor: page.more && page.last ? encodeCursor(String(page.last.number)) : null,
   };
 }
 
@@ -214,7 +236,7 @@ export async function getPullOperation(
   const pull = await ctx.env.REPO.getByName(entry.id).getPull(input.pull_number);
   if (pull === null) throw repoNotFound(entry);
   if (!pull) throw pullNotFound(input.pull_number);
-  return pullOutput(pull);
+  return pullOutput(pull, readable(ctx, entry));
 }
 
 /** The `pulls.create` operation. */
@@ -246,7 +268,7 @@ export async function createPullOperation(
     );
   }
   if (!result.ok) throw failure(entry, result.code, "number" in result ? result.number : undefined);
-  return pullOutput(result.record);
+  return pullOutput(result.record, readable(ctx, entry));
 }
 
 /**
@@ -300,24 +322,30 @@ export async function updatePullOperation(
   input: Input<typeof updatePull>,
 ): Promise<Output<typeof updatePull>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:write");
-  ctx.metrics.count("do.request", { class: "RepoDO", method: "changePull" });
-  const result = await ctx.env.REPO.getByName(entry.id).changePull(
-    input.pull_number,
-    {
-      ...(input.title !== undefined && { title: input.title }),
-      ...(input.body !== undefined && { body: input.body === "" ? null : input.body }),
-      ...(input.state !== undefined && { state: input.state }),
-      ...(input.base !== undefined && { base: input.base }),
-      ...(input.draft !== undefined && { draft: input.draft }),
-      ...(input.maintainer_can_modify !== undefined && {
-        maintainerCanModify: input.maintainer_can_modify,
-      }),
-    },
-    actorOf(ctx),
-  );
+  const patch = {
+    ...(input.title !== undefined && { title: input.title }),
+    ...(input.body !== undefined && { body: input.body === "" ? null : input.body }),
+    ...(input.state !== undefined && { state: input.state }),
+    ...(input.base !== undefined && { base: input.base }),
+    ...(input.draft !== undefined && { draft: input.draft }),
+    ...(input.maintainer_can_modify !== undefined && {
+      maintainerCanModify: input.maintainer_can_modify,
+    }),
+  };
+  const stub = ctx.env.REPO.getByName(entry.id);
+  // With a precondition, through a method an earlier object lacks (it fails, never skips it).
+  ctx.metrics.count("do.request", {
+    class: "RepoDO",
+    method: input.expected_version === undefined ? "changePull" : "changePullAt",
+  });
+  const result =
+    input.expected_version === undefined
+      ? await stub.changePull(input.pull_number, patch, actorOf(ctx))
+      : await stub.changePullAt(input.expected_version, input.pull_number, patch, actorOf(ctx));
+  if (!result.ok && result.code === "stale") throw staleError(refusedVersion(result));
   if (!result.ok)
     throw failure(entry, result.code, "number" in result ? result.number : input.pull_number);
-  return pullOutput(result.record);
+  return pullOutput(result.record, readable(ctx, entry));
 }
 
 /** The `pulls.merge` operation. */

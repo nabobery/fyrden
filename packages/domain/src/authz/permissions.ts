@@ -188,6 +188,24 @@ export const PERMISSIONS = {
     implies: ["pull_requests:read"],
     writes: true,
   },
+  "issues:read": {
+    resource: "repo",
+    minRole: "read",
+    summary: "Read issues.",
+    principals: PRINCIPAL_TYPES,
+    implies: ["metadata:read"],
+    writes: false,
+  },
+  "issues:write": {
+    resource: "repo",
+    // Anyone who reads a repository may open issues; what it may do to
+    // someone else's depends on its role (the issue matrix).
+    minRole: "read",
+    summary: "Open issues, and edit, close and reopen your own (others' as your role allows).",
+    principals: PRINCIPAL_TYPES,
+    implies: ["issues:read"],
+    writes: true,
+  },
   "administration:write": {
     resource: "repo",
     minRole: "admin",

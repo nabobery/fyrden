@@ -85,7 +85,7 @@ const BREAKS = new Set([
  * inside a word keep it whole), lines, cells and blocks apart. Read from
  * the parser's tokens, never rendered, so its size is the source's.
  */
-function visibleText(markdown: string): string {
+export function visibleText(markdown: string): string {
   const source = markdown.slice(0, MENTION_SOURCE_LENGTH);
   if (!withinBudget(source)) return "";
   const events = postprocess(

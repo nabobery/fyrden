@@ -7,12 +7,27 @@ CREATE INDEX audit_segments_archived ON audit_segments (archived_at) WHERE state
 CREATE INDEX audit_segments_from ON audit_segments (from_seq);
 CREATE INDEX audit_segments_pending ON audit_segments (from_seq) WHERE state = 'pending';
 CREATE INDEX audit_segments_to ON audit_segments (to_seq);
+CREATE UNIQUE INDEX code_owner_evaluations_key
+        ON code_owner_evaluations (merge_base, head, file_blob, version);
+CREATE INDEX code_owner_jobs_due ON code_owner_jobs (requested_at, pr_number);
+CREATE INDEX code_owner_pointers_eval ON code_owner_pointers (eval_id);
+CREATE INDEX code_owner_request_jobs_due
+        ON code_owner_request_jobs (requested_at, pr_number);
 CREATE INDEX comments_number ON comments (number, comment_id);
 CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
+CREATE INDEX feed_audience_pages_expiry ON feed_audience_pages (expires_at);
+CREATE INDEX feed_participants_joined ON feed_participants (number, joined_seq);
 CREATE INDEX import_commits_staged ON import_commits (staged_at);
+CREATE INDEX incoming_references_source
+        ON incoming_references (source_repo, source_number, source_comment);
+CREATE INDEX issues_state ON issues (state, number);
+CREATE INDEX issues_updated ON issues (state, updated_at, number);
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
+CREATE UNIQUE INDEX labels_name ON labels (name COLLATE NOCASE);
 CREATE INDEX leases_pack ON leases (pack_id, expires_at);
 CREATE INDEX mergeability_jobs_waiting ON mergeability_jobs (requested_at, pr_number);
+CREATE INDEX milestones_due ON milestones (state, ifnull(due_on, 9007199254740991), number);
+CREATE UNIQUE INDEX milestones_title ON milestones (title);
 CREATE INDEX outgoing_pulls_head ON outgoing_pulls (head_ref);
 CREATE INDEX packs_state ON packs (state, created_at);
 CREATE INDEX packs_unit ON packs (unit_id) WHERE unit_id IS NOT NULL;
@@ -23,13 +38,26 @@ CREATE INDEX pull_requests_base ON pull_requests (base_ref, state);
 CREATE INDEX pull_requests_head ON pull_requests (head_ref, state);
 CREATE INDEX pull_requests_head_repo ON pull_requests (head_repo_id, state, number);
 CREATE INDEX pull_requests_state ON pull_requests (state, number);
+CREATE INDEX pull_requests_updated ON pull_requests (state, updated_at, number);
+CREATE INDEX reactions_content ON reactions (target, target_id, content, id);
+CREATE INDEX reactions_target ON reactions (target, target_id, id);
 CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
 CREATE INDEX refollow_bases_due ON refollow_bases (next_at);
 CREATE INDEX refs_oid ON refs (oid);
+CREATE INDEX resolved_repos_at ON resolved_repos (resolved_at);
 CREATE INDEX review_comments_pr ON review_comments (pr_number, comment_id);
 CREATE INDEX review_comments_thread ON review_comments (thread_id, comment_id);
+CREATE UNIQUE INDEX review_requests_id ON review_requests (request_id);
+CREATE INDEX review_team_requests_owner ON review_team_requests (owner_gen);
+CREATE INDEX review_team_requests_pr ON review_team_requests (pr_number, owner_gen);
 CREATE INDEX review_threads_pr ON review_threads (pr_number, thread_id);
+CREATE INDEX reviews_by_reviewer
+        ON reviews (pr_number, reviewer_id, by_agent, state, review_id)
+        WHERE dismissed_at IS NULL;
+CREATE INDEX reviews_by_reviewer_head
+        ON reviews (pr_number, reviewer_id, by_agent, commit_sha, state, review_id)
+        WHERE dismissed_at IS NULL;
 CREATE INDEX reviews_pr ON reviews (pr_number, review_id);
 CREATE INDEX reviews_standing
         ON reviews (pr_number, reviewer_root, by_agent, state, review_id)
@@ -41,6 +69,7 @@ CREATE INDEX revision_imports_waiting ON revision_imports (requested_at, pr_numb
 CREATE UNIQUE INDEX rulesets_name ON rulesets (name);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);
 CREATE INDEX view_merged_into ON view_merged (into_pack_id, merged_at);
+CREATE INDEX webhook_blobs_retain ON webhook_blobs (retain_until);
 CREATE TABLE acl_snapshot (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         account_id TEXT NOT NULL DEFAULT '',
@@ -56,6 +85,12 @@ CREATE TABLE archive_segments (
         seq INTEGER NOT NULL,
         key TEXT NOT NULL,
         bytes INTEGER NOT NULL,
+        PRIMARY KEY (run_id, seq)
+      ) STRICT;
+CREATE TABLE archive_zip_chunks (
+        run_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        records TEXT NOT NULL CHECK (json_valid(records)),
         PRIMARY KEY (run_id, seq)
       ) STRICT;
 CREATE TABLE archive_zip_records (
@@ -119,6 +154,72 @@ CREATE TABLE claim_releases (
         network_id TEXT NOT NULL,
         up_to INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;
+CREATE TABLE code_owner_asked (
+        pr_number INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('principal', 'team')),
+        id TEXT NOT NULL,
+        asked_at INTEGER NOT NULL,
+        PRIMARY KEY (pr_number, kind, id)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE code_owner_evaluations (
+        eval_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        merge_base TEXT NOT NULL,
+        head TEXT NOT NULL,
+        file_blob TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('pending', 'complete', 'none', 'too_large')),
+        reason TEXT,
+        errors INTEGER NOT NULL DEFAULT 0,
+        cursor TEXT,
+        partial TEXT,
+        totals TEXT,
+        unmatched INTEGER NOT NULL DEFAULT 0,
+        unmatchable INTEGER NOT NULL DEFAULT 0,
+        unmatchable_example TEXT,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE code_owner_jobs (
+        pr_number INTEGER PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        requested_at INTEGER NOT NULL,
+        asked INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+CREATE TABLE code_owner_pointers (
+        pr_number INTEGER PRIMARY KEY,
+        base_ref TEXT NOT NULL,
+        base_tip TEXT NOT NULL,
+        head TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        eval_id INTEGER,
+        file_path TEXT,
+        file_blob TEXT,
+        outcome TEXT,
+        reason TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        retry_at INTEGER
+      ) STRICT;
+CREATE TABLE code_owner_request_jobs (
+        pr_number INTEGER PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        requested_at INTEGER NOT NULL,
+        state TEXT CHECK (state IS NULL OR json_valid(state))
+      ) STRICT;
+CREATE TABLE code_owner_restore (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        after INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE code_owner_rules (
+        eval_id INTEGER NOT NULL,
+        line INTEGER NOT NULL,
+        owners TEXT NOT NULL,
+        paths INTEGER NOT NULL,
+        example TEXT NOT NULL,
+        PRIMARY KEY (eval_id, line)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE code_owner_waiting (
+        pr_number INTEGER PRIMARY KEY,
+        reason TEXT NOT NULL CHECK (reason IN ('room', 'reviewers'))
+      ) STRICT;
 CREATE TABLE collect_requests (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         due_at INTEGER NOT NULL
@@ -143,6 +244,10 @@ CREATE TABLE commits (
     level INTEGER NOT NULL,
     signature TEXT
   ) STRICT, WITHOUT ROWID;
+CREATE TABLE cursor_keys (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        key BLOB NOT NULL CHECK (length(key) = 32)
+      ) STRICT;
 CREATE TABLE ended_transfers (
         transfer_id TEXT PRIMARY KEY,
         landed INTEGER NOT NULL CHECK (landed IN (0, 1)),
@@ -154,6 +259,16 @@ CREATE TABLE event_payloads (
         payload TEXT NOT NULL CHECK (json_valid(payload)),
         created_at INTEGER NOT NULL
       , sent_at INTEGER) STRICT;
+CREATE TABLE feed_audience_pages (
+        event_key TEXT NOT NULL,
+        page INTEGER NOT NULL CHECK (page >= 1),
+        epoch_gen INTEGER NOT NULL,
+        owner_gen INTEGER NOT NULL,
+        recipients TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (event_key, page)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE feed_participants (
         number INTEGER NOT NULL,
         principal TEXT NOT NULL,
@@ -162,6 +277,13 @@ CREATE TABLE feed_participants (
         reason TEXT NOT NULL,
         joined_seq INTEGER NOT NULL,
         PRIMARY KEY (number, principal)
+      ) STRICT;
+CREATE TABLE feed_participation (
+        number INTEGER PRIMARY KEY,
+        participants INTEGER NOT NULL,
+        next_seq INTEGER NOT NULL,
+        overflow INTEGER NOT NULL DEFAULT 0,
+        reclaimed TEXT
       ) STRICT;
 CREATE TABLE feed_threads (
         thread_key TEXT PRIMARY KEY,
@@ -199,6 +321,42 @@ CREATE TABLE import_commits (
         staged_at INTEGER NOT NULL,
         PRIMARY KEY (import_id, oid)
       ) STRICT;
+CREATE TABLE incoming_references (
+        target INTEGER NOT NULL,
+        source_repo TEXT NOT NULL,
+        source_number INTEGER NOT NULL,
+        source_comment INTEGER NOT NULL,
+        source_kind TEXT NOT NULL CHECK (source_kind IN ('issue', 'pull')),
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (target, source_repo, source_kind, source_number, source_comment)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE issue_tombstones (
+        number INTEGER PRIMARY KEY,
+        version INTEGER NOT NULL,
+        deleted_at INTEGER NOT NULL,
+        deleted_by TEXT
+      ) STRICT;
+CREATE TABLE issues (
+        number INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        body TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+        state_reason TEXT
+          CHECK (state_reason IN ('completed', 'not_planned', 'duplicate', 'reopened')),
+        duplicate_of INTEGER,
+        locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+        lock_reason TEXT CHECK (lock_reason IN ('off-topic', 'too heated', 'resolved', 'spam')),
+        author_id TEXT NOT NULL,
+        author_root TEXT NOT NULL,
+        author_act TEXT,
+        closed_at INTEGER,
+        closed_by TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL, milestone INTEGER,
+        CHECK ((duplicate_of IS NOT NULL) = (state = 'closed' AND state_reason = 'duplicate')),
+        CHECK ((state = 'closed') = (closed_at IS NOT NULL))
+      ) STRICT;
 CREATE TABLE jobs (
     job_id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -212,6 +370,16 @@ CREATE TABLE jobs (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   ) STRICT;
+CREATE TABLE labels (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        color TEXT NOT NULL CHECK (length(color) = 6),
+        description TEXT,
+        is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE leases (
     lease_id TEXT NOT NULL,
     pack_id TEXT NOT NULL,
@@ -276,6 +444,23 @@ CREATE TABLE mergeability_jobs (
         seq INTEGER NOT NULL,
         requested_at INTEGER NOT NULL
       ) STRICT;
+CREATE TABLE milestones (
+        number INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+        due_on INTEGER,
+        closed_at INTEGER,
+        open_issues INTEGER NOT NULL DEFAULT 0,
+        closed_issues INTEGER NOT NULL DEFAULT 0,
+        open_pulls INTEGER NOT NULL DEFAULT 0,
+        closed_pulls INTEGER NOT NULL DEFAULT 0,
+        creator TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK ((state = 'closed') = (closed_at IS NOT NULL))
+      ) STRICT;
 CREATE TABLE networks (
         network_id TEXT PRIMARY KEY,
         recorded_at INTEGER NOT NULL
@@ -299,6 +484,15 @@ CREATE TABLE outgoing_pulls (
         generation INTEGER NOT NULL, maintainer_can_modify INTEGER NOT NULL DEFAULT 0, author_root TEXT, consent_version INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (base_repo_id, pr_number)
       ) STRICT;
+CREATE TABLE outgoing_references (
+        source_number INTEGER NOT NULL,
+        source_comment INTEGER NOT NULL,
+        repo_id TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        closes INTEGER NOT NULL CHECK (closes IN (0, 1)),
+        name TEXT NOT NULL,
+        PRIMARY KEY (source_number, source_comment, repo_id, number, name)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE packs (
     pack_id TEXT PRIMARY KEY,
     network_id TEXT NOT NULL,
@@ -363,13 +557,45 @@ CREATE TABLE pull_requests (
         closed_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
-      , last_pusher TEXT, last_pusher_grant TEXT, last_push_at INTEGER, merge_commit_sha TEXT, merged_by TEXT, merged_at INTEGER, head_repo_id TEXT, head_ref_version INTEGER, maintainer_can_modify INTEGER NOT NULL DEFAULT 0, approvals_after INTEGER NOT NULL DEFAULT 0, reviews_revision INTEGER NOT NULL DEFAULT 0) STRICT;
+      , last_pusher TEXT, last_pusher_grant TEXT, last_push_at INTEGER, merge_commit_sha TEXT, merged_by TEXT, merged_at INTEGER, head_repo_id TEXT, head_ref_version INTEGER, maintainer_can_modify INTEGER NOT NULL DEFAULT 0, approvals_after INTEGER NOT NULL DEFAULT 0, reviews_revision INTEGER NOT NULL DEFAULT 0, locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)), lock_reason TEXT
+        CHECK (lock_reason IN ('off-topic', 'too heated', 'resolved', 'spam')), milestone INTEGER) STRICT;
+CREATE TABLE reaction_counts (
+        target TEXT NOT NULL,
+        target_id INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (target, target_id, content)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE reactions (
+        id INTEGER PRIMARY KEY,
+        target TEXT NOT NULL CHECK (target IN ('subject', 'comment', 'review_comment')),
+        target_id INTEGER NOT NULL,
+        content TEXT NOT NULL
+          CHECK (content IN ('+1', '-1', 'laugh', 'confused', 'heart', 'hooray', 'rocket', 'eyes')),
+        principal TEXT NOT NULL,
+        act_chain TEXT,
+        created_at INTEGER NOT NULL,
+        UNIQUE (target, target_id, principal, content)
+      ) STRICT;
 CREATE TABLE ref_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL,
     nonff_version INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   ) STRICT;
+CREATE TABLE reference_closes (
+        effect_id TEXT PRIMARY KEY,
+        outcome TEXT NOT NULL CHECK (outcome IN ('closed', 'unchanged', 'refused')),
+        at INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE reference_sources (
+        source_repo TEXT NOT NULL,
+        source_number INTEGER NOT NULL,
+        source_comment INTEGER NOT NULL,
+        epoch_gen INTEGER NOT NULL,
+        source_seq INTEGER NOT NULL,
+        PRIMARY KEY (source_repo, source_number, source_comment)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE reflog (
     seq INTEGER PRIMARY KEY,
     ref TEXT NOT NULL,
@@ -410,7 +636,12 @@ CREATE TABLE repo_meta (
         write_frozen INTEGER NOT NULL DEFAULT 0 CHECK (write_frozen IN (0, 1)),
         created_at INTEGER NOT NULL
       , epoch_uuid TEXT, source_seq INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, owner_id TEXT, name TEXT, visibility TEXT
-        CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT, next_number INTEGER NOT NULL DEFAULT 1) STRICT;
+        CHECK (visibility IS NULL OR visibility IN ('public', 'internal', 'private')), pushed_at INTEGER, description TEXT, name_gen INTEGER NOT NULL DEFAULT 0, deleting_at INTEGER, transfer_id TEXT, transfer_to TEXT, next_number INTEGER NOT NULL DEFAULT 1, next_label_id INTEGER NOT NULL DEFAULT 1, next_milestone INTEGER NOT NULL DEFAULT 1, next_reaction_id INTEGER NOT NULL DEFAULT 1) STRICT;
+CREATE TABLE resolved_repos (
+        name TEXT PRIMARY KEY,
+        repo_id TEXT,
+        resolved_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE review_comments (
         comment_id INTEGER PRIMARY KEY AUTOINCREMENT,
         pr_number INTEGER NOT NULL,
@@ -424,12 +655,43 @@ CREATE TABLE review_comments (
         updated_at INTEGER NOT NULL,
         version INTEGER NOT NULL DEFAULT 1
       ) STRICT;
+CREATE TABLE review_request_audiences (
+        request_id INTEGER NOT NULL,
+        page INTEGER NOT NULL CHECK (page >= 1),
+        members TEXT NOT NULL,
+        PRIMARY KEY (request_id, page)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE review_request_ids (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        next_id INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE review_requests (
         pr_number INTEGER NOT NULL,
         reviewer_id TEXT NOT NULL,
         requested_by TEXT NOT NULL,
-        requested_at INTEGER NOT NULL, reviewer_root TEXT,
+        requested_at INTEGER NOT NULL, reviewer_root TEXT, reasons INTEGER NOT NULL DEFAULT 1, request_id INTEGER,
         PRIMARY KEY (pr_number, reviewer_id)
+      ) STRICT;
+CREATE TABLE review_team_epochs (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        account_id TEXT NOT NULL,
+        owner_gen INTEGER NOT NULL,
+        observed INTEGER NOT NULL,
+        reconciled INTEGER,
+        cursor INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+CREATE TABLE review_team_requests (
+        request_id INTEGER PRIMARY KEY,
+        pr_number INTEGER NOT NULL,
+        team_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        name TEXT NOT NULL,
+        reasons INTEGER NOT NULL DEFAULT 1,
+        owner_gen INTEGER NOT NULL,
+        members INTEGER NOT NULL,
+        audience INTEGER NOT NULL CHECK (audience IN (0, 1)),
+        requested_by TEXT NOT NULL,
+        requested_at INTEGER NOT NULL
       ) STRICT;
 CREATE TABLE review_threads (
         thread_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -517,6 +779,18 @@ CREATE TABLE storage_owed (
         bytes INTEGER NOT NULL,
         owed_at INTEGER NOT NULL
       ) STRICT;
+CREATE TABLE subject_assignees (
+        number INTEGER NOT NULL,
+        principal TEXT NOT NULL,
+        root TEXT NOT NULL,
+        assigned_at INTEGER NOT NULL,
+        PRIMARY KEY (number, principal)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE subject_labels (
+        number INTEGER NOT NULL,
+        label_id INTEGER NOT NULL,
+        PRIMARY KEY (number, label_id)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE uploads (
     upload_id TEXT PRIMARY KEY,
     pack_id TEXT,
@@ -541,6 +815,12 @@ CREATE TABLE view_merged (
         into_pack_id TEXT NOT NULL,
         merged_at INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;
+CREATE TABLE webhook_blobs (
+        hash TEXT PRIMARY KEY,
+        text_json TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        retain_until INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE webhook_ids (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         last INTEGER NOT NULL
@@ -557,3 +837,54 @@ CREATE TABLE webhooks (
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       ) STRICT;
+CREATE TRIGGER issues_milestone_delete AFTER DELETE ON issues
+        WHEN OLD.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_issues = open_issues - (OLD.state = 'open'),
+          closed_issues = closed_issues - (OLD.state <> 'open') WHERE number = OLD.milestone;
+      END;
+CREATE TRIGGER issues_milestone_insert AFTER INSERT ON issues
+        WHEN NEW.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_issues = open_issues + (NEW.state = 'open'),
+          closed_issues = closed_issues + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+CREATE TRIGGER issues_milestone_update AFTER UPDATE OF state, milestone ON issues
+        WHEN OLD.milestone IS NOT NEW.milestone OR OLD.state IS NOT NEW.state
+      BEGIN
+        UPDATE milestones SET open_issues = open_issues - (OLD.state = 'open'),
+          closed_issues = closed_issues - (OLD.state <> 'open') WHERE number = OLD.milestone;
+        UPDATE milestones SET open_issues = open_issues + (NEW.state = 'open'),
+          closed_issues = closed_issues + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+CREATE TRIGGER pull_requests_milestone_delete AFTER DELETE ON pull_requests
+        WHEN OLD.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_pulls = open_pulls - (OLD.state = 'open'),
+          closed_pulls = closed_pulls - (OLD.state <> 'open') WHERE number = OLD.milestone;
+      END;
+CREATE TRIGGER pull_requests_milestone_insert AFTER INSERT ON pull_requests
+        WHEN NEW.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_pulls = open_pulls + (NEW.state = 'open'),
+          closed_pulls = closed_pulls + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+CREATE TRIGGER pull_requests_milestone_update AFTER UPDATE OF state, milestone ON pull_requests
+        WHEN OLD.milestone IS NOT NEW.milestone OR OLD.state IS NOT NEW.state
+      BEGIN
+        UPDATE milestones SET open_pulls = open_pulls - (OLD.state = 'open'),
+          closed_pulls = closed_pulls - (OLD.state <> 'open') WHERE number = OLD.milestone;
+        UPDATE milestones SET open_pulls = open_pulls + (NEW.state = 'open'),
+          closed_pulls = closed_pulls + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+CREATE TRIGGER reactions_count_delete AFTER DELETE ON reactions
+      BEGIN
+        UPDATE reaction_counts SET count = count - 1
+          WHERE target = OLD.target AND target_id = OLD.target_id AND content = OLD.content;
+      END;
+CREATE TRIGGER reactions_count_insert AFTER INSERT ON reactions
+      BEGIN
+        INSERT INTO reaction_counts (target, target_id, content, count)
+          VALUES (NEW.target, NEW.target_id, NEW.content, 1)
+          ON CONFLICT (target, target_id, content) DO UPDATE SET count = count + 1;
+      END;

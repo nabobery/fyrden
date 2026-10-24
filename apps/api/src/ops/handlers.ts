@@ -1,6 +1,6 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
-import { principalTypeOf } from "@fyrden/domain";
+import { principalTypeOf, REPO_ROLES, type RepoRole } from "@fyrden/domain";
 import {
   createAgentOperation,
   createAgentTokenOperation,
@@ -15,6 +15,7 @@ import {
   listGrantsOperation,
   revokeGrantOperation,
 } from "../accounts/delegation.js";
+import { deleteUserOperation } from "../accounts/deletion.js";
 import {
   createTeamOperation,
   listCollaboratorsOperation,
@@ -26,8 +27,11 @@ import {
   setTeamMembershipOperation,
   setTeamRepoOperation,
 } from "../accounts/grants.js";
+import { handleFree } from "../accounts/handles.js";
+import { suspendUserOperation, unsuspendUserOperation } from "../accounts/lifecycle.js";
 import { createOrgRepoOperation, listOrgReposOperation } from "../accounts/org-repos.js";
 import {
+  addOrgOwnerOperation,
   createOrgOperation,
   listMembersOperation,
   removeMembershipOperation,
@@ -49,6 +53,7 @@ import {
   createGitTokenOperation,
   createUserTokenOperation,
   listUserTokensOperation,
+  mintAs,
   revokeUserTokenOperation,
 } from "../accounts/tokens.js";
 import { ackFeedItemOperation, getFeedOperation, syncFeedOperation } from "../feed/operations.js";
@@ -64,6 +69,7 @@ import {
   compareCommitsOperation,
   getArchiveOperation,
   getBranchOperation,
+  getCodeOwnersErrorsOperation,
   getCommitOperation,
   getContentsOperation,
   getReadmeOperation,
@@ -82,7 +88,13 @@ import {
 } from "../repos/comments.js";
 import { createOwnRepoOperation } from "../repos/create.js";
 import { deleteRepoOperation, deleteReposOperation } from "../repos/delete.js";
-import { authorize, defaultBranchOf, ownListable, resolveRepo } from "../repos/directory.js";
+import {
+  authorize,
+  defaultBranchOf,
+  effectiveRole,
+  ownListable,
+  resolveRepo,
+} from "../repos/directory.js";
 import {
   createFileCommitOperation,
   deleteContentsOperation,
@@ -103,7 +115,41 @@ import {
   rotateHookSecretOperation,
   updateHookOperation,
 } from "../repos/hooks.js";
+import {
+  createIssueOperation,
+  deleteIssueOperation,
+  getIssueOperation,
+  listIssueReferencesOperation,
+  listIssuesOperation,
+  lockIssueOperation,
+  unlockIssueOperation,
+  updateIssueOperation,
+} from "../repos/issues.js";
+import {
+  addAssigneesOperation,
+  addIssueLabelsOperation,
+  clearIssueLabelsOperation,
+  copyDefaultLabelsOperation,
+  createLabelOperation,
+  deleteLabelOperation,
+  getDefaultLabelsOperation,
+  getLabelOperation,
+  listIssueLabelsOperation,
+  listLabelsOperation,
+  removeAssigneesOperation,
+  removeIssueLabelOperation,
+  setDefaultLabelsOperation,
+  setIssueLabelsOperation,
+  updateLabelOperation,
+} from "../repos/labels.js";
 import { listAccountRepos } from "../repos/listing.js";
+import {
+  createMilestoneOperation,
+  deleteMilestoneOperation,
+  getMilestoneOperation,
+  listMilestonesOperation,
+  updateMilestoneOperation,
+} from "../repos/milestones.js";
 import { networkSource, repoOutput, starCounts, visibleParents } from "../repos/output.js";
 import {
   createPullOperation,
@@ -118,6 +164,17 @@ import {
   updatePullOperation,
 } from "../repos/pulls.js";
 import {
+  createCommentReactionOperation,
+  createIssueReactionOperation,
+  createReviewCommentReactionOperation,
+  deleteCommentReactionOperation,
+  deleteIssueReactionOperation,
+  deleteReviewCommentReactionOperation,
+  listCommentReactionsOperation,
+  listIssueReactionsOperation,
+  listReviewCommentReactionsOperation,
+} from "../repos/reactions.js";
+import {
   applySuggestionsOperation,
   createReviewCommentOperation,
   deleteReviewCommentOperation,
@@ -131,6 +188,7 @@ import {
 import {
   createReviewOperation,
   dismissReviewOperation,
+  getPullCodeOwnersOperation,
   getReviewOperation,
   listRequestedReviewersOperation,
   listReviewsOperation,
@@ -148,7 +206,7 @@ import {
 import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "../repos/stars.js";
 import { transferRepoOperation } from "../repos/transfer.js";
 import { updateRepoOperation } from "../repos/update.js";
-import { clock, newId, tokenStore } from "../services.js";
+import { clock, newId } from "../services.js";
 import { platformKeys } from "../signing/platform-key.js";
 import { type Handlers, OperationError } from "./execute.js";
 
@@ -224,15 +282,26 @@ export const handlers: Handlers = {
     const id = newId("usr");
     const now = clock();
     metrics.count("d1.query", { db: "directory", op: "user_create" }, 2);
+    let created: D1Result | undefined;
     try {
-      // The user and its audit row are written together or not at all.
-      await db.batch([
+      // The user and its audit row are written together or not at all; never with a handle a
+      // deletion still holds.
+      [created] = await db.batch([
         db
-          .prepare("INSERT INTO principals (id, type, handle, created_at) VALUES (?, 'user', ?, ?)")
+          .prepare(
+            `INSERT INTO principals (id, type, handle, created_at)
+             SELECT ?1, 'user', ?2, ?3 WHERE ${handleFree("?2", "?3")}`,
+          )
           .bind(id, handle, now),
-        auditStatement(db, now, { actorId: auth.principalId, requestId }, "user.create", id, {
-          handle,
-        }),
+        auditStatement(
+          db,
+          now,
+          { actorId: auth.principalId, requestId },
+          "user.create",
+          id,
+          { handle },
+          "principals",
+        ),
       ]);
     } catch (error) {
       // Handles are unique ignoring case, across users, orgs and agents.
@@ -240,8 +309,14 @@ export const handlers: Handlers = {
         throw new OperationError(409, "handle_taken", `The handle ${handle} is already taken.`);
       throw error;
     }
+    if ((created?.meta.changes ?? 0) === 0)
+      throw new OperationError(409, "handle_taken", `The handle ${handle} is already taken.`);
     return { id, handle, type: "user" as const, created_at: now };
   },
+
+  "admin.users.suspend": suspendUserOperation,
+  "admin.users.delete": deleteUserOperation,
+  "admin.users.unsuspend": unsuspendUserOperation,
 
   "admin.tokens.create": async (ctx, input) => {
     const { env, auth, requestId, metrics } = ctx;
@@ -256,14 +331,17 @@ export const handlers: Handlers = {
     if (user.disabled_at !== null)
       throw new OperationError(409, "user_disabled", "The user is disabled.");
 
-    const store = tokenStore(env, { defer: (p) => ctx.waitUntil(p), metrics });
-    const minted = await store.mint({
-      principalId: input.user_id,
-      type: input.type,
-      scopes: input.scopes,
-      ttlMs: input.expires_in_days * DAY_MS,
-      audit: { actorId: auth.principalId, requestId },
-    });
+    const minted = await mintAs(
+      ctx,
+      {
+        principalId: input.user_id,
+        type: input.type,
+        scopes: input.scopes,
+        ttlMs: input.expires_in_days * DAY_MS,
+        audit: { actorId: auth.principalId, requestId },
+      },
+      () => new OperationError(409, "user_disabled", "The user is disabled."),
+    );
     return {
       id: minted.id,
       token: minted.token,
@@ -296,11 +374,14 @@ export const handlers: Handlers = {
     // HEAD is the repository object's (an import or a fork sets it from its source).
     metrics.count("do.request", { class: "RepoDO", method: "details" });
     const details = await env.REPO.getByName(entry.id).details();
-    const [parents, stars, source] = await Promise.all([
+    const [parents, stars, source, role] = await Promise.all([
       visibleParents(env, auth, [entry], metrics),
       starCounts(env, [entry.id], metrics),
       networkSource(env, auth, entry, metrics),
+      effectiveRole(env, auth, entry, metrics),
     ]);
+    const atLeast = (r: RepoRole) =>
+      role !== null && REPO_ROLES.indexOf(role) >= REPO_ROLES.indexOf(r);
     return {
       ...repoOutput(entry, {
         defaultBranch: defaultBranchOf(details.headTarget),
@@ -309,6 +390,13 @@ export const handlers: Handlers = {
         stars: stars.get(entry.id) ?? 0,
       }),
       source_id: source,
+      permissions: {
+        admin: atLeast("admin"),
+        maintain: atLeast("maintain"),
+        push: atLeast("write"),
+        triage: atLeast("triage"),
+        pull: atLeast("read") || entry.visibility === "public",
+      },
     };
   },
 
@@ -317,6 +405,7 @@ export const handlers: Handlers = {
   "repos.delete_many": deleteReposOperation,
 
   "admin.orgs.create": createOrgOperation,
+  "admin.orgs.owners.add": addOrgOwnerOperation,
   "orgs.memberships.set": setMembershipOperation,
   "orgs.memberships.remove": removeMembershipOperation,
   "orgs.members.list": listMembersOperation,
@@ -385,6 +474,46 @@ export const handlers: Handlers = {
   "pulls.requested_reviewers.list": listRequestedReviewersOperation,
   "pulls.requested_reviewers.add": requestReviewersOperation,
   "pulls.requested_reviewers.remove": removeRequestedReviewersOperation,
+  "pulls.code_owners.get": getPullCodeOwnersOperation,
+  // Issues; the listing, get, lock and comments serve pull requests too, each kind on its
+  // own permission (repos/subjects).
+  "issues.list": listIssuesOperation,
+  "issues.references.list": listIssueReferencesOperation,
+  "reactions.issue.list": listIssueReactionsOperation,
+  "reactions.issue.create": createIssueReactionOperation,
+  "reactions.issue.delete": deleteIssueReactionOperation,
+  "reactions.comment.list": listCommentReactionsOperation,
+  "reactions.comment.create": createCommentReactionOperation,
+  "reactions.comment.delete": deleteCommentReactionOperation,
+  "reactions.review_comment.list": listReviewCommentReactionsOperation,
+  "reactions.review_comment.create": createReviewCommentReactionOperation,
+  "reactions.review_comment.delete": deleteReviewCommentReactionOperation,
+  "labels.list": listLabelsOperation,
+  "labels.get": getLabelOperation,
+  "labels.create": createLabelOperation,
+  "labels.update": updateLabelOperation,
+  "labels.delete": deleteLabelOperation,
+  "labels.copy_defaults": copyDefaultLabelsOperation,
+  "issues.labels.list": listIssueLabelsOperation,
+  "issues.labels.add": addIssueLabelsOperation,
+  "issues.labels.set": setIssueLabelsOperation,
+  "issues.labels.remove": removeIssueLabelOperation,
+  "issues.labels.clear": clearIssueLabelsOperation,
+  "issues.assignees.add": addAssigneesOperation,
+  "issues.assignees.remove": removeAssigneesOperation,
+  "orgs.default_labels.get": getDefaultLabelsOperation,
+  "orgs.default_labels.set": setDefaultLabelsOperation,
+  "milestones.list": listMilestonesOperation,
+  "milestones.get": getMilestoneOperation,
+  "milestones.create": createMilestoneOperation,
+  "milestones.update": updateMilestoneOperation,
+  "milestones.delete": deleteMilestoneOperation,
+  "issues.create": createIssueOperation,
+  "issues.get": getIssueOperation,
+  "issues.update": updateIssueOperation,
+  "issues.delete": deleteIssueOperation,
+  "issues.lock": lockIssueOperation,
+  "issues.unlock": unlockIssueOperation,
   "issues.comments.list": listCommentsOperation,
   "issues.comments.create": createCommentOperation,
   "issues.comments.get": getCommentOperation,
@@ -416,6 +545,7 @@ export const handlers: Handlers = {
   "repos.contents.get": getContentsOperation,
   "repos.contents.root": getRootContentsOperation,
   "repos.readme.get": getReadmeOperation,
+  "repos.codeowners.errors": getCodeOwnersErrorsOperation,
   "repos.trees.get": getTreeOperation,
   "repos.archives.get": getArchiveOperation,
 

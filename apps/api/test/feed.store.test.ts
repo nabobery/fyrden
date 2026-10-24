@@ -131,7 +131,7 @@ describe("applying entries", () => {
       // Neither listed, synced nor acknowledged.
       expect(
         feedIn(storage)
-          .feed.sync(null, 50, null)
+          .feed.sync(null, 50, {})
           .items.map((i) => i.kind),
       ).toEqual(["merge_conflict"]);
       expect(
@@ -400,17 +400,61 @@ describe("reading the feed", () => {
     await stub.applyFeed([
       entry({ thread: 3, kind: "approved", version: 2, priority: "P0", state: "resolved" }),
     ]);
-    const synced = await stub.syncFeed(null, 50, null);
+    const synced = await stub.syncFeed(null, 50, {});
     expect(synced.items.map((i) => [i.threadKey, i.kind])).toEqual([
       ["pull/1", "review_requested"],
       ["pull/2", "activity"],
     ]);
     expect(synced.more).toBe(false);
-    const first = await stub.syncFeed(null, 1, null);
+    const first = await stub.syncFeed(null, 1, {});
     expect(first).toMatchObject({ items: [{ threadKey: "pull/1" }], more: true });
-    const next = await stub.syncFeed({ open: true, seq: first.items[0]?.seq ?? 0 }, 1, null);
+    const next = await stub.syncFeed({ open: true, seq: first.items[0]?.seq ?? 0 }, 1, {});
     expect(next).toMatchObject({ items: [{ threadKey: "pull/2" }], more: false });
     // Limited to some repositories: the others are not read at all.
-    expect((await stub.syncFeed(null, 50, ["rep_other"])).items).toEqual([]);
+    expect((await stub.syncFeed(null, 50, { repoIds: ["rep_other"] })).items).toEqual([]);
+  });
+});
+
+describe("a feed read for one kind of thread", () => {
+  it("reads only that kind's items, however many of the other come first", async () => {
+    const read = await inFeed((storage) => {
+      const { feed, apply } = feedIn(storage);
+      apply(
+        Array.from({ length: 4_999 }, (_, i) =>
+          entry({ subject: "issue", thread: i + 1, version: 1, repoId: "rep_kinds" }),
+        ),
+      );
+      apply([entry({ subject: "pull", thread: 1, version: 1, repoId: "rep_kinds" })]);
+      const exec = storage.sql.exec.bind(storage.sql);
+      let rowsRead = 0;
+      storage.sql.exec = ((query: string, ...bindings: unknown[]) => {
+        const cursor = exec(query, ...bindings);
+        const toArray = cursor.toArray.bind(cursor);
+        cursor.toArray = () => {
+          const rows = toArray();
+          rowsRead += cursor.rowsRead;
+          return rows;
+        };
+        return cursor;
+      }) as typeof storage.sql.exec;
+      try {
+        const listed = feed.list(null, 50, { subjects: ["pull"] });
+        const synced = feed.sync(null, 50, { subjects: ["pull"] });
+        const none = feed.list(null, 50, { subjects: [] });
+        return {
+          listed: listed.expired ? [] : listed.items.map((i) => i.threadKey),
+          synced: synced.items.map((i) => i.threadKey),
+          none: none.expired ? [] : none.items,
+          rowsRead,
+        };
+      } finally {
+        storage.sql.exec = exec;
+      }
+    });
+    expect(read.listed).toEqual(["pull/1"]);
+    expect(read.synced).toEqual(["pull/1"]);
+    expect(read.none).toEqual([]);
+    // Through the index by kind: the one pull request item (and the feed's meta), not the 4,999.
+    expect(read.rowsRead).toBeLessThan(50);
   });
 });

@@ -68,11 +68,31 @@ export const METRICS = {
   "git.repo.packs": ["repo", "group"],
   "git.repo.bytes": ["repo", "group"],
   // The effects pipeline, one point per run by outcome = ok | error: the
-  // effects cron's sweep and its webhook reconciliation, and a consumer
-  // message's inline delivery of the effects it journaled.
-  "effects.sweep": ["outcome"],
+  // effects cron's recovery of overdue effects and its webhook
+  // reconciliation, an events consumer message's sending and inline
+  // delivery of the effects it journaled, and an effects queue message.
+  "effects.recover": ["outcome"],
   "webhooks.reconcile": ["outcome"],
   "effects.dispatch": ["outcome"],
+  "effects.consume": ["sink", "outcome"],
+  // Effects by sink (the value is the amount): sent again by the cron as
+  // overdue; ended because their source was deleted, restored or
+  // transferred since; failed for good (attempts spent, or no such sink).
+  "effects.recovered": ["sink"],
+  "effects.invalidated": ["sink"],
+  "effects.failed": ["sink"],
+  // Activity feeds (the value is the amount): recipients an event named
+  // past what it carries, and joins a thread refused at its cap of
+  // participants.
+  "feed.audience_dropped": [],
+  "feed.participants_overflow": [],
+  "code_owners.request_skipped": ["reason"],
+  "d1.invocation_statements": ["where", "op"],
+  // Wall time of one stage of making webhook deliveries, in ms: an event's
+  // rows, body, claim and hooks once per event; post and record once per
+  // attempt the event's effect makes. The clock advances only on I/O.
+  "webhooks.stage_ms": ["stage"],
+  "feed.stage_ms": ["stage"],
   // Calls one invocation made against one subrequest budget, written once
   // when it ends: where = worker | do; budget = internal (R2, D1, Durable
   // Object calls) | external (outbound fetch and Cache API); op = the route
@@ -105,8 +125,11 @@ export const METRIC_AGGREGATION: Partial<Record<MetricName, MetricAggregation>> 
   "git.repo.bytes": "last",
   subrequests: "each",
   "do.active_ms": "each",
+  "webhooks.stage_ms": "each",
+  "feed.stage_ms": "each",
   "acl.snapshot_age_ms": "each",
   "worker.cpu_ms": "each",
+  "d1.invocation_statements": "each",
   "worker.wall_ms": "each",
   "metrics.dropped": "each",
 };

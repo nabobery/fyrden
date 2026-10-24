@@ -1,3 +1,4 @@
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { DomainEvent } from "@fyrden/domain";
 import { eventKey } from "@fyrden/domain";
 
@@ -5,16 +6,20 @@ import { eventKey } from "@fyrden/domain";
  * The effects journal. A sink (webhooks, the activity feed) says what an
  * event requires of it, one effect per target; the consumer writes those
  * rows in the same batch as the event's projection, so an event is either
- * projected with its effects journaled or not at all. Effects are keyed by
+ * projected with its effects journaled or not at all, then sends their ids
+ * to the sink's queue, whose consumer delivers them. Effects are keyed by
  * event, sink and target: a redelivered event adds nothing, and every
  * destination dedupes by `effect_id` (a delivery can repeat when its
- * acknowledgement was lost).
+ * acknowledgement was lost). The journal, not the queue, decides: a message
+ * only says which effects to look at.
  */
 
 /** What an event requires of one sink: a delivery to `target` with `payload`. */
 export interface PlannedEffect {
   readonly target: string;
   readonly payload: Record<string, unknown>;
+  /** This effect stands across a transfer of its source, as a sink's `acrossTransfers` says of all its own. */
+  readonly acrossTransfers?: boolean;
 }
 
 /** A journaled effect, as the sink delivers it. */
@@ -24,6 +29,14 @@ export interface Effect {
   readonly target: string;
   readonly payload: Record<string, unknown>;
   readonly attempts: number;
+  /** When the dispatcher claimed it (the delivery's own time, not the sink's). */
+  readonly claimedAt?: number;
+}
+
+/** What a single delivery may answer besides done (return) or retry (throw): ended for good. */
+export interface DeliverOutcome {
+  /** Why, recorded as the effect's error (`expired:`, `invalidated:` and so on). */
+  readonly ended: string;
 }
 
 export interface EffectSink {
@@ -32,149 +45,188 @@ export interface EffectSink {
   /** The effects an event requires; none for events the sink ignores. */
   plan(event: DomainEvent): readonly PlannedEffect[];
   /**
-   * Delivers one effect (`db`: the read model it is journaled in). Must be
-   * idempotent per `effect.id`; throws to retry later.
+   * Delivers one effect (`db`: the read model it is journaled in; `metrics`:
+   * the invocation's, for the sink's own calls). Must be idempotent per
+   * `effect.id`; throws to retry later, or answers `{ ended }` when the
+   * effect can never be delivered.
    */
-  deliver(effect: Effect, env: Env, db: D1Database): Promise<void>;
+  deliver(
+    effect: Effect,
+    env: Env,
+    db: D1Database,
+    metrics?: Metrics,
+  ): Promise<void | DeliverOutcome>;
   /**
    * Delivers several of the sink's effects at once, when the sink can do
    * better than one at a time (one call per destination they share): the
    * dispatcher then hands it every effect of the sink it claimed. Returns
    * the ids delivered and why the others were not; those are retried as a
-   * failed `deliver` is. Idempotent per effect id, as `deliver`.
+   * failed `deliver` is, and those it ended. Idempotent per effect id, as
+   * `deliver`. `now` is the dispatcher's time.
    */
-  deliverBatch?(effects: readonly Effect[], env: Env, db: D1Database): Promise<BatchDelivery>;
+  deliverBatch?(
+    effects: readonly Effect[],
+    env: Env,
+    db: D1Database,
+    metrics?: Metrics,
+    now?: number,
+  ): Promise<BatchDelivery>;
   /**
-   * Calls to other services (Durable Objects, D1) delivering a planned
-   * effect of a batch sink makes at most, so an invocation can bound what
-   * it delivers itself. One when not said.
+   * Calls to other services (Durable Objects, D1, R2, queues) delivering a
+   * planned effect makes at most, so an invocation can bound what it
+   * delivers. When not said: one for a batch sink's (its share of the
+   * batch), `SINGLE_EFFECT_CALLS` for another's.
    */
   calls?(planned: PlannedEffect): number;
+  /**
+   * Its effects stand across a transfer of their source: what they carry
+   * does not depend on who owned it (the journal still drops a deleted
+   * source's, and a restored epoch's).
+   */
+  readonly acrossTransfers?: boolean;
+  /**
+   * Effects one queue message of the sink names at most (`PER_MESSAGE` when
+   * not said): about what one invocation delivers in good time (see
+   * `EffectPolicy.invocation`), so messages are delivered side by side.
+   */
+  readonly perMessage?: number;
+  /**
+   * Whether the effect `id` names is sent in a queue message of its own:
+   * one costing about an invocation's share by itself, so it is delivered
+   * beside the others rather than after them. Decided from the id alone, as
+   * every sending (and the effects cron's) has it.
+   */
+  readonly alone?: (id: string) => boolean;
+  /**
+   * The events consumer delivers some of the sink's effects itself (see
+   * `INLINE_BATCH_EFFECTS`), sparing them a queue's wait; a batch sink only.
+   */
+  readonly inline?: boolean;
+  /** Whether this effect of an inline sink may be delivered inline (all of them when not said). */
+  inlineable?(planned: PlannedEffect): boolean;
 }
 
-/** What a batch delivery did: the effects delivered, and the first failure of the rest. */
+/**
+ * What a batch delivery did: the effects delivered, those it ended for
+ * good (nothing could deliver them any more: no attempt is left to them),
+ * the failures it can tell apart (each with the effects it stopped), and
+ * the first failure of any other effect not delivered. An ended effect's
+ * reason starting `invalidated:` says its source moved on, as the claim's.
+ */
 export interface BatchDelivery {
   readonly delivered: readonly string[];
+  readonly ended?: readonly { readonly ids: readonly string[]; readonly reason: string }[];
+  readonly failures?: readonly { readonly ids: readonly string[]; readonly error: unknown }[];
   readonly error?: unknown;
 }
 
 /** Proposed values. */
 export interface EffectPolicy {
-  /** A new effect is the sweeper's to retry only after this long (the consumer delivers it first). */
-  readonly sweepAfterMs: number;
   /** First retry delay; doubles per attempt up to `maxBackoffMs`. */
   readonly backoffMs: number;
   readonly maxBackoffMs: number;
-  /** Attempts before an effect is marked failed. */
+  /** Attempts before an effect is marked failed; a claim counts as one, so a run that dies does too. */
   readonly maxAttempts: number;
-  /** How long a delivery holds its claim; after that, the sweeper may take the effect over. */
+  /** How long a delivery holds its claim; after that, a message naming the effect may take it over. */
   readonly leaseMs: number;
   /** How long delivered effects are kept (for dedupe evidence and debugging). */
   readonly retentionMs: number;
   /**
-   * Effects one claim of a sweep takes at most: a sweep claims page after
-   * page while its calls last, so a page bounds the rows (and payloads) one
-   * query reads, not what a run delivers.
+   * How long a journaled effect waits for its message to be sent before it
+   * is overdue (the consumer may have stopped between its batch and its send).
    */
-  readonly sweepPage: number;
-  /** Calls to other services one sweep makes at most, its claims and marks included (see `effectCalls`). */
-  readonly sweepCalls: number;
+  readonly publishGraceMs: number;
   /**
-   * Effects one sweep delivers at most, whatever its calls allow: what a
-   * run delivers costs CPU time as well as calls (see `EFFECT_POLICY`).
+   * How long past its due time a published effect waits for its message
+   * before it is overdue: longer than a queue's wait under a backlog, so a
+   * slow queue is not taken for a lost message.
    */
-  readonly sweepLimit: number;
-  /**
-   * Payload bytes one sweep claims at most (a run's first effect goes
-   * whatever its size): reading and parsing payloads costs CPU time too.
-   */
-  readonly sweepBytes: number;
+  readonly lateMs: number;
+  /** Overdue effects one run of the effects cron sends again. */
+  readonly recoverPage: number;
+  /** One effects consumer invocation's share of what it may do (see `EffectBudget`). */
+  readonly invocation: {
+    /** Calls to other services, its claims and marks included (see `effectCalls`). */
+    readonly calls: number;
+    /** Effects it delivers at most, whatever its calls allow: delivering costs CPU time too. */
+    readonly effects: number;
+    /** Payload bytes it claims at most (its first effect whatever its size). */
+    readonly bytes: number;
+    /**
+     * Wall time after which it starts no more deliveries, well within a
+     * claim (`leaseMs`): what is left goes back to the queue.
+     */
+    readonly deadlineMs: number;
+  };
 }
 
-/**
- * Calls the effects cron makes besides its sweep's claims and deliveries:
- * the sweep's prune of effects past retention, and reconciling webhook
- * deliveries (about 25:
- * its batches of 4 late sends, 2 hooks to turn off, and one bulk delete of
- * expired bodies). Counted from the code, with room.
- */
-export const CRON_CALLS = 50;
-
-/** Calls one effect of a sink delivering one at a time makes at most (its claim, its work, its outcome). */
+/** Calls one effect of a sink delivering one at a time makes at most (its work and its outcome). */
 export const SINGLE_EFFECT_CALLS = 8;
 
 /**
- * Calls one page of a sweep makes besides its effects' deliveries: its
- * claim, giving back what its calls cannot cover, and a batch sink's mark
- * and retry.
+ * Calls one message of the effects consumer makes besides its effects'
+ * deliveries: its claim, giving back what its budget cannot cover, a mark,
+ * a retry, and sending what is left or retried.
  */
-export const SWEEP_ROUND_CALLS = 4;
+export const MESSAGE_CALLS = 6;
 
 export const EFFECT_POLICY: EffectPolicy = {
-  sweepAfterMs: 60_000,
   backoffMs: 30_000,
   maxBackoffMs: 60 * 60 * 1000,
   maxAttempts: 20,
   leaseMs: 5 * 60 * 1000,
   retentionMs: 7 * 24 * 60 * 60 * 1000,
-  // A webhook effect's payload holds its body (up to 192 KiB): a page reads under 5 MiB.
-  sweepPage: 25,
-  // Free allows 1,000 calls an invocation (measured, docs/operations/limits.md): less the
-  // cron's other work, and a margin.
-  sweepCalls: 900 - CRON_CALLS,
-  // CPU time, not calls, bounds a run: Free allows about 10 ms an invocation (verified,
-  // docs/operations/limits.md), and delivering a webhook effect took 0.26 ms of CPU with a
-  // small body and 0.5 ms with a 180 KB one (measured locally, 2026-10-17: the dispatcher and
-  // the webhook sink with their I/O stubbed), but a run of 20 took 42 to 86 ms on Free
-  // (measured, 2026-10-17): the limit keeps a run's work fixed, not within 10 ms. The bytes
-  // let at most 5 of the largest bodies (192 KiB) through.
-  sweepLimit: 20,
-  sweepBytes: 1024 * 1024,
+  publishGraceMs: 60_000,
+  lateMs: 10 * 60_000,
+  // A claim, a send per sink (100 messages a call) and a mark per failed send: with the cron's
+  // other work (reconciling webhook deliveries, about 25 calls, and the prune) about 35 calls a
+  // run, far within the 1,000 an invocation has.
+  recoverPage: 100,
+  invocation: {
+    // Free allows 1,000 calls an invocation (measured, docs/operations/limits.md), less a margin.
+    calls: 900,
+    // Queue consumers get 30 s of CPU on Free as on Paid (Free's 10 ms is for requests and cron
+    // triggers: docs/operations/limits.md), so what bounds an invocation is its wall time, while
+    // its claims hold, and how long the effects behind it wait: a cron run delivering 20 webhook
+    // effects took 42 to 86 ms of CPU on Free (measured, 2026-10-17). Each sink's messages carry
+    // fewer (`EffectSink.perMessage`), and its queue's batch size bounds how many messages an
+    // invocation takes; this caps a batch. The feed queue's 4 messages of up to 8 effects fit
+    // (an event's pages share an invocation's pool of calls: the queue adds consumers slowly).
+    effects: 32,
+    // A webhook effect's payload holds its body (up to 192 KiB): at most 5 of the largest.
+    bytes: 1024 * 1024,
+    deadlineMs: 60_000,
+  },
 };
 
 /**
- * Effects of sinks that deliver one at a time a consumer invocation of a
- * full batch (5 messages, wrangler.jsonc) delivers itself; the rest wait
- * for the sweeper. Each message fewer leaves room for as many more (see
- * `inlineEffects`). Proposed.
- */
-export const INLINE_EFFECTS = 1;
-
-/**
- * The same for an invocation of one message: within a few ms of CPU time,
- * as the sweep's `sweepLimit`, and its payloads within `sweepBytes` (5 of
- * the largest webhook bodies, 192 KiB). Proposed: on Free a consumer
- * invocation took 8 ms of CPU at the median and 44 ms at most (measured,
- * 2026-10-17; docs/operations/limits.md).
- */
-export const INLINE_EFFECTS_ALONE = 5;
-
-/**
- * Effects of sinks that deliver one at a time an invocation of `messages`
- * delivers itself, shared by its messages: the fewer it applies, the more
- * of its calls and CPU are left for delivering. Its calls bound it too
- * (see the events consumer).
- */
-export function inlineEffects(messages: number): number {
-  return Math.max(INLINE_EFFECTS, INLINE_EFFECTS_ALONE - INLINE_EFFECTS * (messages - 1));
-}
-
-/**
- * Effects of sinks that deliver in batches one consumer invocation
- * delivers itself, besides: each message's go in one call, for about four
- * D1 queries whatever their number (a claim, the sink's own lookup, one
- * mark, one retry), and fewer when the invocation's calls run short (see
- * the events consumer). Proposed.
+ * Effects of sinks that deliver in batches and are delivered inline
+ * (`EffectSink.inline`) one events consumer invocation delivers itself:
+ * each message's go in one call, for about four D1 queries whatever their
+ * number (a claim, the sink's own lookup, one mark, one retry), and fewer
+ * when the invocation's calls run short (see the events consumer). The
+ * rest go to their queue. Proposed.
  */
 export const INLINE_BATCH_EFFECTS = 8;
+
+/**
+ * Calls to recipients (a feed's, one each) one events consumer invocation
+ * makes delivering inline at most: about 30 ms of wall time each on Free
+ * (measured, 2026-10-21), and other sources' events wait behind them, so
+ * a larger audience goes to its sink's queue, whose consumers run side by
+ * side. Proposed.
+ */
+export const INLINE_RECIPIENTS = 50;
+
+/** Effects a queue message names at most, unless its sink says (`EffectSink.perMessage`). Proposed. */
+export const PER_MESSAGE = 10;
 
 const SINK_NAME = /^[a-z][a-z_]*$/;
 const MAX_TARGET = 256;
 
 /** The calls delivering `effect` makes at most, as its sink says (`EffectSink.calls`). */
 export function effectCalls(sink: EffectSink | undefined, effect: PlannedEffect): number {
-  if (!sink?.deliverBatch) return SINGLE_EFFECT_CALLS;
-  return sink.calls?.(effect) ?? 1;
+  return sink?.calls?.(effect) ?? (sink?.deliverBatch ? 1 : SINGLE_EFFECT_CALLS);
 }
 
 /** The effect's id: the event key, the sink and the target. */
@@ -190,7 +242,8 @@ const STATEMENT_BYTES = 1024 * 1024;
 /**
  * The journal inserts for an envelope's events, guarded like projections:
  * nothing is journaled for an event of an older epoch or an older ownership
- * generation than the read model has seen. The effects go in as few
+ * generation than the read model has seen. Each effect is due at once, and
+ * keeps where it came from for its claim to check again. The effects go in as few
  * statements as their size allows (one for an ordinary envelope), each
  * returning the ids (and sinks) it inserted (none for an effect already
  * journaled).
@@ -203,53 +256,90 @@ export function effectStatements(
   now: number,
   policy: EffectPolicy = EFFECT_POLICY,
 ): D1PreparedStatement[] {
-  type Row = {
-    id: string;
-    sink: string;
-    target: string;
-    payload: string;
-    epoch: number;
-    ownerGen: number;
-  };
-  const chunks: Row[][] = [[]];
-  let bytes = 0;
+  return journalStatements(db, sourceId, planEffects(sinks, events), now, policy);
+}
+
+/** An effect an event requires, as it is journaled. */
+export interface JournalRow {
+  readonly id: string;
+  readonly sink: string;
+  readonly target: string;
+  readonly payload: string;
+  readonly epoch: number;
+  readonly ownerGen: number;
+  readonly anyOwner: 0 | 1;
+  /** The calls delivering it makes at most (see `effectCalls`). */
+  readonly calls: number;
+  /** The events consumer may deliver it itself (`EffectSink.inline`, `inlineable`). */
+  readonly inline: boolean;
+}
+
+/** The effects `events` require of `sinks`, each sink asked once per event. */
+export function planEffects(
+  sinks: readonly EffectSink[],
+  events: readonly DomainEvent[],
+): JournalRow[] {
+  const rows: JournalRow[] = [];
   for (const sink of sinks) {
     if (!SINK_NAME.test(sink.name)) throw new Error(`invalid sink name ${sink.name}`);
     for (const event of events)
       for (const planned of sink.plan(event)) {
         if (planned.target.length === 0 || planned.target.length > MAX_TARGET)
           throw new Error(`invalid effect target for sink ${sink.name}`);
-        const row = {
+        rows.push({
           id: effectId(event, sink.name, planned.target),
           sink: sink.name,
           target: planned.target,
           payload: JSON.stringify(planned.payload),
           epoch: event.id.epochGen,
           ownerGen: event.ownerGen,
-        };
-        // The row as it is bound: UTF-8 JSON, its payload escaped once more.
-        const size = encoder.encode(JSON.stringify(row)).length + 1;
-        if (bytes + size > STATEMENT_BYTES && (chunks.at(-1)?.length ?? 0) > 0) {
-          chunks.push([]);
-          bytes = 0;
-        }
-        chunks.at(-1)?.push(row);
-        bytes += size;
+          anyOwner: sink.acrossTransfers === true || planned.acrossTransfers === true ? 1 : 0,
+          calls: effectCalls(sink, planned),
+          inline: sink.inline === true && sink.inlineable?.(planned) !== false,
+        });
       }
+  }
+  return rows;
+}
+
+/** `effectStatements` for effects already planned (`planEffects`). */
+export function journalStatements(
+  db: D1Database,
+  sourceId: string,
+  planned: readonly JournalRow[],
+  now: number,
+  policy: EffectPolicy = EFFECT_POLICY,
+): D1PreparedStatement[] {
+  type Row = Omit<JournalRow, "calls" | "inline">;
+  const chunks: Row[][] = [[]];
+  let bytes = 0;
+  for (const { calls: _calls, inline: _inline, ...row } of planned) {
+    // The row as it is bound: UTF-8 JSON, its payload escaped once more.
+    const size = encoder.encode(JSON.stringify(row)).length + 1;
+    if (bytes + size > STATEMENT_BYTES && (chunks.at(-1)?.length ?? 0) > 0) {
+      chunks.push([]);
+      bytes = 0;
+    }
+    chunks.at(-1)?.push(row);
+    bytes += size;
   }
   return chunks
     .filter((rows) => rows.length > 0)
     .map((rows) =>
       db
         .prepare(
-          `INSERT OR IGNORE INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
-           SELECT e.value ->> 'id', e.value ->> 'sink', e.value ->> 'target', e.value ->> 'payload', ?1, ?2
+          `INSERT OR IGNORE INTO effects (effect_id, sink, target, payload, next_attempt_at,
+             created_at, source_id, epoch_gen, owner_gen, any_owner, recover_at)
+           SELECT e.value ->> 'id', e.value ->> 'sink', e.value ->> 'target', e.value ->> 'payload',
+             ?2, ?2, ?4, e.value ->> 'epoch', e.value ->> 'ownerGen', e.value ->> 'anyOwner', ?1
            FROM json_each(?3) e
            WHERE (e.value ->> 'epoch') >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?4)
-             AND (e.value ->> 'ownerGen') >=
-                 coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?4), 0)
+             AND ((e.value ->> 'anyOwner') = 1 OR (e.value ->> 'ownerGen') >=
+                 coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?4), 0))
+             -- Nothing of a deleted repository once its tombstone is in: its cleanups may have run.
+             AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = ?4 AND deleted = 1)
            RETURNING effect_id, sink`,
         )
-        .bind(now + policy.sweepAfterMs, now, JSON.stringify(rows), sourceId),
+        .bind(now + policy.publishGraceMs, now, JSON.stringify(rows), sourceId),
     );
 }

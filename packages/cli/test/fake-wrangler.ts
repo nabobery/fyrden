@@ -24,6 +24,8 @@ export function fakeWrangler() {
     d1Migrations: new Map<string, string[]>(),
     /** What fyrden-org answers to the effects summary, one row per state. */
     effects: [] as { state: string; count: number; oldest: number }[],
+    /** Answers other queries of a database (a test's own SQLite), before the cases above. */
+    d1Query: undefined as ((db: string, sql: string) => unknown[] | undefined) | undefined,
     /** fyrden-api's versions, latest last, with the vars each was deployed with. */
     apiVersions: [] as { id: string; vars: Record<string, string> }[],
     r2: new Set<string>(),
@@ -188,7 +190,9 @@ export function fakeWrangler() {
         const schema = state.d1Schema.get(db) ?? [];
         const migrations = state.d1Migrations.get(db);
         let results: unknown[];
-        if (sql.includes("FROM d1_migrations")) {
+        const answered = state.d1Query?.(db, sql);
+        if (answered) results = answered;
+        else if (sql.includes("FROM d1_migrations")) {
           if (!migrations) return fail("no such table: d1_migrations: SQLITE_ERROR [code: 7500]");
           results = migrations.map((name) => ({ name }));
         } else if (sql.includes("FROM sqlite_schema")) results = schema;

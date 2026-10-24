@@ -102,14 +102,27 @@ The latest point of a group is its current value.
 
 | Metric | Dimensions | Value |
 |---|---|---|
-| `effects.sweep` | `outcome` (`ok`, `error`) | 1 per run of the effects cron's sweep (retrying due webhook and feed effects) |
+| `effects.recover` | `outcome` (`ok`, `error`) | 1 per run of the effects cron's recovery (sending overdue effects to their queue again, and deleting effects past retention) |
 | `webhooks.reconcile` | `outcome` (`ok`, `error`) | 1 per run of the effects cron's webhook reconciliation (late sends, dead claims, hooks to turn off, expired deliveries) |
-| `effects.dispatch` | `outcome` (`ok`, `error`) | 1 per events consumer message that delivered effects it journaled itself |
+| `effects.dispatch` | `outcome` (`ok`, `error`) | 1 per events consumer invocation that sent effects to their queues or delivered some itself |
+| `effects.consume` | `sink`, `outcome` (`ok`, `error`) | 1 per effects queue invocation (`error`: an outcome could not be recorded, or what was left could not be sent back; its messages are retried) |
+| `effects.recovered` | `sink` | Overdue effects the cron sent to their queue again (a message lost or never sent, or a claim that died) |
+| `effects.invalidated` | `sink` | Effects ended without delivery because their source was deleted, restored to an earlier state, or transferred since (unless the effect stands across transfers: a settlement of review requests, or any of a sink whose effects all do) |
+| `effects.failed` | `sink` | Effects that failed for good: their attempts spent (a claim counts as one), their sink gone, or ended by their sink (a feed page past its delivery deadline, gone, or not what its event names) |
+| `feed.audience_dropped` | — | Recipients an event named past the 100 it carries and its 128 pages (the value is the amount; the bounds keep every event within them) |
+| `feed.participants_overflow` | — | Joins a thread refused at its cap of 1,000 participants, by principals not already participating |
+| `code_owners.request_skipped` | `reason` | Code owners not asked to review: `team_too_large` (a team with more members than one request asks; never asked), `reviewers` (more reviewers that can matter than one read covers; asked again once a review changes) |
+| `d1.invocation_statements` | `where`, `op` | D1 statements one platform invocation ran in all (every binding the repository object counts), one point an invocation: how near it came to D1's 50 queries an invocation |
+| `webhooks.stage_ms` | `stage` (`rows`, `body`, `claim`, `hooks`, `hook`, `body_read`, `post`, `record`) | Wall time of one stage of making webhook deliveries, in milliseconds, one point each. An event's effect writes `rows` (its deliveries' rows and which wait), `body` (storing it), `claim` (the tombstone and its first attempts' claims) and `hooks` (their hooks, in one call) once, then `post` (address lookup, request and the answer's excerpt) and `record` per first attempt; a queued attempt writes `claim`, `hook`, `body_read`, `post` and `record`. First attempts run side by side, so their stages overlap. The runtime's clock advances only on I/O. The effect also logs these times in one line (`webhooks.materialize`), with how long it took in all |
+| `feed.stage_ms` | `stage` (`pages`, `calls`) | Wall time of one stage of a batch of feed deliveries, in milliseconds, one point each: `pages` (reading its audience pages from their repositories, when it has any) and `calls` (the calls to recipients' feeds, up to 32 under way at once). The batch also logs these times in one line (`feed.deliver`), with its effects, pages and calls |
 
-Any `error` means effects are not being claimed or delivered: the failure is
-logged at error level (`op` `cron.effects` or `effects.dispatch`), and the
-effects stay pending for a later run. `GET /healthz` reports how late the
-oldest pending effect is (`checks.effects.overdueS`).
+Any `error` means effects are not being sent, claimed or delivered: the
+failure is logged at error level (`op` `cron.effects`, `effects.dispatch`
+or `effects.consume`), and the effects stay pending; the effects cron sends
+them again once overdue. `GET /healthz` reports how late the oldest pending
+effect is (`checks.effects.overdueS`), and whether one failed for good in
+the last hour (`checks.effects.failed`); either makes `checks.effects.ok`
+false.
 
 ### Cost counters
 

@@ -1,4 +1,4 @@
-import { delegationOf, readGrantLinks } from "@fyrden/adapters-cloudflare/auth";
+import { delegationOf, MintRefusedError, readGrantLinks } from "@fyrden/adapters-cloudflare/auth";
 import { isPermission, scopesAllow } from "@fyrden/domain";
 import { grantById } from "../accounts/delegation.js";
 import { clock, tokenStore } from "../services.js";
@@ -25,12 +25,16 @@ export const EXCHANGE_POLICY = {
   accessTokenTtlMs: 60 * 60 * 1000,
 };
 
-async function enabled(env: Env, principalId: string): Promise<boolean> {
+/** Hooks into the exchange. For tests. */
+export const exchangeHooks: { beforeMint?: () => Promise<void> } = {};
+
+/** An enabled principal's lifecycle generation; undefined when it is disabled. */
+async function enabledAt(env: Env, principalId: string): Promise<number | undefined> {
   const row = await env.DIRECTORY.withSession("first-primary")
-    .prepare("SELECT 1 AS one FROM principals WHERE id = ? AND disabled_at IS NULL")
+    .prepare("SELECT lifecycle_gen FROM principals WHERE id = ? AND disabled_at IS NULL")
     .bind(principalId)
-    .first();
-  return row !== null;
+    .first<{ lifecycle_gen: number }>();
+  return row?.lifecycle_gen;
 }
 
 /** `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`. */
@@ -80,7 +84,12 @@ export async function tokenExchange(
 
   const now = clock();
   const grant = await grantById(c.env, grantId);
-  if (!grant || grant.agent_id !== agent.principalId || !(await enabled(c.env, grant.grantor_id)))
+  // The grantor's generation: a suspension of theirs from here on (even one lifted) issues nothing.
+  const grantorGen =
+    grant && grant.agent_id === agent.principalId
+      ? await enabledAt(c.env, grant.grantor_id)
+      : undefined;
+  if (!grant || grantorGen === undefined)
     return refuse(c, "invalid_grant", "The agent holds no such grant.");
   // The chain from the grants themselves: this grant's agent, then its parent's.
   metrics.count("d1.query", { db: "directory", op: "token_grants" });
@@ -122,25 +131,33 @@ export async function tokenExchange(
   // Judged again now: a deadline that passed during the lookups issues nothing.
   if (until <= clock())
     return refuse(c, "invalid_grant", "The grant or the agent's token expired meanwhile.");
-  const minted = await store.mint({
-    principalId: grant.grantor_id,
-    type: "oat",
-    scopes,
-    repoIds,
-    ttlMs: EXCHANGE_POLICY.accessTokenTtlMs,
-    notAfter: until,
-    delegation: { grantId: grant.id, act },
-    // Bound to one resource (RFC 8707): the one asked for, else the REST API.
-    audience: resource ?? resourceUri(originOf(c), "api"),
-    dpopJkt: proof.jkt,
-    // Revoking the agent's own token stops this one, and the git tokens minted from it.
-    sourceId: agent.id,
-    audit: {
-      actorId: agent.principalId,
-      act,
-      ...(c.get("requestId") !== undefined && { requestId: c.get("requestId") }),
-    },
-  });
+  await exchangeHooks.beforeMint?.();
+  let minted: { token: string; expiresAt: number };
+  try {
+    minted = await store.mint({
+      principalId: grant.grantor_id,
+      type: "oat",
+      scopes,
+      repoIds,
+      ttlMs: EXCHANGE_POLICY.accessTokenTtlMs,
+      notAfter: until,
+      delegation: { grantId: grant.id, act },
+      // Bound to one resource (RFC 8707): the one asked for, else the REST API.
+      audience: resource ?? resourceUri(originOf(c), "api"),
+      dpopJkt: proof.jkt,
+      // Revoking the agent's own token stops this one, and the git tokens minted from it.
+      sourceId: agent.id,
+      audit: {
+        actorId: agent.principalId,
+        act,
+        ...(c.get("requestId") !== undefined && { requestId: c.get("requestId") }),
+      },
+      issuer: { principalId: grant.grantor_id, gen: grantorGen },
+    });
+  } catch (error) {
+    if (!(error instanceof MintRefusedError)) throw error;
+    return refuse(c, "invalid_grant", "The grant's user was suspended or disabled meanwhile.");
+  }
   return c.json(
     {
       access_token: minted.token,

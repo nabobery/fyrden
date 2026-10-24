@@ -13,8 +13,10 @@ import { describe, expect, it } from "vitest";
 import { userSchema } from "../src/do/schema/user.js";
 import userV0 from "./fixtures/do-schemas/UserDO/v0.sql?raw";
 import userV2 from "./fixtures/do-schemas/UserDO/v2.sql?raw";
+import userV3 from "./fixtures/do-schemas/UserDO/v3.sql?raw";
+import userV4 from "./fixtures/do-schemas/UserDO/v4.sql?raw";
 
-const versions: Record<number, string> = { 0: userV0, 2: userV2 };
+const versions: Record<number, string> = { 0: userV0, 2: userV2, 3: userV3, 4: userV4 };
 
 describe("UserDO schema", () => {
   it("matches the committed expected schema (no drift)", async () => {

@@ -13,6 +13,7 @@ import type {
 } from "@fyrden/api-contract";
 import { coAuthorTrailers } from "@fyrden/domain";
 import { appendTrailers } from "@fyrden/git-core";
+import type { Reacted } from "../do/repo/reactions.js";
 import {
   type Comparison,
   isOutdated,
@@ -22,40 +23,16 @@ import {
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { pageOf } from "../ops/pages.js";
 import { resolveOne } from "../signing/verification.js";
 import type { RepoEntry } from "./directory.js";
 import { commitIdentityOf, noReplyPeople } from "./file-writes.js";
 import { actorOf, failure } from "./pulls.js";
+import { reviewCommentOutput } from "./shapes.js";
 
 /** A diff comment as the API returns it, judged against what its pull request's diff compares now. */
-function commentOutput(
-  comment: ReviewCommentRecord,
-  now: Comparison | null,
-): Output<typeof getReviewComment> {
-  const { anchor } = comment;
-  const outdated = isOutdated(anchor, now);
-  return {
-    id: comment.id,
-    pull_request_review_id: null,
-    ...(comment.inReplyTo !== null && { in_reply_to_id: comment.inReplyTo }),
-    thread_id: comment.threadId,
-    user: { id: comment.authorId },
-    performed_via_agents: [...comment.actChain],
-    body: comment.body,
-    commit_id: anchor.commitSha,
-    original_commit_id: anchor.commitSha,
-    path: anchor.path,
-    side: anchor.side,
-    line: outdated ? null : anchor.line,
-    original_line: anchor.line,
-    start_line: anchor.startLine,
-    start_side: anchor.startLine === null ? null : anchor.side,
-    outdated,
-    resolved: comment.resolved,
-    created_at: comment.createdAt,
-    updated_at: comment.updatedAt,
-  };
-}
+const commentOutput = (comment: Reacted<ReviewCommentRecord>, now: Comparison | null) =>
+  reviewCommentOutput(comment, isOutdated(comment.anchor, now));
 
 function threadOutput(
   thread: ThreadRecord,
@@ -119,7 +96,7 @@ export async function listReviewCommentsOperation(
   ctx: OpContext,
   input: Input<typeof listReviewComments>,
 ): Promise<Output<typeof listReviewComments>> {
-  const after = afterOf(input.cursor);
+  const after = input.after ?? afterOf(input.cursor);
   const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:read");
   const listed = await repo(ctx, entry, "listReviewComments").listReviewComments(
     input.pull_number,
@@ -128,12 +105,10 @@ export async function listReviewCommentsOperation(
   );
   if (listed === null) throw failure(entry, "repo_not_found");
   if (listed === undefined) throw failure(entry, "not_found", input.pull_number);
-  const page = listed.comments.slice(0, input.per_page);
-  const last = page.at(-1);
+  const page = pageOf(listed.comments, input.per_page, (c) => commentOutput(c, listed.comparison));
   return {
-    comments: page.map((c) => commentOutput(c, listed.comparison)),
-    next_cursor:
-      listed.comments.length > input.per_page && last ? encodeCursor(String(last.id)) : null,
+    comments: page.shown,
+    next_cursor: page.more && page.last ? encodeCursor(String(page.last.id)) : null,
   };
 }
 

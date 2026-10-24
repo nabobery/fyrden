@@ -28,6 +28,8 @@ export interface RepoAclDeps {
   readonly account: () => RepoAccount | undefined;
   /** The account object's snapshot for this repository. */
   readonly pull: (accountId: string) => Promise<AclSnapshot>;
+  /** In the caller's transaction: account `accountId`'s restore generation `epochGen` was seen. */
+  readonly observed?: (accountId: string, epochGen: number) => void;
 }
 
 type Row = {
@@ -103,6 +105,31 @@ export class RepoAcl {
   }
 
   /**
+   * `allows` for many decisions from one read of the snapshot (a pull
+   * request's reviewers by the thousand): a function answering as `allows`
+   * answers now.
+   */
+  allowsNow(): (principalId: string, min: RepoRole) => boolean {
+    const account = this.deps.account();
+    if (!account) return () => true;
+    const row = this.#usable(account.accountId, ACL_POLICY.writeWindowMs);
+    const roles = row && this.#roles(row);
+    return (principalId, min) =>
+      ownsUserAccount(principalId, account.ownerId) ||
+      principalId === account.accountId ||
+      (roles !== undefined && atLeast(roles.get(principalId) ?? null, min));
+  }
+
+  /**
+   * Pulls a snapshot unless one within the write window is stored, so that
+   * `allows` answers from it (a failed pull leaves none it answers from).
+   */
+  async pullForWrite(): Promise<void> {
+    const account = this.deps.account();
+    if (account) await this.#snapshot(account, "write");
+  }
+
+  /**
    * Pulls a snapshot unless one within the read TTL is stored, so that
    * `lastRoleOf` answers from it (a failed pull leaves the stored one).
    */
@@ -124,6 +151,28 @@ export class RepoAcl {
       return "admin";
     const row = this.#usable(account.accountId, Number.POSITIVE_INFINITY);
     return row ? (this.#roles(row).get(principalId) ?? null) : null;
+  }
+
+  /**
+   * `lastRoleOf` for many principals from one read of the snapshot (a
+   * feed's audience), and what that snapshot is (`key`, changing whenever
+   * its account, restore generation or version does; null for none).
+   */
+  lastRoles(): {
+    readonly roleOf: (principalId: string) => RepoRole | null;
+    readonly key: string | null;
+  } {
+    const account = this.deps.account();
+    if (!account) return { roleOf: () => null, key: null };
+    const row = this.#usable(account.accountId, Number.POSITIVE_INFINITY);
+    const roles = row ? this.#roles(row) : new Map<string, RepoRole>();
+    return {
+      roleOf: (principalId) =>
+        principalId === account.accountId || ownsUserAccount(principalId, account.ownerId)
+          ? "admin"
+          : (roles.get(principalId) ?? null),
+      key: row ? `${row.account_id}:${row.epoch_gen}:${row.version}` : null,
+    };
   }
 
   /**
@@ -155,6 +204,15 @@ export class RepoAcl {
   }
 
   /**
+   * Whether `(epochGen, version)` of account `accountId` is older than one
+   * the repository has seen (its floor): an answer from it is stale.
+   */
+  isBelowFloor(accountId: string, epochGen: number, version: number): boolean {
+    const row = this.#row(accountId);
+    return row !== undefined && below(epochGen, version, row.floor_epoch, row.floor_version);
+  }
+
+  /**
    * The repository moved to another account: the old account's snapshot
    * and version floor mean nothing there; the next decision pulls afresh.
    */
@@ -169,6 +227,7 @@ export class RepoAcl {
    */
   invalidate(accountId: string, epochGen: number, version: number): void {
     if (this.deps.account()?.accountId !== accountId) return;
+    this.deps.observed?.(accountId, epochGen);
     const row = this.#row(accountId);
     if (row && !below(row.floor_epoch, row.floor_version, epochGen, version)) return;
     // Another account's snapshot and floor go with it.
@@ -257,6 +316,7 @@ export class RepoAcl {
       stored.floor_epoch,
       stored.floor_version,
     );
+    this.deps.observed?.(accountId, snapshot.epochGen);
     return stored;
   }
 

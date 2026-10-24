@@ -17,12 +17,12 @@ import { describe, expect, it } from "vitest";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { UserDO } from "../src/do/UserDO.js";
 import type { FeedPurge } from "../src/do/user/feed.js";
-import { sweepEffects } from "../src/effects/dispatcher.js";
+import { deliverEffects, invocationBudget } from "../src/effects/dispatcher.js";
 import { EFFECT_POLICY, type Effect, type EffectSink } from "../src/effects/journal.js";
 import { feedSink } from "../src/feed/sink.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { api, json, user } from "./helpers/api.js";
-import { settleOthersDue } from "./helpers/effects.js";
+import { recordingPublish } from "./helpers/effects.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 
@@ -498,11 +498,10 @@ describe("the feed sink and access revocations", () => {
     expect(purges.map((p) => p.purge.repoIds)).toEqual([[leaving, staying]]);
   });
 
-  it("completes a revocation of 1,050 principals across sweeps, each within its calls", async () => {
+  it("completes a revocation of 1,050 principals across queue messages, each invocation within its calls", async () => {
     const orgId = newId("org");
     const { on, purges } = recordingPurges();
-    // Its sweeps' bounds hold for its own effects: others' are settled first.
-    await settleOthersDue(Date.now() + EFFECT_POLICY.sweepAfterMs + 60_000);
+    const { publish, sent } = recordingPublish();
     await applyEnvelope(
       on,
       {
@@ -515,27 +514,33 @@ describe("the feed sink and access revocations", () => {
           }),
         ],
       },
-      // Nothing inline: the sweeper delivers it all.
-      { sinks: [feedSink], inline: { left: 0, batched: 0 } },
+      // Nothing inline: the feed's queue delivers it all.
+      { sinks: [feedSink], publish, inline: { batched: 0 } },
     );
     expect(await effectsOf(orgId)).toHaveLength(11);
-    const due = Date.now() + EFFECT_POLICY.sweepAfterMs;
-    let sweeps = 0;
-    while ((await effectsOf(orgId)).some((e) => e.state === "pending")) {
+    // The queue: one message an invocation, what each sends back taken by a later one.
+    let invocations = 0;
+    for (let next = sent.shift(); next; next = sent.shift()) {
       const before = purges.length;
-      await sweepEffects({ db: env.ORG_READ, env: on, sinks: [feedSink], now: () => due });
-      expect(purges.length - before).toBeLessThanOrEqual(EFFECT_POLICY.sweepCalls);
-      sweeps++;
-      expect(sweeps).toBeLessThanOrEqual(3);
+      const now = Date.now();
+      await deliverEffects(
+        { db: env.ORG_READ, env: on, sinks: [feedSink], now: () => now, publish },
+        next.sink,
+        next.ids,
+        invocationBudget(now),
+      );
+      expect(purges.length - before).toBeLessThanOrEqual(EFFECT_POLICY.invocation.calls);
+      invocations++;
+      expect(invocations).toBeLessThanOrEqual(3);
     }
+    expect((await effectsOf(orgId)).every((e) => e.state === "done")).toBe(true);
     expect(new Set(purges.map((p) => p.principal)).size).toBe(1_050);
   });
 
-  it("gives back, untried, the effects past a sweep's calls", async () => {
+  it("gives back, untried, the effects past an invocation's calls, and sends them back", async () => {
     const orgId = newId("org");
     const { on, purges } = recordingPurges();
-    // Its sweeps' bounds hold for its own effects: others' are settled first.
-    await settleOthersDue(Date.now() + EFFECT_POLICY.sweepAfterMs + 60_000);
+    const { publish, sent } = recordingPublish();
     await applyEnvelope(
       on,
       {
@@ -544,23 +549,27 @@ describe("the feed sink and access revocations", () => {
           revokedEvent(orgId, 1, { principals: principals(400), repos: ["rep_x"], acl_version: 2 }),
         ],
       },
-      { sinks: [feedSink], inline: { left: 0, batched: 0 } },
+      { sinks: [feedSink], publish, inline: { batched: 0 } },
     );
-    await sweepEffects({
-      db: env.ORG_READ,
-      env: on,
-      sinks: [feedSink],
-      now: () => Date.now() + EFFECT_POLICY.sweepAfterMs,
-      policy: { ...EFFECT_POLICY, sweepCalls: 150 },
-    });
+    const [message] = sent.splice(0);
+    const policy = {
+      ...EFFECT_POLICY,
+      invocation: { ...EFFECT_POLICY.invocation, calls: 150 },
+    };
+    const now = Date.now();
+    await deliverEffects(
+      { db: env.ORG_READ, env: on, sinks: [feedSink], now: () => now, publish, policy },
+      "feed",
+      message?.ids ?? [],
+      invocationBudget(now, policy),
+    );
     expect(purges).toHaveLength(100);
     const rows = await effectsOf(orgId);
     expect(rows.filter((e) => e.state === "done")).toHaveLength(1);
-    expect(rows.filter((e) => e.state === "pending")).toEqual(
-      expect.arrayContaining([expect.objectContaining({ attempts: 0, lease_token: null })]),
-    );
-    expect(rows.filter((e) => e.state === "pending" && (e.attempts > 0 || e.lease_token))).toEqual(
-      [],
-    );
+    const pending = rows.filter((e) => e.state === "pending");
+    expect(pending).toHaveLength(3);
+    expect(pending.every((e) => e.attempts === 0 && e.lease_token === null)).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect([...(sent[0]?.ids ?? [])].sort()).toEqual(pending.map((e) => e.effect_id).sort());
   });
 });

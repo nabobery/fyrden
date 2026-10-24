@@ -16,7 +16,8 @@
 | Parser fuzzing | `packages/git-core/fuzz` | Node (Vitest), time-boxed | `pnpm --filter @fyrden/git-core fuzz` |
 | Mutation testing | `packages/git-core`, one `src/` directory per run | Stryker | `FYRDEN_MUTATION_SCOPE=<scope> pnpm --filter @fyrden/git-core mutation` |
 
-Pull requests and pushes to `main` run the unit, workerd, shuffle, dry-run
+Pull requests and pushes to `main` run the unit, workerd, shuffle (three
+seeds, one a job side by side, gathered in one required check), dry-run
 and end-to-end tiers, MCP conformance and REST API fuzzing (one job,
 `contract`, which deploys also wait for), and the interoperability subset with
 the current pinned git. Pull requests also run mutation testing

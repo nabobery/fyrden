@@ -19,7 +19,10 @@ import { type SignedFact, verdicts } from "../../signing/verification.js";
 import type { RepoAcl } from "./acl.js";
 import { BROWSE_POLICY } from "./browse.js";
 import {
+  type CodeOwnerDemand,
   checkPushRules,
+  codeOwnerDemand,
+  countedApprovals,
   hasPrecheckRules,
   precheckPushRules,
   type RuleSnapshot,
@@ -38,6 +41,16 @@ import { factOf } from "./signature.js";
 /** Principals one directory query looks up (D1 binds at most 100 parameters). */
 const OWNER_BATCH = 50;
 
+/** Principals one activity query reads, as one JSON array. */
+export const ACTIVE_BATCH = 1_000;
+
+/**
+ * Principals one read of a pull request's reviewers' activity covers at
+ * most (20 queries): the reviewers that can matter, their roots and the
+ * agents their reviews went through. Proposed.
+ */
+export const MAX_ACTIVITY_PRINCIPALS = 20_000;
+
 /** Stands for a commit not made yet in a ruleset precheck (only the update's kind matters there). */
 export const ZERO_ID = "0".repeat(40);
 
@@ -53,22 +66,34 @@ export interface AuthorityDeps {
 export class RepoAuthority {
   constructor(private readonly deps: AuthorityDeps) {}
 
-  /** The strongest role the current ACL snapshot allows (an owner's: admin). */
-  #ruleRoleNow(principal: string): RepoRole | null {
-    for (const role of [...REPO_ROLES].reverse())
-      if (this.deps.acl.allows(principal, role)) return role;
-    return null;
+  /**
+   * Whether a merge into `ref` by `principal` (under `grantId`) is asked
+   * for code owners' review by its rules: by an applicable `active` rule,
+   * only by `evaluate` ones, or not at all (a bypass included).
+   */
+  async codeOwnerDemand(
+    principal: string,
+    grantId: string | null,
+    ref: string,
+  ): Promise<CodeOwnerDemand | null> {
+    const ceilings = await this.rolesPulled(principal, grantId);
+    return codeOwnerDemand(
+      this.#ruleSnapshot(principal, ceilings).snapshot,
+      principal,
+      grantId !== null,
+      ref,
+    );
   }
 
   /** The principal's effective role now: the weakest of its own and its `ceilings`'. */
   roleNow(principal: string, ceilings: readonly string[]): RepoRole | null {
-    let role = this.#ruleRoleNow(principal);
-    for (const id of ceilings) {
-      const cap = this.#ruleRoleNow(id);
-      if (cap === null || (role !== null && REPO_ROLES.indexOf(cap) < REPO_ROLES.indexOf(role)))
-        role = cap;
-    }
-    return role;
+    return effectiveRole((id, min) => this.deps.acl.allows(id, min), principal, ceilings);
+  }
+
+  /** `roleNow` for many principals from one read of the current snapshot. */
+  rolesNow(): (principal: string, ceilings: readonly string[]) => RepoRole | null {
+    const allows = this.deps.acl.allowsNow();
+    return (principal, ceilings) => effectiveRole(allows, principal, ceilings);
   }
 
   /**
@@ -93,28 +118,106 @@ export class RepoAuthority {
   }
 
   /**
-   * The owners capping each of `principals` (an agent's own owner; none for
-   * a user), from the directory's primary in batches, with all their roles
-   * pulled fresh: a few queries however many principals there are.
+   * Which of `principals` are active (not disabled, nor, for an agent, its
+   * owner: a suspended user's approvals stop counting at once), each with
+   * the owners capping it (an agent's own owner; none for a user), from the
+   * directory's primary in batches, with all their roles pulled fresh: a
+   * few queries however many principals there are.
    */
-  async ownersPulled(principals: readonly string[]): Promise<Map<string, string[]>> {
-    const owners = new Map<string, string[]>(principals.map((id) => [id, []]));
-    const agents = principals.filter((id) => principalTypeOf(id) === "agent");
+  async activeOwnersPulled(principals: readonly string[]): Promise<Map<string, string[]>> {
+    const owners = new Map<string, string[]>();
+    const unique = [...new Set(principals)];
     const db = this.deps.env().DIRECTORY.withSession("first-primary");
-    for (let at = 0; at < agents.length; at += OWNER_BATCH) {
-      const batch = agents.slice(at, at + OWNER_BATCH);
-      this.deps.git.context.metrics.count("d1.query", { db: "directory", op: "agent_owner" });
+    // As one JSON array a query (one bound parameter), so reviewers, their roots and the agents
+    // their reviews went through cost a query a thousand, within Free's 50 a request.
+    for (let at = 0; at < unique.length; at += ACTIVE_BATCH) {
+      const batch = unique.slice(at, at + ACTIVE_BATCH);
+      this.deps.git.context.metrics.count("d1.query", { db: "directory", op: "active_owners" });
       const { results } = await db
         .prepare(
-          `SELECT id, owner_id FROM principals WHERE id IN (${batch.map(() => "?").join(", ")})`,
+          `SELECT p.id, p.owner_id FROM principals p LEFT JOIN principals o ON o.id = p.owner_id
+           WHERE p.id IN (SELECT value FROM json_each(?)) AND p.disabled_at IS NULL
+             AND o.disabled_at IS NULL`,
         )
-        .bind(...batch)
+        .bind(JSON.stringify(batch))
         .all<{ id: string; owner_id: string | null }>();
-      for (const row of results) if (row.owner_id) owners.set(row.id, [row.owner_id]);
+      for (const row of results)
+        owners.set(
+          row.id,
+          principalTypeOf(row.id) === "agent" && row.owner_id ? [row.owner_id] : [],
+        );
     }
     for (const id of new Set([...owners.keys(), ...[...owners.values()].flat()]))
       await this.deps.acl.roleOf(id, "write");
     return owners;
+  }
+
+  /**
+   * Of a pull request's picked `reviews`, those that can matter: whose
+   * root or whose reviewer has at least write by its own role in the ACL
+   * snapshot (pulled within the write window first), as counting goes by
+   * root and ownership by reviewer; and which of them, their roots and the
+   * agents they went through are active (`activeOwnersPulled`); and the
+   * roots and reviewers of the reviews left out (whose writing later must
+   * stop a decision made without them). Undefined when that is more than
+   * `max` principals: nothing is read then.
+   */
+  async reviewerActivity<
+    R extends {
+      readonly reviewerId: string;
+      readonly reviewerRoot: string;
+      readonly actChain: readonly string[];
+    },
+  >(
+    reviews: readonly R[],
+    max = MAX_ACTIVITY_PRINCIPALS,
+  ): Promise<{ kept: R[]; left: string[]; active: Map<string, string[]> } | undefined> {
+    await this.deps.acl.pullForWrite();
+    const writes = this.writersNow();
+    const kept: R[] = [];
+    const left = new Set<string>();
+    for (const r of reviews)
+      if (writes(r.reviewerRoot) || writes(r.reviewerId)) kept.push(r);
+      else left.add(r.reviewerRoot).add(r.reviewerId);
+    const principals = new Set(kept.flatMap((r) => [r.reviewerRoot, r.reviewerId, ...r.actChain]));
+    if (principals.size > max) return undefined;
+    return { kept, left: [...left], active: await this.activeOwnersPulled([...principals]) };
+  }
+
+  /**
+   * Whether a principal has at least write by its own role, for many from
+   * one read of the current snapshot.
+   */
+  writersNow(): (principal: string) => boolean {
+    const allows = this.deps.acl.allowsNow();
+    return (principal) => allows(principal, "write");
+  }
+
+  /**
+   * Of `principals`, those being deleted or deleted (a review requested of
+   * one holds a place no one can take back by name: their handle is gone),
+   * from the directory's primary in batches.
+   */
+  async deletedOf(principals: readonly string[]): Promise<Set<string>> {
+    const deleted = new Set<string>();
+    const unique = [...new Set(principals)];
+    const db = this.deps.env().DIRECTORY.withSession("first-primary");
+    for (let at = 0; at < unique.length; at += OWNER_BATCH) {
+      const batch = unique.slice(at, at + OWNER_BATCH);
+      this.deps.git.context.metrics.count("d1.query", {
+        db: "directory",
+        op: "deleted_principals",
+      });
+      const { results } = await db
+        .prepare(
+          `SELECT id FROM principals WHERE id IN (${batch.map(() => "?").join(", ")})
+             AND lifecycle IN ('deleting', 'deleted')`,
+        )
+        .bind(...batch)
+        .all<{ id: string }>();
+      for (const row of results) deleted.add(row.id);
+    }
+    return deleted;
   }
 
   /** A write's ceilings, with the principal's and their roles pulled fresh (one snapshot serves all). */
@@ -269,6 +372,8 @@ export class RepoAuthority {
         }
         this.deps.rulesets().recordEvaluated(input.uploadId, input.principal, checked.evaluated);
         const { refusals } = checked;
+        // A merge is one update: the approvals its rules count, from this same snapshot.
+        const merged = input.merge && input.commands[0]?.name;
         return {
           stamp,
           restamp: () => this.#ruleSnapshot(input.principal, ceilings).stamp,
@@ -276,6 +381,16 @@ export class RepoAuthority {
             snapshot.role !== null &&
             REPO_ROLES.indexOf(snapshot.role) >= REPO_ROLES.indexOf("write"),
           refusals,
+          ...(input.merge &&
+            merged && {
+              approvals: countedApprovals(snapshot, {
+                principal: input.principal,
+                delegated: input.grantId !== null,
+                ref: merged,
+                head: input.head,
+                merge: input.merge,
+              }),
+            }),
         };
       },
     };
@@ -329,4 +444,23 @@ export class RepoAuthority {
       },
     };
   }
+}
+
+/** The weakest of `principal`'s strongest role and its `ceilings`', as `allows` answers them. */
+function effectiveRole(
+  allows: (principal: string, min: RepoRole) => boolean,
+  principal: string,
+  ceilings: readonly string[],
+): RepoRole | null {
+  const strongest = (id: string): RepoRole | null => {
+    for (const role of [...REPO_ROLES].reverse()) if (allows(id, role)) return role;
+    return null;
+  };
+  let role = strongest(principal);
+  for (const id of ceilings) {
+    const cap = strongest(id);
+    if (cap === null || (role !== null && REPO_ROLES.indexOf(cap) < REPO_ROLES.indexOf(role)))
+      role = cap;
+  }
+  return role;
 }

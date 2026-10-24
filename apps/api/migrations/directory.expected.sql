@@ -51,6 +51,13 @@ CREATE TABLE grants (
   CHECK ((depth = 1) = (root_id = id))
 ) STRICT;
 
+-- table handle_reservations
+CREATE TABLE handle_reservations (
+  handle TEXT PRIMARY KEY COLLATE NOCASE,
+  principal_id TEXT NOT NULL,
+  until INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+
 -- table idempotency_keys
 CREATE TABLE idempotency_keys (
   token_id TEXT NOT NULL,
@@ -126,6 +133,18 @@ CREATE TABLE passkeys (
   last_used_at INTEGER
 ) STRICT;
 
+-- table principal_lifecycle
+CREATE TABLE principal_lifecycle (
+  principal_id TEXT NOT NULL REFERENCES principals (id),
+  gen INTEGER NOT NULL,
+  from_state TEXT NOT NULL,
+  to_state TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  actor_id TEXT,
+  request_id TEXT,
+  PRIMARY KEY (principal_id, gen)
+) STRICT, WITHOUT ROWID;
+
 -- table principals
 CREATE TABLE principals (
   id TEXT PRIMARY KEY,
@@ -137,7 +156,9 @@ CREATE TABLE principals (
   is_instance_admin INTEGER NOT NULL DEFAULT 0 CHECK (is_instance_admin IN (0, 1)),
   created_at INTEGER NOT NULL,
   disabled_at INTEGER, require_dpop INTEGER NOT NULL DEFAULT 0
-  CHECK (require_dpop IN (0, 1)),
+  CHECK (require_dpop IN (0, 1)), lifecycle TEXT NOT NULL DEFAULT 'active'
+  CHECK (lifecycle IN ('active', 'suspended', 'deleting', 'deleted')), lifecycle_gen INTEGER NOT NULL DEFAULT 0, lifecycle_claim TEXT, suspended_at INTEGER, suspended_by TEXT, suspended_reason TEXT
+  CHECK (suspended_reason IS NULL OR length(suspended_reason) <= 200),
   CHECK ((type IN ('agent', 'installation')) = (owner_id IS NOT NULL)),
   CHECK (type = 'installation' OR handle IS NOT NULL)
 ) STRICT;
@@ -161,13 +182,21 @@ CREATE TABLE refresh_tokens (
   revoked_at INTEGER
 ) STRICT;
 
+-- table repo_deletion_cleanups
+CREATE TABLE repo_deletion_cleanups (
+  repo_id TEXT NOT NULL REFERENCES repo_deletions (repo_id),
+  cleanup TEXT NOT NULL,
+  done_at INTEGER NOT NULL, gen INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (repo_id, cleanup)
+) STRICT, WITHOUT ROWID;
+
 -- table repo_deletions
 CREATE TABLE repo_deletions (
   repo_id TEXT PRIMARY KEY REFERENCES repos (id),
   step TEXT NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
-, requested_by TEXT, last_error TEXT, act_chain TEXT CHECK (act_chain IS NULL OR json_valid(act_chain)), request_id TEXT, tombstone TEXT CHECK (tombstone IS NULL OR json_valid(tombstone))) STRICT;
+, requested_by TEXT, last_error TEXT, act_chain TEXT CHECK (act_chain IS NULL OR json_valid(act_chain)), request_id TEXT, tombstone TEXT CHECK (tombstone IS NULL OR json_valid(tombstone)), gen INTEGER NOT NULL DEFAULT 0, reopened_epoch INTEGER) STRICT;
 
 -- table repo_redirects
 CREATE TABLE repo_redirects (
@@ -262,6 +291,37 @@ CREATE TABLE "tokens" (
   CHECK ((grant_id IS NULL) = (act_chain IS NULL))
 ) STRICT;
 
+-- table user_deletions
+CREATE TABLE user_deletions (
+  user_id TEXT PRIMARY KEY REFERENCES principals (id),
+  step TEXT NOT NULL
+    CHECK (step IN ('repositories', 'accounts', 'stars', 'feeds', 'finalize', 'done')),
+  requested_by TEXT,
+  request_id TEXT,
+  scan_until INTEGER NOT NULL,
+  account_cursor INTEGER NOT NULL DEFAULT 0,
+  batch_cursor INTEGER NOT NULL DEFAULT 0,
+  feed_cursor INTEGER NOT NULL DEFAULT 0,
+  blocked TEXT,
+  next_attempt_at INTEGER NOT NULL,
+  rearm_after INTEGER NOT NULL DEFAULT 0,
+  lease_id TEXT,
+  lease_until INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  released_handles TEXT NOT NULL CHECK (json_valid(released_handles)),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+-- table user_retirements
+CREATE TABLE user_retirements (
+  user_id TEXT NOT NULL REFERENCES user_deletions (user_id),
+  principal_id TEXT NOT NULL,
+  ord INTEGER NOT NULL,
+  PRIMARY KEY (user_id, principal_id)
+) STRICT, WITHOUT ROWID;
+
 -- table webauthn_challenges
 CREATE TABLE webauthn_challenges (
   id TEXT PRIMARY KEY,
@@ -318,6 +378,9 @@ CREATE INDEX oauth_requests_expiry ON oauth_requests (expires_at);
 -- index oauth_requests_pending
 CREATE INDEX oauth_requests_pending ON oauth_requests (user_id, expires_at) WHERE code_hash IS NULL;
 
+-- index oauth_requests_unconsumed_user
+CREATE INDEX oauth_requests_unconsumed_user ON oauth_requests (user_id) WHERE used_at IS NULL;
+
 -- index passkeys_user
 CREATE INDEX passkeys_user ON passkeys (user_id);
 
@@ -366,6 +429,9 @@ CREATE INDEX repos_generating ON repos (generating_since)
 -- index repos_network
 CREATE INDEX repos_network ON repos (network_id);
 
+-- index repos_owner
+CREATE INDEX repos_owner ON repos (owner_id, id);
+
 -- index repos_owner_name
 CREATE UNIQUE INDEX repos_owner_name ON repos (owner_id, name COLLATE NOCASE) WHERE state <> 'deleted';
 
@@ -399,5 +465,27 @@ CREATE INDEX tokens_oat_expiry ON tokens (expires_at) WHERE type = 'oat';
 -- index tokens_principal
 CREATE INDEX tokens_principal ON tokens (principal_id);
 
+-- index user_deletions_rearm
+CREATE INDEX user_deletions_rearm ON user_deletions (rearm_after, user_id) WHERE step <> 'done';
+
+-- index user_retirements_principal
+CREATE INDEX user_retirements_principal ON user_retirements (principal_id);
+
 -- index webauthn_challenges_expiry
 CREATE INDEX webauthn_challenges_expiry ON webauthn_challenges (expires_at);
+
+-- trigger principals_lifecycle_insert
+CREATE TRIGGER principals_lifecycle_insert BEFORE INSERT ON principals
+WHEN (NEW.lifecycle <> 'active' AND NEW.disabled_at IS NULL)
+  OR (NEW.type = 'user' AND NEW.lifecycle = 'active' AND NEW.disabled_at IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'a principal''s lifecycle and disabled_at disagree');
+END;
+
+-- trigger principals_lifecycle_update
+CREATE TRIGGER principals_lifecycle_update BEFORE UPDATE OF lifecycle, disabled_at ON principals
+WHEN (NEW.lifecycle <> 'active' AND NEW.disabled_at IS NULL)
+  OR (NEW.type = 'user' AND NEW.lifecycle = 'active' AND NEW.disabled_at IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'a principal''s lifecycle and disabled_at disagree');
+END;

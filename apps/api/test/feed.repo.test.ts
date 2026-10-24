@@ -8,6 +8,7 @@ import type { DomainEvent, FeedBlock } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import { type FeedMember, memberKey } from "../src/do/repo/feed-view.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
@@ -59,19 +60,20 @@ async function collaborator(permission: "pull" | "push"): Promise<Who> {
   return who;
 }
 
+/** The outbox's events since `from`. */
+const events = (from = 0) =>
+  inRepo(stub(), (r: RepoDO) =>
+    r.git.context.storage.sql
+      .exec<{ event: string }>(
+        "SELECT event FROM outbox WHERE source_seq > ? ORDER BY source_seq",
+        from,
+      )
+      .toArray()
+      .map((row) => JSON.parse(row.event) as DomainEvent),
+  );
 /** The feed blocks of the outbox's events since `from`, with their event types. */
 const blocks = async (from = 0) =>
-  (
-    await inRepo(stub(), (r: RepoDO) =>
-      r.git.context.storage.sql
-        .exec<{ event: string }>(
-          "SELECT event FROM outbox WHERE source_seq > ? ORDER BY source_seq",
-          from,
-        )
-        .toArray()
-        .map((row) => JSON.parse(row.event) as DomainEvent),
-    )
-  )
+  (await events(from))
     .filter((e) => e.feed)
     .map((e) => ({ type: e.type, ...(e.feed as FeedBlock) }));
 const seq = () =>
@@ -137,16 +139,22 @@ describe("feed blocks", () => {
     expect(reviewed.status).toBe(200);
     const [review] = await blocks(after);
     expect(review?.action).toBe("review");
-    // The reviewer's own request settles silently; the author hears of the approval.
+    // The author hears of the approval; the reviewer's own request settles silently, in entries
+    // the event carries (standing across a transfer).
     expect(told(review)).toEqual(
       [
-        `${writer.principalId}:review_requested:resolved:silent`,
         `${owner.principalId}:approved:open`,
         `${owner.principalId}:changes_requested:resolved`,
         `${owner.principalId}:activity:open`,
       ].sort(),
     );
     expect(review?.subject.version).toBeGreaterThan(requested?.subject.version as number);
+    const [settling] = (await events(after)).filter(
+      (e) => e.type === "pull_request_review.submitted",
+    );
+    const settled = (settling?.data?.resolutions ?? []) as FeedBlock[];
+    expect(settled.map(told)).toEqual([[`${writer.principalId}:review_requested:resolved:silent`]]);
+    expect(settled[0]?.subject.version).toBeGreaterThan(requested?.subject.version as number);
   });
 
   it("keep changes requested open until that reviewer's latest review is not one", async () => {
@@ -230,16 +238,25 @@ describe("feed blocks", () => {
       api("POST", `${path}/issues/1/comments`, writer.token, { body: "a   secret\n\nrevealed" }),
     );
     const member = `comment/${made.body.id}`;
-    const view = (who: Who) => stub().feedView(who.principalId, null, [member, "pull/1", "bogus"]);
-    expect((await view(owner)).excerpts).toEqual({ [member]: "a secret revealed", "pull/1": null });
+    const EPOCH = await inRepo(stub(), (r: RepoDO) => r.events.epochGen());
+    const view = (who: Who) =>
+      stub().feedView(who.principalId, null, [
+        { epoch: EPOCH, thread: "pull/1", member },
+        { epoch: EPOCH, thread: "pull/1", member: "pull/1" },
+        { epoch: EPOCH, thread: "pull/1", member: "bogus" },
+      ]);
+    expect((await view(owner)).excerpts).toEqual({
+      [`${EPOCH} pull/1 ${member}`]: "a secret revealed",
+      [`${EPOCH} pull/1 pull/1`]: null,
+    });
     await api("PATCH", `${path}/issues/comments/${made.body.id}`, writer.token, {
       body: "redacted",
     });
-    expect((await view(owner)).excerpts[member]).toBe("redacted");
+    expect((await view(owner)).excerpts[`${EPOCH} pull/1 ${member}`]).toBe("redacted");
     const from = await seq();
     await api("DELETE", `${path}/issues/comments/${made.body.id}`, writer.token);
     expect(await blocks(from)).toEqual([]);
-    expect((await view(owner)).excerpts[member]).toBeNull();
+    expect((await view(owner)).excerpts[`${EPOCH} pull/1 ${member}`]).toBeNull();
     // One who cannot read the repository gets nothing, and is told so by the ACL decided with.
     expect(await view(await user())).toMatchObject({
       readable: false,
@@ -250,6 +267,78 @@ describe("feed blocks", () => {
         loss: { accountId: owner.principalId, aclVersion: expect.any(Number) },
       },
     });
+  });
+
+  it("show a member only on its own thread and restore generation, whatever its id or number names now", async () => {
+    // As after a restore of the repository, which sets its id and number counters back: an item's
+    // member names a comment, review or review comment now on another subject, or a number now
+    // another kind's; or the item was told before the restore.
+    await api("PATCH", `${path}/pulls/1`, owner.token, { body: "pull text" });
+    const issue = await json<{ number: number }>(
+      api("POST", `${path}/issues`, owner.token, { title: "An issue", body: "issue text" }),
+    );
+    const onPull = await json<{ id: number }>(
+      api("POST", `${path}/issues/1/comments`, owner.token, { body: "pull request text" }),
+    );
+    const onIssue = await json<{ id: number }>(
+      api("POST", `${path}/issues/${issue.body.number}/comments`, owner.token, {
+        body: "issue comment",
+      }),
+    );
+    const epoch = await inRepo(stub(), (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      sql.exec(
+        `INSERT INTO reviews (review_id, pr_number, reviewer_id, reviewer_root, by_agent, state,
+           commit_sha, body, submitted_at) VALUES (900, 1, 'usr_r', 'usr_r', 0, 'COMMENTED', ?, 'review text', 1)`,
+        "0".repeat(40),
+      );
+      // Another pull request, as one opened after the restore would be.
+      sql.exec(
+        `INSERT INTO pull_requests (number, title, state, draft, author_id, author_root, base_ref,
+           base_sha, head_ref, head_sha, created_at, updated_at)
+         VALUES (50, 'another', 'open', 0, 'usr_r', 'usr_r', 'main', ?1, 'other', ?1, 1, 1)`,
+        "0".repeat(40),
+      );
+      sql.exec(
+        `INSERT INTO review_threads (thread_id, pr_number, commit_sha, path, side, line)
+         VALUES (902, 1, ?, 'a.txt', 'RIGHT', 1)`,
+        "0".repeat(40),
+      );
+      sql.exec(
+        `INSERT INTO review_comments (comment_id, pr_number, thread_id, author_id, author_root, body,
+           created_at, updated_at) VALUES (901, 1, 902, 'usr_r', 'usr_r', 'line text', 1, 1)`,
+      );
+      return r.events.epochGen();
+    });
+    const n = issue.body.number;
+    const cases: [FeedMember, string | null][] = [
+      [{ epoch, thread: `issue/${n}`, member: `comment/${onPull.body.id}` }, null],
+      [{ epoch, thread: `issue/${n}`, member: `comment/${onIssue.body.id}` }, "issue comment"],
+      [{ epoch, thread: "pull/1", member: `comment/${onPull.body.id}` }, "pull request text"],
+      [{ epoch, thread: "issue/1", member: "issue/1" }, null],
+      [{ epoch, thread: "issue/1", member: `comment/${onPull.body.id}` }, null],
+      [{ epoch, thread: "pull/1", member: `comment/${onIssue.body.id}` }, null],
+      [{ epoch, thread: `pull/${n}`, member: `pull/${n}` }, null],
+      [{ epoch, thread: `issue/${n}`, member: `issue/${n}` }, "issue text"],
+      [{ epoch, thread: "pull/1", member: "pull/1" }, "pull text"],
+      [{ epoch, thread: "pull/1", member: "review/900" }, "review text"],
+      [{ epoch, thread: `issue/${n}`, member: "review/900" }, null],
+      [{ epoch, thread: "pull/1", member: "review_comment/901" }, "line text"],
+      [{ epoch, thread: `issue/${n}`, member: "review_comment/901" }, null],
+      [{ epoch, thread: "pull/50", member: "review/900" }, null],
+      [{ epoch, thread: "pull/50", member: "review_comment/901" }, null],
+      [{ epoch, thread: "pull/50", member: `comment/${onPull.body.id}` }, null],
+      [{ epoch, thread: "pull/99", member: "review/900" }, null],
+      // Told in another restore generation: nothing, even on its own thread.
+      [{ epoch: epoch + 1, thread: "pull/1", member: `comment/${onPull.body.id}` }, null],
+      [{ epoch: epoch - 1, thread: "pull/1", member: "review/900" }, null],
+    ];
+    const { excerpts } = await stub().feedView(
+      owner.principalId,
+      null,
+      cases.map(([m]) => m),
+    );
+    expect(cases.map(([m]) => excerpts[memberKey(m)])).toEqual(cases.map(([, said]) => said));
   });
 
   it("keep out of a thread those mentioned who cannot read the repository", async () => {

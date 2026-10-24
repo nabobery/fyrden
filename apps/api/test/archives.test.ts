@@ -303,6 +303,154 @@ describe("archives", () => {
     expect(outcome).toBe(Math.ceil((fx.trees.recursive.length + 1) / 3));
   });
 
+  it("keep a zip's records in a row or a few a slice, not one an entry, and none once it is ready", async () => {
+    // Default chunks: one row a slice. Chunks of 1 byte: one row a record (a record never
+    // splits). Chunks of 300 bytes: more rows than slices, none longer than 300 bytes.
+    for (const zipChunkBytes of [ARCHIVE_POLICY.zipChunkBytes, 1, 300]) {
+      const outcome = await inRepo(target.repo.stub, async ({ git }) => {
+        const sql = git.context.storage.sql;
+        const archives = new RepoArchives({
+          git,
+          memoryBlocks: createClockBlockCache(),
+          policy: { sliceEntries: 4, zipChunkBytes },
+        });
+        const input = {
+          commit: fx.revs.main as string,
+          mtime: 0,
+          format: "zip" as const,
+          prefix: `chunked-${zipChunkBytes}`,
+          budgetMs: 0,
+        };
+        // A request with no budget runs one slice.
+        let status = await archives.request(input);
+        const runId = sql
+          .exec<{ run_id: string }>("SELECT run_id FROM archives WHERE prefix = ?", input.prefix)
+          .one().run_id;
+        const seen: {
+          segments: number;
+          rows: number;
+          records: number;
+          longest: number;
+          legacy: string[];
+        }[] = [];
+        while (status.ok && status.value.state === "building") {
+          const rows = sql
+            .exec<{ records: string }>(
+              "SELECT records FROM archive_zip_chunks WHERE run_id = ? ORDER BY seq",
+              runId,
+            )
+            .toArray();
+          seen.push({
+            segments: sql.exec("SELECT segments FROM archives WHERE run_id = ?", runId).one()
+              .segments as number,
+            rows: rows.length,
+            records: rows.reduce((n, r) => n + (JSON.parse(r.records) as unknown[]).length, 0),
+            longest: Math.max(...rows.map((r) => new TextEncoder().encode(r.records).length)),
+            legacy: sql
+              .exec<{ record: string }>(
+                "SELECT record FROM archive_zip_records WHERE run_id = ? ORDER BY seq",
+                runId,
+              )
+              .toArray()
+              .map((r) => r.record),
+          });
+          status = await archives.request(input);
+          if (seen.length > 100) throw new Error("the archive does not finish");
+        }
+        if (!status.ok || status.value.state !== "ready") throw new Error(JSON.stringify(status));
+        const parts: Uint8Array[] = [];
+        for (const key of status.value.keys)
+          parts.push(
+            new Uint8Array(await ((await git.bucket.get(key)) as R2ObjectBody).arrayBuffer()),
+          );
+        const left = sql
+          .exec<{ n: number }>(
+            `SELECT (SELECT count(*) FROM archive_zip_chunks WHERE run_id = ?1)
+               + (SELECT count(*) FROM archive_zip_records WHERE run_id = ?1) AS n`,
+            runId,
+          )
+          .one().n;
+        return { seen, parts, left };
+      });
+      expect(outcome.seen.length, String(zipChunkBytes)).toBeGreaterThan(1);
+      for (const { segments, rows, records, longest, legacy } of outcome.seen) {
+        // Every entry of the segments written so far has its record kept, four a slice.
+        expect(records).toBe(segments * 4);
+        if (zipChunkBytes === 300) {
+          expect(rows).toBeGreaterThan(segments);
+          expect(longest).toBeLessThanOrEqual(300);
+        } else expect(rows).toBe(zipChunkBytes === 1 ? records : segments);
+        // The old table holds one record, which code from before chunks fails to decode (as it
+        // decodes names: `atob`), so it fails the build rather than finish the zip without
+        // the entries kept in chunks.
+        expect(legacy).toHaveLength(1);
+        expect(() => atob(JSON.parse(legacy[0] as string).name)).toThrow();
+      }
+      expect(outcome.left).toBe(0);
+      const bytes = new Uint8Array(outcome.parts.reduce((n, p) => n + p.length, 0));
+      let at = 0;
+      for (const part of outcome.parts) {
+        bytes.set(part, at);
+        at += part.length;
+      }
+      const prefix = `chunked-${zipChunkBytes}`;
+      const entries = unzip(bytes);
+      expect(shape(entries)).toEqual(expectedEntries(prefix));
+      checkContents(entries, prefix);
+    }
+  });
+
+  it("replace a zip's records past a slice run again from an earlier cursor, however it cuts", async () => {
+    const outcome = await inRepo(target.repo.stub, async ({ git }) => {
+      const sql = git.context.storage.sql;
+      const slicing = (sliceEntries: number) =>
+        new RepoArchives({ git, memoryBlocks: createClockBlockCache(), policy: { sliceEntries } });
+      const input = {
+        commit: fx.revs.main as string,
+        mtime: 0,
+        format: "zip" as const,
+        prefix: "recut",
+        budgetMs: 0,
+      };
+      // Two slices of three entries; then, from the cursor after the first, slices of two:
+      // the records the second slice of three kept are written over, none left over.
+      await slicing(3).request(input);
+      const runId = sql
+        .exec<{ run_id: string }>("SELECT run_id FROM archives WHERE prefix = 'recut'")
+        .one().run_id;
+      const jobId = archiveJobId(runId);
+      const afterFirst = git.jobs.get(jobId)?.cursor ?? null;
+      await slicing(3).request(input);
+      sql.exec(
+        "UPDATE jobs SET cursor = ?, state = 'queued', next_run_at = 0 WHERE job_id = ?",
+        afterFirst,
+        jobId,
+      );
+      const archives = slicing(2);
+      let status = await archives.request(input);
+      for (let i = 0; status.ok && status.value.state === "building"; i++) {
+        if (i > 100) throw new Error("the archive does not finish");
+        status = await archives.request(input);
+      }
+      if (!status.ok || status.value.state !== "ready") throw new Error(JSON.stringify(status));
+      const parts: Uint8Array[] = [];
+      for (const key of status.value.keys)
+        parts.push(
+          new Uint8Array(await ((await git.bucket.get(key)) as R2ObjectBody).arrayBuffer()),
+        );
+      return parts;
+    });
+    const bytes = new Uint8Array(outcome.reduce((n, p) => n + p.length, 0));
+    let at = 0;
+    for (const part of outcome) {
+      bytes.set(part, at);
+      at += part.length;
+    }
+    const entries = unzip(bytes);
+    expect(shape(entries)).toEqual(expectedEntries("recut"));
+    checkContents(entries, "recut");
+  });
+
   it("record no segment from a runner that lost its claim, and serve only recorded ones", async () => {
     const outcome = await inRepo(target.repo.stub, async ({ git }) => {
       const archives = new RepoArchives({

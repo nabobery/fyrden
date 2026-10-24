@@ -1,5 +1,7 @@
 import { auditStatement } from "@fyrden/adapters-cloudflare/auth";
+import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type {
+  addOrgOwner,
   createOrg,
   Input,
   listMembers,
@@ -15,6 +17,8 @@ import { type OpContext, OperationError } from "../ops/execute.js";
 import { heldRepos } from "../repos/directory.js";
 import { clock, newId } from "../services.js";
 import { applied, findAccount, invalidateChange, orgFor, userFor } from "./account.js";
+import { wakeDeletionsBlockedOn } from "./deletion-runner.js";
+import { GHOST_LOGIN, ghostsAmong, handleFree } from "./handles.js";
 
 // D1 reports a unique-index violation in the error message.
 const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
@@ -22,6 +26,9 @@ const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
 /** GitHub's membership role names: an `admin` is an owner. */
 const toOrgRole = (role: "admin" | "member"): OrgRole => (role === "admin" ? "owner" : "member");
 const toApiRole = (role: OrgRole): "admin" | "member" => (role === "owner" ? "admin" : "member");
+
+/** Hooks into organization creation. For tests. */
+export const orgHooks: { beforePublish?: () => Promise<void> } = {};
 
 /** The `admin.orgs.create` operation: the organization's object first, then its directory rows. */
 export async function createOrgOperation(
@@ -42,24 +49,55 @@ export async function createOrgOperation(
     owner: { id: admin.id, handle: admin.handle },
     epochGen,
   });
+  if (!init.ok && init.code === "owner_gone")
+    throw new OperationError(409, "user_changed", `The user ${input.admin} changed meanwhile.`);
   if (!init.ok) throw new Error(`initializing the organization failed: ${init.error}`);
+  await orgHooks.beforePublish?.();
   const now = clock();
   const db = env.DIRECTORY;
-  metrics.count("d1.query", { db: "directory", op: "org_create" }, 2);
+  metrics.count("d1.query", { db: "directory", op: "org_create" }, 3);
+  let seen: D1Result | undefined;
+  let made: D1Result | undefined;
   try {
-    await db.batch([
+    [seen, made] = await db.batch([
+      // What the insert below sees, for why it held back.
       db
-        .prepare("INSERT INTO principals (id, type, handle, created_at) VALUES (?, 'org', ?, ?)")
-        .bind(id, input.login, now),
-      auditStatement(db, now, { actorId: auth.principalId, requestId }, "org.create", id, {
-        login: input.login,
-        admin: admin.id,
-      }),
+        .prepare(
+          `SELECT ${handleFree("?1", "?2")} AS free,
+             EXISTS (SELECT 1 FROM principals WHERE id = ?3 AND lifecycle = 'active') AS owner`,
+        )
+        .bind(input.login, now, admin.id),
+      // Only while its first owner is active (a deletion of theirs may have begun since they
+      // were found) and no deletion holds the handle.
+      db
+        .prepare(
+          `INSERT INTO principals (id, type, handle, created_at)
+           SELECT ?1, 'org', ?2, ?3
+           WHERE ${handleFree("?2", "?3")}
+             AND EXISTS (SELECT 1 FROM principals WHERE id = ?4 AND lifecycle = 'active')`,
+        )
+        .bind(id, input.login, now, admin.id),
+      auditStatement(
+        db,
+        now,
+        { actorId: auth.principalId, requestId },
+        "org.create",
+        id,
+        { login: input.login, admin: admin.id },
+        "principals",
+      ),
     ]);
   } catch (error) {
     if (error instanceof Error && UNIQUE_VIOLATION.test(error.message))
       throw new OperationError(409, "handle_taken", `The handle ${input.login} is already taken.`);
     throw error;
+  }
+  // Held back, the initialized object stays unreachable, as when the rows fail.
+  if ((made?.meta.changes ?? 0) === 0) {
+    const why = seen?.results[0] as { free: number; owner: number } | undefined;
+    if (why?.free !== 1)
+      throw new OperationError(409, "handle_taken", `The handle ${input.login} is already taken.`);
+    throw new OperationError(409, "user_changed", `The user ${input.admin} changed meanwhile.`);
   }
   return { id, login: input.login, created_at: now };
 }
@@ -87,7 +125,46 @@ export async function setMembershipOperation(
   );
   ctx.waitUntil(stub.deliverAudit());
   await invalidateChange(env, org.id, change, metrics);
+  if (input.role === "admin") await wakeDeletions(env, org.id, metrics);
   return { org: org.handle, user: user.handle, role: input.role, state: "active" };
+}
+
+/** A user deletion waiting on the organization's last owner goes on now that it has another. */
+async function wakeDeletions(env: Env, orgId: string, metrics: Metrics): Promise<void> {
+  await wakeDeletionsBlockedOn(env, orgId, { metrics }).catch((error: unknown) =>
+    createLogger({ op: "orgs.owners", orgId }).warn("waking deletions failed", { error }),
+  );
+}
+
+/**
+ * The `admin.orgs.owners.add` operation: an instance administrator (the
+ * permission checked) makes an active user an owner of the organization,
+ * whoever its owners are; the organization's object adds them as any
+ * addition is (never a user being deleted), audited `org.owner_handoff`;
+ * a user deletion waiting on the organization then runs again at once (as
+ * after an owner's promotion of a member).
+ */
+export async function addOrgOwnerOperation(
+  ctx: OpContext,
+  input: Input<typeof addOrgOwner>,
+): Promise<null> {
+  const { env, auth, requestId, metrics } = ctx;
+  const org = await findAccount(env, input.org, { metrics });
+  if (org?.type !== "org")
+    throw new OperationError(404, "org_not_found", `No organization ${input.org} was found.`);
+  const user = await userFor(ctx, input.username);
+  const stub = env.ORG.getByName(org.id);
+  metrics.count("do.request", { class: "OrgDO", method: "handOwnership" });
+  const change = applied(
+    await stub.handOwnership(
+      { principalId: auth.principalId, requestId },
+      { id: user.id, handle: user.handle },
+    ),
+  );
+  ctx.waitUntil(stub.deliverAudit());
+  await invalidateChange(env, org.id, change, metrics);
+  await wakeDeletions(env, org.id, metrics);
+  return null;
 }
 
 /** The `orgs.memberships.remove` operation; removing a user who is not a member answers the same. */
@@ -124,8 +201,17 @@ export async function listMembersOperation(
   const rows = await env.ORG.getByName(org.id).members(after, input.per_page + 1);
   const page = rows.slice(0, input.per_page);
   const last = page.at(-1);
+  const ghosts = await ghostsAmong(
+    env,
+    page.map((m) => m.id),
+    metrics,
+  );
   return {
-    members: page.map((m) => ({ id: m.id, login: m.handle, role: toApiRole(m.role) })),
+    members: page.map((m) => ({
+      id: m.id,
+      login: ghosts.has(m.id) ? GHOST_LOGIN : m.handle,
+      role: toApiRole(m.role),
+    })),
     next_cursor: rows.length > input.per_page && last ? encodeCursor(last.handle) : null,
   };
 }

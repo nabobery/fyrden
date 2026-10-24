@@ -6,6 +6,7 @@ import type {
 } from "@fyrden/adapters-cloudflare/git";
 import {
   decidePullAction,
+  type LockReason,
   PULL_ACTION_RULES,
   PULL_ENTITY,
   type PullAction,
@@ -14,6 +15,7 @@ import {
   type PullState,
   pullHeadRef,
   type RepoRole,
+  type SubjectMetaField,
 } from "@fyrden/domain";
 import {
   type Oid,
@@ -23,7 +25,17 @@ import {
   oidToHex,
   type RefUpdate,
 } from "@fyrden/git-core";
+import { labelOutput, milestoneOutput, pullOutput } from "../../repos/shapes.js";
+import type { CaptureValue } from "../../webhooks/capture.js";
+import { ALL_KINDS, capturable, userOf } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
+import type { PullView } from "./mergeability.js";
+import type {
+  MilestoneRecord,
+  SnapshotMeta,
+  SubjectEvent,
+  SubjectTouched,
+} from "./subject-meta.js";
 
 const BRANCHES = "refs/heads/";
 const PULL_HEAD = /^refs\/pull\/([1-9][0-9]*)\/head$/;
@@ -37,8 +49,8 @@ export const LISTING_TTL_MS = 24 * 60 * 60 * 1000;
 /** Listings a repository keeps at most (the oldest go first). Proposed. */
 export const MAX_LISTINGS = 1_000;
 
-/** A pull request as the repository keeps it. */
-export interface PullRecord extends PullRequestRow {
+/** A pull request as the repository keeps it (its labels, assignees and milestone are read apart). */
+export interface PullRecord extends Omit<PullRequestRow, SubjectMetaField> {
   /** The agents that opened it for `authorId`, the current one first; empty when it acted itself. */
   readonly authorAct: readonly string[];
   /**
@@ -74,6 +86,8 @@ type Row = {
   head_repo_id: string | null;
   head_ref_version: number | null;
   maintainer_can_modify: number;
+  locked: number;
+  lock_reason: LockReason | null;
   last_pusher: string | null;
   last_pusher_grant: string | null;
   last_push_at: number | null;
@@ -81,6 +95,7 @@ type Row = {
   merged_by: string | null;
   merged_at: number | null;
   generation: number;
+  milestone: number | null;
   version: number;
   closed_at: number | null;
   created_at: number;
@@ -127,6 +142,11 @@ export interface PullCaller {
   readonly role: RepoRole | null;
 }
 
+/** An open pull request's head moved: its new head, who pushed it, under which grant, and when (twice). */
+export const HEAD_MOVED = `UPDATE pull_requests SET head_sha = ?, last_pusher = ?, last_pusher_grant = ?,
+    last_push_at = ?, version = version + 1, updated_at = ?
+  WHERE number = ? AND state = 'open' RETURNING *`;
+
 /** A page of the open pull requests whose head is in a repository: its id, the number after, the size. */
 export const OPEN_FROM_HEAD_REPO = `SELECT * FROM pull_requests
   WHERE head_repo_id = ? AND state = 'open' AND number > ? ORDER BY number LIMIT ?`;
@@ -148,7 +168,7 @@ export class RepoPulls {
        * In the transaction of a change: whether the pull request merges must
        * be worked out again (open), or no longer (closed or merged).
        */
-      readonly stale?: (number: number, open: boolean) => void;
+      readonly stale?: (number: number, open: boolean, event: string) => void;
       /** In a commit's transaction: base branch `branch` moved, so its open pull requests' too. */
       readonly staleBase?: (branch: string) => void;
       /**
@@ -157,8 +177,24 @@ export class RepoPulls {
        * repository must follow the branch for it, or no longer.
        */
       readonly follow?: (pull: PullRecord) => void;
+      /** What a pull request's labels, assignees and milestone are, read into its snapshots. */
+      readonly snapshotMeta?: (number: number) => SnapshotMeta;
+      /** In a change's transaction: its description now (opened, or edited), for what it refers to. */
+      readonly described?: (number: number, body: string | null, actor: RefActor | null) => void;
+      /** In a merge's transaction, once merged: what its description closes is closed. */
+      readonly merged?: (pull: PullRecord, actor: RefActor) => void;
+      /** A pull request as the API shows it, as it stands (for webhook captures). */
+      readonly view?: (pull: PullRecord) => PullView;
+      /** A milestone as it stands (its counts after a change), for webhook captures. */
+      readonly milestone?: (number: number) => MilestoneRecord | undefined;
     },
   ) {}
+
+  /** `pull` as the API shows it to a reader of both kinds, as it stands, for a webhook capture. */
+  captured(pull: PullRecord): CaptureValue {
+    const view = this.deps.view?.(pull);
+    return view ? capturable(pullOutput(view, ALL_KINDS)) : null;
+  }
 
   get(number: number): PullRecord | undefined {
     const row = this.#rows("SELECT * FROM pull_requests WHERE number = ?", number)[0];
@@ -235,9 +271,7 @@ export class RepoPulls {
       const number = Number(PULL_HEAD.exec(update.name)?.[1]);
       if (!number || update.newOid === null) continue;
       const [row] = this.#rows(
-        `UPDATE pull_requests SET head_sha = ?, last_pusher = ?, last_pusher_grant = ?,
-           last_push_at = ?, version = version + 1, updated_at = ?
-         WHERE number = ? AND state = 'open' RETURNING *`,
+        HEAD_MOVED,
         oidToHex(update.newOid),
         actor?.principal ?? null,
         actor?.grantId ?? null,
@@ -303,8 +337,10 @@ export class RepoPulls {
     );
     // The fence ran in this transaction: it is open.
     if (!row) throw new Error(`pull request ${number} is not open to merge`);
-    this.#emit(rule.event, record(row), actor);
+    const pull = record(row);
+    this.#emit(rule.event, pull, actor);
     this.deps.events.auditChange(rule.audit, actor, { number, sha: oidToHex(sha), method });
+    this.deps.merged?.(pull, actor);
   }
 
   /**
@@ -756,6 +792,44 @@ export class RepoPulls {
   }
 
   /**
+   * Locks or unlocks the pull request's conversation (write access), with
+   * its event and audit row; changing nothing (locked already with that
+   * reason) emits nothing.
+   */
+  setLock(
+    number: number,
+    locked: boolean,
+    reason: LockReason | null,
+    caller: PullCaller,
+  ): { ok: true } | { ok: false; code: "not_found" | "forbidden" } {
+    const current = this.get(number);
+    if (!current) return { ok: false, code: "not_found" };
+    const action = locked ? "lock" : "unlock";
+    const decision = decidePullAction(action, {
+      state: current.state,
+      headRefDeleted: current.headRefDeleted,
+      isAuthor: caller.root === current.authorRoot,
+      role: caller.role,
+    });
+    if (!decision.ok) return { ok: false, code: "forbidden" };
+    if (current.locked === locked && current.lockReason === reason) return { ok: true };
+    const rule = PULL_ACTION_RULES[action];
+    this.deps.git.context.storage.transactionSync(() => {
+      const [row] = this.#rows(
+        `UPDATE pull_requests SET locked = ?, lock_reason = ?, version = version + 1, updated_at = ?
+         WHERE number = ? RETURNING *`,
+        locked ? 1 : 0,
+        reason,
+        this.deps.git.context.now(),
+        number,
+      );
+      this.#emit(rule.event, record(row as Row), caller.actor);
+      this.deps.events.auditChange(rule.audit, caller.actor, { number, ...(reason && { reason }) });
+    });
+    return { ok: true };
+  }
+
+  /**
    * What a pull request's files and commits are compared from: an open
    * one's base branch tip (the recorded base once the branch is gone); a
    * closed or merged one's recorded base, the branch's tip when it closed
@@ -794,11 +868,17 @@ export class RepoPulls {
     return row?.oid ? oidFromBytes(new Uint8Array(row.oid)) : null;
   }
 
+  /**
+   * Emits the pull request's event; its webhook capture is its number, the
+   * pull request as the API shows it, what a metadata action `touched`, a
+   * synchronize's head before and after, and an edit's changes.
+   */
   #emit(
     event: string,
     pull: PullRecord,
     actor: RefActor | null,
     data: Record<string, unknown> | null = null,
+    touched?: SubjectTouched,
   ): void {
     // Every change passes here: the head it leaves is one the pull request has had, and
     // whether it merges is worked out again (only when its base tip or head moved, in fact).
@@ -807,7 +887,7 @@ export class RepoPulls {
       pull.number,
       pull.headSha,
     );
-    this.deps.stale?.(pull.number, pull.state === "open");
+    this.deps.stale?.(pull.number, pull.state === "open", event);
     // The head's repository is told what the pull request now asks of it (its consent too).
     if (
       pull.headRepoId &&
@@ -826,14 +906,59 @@ export class RepoPulls {
       lastPushAt: _at,
       headRefVersion: _headVersion,
       version,
-      ...row
+      ...fields
     } = pull;
+    const row = {
+      ...fields,
+      ...(this.deps.snapshotMeta?.(pull.number) ?? { labels: [], assignees: [], milestone: null }),
+    };
     this.deps.events.emitEntity(
       `pull_request.${event}`,
       actor,
       { type: PULL_ENTITY, id: `${this.deps.repoId()}#${pull.number}`, version, row },
       data,
+      false,
+      () => ({
+        number: pull.number,
+        pull_request: this.captured(pull),
+        ...(event === "synchronize" && {
+          before: (data?.before as string | null | undefined) ?? null,
+          after: (data?.after as string | null | undefined) ?? null,
+        }),
+        ...(touched?.label && { label: capturable(labelOutput(touched.label)) }),
+        ...(touched?.assignee !== undefined && { assignee: userOf(touched.assignee) }),
+        // The milestone set or left, its counts as the change left them.
+        ...(touched?.milestone && {
+          milestone: capturable(
+            milestoneOutput(
+              this.deps.milestone?.(touched.milestone.number) ?? touched.milestone,
+              ALL_KINDS,
+            ),
+          ),
+        }),
+        ...(data?.changes !== undefined && { changes: capturable(data.changes) }),
+      }),
     );
+    if (
+      event === "opened" ||
+      (event === "edited" && data?.changes && "body" in (data.changes as object))
+    )
+      this.deps.described?.(pull.number, pull.body, actor);
+  }
+
+  /**
+   * In a change's transaction: the pull request's labels, assignees or
+   * milestone changed; bumps its version and update time and emits
+   * `events` with its snapshot as it now stands.
+   */
+  touch(number: number, events: readonly SubjectEvent[], actor: RefActor): void {
+    const [row] = this.#rows(
+      "UPDATE pull_requests SET version = version + 1, updated_at = ? WHERE number = ? RETURNING *",
+      this.deps.git.context.now(),
+      number,
+    );
+    const pull = record(row as Row);
+    for (const { event, data, touched } of events) this.#emit(event, pull, actor, data, touched);
   }
 
   #rows<T extends Record<string, SqlStorageValue> = Row>(
@@ -852,8 +977,8 @@ export class RepoPulls {
   }
 }
 
-/** What a patch can ask for: a merge is made through the push path. */
-type PatchAction = Exclude<PullAction, "merge">;
+/** What a patch can ask for: a merge is made through the push path, a lock through its own. */
+type PatchAction = Exclude<PullAction, "merge" | "lock" | "unlock">;
 
 /** The actions a patch asks for, in the order they apply: a reopen first, a close last. */
 function plannedActions(current: PullRecord, patch: PullPatch): PatchAction[] {
@@ -893,6 +1018,8 @@ function record(row: Row): PullRecord {
     headRepoId: row.head_repo_id,
     headRefVersion: row.head_ref_version,
     maintainerCanModify: row.maintainer_can_modify === 1,
+    locked: row.locked === 1,
+    lockReason: row.lock_reason,
     baseSha: row.base_sha,
     headSha: row.head_sha,
     headRefDeleted: row.head_ref_deleted === 1,
@@ -903,6 +1030,7 @@ function record(row: Row): PullRecord {
     mergedBy: row.merged_by,
     mergedAt: row.merged_at,
     generation: row.generation,
+    milestone: row.milestone,
     closedAt: row.closed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

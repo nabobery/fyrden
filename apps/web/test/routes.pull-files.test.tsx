@@ -51,6 +51,17 @@ function comment(extra: Record<string, unknown>): ReviewComment {
     resolved: false,
     created_at: 1,
     updated_at: 1,
+    reactions: {
+      total_count: 0,
+      "+1": 0,
+      "-1": 0,
+      laugh: 0,
+      confused: 0,
+      heart: 0,
+      hooray: 0,
+      rocket: 0,
+      eyes: 0,
+    },
     ...extra,
   } as ReviewComment;
 }

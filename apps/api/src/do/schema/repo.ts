@@ -851,4 +851,512 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 33,
+    // Issues, numbered with pull requests from `repo_meta.next_number`; a
+    // deleted issue leaves a tombstone for good (numbers are never reused,
+    // and feeds check it when they show the issue's items). Conversations
+    // of pull requests lock too. Listings sorted by update read an index
+    // per state on both tables.
+    name: "issues",
+    sql: `
+      CREATE TABLE issues (
+        number INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        body TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+        state_reason TEXT
+          CHECK (state_reason IN ('completed', 'not_planned', 'duplicate', 'reopened')),
+        duplicate_of INTEGER,
+        locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+        lock_reason TEXT CHECK (lock_reason IN ('off-topic', 'too heated', 'resolved', 'spam')),
+        author_id TEXT NOT NULL,
+        author_root TEXT NOT NULL,
+        author_act TEXT,
+        closed_at INTEGER,
+        closed_by TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK ((duplicate_of IS NOT NULL) = (state = 'closed' AND state_reason = 'duplicate')),
+        CHECK ((state = 'closed') = (closed_at IS NOT NULL))
+      ) STRICT;
+      CREATE INDEX issues_state ON issues (state, number);
+      CREATE INDEX issues_updated ON issues (state, updated_at, number);
+      CREATE TABLE issue_tombstones (
+        number INTEGER PRIMARY KEY,
+        version INTEGER NOT NULL,
+        deleted_at INTEGER NOT NULL,
+        deleted_by TEXT
+      ) STRICT;
+      ALTER TABLE pull_requests ADD COLUMN locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1));
+      ALTER TABLE pull_requests ADD COLUMN lock_reason TEXT
+        CHECK (lock_reason IN ('off-topic', 'too heated', 'resolved', 'spam'));
+      CREATE INDEX pull_requests_updated ON pull_requests (state, updated_at, number);
+    `,
+  },
+  {
+    version: 34,
+    // Labels, milestones and assignees of issues and pull requests (one
+    // number sequence, so kept by number). Label ids and milestone numbers
+    // come from counters and are never reused: deleting one is one row, and
+    // what pointed at it reads as nothing. Milestone counts, of issues and
+    // of pull requests apart (each shown only to a caller that reads that
+    // kind), are kept by triggers on both tables, so no change of state can
+    // miss them.
+    name: "labels_milestones_assignees",
+    sql: `
+      ALTER TABLE repo_meta ADD COLUMN next_label_id INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE repo_meta ADD COLUMN next_milestone INTEGER NOT NULL DEFAULT 1;
+      CREATE TABLE labels (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        color TEXT NOT NULL CHECK (length(color) = 6),
+        description TEXT,
+        is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE UNIQUE INDEX labels_name ON labels (name COLLATE NOCASE);
+      CREATE TABLE subject_labels (
+        number INTEGER NOT NULL,
+        label_id INTEGER NOT NULL,
+        PRIMARY KEY (number, label_id)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE subject_assignees (
+        number INTEGER NOT NULL,
+        principal TEXT NOT NULL,
+        root TEXT NOT NULL,
+        assigned_at INTEGER NOT NULL,
+        PRIMARY KEY (number, principal)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE milestones (
+        number INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+        due_on INTEGER,
+        closed_at INTEGER,
+        open_issues INTEGER NOT NULL DEFAULT 0,
+        closed_issues INTEGER NOT NULL DEFAULT 0,
+        open_pulls INTEGER NOT NULL DEFAULT 0,
+        closed_pulls INTEGER NOT NULL DEFAULT 0,
+        creator TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK ((state = 'closed') = (closed_at IS NOT NULL))
+      ) STRICT;
+      CREATE UNIQUE INDEX milestones_title ON milestones (title);
+      -- Listed by due date, those without one last.
+      CREATE INDEX milestones_due ON milestones (state, ifnull(due_on, 9007199254740991), number);
+      ALTER TABLE issues ADD COLUMN milestone INTEGER;
+      ALTER TABLE pull_requests ADD COLUMN milestone INTEGER;
+      CREATE TRIGGER issues_milestone_insert AFTER INSERT ON issues
+        WHEN NEW.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_issues = open_issues + (NEW.state = 'open'),
+          closed_issues = closed_issues + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+      CREATE TRIGGER issues_milestone_update AFTER UPDATE OF state, milestone ON issues
+        WHEN OLD.milestone IS NOT NEW.milestone OR OLD.state IS NOT NEW.state
+      BEGIN
+        UPDATE milestones SET open_issues = open_issues - (OLD.state = 'open'),
+          closed_issues = closed_issues - (OLD.state <> 'open') WHERE number = OLD.milestone;
+        UPDATE milestones SET open_issues = open_issues + (NEW.state = 'open'),
+          closed_issues = closed_issues + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+      CREATE TRIGGER issues_milestone_delete AFTER DELETE ON issues
+        WHEN OLD.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_issues = open_issues - (OLD.state = 'open'),
+          closed_issues = closed_issues - (OLD.state <> 'open') WHERE number = OLD.milestone;
+      END;
+      CREATE TRIGGER pull_requests_milestone_insert AFTER INSERT ON pull_requests
+        WHEN NEW.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_pulls = open_pulls + (NEW.state = 'open'),
+          closed_pulls = closed_pulls + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+      CREATE TRIGGER pull_requests_milestone_update AFTER UPDATE OF state, milestone ON pull_requests
+        WHEN OLD.milestone IS NOT NEW.milestone OR OLD.state IS NOT NEW.state
+      BEGIN
+        UPDATE milestones SET open_pulls = open_pulls - (OLD.state = 'open'),
+          closed_pulls = closed_pulls - (OLD.state <> 'open') WHERE number = OLD.milestone;
+        UPDATE milestones SET open_pulls = open_pulls + (NEW.state = 'open'),
+          closed_pulls = closed_pulls + (NEW.state <> 'open') WHERE number = NEW.milestone;
+      END;
+      CREATE TRIGGER pull_requests_milestone_delete AFTER DELETE ON pull_requests
+        WHEN OLD.milestone IS NOT NULL
+      BEGIN
+        UPDATE milestones SET open_pulls = open_pulls - (OLD.state = 'open'),
+          closed_pulls = closed_pulls - (OLD.state <> 'open') WHERE number = OLD.milestone;
+      END;
+    `,
+  },
+  {
+    version: 35,
+    // Reactions to issues and pull requests (by number), conversation
+    // comments and diff comments: one per principal, content and target.
+    // Ids come from a counter and are never reused (a deletion by id cannot
+    // reach a later reaction); the counts each target answers with are kept
+    // by triggers (a count back at 0 stays; a target's go with it).
+    name: "reactions",
+    sql: `
+      ALTER TABLE repo_meta ADD COLUMN next_reaction_id INTEGER NOT NULL DEFAULT 1;
+      CREATE TABLE reactions (
+        id INTEGER PRIMARY KEY,
+        target TEXT NOT NULL CHECK (target IN ('subject', 'comment', 'review_comment')),
+        target_id INTEGER NOT NULL,
+        content TEXT NOT NULL
+          CHECK (content IN ('+1', '-1', 'laugh', 'confused', 'heart', 'hooray', 'rocket', 'eyes')),
+        principal TEXT NOT NULL,
+        act_chain TEXT,
+        created_at INTEGER NOT NULL,
+        UNIQUE (target, target_id, principal, content)
+      ) STRICT;
+      CREATE INDEX reactions_target ON reactions (target, target_id, id);
+      CREATE INDEX reactions_content ON reactions (target, target_id, content, id);
+      CREATE TABLE reaction_counts (
+        target TEXT NOT NULL,
+        target_id INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (target, target_id, content)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TRIGGER reactions_count_insert AFTER INSERT ON reactions
+      BEGIN
+        INSERT INTO reaction_counts (target, target_id, content, count)
+          VALUES (NEW.target, NEW.target_id, NEW.content, 1)
+          ON CONFLICT (target, target_id, content) DO UPDATE SET count = count + 1;
+      END;
+      CREATE TRIGGER reactions_count_delete AFTER DELETE ON reactions
+      BEGIN
+        UPDATE reaction_counts SET count = count - 1
+          WHERE target = OLD.target AND target_id = OLD.target_id AND content = OLD.content;
+      END;
+    `,
+  },
+  {
+    version: 36,
+    // References between issues and pull requests. `outgoing_references`:
+    // what each of this repository's sources (an issue's or pull request's
+    // body, comment 0, or a conversation comment) names, here (whether it
+    // exists yet or not) or in another repository, under each name it was
+    // written with (empty for `#N`; each keeps where it pointed then), and
+    // whether it closes it. `incoming_references`: what
+    // names each of this repository's issues and pull requests, from here
+    // or from another repository, whose sets arrive in order of the
+    // source's events (`reference_sources` keeps the last applied).
+    // `reference_closes`: each close another repository's merge asked of
+    // this one, by its effect, with what came of it (a repeat answers the
+    // same). `resolved_repos`: other repositories' names as texts here last
+    // resolved them (a merge reads them, however long after). `cursor_keys`:
+    // the key listing cursors are sealed with. A target's references are
+    // kept by source repository and kind, so a listing passes over those a
+    // reader may not see a group at a time.
+    name: "references",
+    sql: `
+      CREATE TABLE outgoing_references (
+        source_number INTEGER NOT NULL,
+        source_comment INTEGER NOT NULL,
+        repo_id TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        closes INTEGER NOT NULL CHECK (closes IN (0, 1)),
+        name TEXT NOT NULL,
+        PRIMARY KEY (source_number, source_comment, repo_id, number, name)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE incoming_references (
+        target INTEGER NOT NULL,
+        source_repo TEXT NOT NULL,
+        source_number INTEGER NOT NULL,
+        source_comment INTEGER NOT NULL,
+        source_kind TEXT NOT NULL CHECK (source_kind IN ('issue', 'pull')),
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (target, source_repo, source_kind, source_number, source_comment)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX incoming_references_source
+        ON incoming_references (source_repo, source_number, source_comment);
+      CREATE TABLE reference_closes (
+        effect_id TEXT PRIMARY KEY,
+        outcome TEXT NOT NULL CHECK (outcome IN ('closed', 'unchanged', 'refused')),
+        at INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE resolved_repos (
+        name TEXT PRIMARY KEY,
+        repo_id TEXT,
+        resolved_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX resolved_repos_at ON resolved_repos (resolved_at);
+      CREATE TABLE cursor_keys (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        key BLOB NOT NULL CHECK (length(key) = 32)
+      ) STRICT;
+      CREATE TABLE reference_sources (
+        source_repo TEXT NOT NULL,
+        source_number INTEGER NOT NULL,
+        source_comment INTEGER NOT NULL,
+        epoch_gen INTEGER NOT NULL,
+        source_seq INTEGER NOT NULL,
+        PRIMARY KEY (source_repo, source_number, source_comment)
+      ) STRICT, WITHOUT ROWID;
+    `,
+  },
+  {
+    version: 37,
+    // A thread's participants counted (`feed_participation`): how many it
+    // keeps, the sequence the next to join takes, how many joins the cap
+    // refused (of principals not already in), and the readers it last
+    // reclaimed the places of those who no longer read with (their ACL's
+    // key), so a join reads one row rather than counting the thread's
+    // participants. Their index in join
+    // order serves reading them a page at a time.
+    name: "feed_participation",
+    sql: `
+      CREATE TABLE feed_participation (
+        number INTEGER PRIMARY KEY,
+        participants INTEGER NOT NULL,
+        next_seq INTEGER NOT NULL,
+        overflow INTEGER NOT NULL DEFAULT 0,
+        reclaimed TEXT
+      ) STRICT;
+      INSERT INTO feed_participation (number, participants, next_seq)
+        SELECT number, count(*), max(joined_seq) + 1 FROM feed_participants GROUP BY number;
+      CREATE INDEX feed_participants_joined ON feed_participants (number, joined_seq);
+    `,
+  },
+  {
+    version: 38,
+    // Activity feed recipients past those an event carries
+    // (`feed_audience_pages`): each page's entries frozen with the event
+    // (keyed by its full id), with the restore and ownership generations it
+    // was made in and when it may go (a day after the event's delivery
+    // deadline). Only the event's feed effects read them.
+    name: "feed_audience_pages",
+    sql: `
+      CREATE TABLE feed_audience_pages (
+        event_key TEXT NOT NULL,
+        page INTEGER NOT NULL CHECK (page >= 1),
+        epoch_gen INTEGER NOT NULL,
+        owner_gen INTEGER NOT NULL,
+        recipients TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (event_key, page)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX feed_audience_pages_expiry ON feed_audience_pages (expires_at);
+    `,
+  },
+  {
+    version: 39,
+    // Webhook capture blobs (`webhook_blobs`): long text values webhook
+    // captures name by the hash of their JSON encoding, each kept once until
+    // a day after the latest delivery deadline of an event naming it.
+    name: "webhook_blobs",
+    sql: `
+      CREATE TABLE webhook_blobs (
+        hash TEXT PRIMARY KEY,
+        text_json TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        retain_until INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX webhook_blobs_retain ON webhook_blobs (retain_until);
+    `,
+  },
+  {
+    version: 40,
+    // Reviews asked of teams. Every request takes an id never used again
+    // (`review_request_ids`; a principal's too, existing ones numbered
+    // here) and its reasons (bit 1: someone asked; existing ones were).
+    // A team's request (`review_team_requests`) keeps the team as it was
+    // asked (stable id, slug and name), the ownership generation it was
+    // asked under (another owner's are no one's) and how many members it
+    // asked; its members as they were then (`review_request_audiences`,
+    // pages of ids) until it ends or its pull request merges.
+    // `review_team_epochs`: the account's restore generation
+    // its team requests were last checked against, and the one seen since,
+    // for the ownership they were seen under.
+    name: "review_team_requests",
+    sql: `
+      ALTER TABLE review_requests ADD COLUMN reasons INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE review_requests ADD COLUMN request_id INTEGER;
+      UPDATE review_requests SET request_id = rowid;
+      CREATE UNIQUE INDEX review_requests_id ON review_requests (request_id);
+      CREATE TABLE review_request_ids (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        next_id INTEGER NOT NULL
+      ) STRICT;
+      INSERT INTO review_request_ids (id, next_id)
+        SELECT 1, coalesce(max(request_id), 0) + 1 FROM review_requests;
+      CREATE TABLE review_team_requests (
+        request_id INTEGER PRIMARY KEY,
+        pr_number INTEGER NOT NULL,
+        team_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        name TEXT NOT NULL,
+        reasons INTEGER NOT NULL DEFAULT 1,
+        owner_gen INTEGER NOT NULL,
+        members INTEGER NOT NULL,
+        audience INTEGER NOT NULL CHECK (audience IN (0, 1)),
+        requested_by TEXT NOT NULL,
+        requested_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX review_team_requests_pr ON review_team_requests (pr_number, owner_gen);
+      CREATE INDEX review_team_requests_owner ON review_team_requests (owner_gen);
+      CREATE TABLE review_request_audiences (
+        request_id INTEGER NOT NULL,
+        page INTEGER NOT NULL CHECK (page >= 1),
+        members TEXT NOT NULL,
+        PRIMARY KEY (request_id, page)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE review_team_epochs (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        account_id TEXT NOT NULL,
+        owner_gen INTEGER NOT NULL,
+        observed INTEGER NOT NULL,
+        reconciled INTEGER,
+        cursor INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+    `,
+  },
+  {
+    version: 41,
+    // Who owns what each open pull request changes, worked out in the
+    // background. `code_owner_jobs`: the pull requests to work out (a
+    // newer request bumps `seq`; `asked` for a draft whose result was read).
+    // `code_owner_evaluations`: one per (merge base, head, CODEOWNERS blob,
+    // evaluator version), content-addressed; its checkpoint while pending
+    // (the diff's cursor, the counts so far, the totals) and its outcome.
+    // `code_owner_rules`: a finished evaluation's counts per deciding rule.
+    // `code_owner_pointers`: what each pull request shows, for the base
+    // branch, base tip, head and version it was worked out for: an
+    // evaluation and the file's location, or an outcome reached before
+    // one could be keyed (`merge_base` too large, unreadable).
+    // `code_owner_restore`: where a restore's scan of open pull requests is.
+    name: "code_owners",
+    sql: `
+      CREATE TABLE code_owner_jobs (
+        pr_number INTEGER PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        requested_at INTEGER NOT NULL,
+        asked INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+      CREATE INDEX code_owner_jobs_due ON code_owner_jobs (requested_at, pr_number);
+      CREATE TABLE code_owner_evaluations (
+        eval_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        merge_base TEXT NOT NULL,
+        head TEXT NOT NULL,
+        file_blob TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('pending', 'complete', 'none', 'too_large')),
+        reason TEXT,
+        errors INTEGER NOT NULL DEFAULT 0,
+        cursor TEXT,
+        partial TEXT,
+        totals TEXT,
+        unmatched INTEGER NOT NULL DEFAULT 0,
+        unmatchable INTEGER NOT NULL DEFAULT 0,
+        unmatchable_example TEXT,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE UNIQUE INDEX code_owner_evaluations_key
+        ON code_owner_evaluations (merge_base, head, file_blob, version);
+      CREATE TABLE code_owner_rules (
+        eval_id INTEGER NOT NULL,
+        line INTEGER NOT NULL,
+        owners TEXT NOT NULL,
+        paths INTEGER NOT NULL,
+        example TEXT NOT NULL,
+        PRIMARY KEY (eval_id, line)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE code_owner_pointers (
+        pr_number INTEGER PRIMARY KEY,
+        base_ref TEXT NOT NULL,
+        base_tip TEXT NOT NULL,
+        head TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        eval_id INTEGER,
+        file_path TEXT,
+        file_blob TEXT,
+        outcome TEXT,
+        reason TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        retry_at INTEGER
+      ) STRICT;
+      CREATE INDEX code_owner_pointers_eval ON code_owner_pointers (eval_id);
+      CREATE TABLE code_owner_restore (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        after INTEGER NOT NULL
+      ) STRICT;
+    `,
+  },
+  {
+    version: 42,
+    // A zip's records wait for its last slice in rows of many
+    // (`archive_zip_chunks`, keyed by each row's first entry), not a row
+    // an entry. Records of builds under way are copied, a row each;
+    // `archive_zip_records` is read no more, and is dropped by a later
+    // contract step.
+    name: "archive_zip_chunks",
+    sql: `
+      CREATE TABLE archive_zip_chunks (
+        run_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        records TEXT NOT NULL CHECK (json_valid(records)),
+        PRIMARY KEY (run_id, seq)
+      ) STRICT;
+      INSERT INTO archive_zip_chunks (run_id, seq, records)
+        SELECT run_id, seq, json_array(json(record)) FROM archive_zip_records;
+    `,
+  },
+  {
+    version: 43,
+    // A merge reads each reviewer's latest reviews (code owners tell a
+    // person's agents apart), not each root's: seeks by reviewer.
+    // `reviews_standing` and `reviews_standing_head` are read no more and
+    // are dropped by a later contract step.
+    name: "reviews_by_reviewer",
+    sql: `
+      CREATE INDEX reviews_by_reviewer
+        ON reviews (pr_number, reviewer_id, by_agent, state, review_id)
+        WHERE dismissed_at IS NULL;
+      CREATE INDEX reviews_by_reviewer_head
+        ON reviews (pr_number, reviewer_id, by_agent, commit_sha, state, review_id)
+        WHERE dismissed_at IS NULL;
+    `,
+  },
+  {
+    version: 44,
+    // Code owners asked to review. `code_owner_request_jobs`: the pull
+    // requests whose owners are to be asked (a newer request bumps `seq`),
+    // each with its pass's partial work (`state`, JSON: where it is in the
+    // rules and what it was read under; none to start from the first rule).
+    // `code_owner_asked`: who was asked once for its ownership on each pull
+    // request (never again there). `code_owner_waiting`: pull requests with
+    // owners left to ask, for room (places, members) or until their
+    // reviewers are fewer.
+    name: "code_owner_requests",
+    sql: `
+      CREATE TABLE code_owner_request_jobs (
+        pr_number INTEGER PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        requested_at INTEGER NOT NULL,
+        state TEXT CHECK (state IS NULL OR json_valid(state))
+      ) STRICT;
+      CREATE INDEX code_owner_request_jobs_due
+        ON code_owner_request_jobs (requested_at, pr_number);
+      CREATE TABLE code_owner_asked (
+        pr_number INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('principal', 'team')),
+        id TEXT NOT NULL,
+        asked_at INTEGER NOT NULL,
+        PRIMARY KEY (pr_number, kind, id)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE code_owner_waiting (
+        pr_number INTEGER PRIMARY KEY,
+        reason TEXT NOT NULL CHECK (reason IN ('room', 'reviewers'))
+      ) STRICT;
+    `,
+  },
 ];

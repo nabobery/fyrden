@@ -1,6 +1,10 @@
 import { createLogger, createMetrics } from "@fyrden/adapters-cloudflare/obs";
 import {
   atLeast,
+  GITHUB_DEFAULT_LABELS,
+  type LabelSpec,
+  MAX_TEAM_REVIEWERS,
+  membershipKey,
   type OrgRole,
   orgRepoRole,
   REPO_ROLES,
@@ -34,6 +38,38 @@ export interface ChangeActor {
   readonly requestId?: string;
 }
 
+/** Hooks into an account object. For tests. */
+export const accountHooks: {
+  /** After an addition read its principals' lifecycle, before its transaction. */
+  afterLifecycleRead?: (account: OrgDO) => Promise<void>;
+  /** Before the object reads its restore generation from the directory. */
+  beforeEpochRead?: () => Promise<void>;
+} = {};
+
+/** What a user deletion asks of each account object (see `retirePrincipals`). */
+export interface RetireInput {
+  /** The principals retired: the deleted user and its agents (up to 100 a call). */
+  readonly ids: readonly string[];
+  readonly jobId: string;
+  /** Who deletes them, for the audit row. */
+  readonly actor: ChangeActor;
+  /** Whether an organization keeps an owner (false for an object whose organization was never published). */
+  readonly ownerCheck: boolean;
+  /** Most rows removed this call. */
+  readonly budget: number;
+}
+
+export type RetireAnswer =
+  | {
+      /** `more`: rows of theirs are left for another call. */
+      readonly state: "done" | "more";
+      readonly removed: number;
+      readonly epochGen: number;
+      readonly version: number;
+    }
+  /** One of them is the organization's only owner: nothing was removed. */
+  | { readonly state: "sole_owner" };
+
 /** The outcome of an access change. */
 export type AclChange =
   | {
@@ -55,7 +91,8 @@ export type AclChange =
         | "team_not_found"
         | "team_taken"
         | "too_many"
-        | "repo_gone";
+        | "repo_gone"
+        | "principal_gone";
       readonly error: string;
     };
 
@@ -77,6 +114,31 @@ export interface MemberRow {
   readonly role: OrgRole;
 }
 
+/** A team a review is asked of, as the account has it now. */
+export interface TeamAudienceEntry {
+  /** Its stable id (a slug may be taken by another team later). */
+  readonly id: string;
+  readonly slug: string;
+  readonly name: string;
+  /** The role every member has on the repository at least: the base role or the team's grant. */
+  readonly role: RepoRole | null;
+  /** Every member, in id order; null when there are more than a request may ask. */
+  readonly members: readonly string[] | null;
+}
+
+/**
+ * Teams of the account asked to review a pull request of one of its
+ * repositories, read together, with the ACL `(epochGen, version)` they
+ * were read at; `missing`, the slugs that name no team.
+ */
+export interface TeamAudience {
+  readonly accountId: string;
+  readonly epochGen: number;
+  readonly version: number;
+  readonly teams: readonly TeamAudienceEntry[];
+  readonly missing: readonly string[];
+}
+
 /**
  * Who may do what on one repository of the account, at one ACL version: each
  * principal's strongest role there. A repository object caches it.
@@ -88,6 +150,66 @@ export interface AclSnapshot {
   /** Principal id → role. */
   readonly roles: Readonly<Record<string, RepoRole>>;
 }
+
+/**
+ * Principals' and teams' current roles on one repository and team
+ * memberships, confirmed at one ACL version (see `confirmRoles`).
+ */
+export interface RoleConfirmation {
+  readonly accountId: string;
+  readonly epochGen: number;
+  readonly version: number;
+  /** Principal id → role, null for none. */
+  readonly roles: Readonly<Record<string, RepoRole | null>>;
+  /** Team id → its role, null for none (or no such team). */
+  readonly teamRoles: Readonly<Record<string, RepoRole | null>>;
+  /** The memberships asked about (`membershipKey`s) that hold. */
+  readonly members: readonly string[];
+}
+
+/** An organization's teams as a merge's code owners name them (see `codeOwnerTeams`). */
+export interface CodeOwnerTeams {
+  /** Slug → its team and role on the repository; a slug left out names no team. */
+  readonly teams: Readonly<
+    Record<string, { readonly teamId: string; readonly role: RepoRole | null }>
+  >;
+  /** Memberships (`membershipKey`s) of the principals asked about. */
+  readonly members: readonly string[];
+}
+
+/**
+ * What a request job reads of the organization's teams its code owners
+ * name (see `codeOwnerTeamFacts`), read after the epoch check with the ACL
+ * `(epochGen, version)` it was read at.
+ */
+export interface CodeOwnerTeamFacts {
+  readonly accountId: string;
+  readonly epochGen: number;
+  readonly version: number;
+  /** Slug (lowercased) → its team and role on the repository; a slug left out names no team. */
+  readonly teams: Readonly<
+    Record<string, { readonly teamId: string; readonly role: RepoRole | null }>
+  >;
+  /**
+   * Each group of slugs probed, in order, until the probes ran out: one of
+   * the candidates is a member of one of its teams with write (`member`),
+   * none is (`none`), or where the probes stopped (the team's index in the
+   * group and the candidate to go on from).
+   */
+  readonly groups: readonly (
+    | { readonly outcome: "member" | "none" }
+    | { readonly outcome: "stopped"; readonly team: number; readonly from: number }
+  )[];
+}
+
+/** Most principals one confirmation reads (a merge's reviewers, owners and their owners). Proposed. */
+export const MAX_CONFIRMED_PRINCIPALS = 1_024;
+
+/** Most teams one read of code owners' team facts names. Proposed. */
+export const MAX_TEAM_FACTS_SLUGS = 16;
+
+/** Most team memberships one confirmation reads. Proposed. */
+export const MAX_CONFIRMED_PAIRS = 4_096;
 
 /** The role members of an organization get on its repositories (GitHub's default; not configurable yet). */
 export const BASE_ROLE: RepoRole = "read";
@@ -111,6 +233,22 @@ type Meta = {
   acl_version: number;
   epoch_gen: number;
 };
+
+/** A page of a restored object's reconciliation, kept while its rows are being removed. */
+type ReconcilePage = {
+  /** Its principals being deleted or deleted. */
+  readonly gone: readonly string[];
+  /** Its last principal id (where the next page starts), null for an empty page. */
+  readonly last: string | null;
+  /** Whether it was a full page (more may follow). */
+  readonly full: boolean;
+};
+
+/** Rows a restored object's reconciliation removes an alarm at most. Proposed. */
+const RECONCILE_ROWS = 500;
+
+/** Principals one directory query reads the lifecycle of (D1 binds at most 100 parameters). */
+const LIFECYCLE_BATCH = 90;
 
 /** Repositories one `access.revoked` event names at most (a removal can name thousands). */
 const REVOKED_REPOS = 100;
@@ -215,15 +353,31 @@ export class OrgDO extends MigratingDO {
       .toArray()[0];
   }
 
-  /** Records the account and, for an organization, its first owner. Idempotent for the same account. */
-  init(input: AccountInit): { ok: true } | { ok: false; error: string } {
+  /**
+   * Records the account and, for an organization, its first owner (never
+   * one being deleted). Idempotent for the same account.
+   */
+  async init(
+    input: AccountInit,
+  ): Promise<{ ok: true } | { ok: false; code: "conflict" | "owner_gone"; error: string }> {
+    const remaining = input.kind === "org" ? await this.#remaining([input.owner.id]) : undefined;
     return this.ctx.storage.transactionSync(() => {
       const meta = this.#meta();
       if (meta) {
         return meta.account_id === input.accountId && meta.kind === input.kind
           ? { ok: true as const }
-          : { ok: false as const, error: "the object records another account" };
+          : {
+              ok: false as const,
+              code: "conflict" as const,
+              error: "the object records another account",
+            };
       }
+      if (remaining && this.#gone([input.owner.id], remaining))
+        return {
+          ok: false as const,
+          code: "owner_gone" as const,
+          error: "the first owner is being deleted",
+        };
       const now = this.#now();
       this.ctx.storage.sql.exec(
         `INSERT INTO org_meta (id, account_id, kind, epoch_gen, epoch_uuid, created_at)
@@ -280,6 +434,192 @@ export class OrgDO extends MigratingDO {
       version: meta.acl_version,
       roles: Object.fromEntries(this.#rolesFor(repoId, meta)),
     };
+  }
+
+  /**
+   * Each of `principals`' strongest role on repository `repoId` now (null
+   * for none), as `snapshotFor` gives it, each of `teams`' role on it (null
+   * for none, or no such team) and which of the `pairs` (`membershipKey`s)
+   * are memberships, at the account's current ACL version and restore
+   * generation: read after the epoch check, all with no await between
+   * them, so a merge's confirmation of its reviewers and code owners is one
+   * linearized read here. At most `MAX_CONFIRMED_PRINCIPALS` principals and
+   * `MAX_CONFIRMED_PAIRS` pairs.
+   */
+  async confirmRoles(
+    repoId: string,
+    principals: readonly string[],
+    teams: readonly string[] = [],
+    pairs: readonly string[] = [],
+  ): Promise<RoleConfirmation> {
+    const unique = [...new Set(principals)];
+    if (unique.length > MAX_CONFIRMED_PRINCIPALS)
+      throw new Error(`more than ${MAX_CONFIRMED_PRINCIPALS} principals to confirm`);
+    if (pairs.length > MAX_CONFIRMED_PAIRS)
+      throw new Error(`more than ${MAX_CONFIRMED_PAIRS} memberships to confirm`);
+    await this.#checkEpoch();
+    const meta = this.#meta();
+    if (!meta)
+      return { accountId: "", epochGen: 0, version: 0, roles: {}, teamRoles: {}, members: [] };
+    return {
+      accountId: meta.account_id,
+      epochGen: meta.epoch_gen,
+      version: meta.acl_version,
+      roles: Object.fromEntries(unique.map((p) => [p, this.#roleOn(repoId, p, meta)])),
+      teamRoles: Object.fromEntries(
+        [...new Set(teams)].map((t) => [t, this.#teamRoleOn(repoId, t)]),
+      ),
+      members: this.#memberships(pairs),
+    };
+  }
+
+  /**
+   * What a merge's code owners need of the organization's teams: for each
+   * of `slugs`, its id and role on repository `repoId` (absent: no such
+   * team), and which of `principals` are members of those found. An
+   * account that is not an organization has no teams.
+   */
+  async codeOwnerTeams(
+    repoId: string,
+    slugs: readonly string[],
+    principals: readonly string[],
+  ): Promise<CodeOwnerTeams> {
+    await this.#checkEpoch();
+    const meta = this.#meta();
+    if (meta?.kind !== "org") return { teams: {}, members: [] };
+    const sql = this.ctx.storage.sql;
+    const teams: Record<string, { teamId: string; role: RepoRole | null }> = {};
+    for (const slug of new Set(slugs)) {
+      const found = sql
+        // Slugs are stored lowercase: matched by the slug's own (binary) index.
+        .exec<{ team_id: string }>("SELECT team_id FROM teams WHERE slug = ?", slug.toLowerCase())
+        .toArray()[0];
+      if (found)
+        teams[slug] = { teamId: found.team_id, role: this.#teamRoleOn(repoId, found.team_id) };
+    }
+    const ids = Object.values(teams).map((t) => t.teamId);
+    const members = sql
+      .exec<{ team_id: string; principal_id: string }>(
+        `SELECT team_id, principal_id FROM team_members
+         WHERE team_id IN (SELECT value FROM json_each(?))
+           AND principal_id IN (SELECT value FROM json_each(?))`,
+        JSON.stringify(ids),
+        JSON.stringify([...new Set(principals)]),
+      )
+      .toArray()
+      .map((m) => membershipKey(m.team_id, m.principal_id));
+    return { teams, members };
+  }
+
+  /**
+   * What a request job needs of the organization's teams its code owners
+   * name: for each of `slugs` (at most `MAX_TEAM_FACTS_SLUGS`), its id and
+   * role on repository `repoId` (absent: no such team); and, for each of
+   * `probe.groups` in order (one rule's teams each, as slugs among
+   * `slugs`), whether one of `probe.candidates` is a member of one of its
+   * teams with at least write, the first group from `probe.start`, by
+   * indexed lookups of at most `probe.probes` candidates in all, saying
+   * where they stopped. Read after the epoch check with no await between,
+   * answered with the ACL version and restore generation they hold at. An
+   * account that is not an organization has no teams.
+   */
+  async codeOwnerTeamFacts(
+    repoId: string,
+    slugs: readonly string[],
+    probe: {
+      readonly groups: readonly (readonly string[])[];
+      readonly candidates: readonly string[];
+      readonly start: { readonly team: number; readonly from: number };
+      readonly probes: number;
+    },
+  ): Promise<CodeOwnerTeamFacts> {
+    const unique = [...new Set(slugs.map((slug) => slug.toLowerCase()))];
+    if (unique.length > MAX_TEAM_FACTS_SLUGS)
+      throw new Error(`more than ${MAX_TEAM_FACTS_SLUGS} teams to read`);
+    await this.#checkEpoch();
+    const meta = this.#meta();
+    // No teams: none of their members approved.
+    const none = probe.groups.map(() => ({ outcome: "none" as const }));
+    if (!meta) return { accountId: "", epochGen: 0, version: 0, teams: {}, groups: none };
+    const basis = {
+      accountId: meta.account_id,
+      epochGen: meta.epoch_gen,
+      version: meta.acl_version,
+    };
+    if (meta.kind !== "org") return { ...basis, teams: {}, groups: none };
+    const sql = this.ctx.storage.sql;
+    const teams: Record<string, { teamId: string; role: RepoRole | null }> = {};
+    for (const slug of unique) {
+      const found = sql
+        .exec<{ team_id: string }>("SELECT team_id FROM teams WHERE slug = ?", slug)
+        .toArray()[0];
+      if (found)
+        teams[slug] = { teamId: found.team_id, role: this.#teamRoleOn(repoId, found.team_id) };
+    }
+    const { candidates } = probe;
+    let left = probe.probes;
+    const groups: CodeOwnerTeamFacts["groups"][number][] = [];
+    probing: for (const [g, group] of probe.groups.entries()) {
+      const first = g === 0 ? probe.start : { team: 0, from: 0 };
+      for (let t = first.team; t < group.length; t++) {
+        const team = teams[(group[t] as string).toLowerCase()];
+        if (!team || !atLeast(team.role, "write")) continue;
+        let from = t === first.team ? first.from : 0;
+        while (from < candidates.length) {
+          if (left === 0) {
+            groups.push({ outcome: "stopped", team: t, from });
+            break probing;
+          }
+          const take = Math.min(left, candidates.length - from);
+          left -= take;
+          const member =
+            sql
+              .exec(
+                `SELECT 1 FROM team_members WHERE team_id = ?
+                   AND principal_id IN (SELECT value FROM json_each(?)) LIMIT 1`,
+                team.teamId,
+                JSON.stringify(candidates.slice(from, from + take)),
+              )
+              .toArray().length > 0;
+          if (member) {
+            groups.push({ outcome: "member" });
+            continue probing;
+          }
+          from += take;
+        }
+      }
+      groups.push({ outcome: "none" });
+    }
+    return { ...basis, teams, groups };
+  }
+
+  /** Team `teamId`'s role on repository `repoId`, or null (no grant, or no such team). */
+  #teamRoleOn(repoId: string, teamId: string): RepoRole | null {
+    const row = this.ctx.storage.sql
+      .exec<{ role: RepoRole }>(
+        "SELECT role FROM team_repos WHERE team_id = ? AND repo_id = ?",
+        teamId,
+        repoId,
+      )
+      .toArray()[0];
+    return row?.role ?? null;
+  }
+
+  /** Which of `pairs` (`membershipKey`s) are memberships now. */
+  #memberships(pairs: readonly string[]): string[] {
+    const sql = this.ctx.storage.sql;
+    return pairs.filter((pair) => {
+      const at = pair.indexOf(" ");
+      return (
+        sql
+          .exec(
+            "SELECT 1 FROM team_members WHERE team_id = ? AND principal_id = ?",
+            pair.slice(0, at),
+            pair.slice(at + 1),
+          )
+          .toArray().length > 0
+      );
+    });
   }
 
   /** Whether the account is recorded (a user's is created when something first needs it). */
@@ -422,21 +762,55 @@ export class OrgDO extends MigratingDO {
     member: { readonly id: string; readonly handle: string },
     role: OrgRole,
   ): Promise<AclChange> {
-    return this.#change(actor, { owner: true }, (meta) => {
-      const current = this.accountRole(member.id);
-      if (current === role) return this.#unchanged(meta);
-      if (current === "owner" && this.#owners() === 1) return LAST_OWNER;
-      this.ctx.storage.sql.exec(
-        `INSERT INTO members (principal_id, handle, role, added_at) VALUES (?, ?, ?, ?)
+    return this.#change(
+      actor,
+      { owner: true },
+      (meta) => {
+        const current = this.accountRole(member.id);
+        if (current === role) return this.#unchanged(meta);
+        if (current === "owner" && this.#owners() === 1) return LAST_OWNER;
+        this.ctx.storage.sql.exec(
+          `INSERT INTO members (principal_id, handle, role, added_at) VALUES (?, ?, ?, ?)
          ON CONFLICT (principal_id) DO UPDATE SET role = excluded.role, handle = excluded.handle`,
-        member.id,
-        member.handle,
-        role,
-        this.#now(),
-      );
-      if (current === null) this.#keepWithinLimit(meta);
-      return this.#changed(actor, "org.member.set", { user: member.id, role });
-    });
+          member.id,
+          member.handle,
+          role,
+          this.#now(),
+        );
+        if (current === null) this.#keepWithinLimit(meta);
+        return this.#changed(actor, "org.member.set", { user: member.id, role });
+      },
+      [member.id],
+    );
+  }
+
+  /**
+   * Makes `member` an owner, for an instance administrator (`actor`, who
+   * the Worker checked is one): an organization's owners need not agree,
+   * as when they can no longer act. Already an owner, it bumps nothing.
+   */
+  async handOwnership(
+    actor: ChangeActor,
+    member: { readonly id: string; readonly handle: string },
+  ): Promise<AclChange> {
+    return this.#change(
+      actor,
+      { instanceAdmin: true },
+      (meta) => {
+        const current = this.accountRole(member.id);
+        if (current === "owner") return this.#unchanged(meta);
+        this.ctx.storage.sql.exec(
+          `INSERT INTO members (principal_id, handle, role, added_at) VALUES (?, ?, 'owner', ?)
+           ON CONFLICT (principal_id) DO UPDATE SET role = excluded.role, handle = excluded.handle`,
+          member.id,
+          member.handle,
+          this.#now(),
+        );
+        if (current === null) this.#keepWithinLimit(meta);
+        return this.#changed(actor, "org.owner_handoff", { user: member.id });
+      },
+      [member.id],
+    );
   }
 
   /**
@@ -488,26 +862,34 @@ export class OrgDO extends MigratingDO {
     user: { readonly id: string; readonly handle: string },
     role: RepoRole,
   ): Promise<AclChange> {
-    return this.#change(actor, { repoAdmin: repoId }, (meta) => {
-      if (this.#notHere(repoId)) return REPO_GONE;
-      const current = this.#collaboratorRole(repoId, user.id);
-      if (current === role) return this.#unchanged(meta, [repoId]);
-      this.ctx.storage.sql.exec(
-        `INSERT INTO collaborators (repo_id, principal_id, handle, role, added_at)
+    return this.#change(
+      actor,
+      { repoAdmin: repoId },
+      (meta) => {
+        if (this.#notHere(repoId)) return REPO_GONE;
+        const current = this.#collaboratorRole(repoId, user.id);
+        if (current === role) return this.#unchanged(meta, [repoId]);
+        this.ctx.storage.sql.exec(
+          `INSERT INTO collaborators (repo_id, principal_id, handle, role, added_at)
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (repo_id, principal_id) DO UPDATE SET role = excluded.role,
            handle = excluded.handle`,
-        repoId,
-        user.id,
-        user.handle,
-        role,
-        this.#now(),
-      );
-      if (current === null) this.#keepWithinLimit(meta, repoId);
-      return this.#changed(actor, "repo.collaborator.set", { repo: repoId, user: user.id, role }, [
-        repoId,
-      ]);
-    });
+          repoId,
+          user.id,
+          user.handle,
+          role,
+          this.#now(),
+        );
+        if (current === null) this.#keepWithinLimit(meta, repoId);
+        return this.#changed(
+          actor,
+          "repo.collaborator.set",
+          { repo: repoId, user: user.id, role },
+          [repoId],
+        );
+      },
+      [user.id],
+    );
   }
 
   /**
@@ -532,6 +914,80 @@ export class OrgDO extends MigratingDO {
         this.#revoked(actor, [userId], [repoId], (changed as { version: number }).version);
       return changed;
     });
+  }
+
+  /**
+   * Retires principals a user deletion deletes (`input.ids`): from now on
+   * this instance adds none of them (see `#retired`), and in one
+   * transaction their memberships, team memberships and collaborator
+   * grants go, at most `input.budget` rows (`more` when rows are left).
+   * Never an organization's only owner (`sole_owner`, nothing removed),
+   * unless `input.ownerCheck` is off. The access version is bumped once
+   * when anything went; no lost-access notice is sent (their feeds are
+   * retired). Again, it removes what is left.
+   */
+  async retirePrincipals(input: RetireInput): Promise<RetireAnswer> {
+    await this.#checkEpoch();
+    for (const id of input.ids) this.#retired.add(id);
+    const answer = this.ctx.storage.transactionSync((): RetireAnswer => {
+      const meta = this.#meta();
+      if (!meta) return { state: "done", removed: 0, epochGen: 0, version: 0 };
+      const ids = JSON.stringify(input.ids);
+      const theirs = "principal_id IN (SELECT value FROM json_each(?))";
+      if (meta.kind === "org" && input.ownerCheck) {
+        // One of them owns it and no one else does (two short reads, however many owners).
+        const sole = this.ctx.storage.sql
+          .exec<{ sole: number }>(
+            `SELECT EXISTS (SELECT 1 FROM members WHERE role = 'owner' AND ${theirs})
+               AND NOT EXISTS (SELECT 1 FROM members WHERE role = 'owner'
+                 AND principal_id NOT IN (SELECT value FROM json_each(?))) AS sole`,
+            ids,
+            ids,
+          )
+          .one().sole;
+        if (sole) return { state: "sole_owner" };
+      }
+      let budget = input.budget;
+      let removed = 0;
+      for (const table of ["members", "team_members", "collaborators"] as const) {
+        if (budget <= 0) break;
+        // Rows deleted, not rows written (index updates count there too).
+        const gone = this.ctx.storage.sql
+          .exec(
+            `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE ${theirs} LIMIT ?)
+             RETURNING rowid`,
+            ids,
+            budget,
+          )
+          .toArray().length;
+        removed += gone;
+        budget -= gone;
+      }
+      const left = this.ctx.storage.sql
+        .exec<{ left: number }>(
+          `SELECT EXISTS (SELECT 1 FROM members WHERE ${theirs})
+             OR EXISTS (SELECT 1 FROM team_members WHERE ${theirs})
+             OR EXISTS (SELECT 1 FROM collaborators WHERE ${theirs}) AS left`,
+          ids,
+          ids,
+          ids,
+        )
+        .one().left;
+      let version = meta.acl_version;
+      if (removed > 0) {
+        version = this.#bump();
+        this.#audit(input.actor, "principal.retire", {
+          principals: input.ids,
+          job: input.jobId,
+          removed,
+          acl_version: version,
+        });
+      }
+      return { state: left ? "more" : "done", removed, epochGen: meta.epoch_gen, version };
+    });
+    // Its audit row is delivered soon, as a change's is.
+    if (answer.state !== "sole_owner" && answer.removed > 0) this.#scheduleAudit();
+    return answer;
   }
 
   /**
@@ -598,6 +1054,67 @@ export class OrgDO extends MigratingDO {
     return limits;
   }
 
+  /**
+   * The labels the account's new repositories get, in order: the set its
+   * owners last set, or GitHub's until they set one.
+   */
+  defaultLabels(): LabelSpec[] {
+    const meta = this.ctx.storage.sql
+      .exec<{ set: number }>('SELECT default_labels_set AS "set" FROM org_meta')
+      .toArray()[0];
+    if (!meta?.set) return GITHUB_DEFAULT_LABELS.map((l) => ({ ...l }));
+    return this.ctx.storage.sql
+      .exec<{ name: string; color: string; description: string | null }>(
+        "SELECT name, color, description FROM default_labels ORDER BY position",
+      )
+      .toArray();
+  }
+
+  /**
+   * Replaces the organization's default labels, if `audit.actor` is an
+   * owner now (checked in the change's transaction; the Worker checked that
+   * names are unique), with its audit row in the same transaction.
+   * Repositories made before keep theirs.
+   */
+  setDefaultLabels(
+    labels: readonly LabelSpec[],
+    audit: { readonly accountId: string; readonly actor: ChangeActor },
+  ):
+    | { ok: true; labels: LabelSpec[] }
+    | { ok: false; code: "not_an_org" | "forbidden"; error: string } {
+    const sql = this.ctx.storage.sql;
+    const refused = this.ctx.storage.transactionSync(() => {
+      const refused = this.#refuse(audit.actor);
+      if (refused) return refused as typeof NOT_AN_ORG | typeof FORBIDDEN;
+      sql.exec("DELETE FROM default_labels");
+      for (const [position, label] of labels.entries())
+        sql.exec(
+          "INSERT INTO default_labels (position, name, color, description) VALUES (?, ?, ?, ?)",
+          position,
+          label.name,
+          label.color.toLowerCase(),
+          label.description,
+        );
+      sql.exec("UPDATE org_meta SET default_labels_set = 1");
+      sql.exec(
+        `INSERT INTO pending_audit (at, actor_id, action, target_id, details, request_id)
+         VALUES (?, ?, 'org.default_labels', ?, ?, ?)`,
+        this.#now(),
+        audit.actor.principalId,
+        audit.accountId,
+        JSON.stringify({ labels: labels.map((l) => l.name) }),
+        audit.actor.requestId ?? null,
+      );
+      return undefined;
+    });
+    if (refused) return { ok: false, code: refused.code, error: refused.error };
+    void this.ctx.storage.getAlarm().then((current) => {
+      const at = this.#now() + AUDIT_RETRY_MS;
+      if (current === null || current > at) return this.ctx.storage.setAlarm(at);
+    });
+    return { ok: true, labels: this.defaultLabels() };
+  }
+
   /** Reserves storage for an upload being stored (see `AccountQuotas.reserve`). */
   reserveStorage(input: Parameters<AccountQuotas["reserve"]>[0]): {
     reserved: number;
@@ -660,11 +1177,14 @@ export class OrgDO extends MigratingDO {
    * grant made here since it arrived wins. Returns the ACL version to tell
    * the repository of.
    */
-  adoptRepo(
+  async adoptRepo(
     transferId: string,
     repoId: string,
     from: ReturnType<OrgDO["repoForTransfer"]>,
-  ): { epochGen: number; version: number } {
+  ): Promise<{ epochGen: number; version: number }> {
+    // Collaborators being deleted are not taken (a deletion may have begun since they were
+    // handed over).
+    const remaining = await this.#remaining(from.collaborators.map((c) => c.principalId));
     // Its admission made its room (`reserveArrival`); it is not refused here, where the
     // repository has moved already.
     return this.ctx.storage.transactionSync(() => {
@@ -678,7 +1198,7 @@ export class OrgDO extends MigratingDO {
       this.ctx.storage.sql.exec("DELETE FROM forgotten_repos WHERE repo_id = ?", repoId);
       this.ctx.storage.sql.exec("DELETE FROM released_repos WHERE repo_id = ?", repoId);
       const now = this.#now();
-      for (const c of from.collaborators)
+      for (const c of from.collaborators.filter((c) => !this.#gone([c.principalId], remaining)))
         this.ctx.storage.sql.exec(
           `INSERT INTO collaborators (repo_id, principal_id, handle, role, added_at)
            VALUES (?, ?, ?, ?, ?) ON CONFLICT (repo_id, principal_id) DO NOTHING`,
@@ -992,27 +1512,120 @@ export class OrgDO extends MigratingDO {
       .map((r) => ({ slug: r.slug, name: r.name }));
   }
 
+  /**
+   * Teams `slugs` as a review request of repository `repoId` asks them
+   * (see `TeamAudience`), read without an await between them, after the
+   * restore generation is checked. Members are listed up to `maxMembers`
+   * a team; a team with more answers none.
+   */
+  async teamAudience(
+    repoId: string,
+    slugs: readonly string[],
+    maxMembers: number = MAX_TEAM_REVIEWERS,
+  ): Promise<TeamAudience> {
+    await this.#checkEpoch();
+    const meta = this.#meta();
+    if (meta?.kind !== "org")
+      return {
+        accountId: meta?.account_id ?? "",
+        epochGen: meta?.epoch_gen ?? 0,
+        version: meta?.acl_version ?? 0,
+        teams: [],
+        missing: [...new Set(slugs)],
+      };
+    const sql = this.ctx.storage.sql;
+    const teams: TeamAudienceEntry[] = [];
+    const missing: string[] = [];
+    for (const slug of new Set(slugs)) {
+      const [team] = sql
+        .exec<{ team_id: string; name: string }>(
+          "SELECT team_id, name FROM teams WHERE slug = ?",
+          slug,
+        )
+        .toArray();
+      if (!team) {
+        missing.push(slug);
+        continue;
+      }
+      const granted = sql
+        .exec<{ role: RepoRole }>(
+          "SELECT role FROM team_repos WHERE team_id = ? AND repo_id = ?",
+          team.team_id,
+          repoId,
+        )
+        .toArray()[0]?.role;
+      const members = sql
+        .exec<{ principal_id: string }>(
+          "SELECT principal_id FROM team_members WHERE team_id = ? ORDER BY principal_id LIMIT ?",
+          team.team_id,
+          maxMembers + 1,
+        )
+        .toArray()
+        .map((m) => m.principal_id);
+      teams.push({
+        id: team.team_id,
+        slug,
+        name: team.name,
+        // Only members of the organization are on its teams: each has the base role at least.
+        role: strongestRole([orgRepoRole("member", BASE_ROLE), granted ?? null]),
+        members: members.length > maxMembers ? null : members,
+      });
+    }
+    return {
+      accountId: meta.account_id,
+      epochGen: meta.epoch_gen,
+      version: meta.acl_version,
+      teams,
+      missing,
+    };
+  }
+
+  /**
+   * Which of the teams `teamIds` (stable ids) the account has now, after
+   * its restore generation is checked, with that generation.
+   */
+  async teamsPresent(
+    teamIds: readonly string[],
+  ): Promise<{ accountId: string; epochGen: number; present: string[] }> {
+    await this.#checkEpoch();
+    const meta = this.#meta();
+    if (!meta) return { accountId: "", epochGen: 0, present: [] };
+    const present = this.ctx.storage.sql
+      .exec<{ team_id: string }>(
+        "SELECT team_id FROM teams WHERE team_id IN (SELECT value FROM json_each(?))",
+        JSON.stringify([...new Set(teamIds)]),
+      )
+      .toArray()
+      .map((row) => row.team_id);
+    return { accountId: meta.account_id, epochGen: meta.epoch_gen, present };
+  }
+
   /** Adds a member of the organization to a team, if `actor` owns the organization now. */
   async setTeamMember(actor: ChangeActor, slug: string, userId: string): Promise<AclChange> {
-    return this.#change(actor, { owner: true }, (meta) => {
-      const teamId = this.#teamId(slug);
-      if (!teamId) return teamNotFound(slug);
-      if (this.accountRole(userId) === null)
-        return {
-          ok: false,
-          code: "not_a_member",
-          error: "Only members of the organization join its teams.",
-        };
-      const added = this.ctx.storage.sql.exec(
-        "INSERT INTO team_members (team_id, principal_id, added_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
-        teamId,
-        userId,
-        this.#now(),
-      ).rowsWritten;
-      const repos = this.#teamRepos(teamId);
-      if (added === 0) return this.#unchanged(meta, repos);
-      return this.#changed(actor, "org.team.member.add", { team: slug, user: userId }, repos);
-    });
+    return this.#change(
+      actor,
+      { owner: true },
+      (meta) => {
+        const teamId = this.#teamId(slug);
+        if (!teamId) return teamNotFound(slug);
+        if (this.accountRole(userId) === null)
+          return {
+            ok: false,
+            code: "not_a_member",
+            error: "Only members of the organization join its teams.",
+          };
+        const added = this.ctx.storage.sql.exec(
+          "INSERT INTO team_members (team_id, principal_id, added_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+          teamId,
+          userId,
+          this.#now(),
+        ).rowsWritten;
+        const repos = this.#teamRepos(teamId);
+        if (added === 0) return this.#unchanged(meta, repos);
+        return this.#changed(actor, "org.team.member.add", { team: slug, user: userId }, repos);
+      },
+      [userId],
+    );
   }
 
   /** Removes a member from a team, if `actor` owns the organization now. */
@@ -1107,10 +1720,17 @@ export class OrgDO extends MigratingDO {
    */
   async #change(
     actor: ChangeActor,
-    needs: { readonly owner: true } | { readonly repoAdmin: string },
+    needs:
+      | { readonly owner: true }
+      | { readonly repoAdmin: string }
+      /** An instance administrator's change of an organization (the Worker checked the role). */
+      | { readonly instanceAdmin: true },
     apply: (meta: Meta) => AclChange,
+    /** The principals the change gives access: none being deleted (see `#gone`). */
+    incoming: readonly string[] = [],
   ): Promise<AclChange> {
     await this.#checkEpoch();
+    const remaining = incoming.length > 0 ? await this.#remaining(incoming) : undefined;
     let change: AclChange;
     try {
       change = this.ctx.storage.transactionSync((): AclChange => {
@@ -1118,11 +1738,14 @@ export class OrgDO extends MigratingDO {
         if ("owner" in needs) {
           const refused = this.#refuse(actor);
           if (refused) return refused;
+        } else if ("instanceAdmin" in needs) {
+          if (meta?.kind !== "org") return NOT_AN_ORG;
         } else {
           if (!meta) return NOT_RECORDED;
           if (!atLeast(this.#roleOn(needs.repoAdmin, actor.principalId, meta), "admin"))
             return FORBIDDEN;
         }
+        if (remaining && this.#gone(incoming, remaining)) return PRINCIPAL_GONE;
         return apply(this.#meta() as Meta);
       });
     } catch (error) {
@@ -1231,6 +1854,25 @@ export class OrgDO extends MigratingDO {
   }
 
   override async alarm(): Promise<void> {
+    // The restore generation first (a restored object's first call may be its alarm): nothing
+    // runs before it is taken; unknown (the directory unreachable), tried again later.
+    try {
+      await this.#checkEpoch();
+    } catch (error) {
+      createLogger({ op: "org.epoch", doClass: "OrgDO" }).warn("taking the epoch failed", {
+        error,
+      });
+      await this.#armBy(this.#now() + AUDIT_RETRY_MS);
+      return;
+    }
+    try {
+      if (await this.#reconcileSlice()) await this.#armBy(this.#now());
+    } catch (error) {
+      createLogger({ op: "org.reconcile", doClass: "OrgDO" }).warn("reconciling failed", {
+        error,
+      });
+      await this.#armBy(this.#now() + AUDIT_RETRY_MS);
+    }
     // Events first (a failure backs off and never stops the audit delivery).
     try {
       const outbox = this.#outbox;
@@ -1286,16 +1928,22 @@ export class OrgDO extends MigratingDO {
     const meta = this.#meta();
     // Nothing recorded yet: `init` records the generation just allocated.
     if (!meta) return;
+    await accountHooks.beforeEpochRead?.();
     const row = await this.env.DIRECTORY.withSession("first-primary")
       .prepare("SELECT epoch_gen FROM source_epochs WHERE source_id = ?")
       .bind(meta.account_id)
       .first<{ epoch_gen: number }>();
-    if (row && row.epoch_gen > (this.#meta() as Meta).epoch_gen)
+    if (row && row.epoch_gen > (this.#meta() as Meta).epoch_gen) {
+      // Restored: it may hold principals deleted since its backup; its alarm forgets them, from
+      // the start (a page the backup was in the middle of was decided before it).
       this.ctx.storage.sql.exec(
-        "UPDATE org_meta SET epoch_gen = ?, epoch_uuid = ? WHERE id = 1",
+        `UPDATE org_meta SET epoch_gen = ?, epoch_uuid = ?, reconcile_cursor = '',
+           reconcile_pending = NULL WHERE id = 1`,
         row.epoch_gen,
         crypto.randomUUID(),
       );
+      await this.#armBy(this.#now());
+    }
     this.#epochChecked = true;
   }
 
@@ -1305,6 +1953,157 @@ export class OrgDO extends MigratingDO {
     if (meta?.kind !== "org") return NOT_AN_ORG;
     if (this.accountRole(actor.principalId) !== "owner") return FORBIDDEN;
     return undefined;
+  }
+
+  /**
+   * Principals retired here by a user deletion while this instance lives.
+   * Kept in memory only: an addition reads its principals' lifecycle from
+   * the directory (`#remaining`), then checks this set in its transaction,
+   * after its last await. A retirement that lands during that read is in
+   * this instance (the object's one live instance; a replaced one can no
+   * longer write this object's storage), so the set catches it; an
+   * addition whose read follows the deletion's start sees it there.
+   */
+  #retired = new Set<string>();
+
+  /**
+   * Of `ids`, those not being deleted (any lifecycle but `deleting` and
+   * `deleted`), read from the directory's primary. Runs
+   * `accountHooks.afterLifecycleRead` after.
+   */
+  async #remaining(ids: readonly string[]): Promise<Set<string>> {
+    const remaining = new Set<string>();
+    const db = this.env.DIRECTORY.withSession("first-primary");
+    const unique = [...new Set(ids)];
+    for (let at = 0; at < unique.length; at += LIFECYCLE_BATCH) {
+      const batch = unique.slice(at, at + LIFECYCLE_BATCH);
+      const { results } = await db
+        .prepare(
+          `SELECT id FROM principals WHERE id IN (${batch.map(() => "?").join(", ")})
+             AND lifecycle IN ('active', 'suspended')`,
+        )
+        .bind(...batch)
+        .all<{ id: string }>();
+      for (const row of results) remaining.add(row.id);
+    }
+    await accountHooks.afterLifecycleRead?.(this);
+    return remaining;
+  }
+
+  /** Whether any of `ids` is being deleted: not in `remaining`, or retired here since. */
+  #gone(ids: readonly string[], remaining: ReadonlySet<string>): boolean {
+    return ids.some((id) => !remaining.has(id) || this.#retired.has(id));
+  }
+
+  /**
+   * One page of a restored object's reconciliation: of the principals it
+   * holds (members, team members, collaborators), in id order from where it
+   * got to, those being deleted or deleted since its backup are forgotten
+   * as a retirement forgets them, an organization's last owners kept (it
+   * keeps an owner; an administrator hands it over). True while pages are
+   * left.
+   */
+  async #reconcileSlice(): Promise<boolean> {
+    const state = this.ctx.storage.sql
+      .exec<{ c: string | null; p: string | null }>(
+        "SELECT reconcile_cursor AS c, reconcile_pending AS p FROM org_meta WHERE id = 1",
+      )
+      .toArray()[0];
+    const cursor = state?.c;
+    if (cursor === null || cursor === undefined) return false;
+    // A page whose rows are not all removed yet goes on as it was read (neither the page nor
+    // the directory read again); a new one is read from the cursor.
+    let page: ReconcilePage;
+    if (state?.p) page = JSON.parse(state.p) as ReconcilePage;
+    else {
+      const ids = this.ctx.storage.sql
+        .exec<{ p: string }>(
+          `SELECT principal_id AS p FROM members WHERE principal_id > ?1
+           UNION SELECT principal_id FROM team_members WHERE principal_id > ?1
+           UNION SELECT principal_id FROM collaborators WHERE principal_id > ?1
+           ORDER BY 1 LIMIT ?2`,
+          cursor,
+          LIFECYCLE_BATCH,
+        )
+        .toArray()
+        .map((r) => r.p);
+      const remaining = ids.length > 0 ? await this.#remaining(ids) : new Set<string>();
+      page = {
+        gone: ids.filter((id) => this.#gone([id], remaining)),
+        last: ids.at(-1) ?? null,
+        full: ids.length === LIFECYCLE_BATCH,
+      };
+    }
+    for (const id of page.gone) this.#retired.add(id);
+    return this.ctx.storage.transactionSync(() => {
+      // Moved on meanwhile (another alarm): leave it to that one.
+      const now = this.ctx.storage.sql
+        .exec<{ c: string | null }>("SELECT reconcile_cursor AS c FROM org_meta WHERE id = 1")
+        .one().c;
+      if (now !== cursor) return now !== null;
+      const meta = this.#meta() as Meta;
+      const theirs = JSON.stringify(page.gone);
+      const keepOwners =
+        meta.kind === "org" &&
+        this.ctx.storage.sql
+          .exec<{ others: number }>(
+            `SELECT NOT EXISTS (SELECT 1 FROM members WHERE role = 'owner'
+               AND principal_id NOT IN (SELECT value FROM json_each(?))) AS others`,
+            theirs,
+          )
+          .one().others === 1;
+      // A page of rows at most (as a retirement's); the page stays until none is left.
+      const kept = keepOwners ? "AND role <> 'owner'" : "";
+      const theirsIn = "principal_id IN (SELECT value FROM json_each(?))";
+      let budget = RECONCILE_ROWS;
+      let removed = 0;
+      for (const table of ["members", "team_members", "collaborators"] as const) {
+        if (budget <= 0) break;
+        const gone = this.ctx.storage.sql
+          .exec(
+            `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE ${theirsIn}
+               ${table === "members" ? kept : ""} LIMIT ?) RETURNING rowid`,
+            theirs,
+            budget,
+          )
+          .toArray().length;
+        removed += gone;
+        budget -= gone;
+      }
+      const left =
+        this.ctx.storage.sql
+          .exec<{ left: number }>(
+            `SELECT EXISTS (SELECT 1 FROM members WHERE ${theirsIn} ${kept})
+               OR EXISTS (SELECT 1 FROM team_members WHERE ${theirsIn})
+               OR EXISTS (SELECT 1 FROM collaborators WHERE ${theirsIn}) AS left`,
+            theirs,
+            theirs,
+            theirs,
+          )
+          .one().left === 1;
+      if (removed > 0) {
+        const version = this.#bump();
+        this.#audit(null, "principal.retire", {
+          principals: page.gone,
+          job: "restore",
+          removed,
+          acl_version: version,
+        });
+        this.#scheduleAudit();
+      }
+      if (left) {
+        this.ctx.storage.sql.exec(
+          "UPDATE org_meta SET reconcile_pending = ? WHERE id = 1",
+          JSON.stringify(page),
+        );
+        return true;
+      }
+      this.ctx.storage.sql.exec(
+        "UPDATE org_meta SET reconcile_cursor = ?, reconcile_pending = NULL WHERE id = 1",
+        page.full && page.last !== null ? page.last : null,
+      );
+      return page.full;
+    });
   }
 
   #owners(): number {
@@ -1321,16 +2120,17 @@ export class OrgDO extends MigratingDO {
       .one().v;
   }
 
-  #audit(actor: ChangeActor, action: string, details: Record<string, unknown>): void {
+  /** An audit row of the change; `actor` null for the object's own (a restore's reconciliation). */
+  #audit(actor: ChangeActor | null, action: string, details: Record<string, unknown>): void {
     this.ctx.storage.sql.exec(
       `INSERT INTO pending_audit (at, actor_id, action, target_id, details, request_id)
        VALUES (?, ?, ?, ?, ?, ?)`,
       this.#now(),
-      actor.principalId,
+      actor?.principalId ?? null,
       action,
       (this.#meta() as Meta).account_id,
       JSON.stringify(details),
-      actor.requestId ?? null,
+      actor?.requestId ?? null,
     );
   }
 
@@ -1340,7 +2140,11 @@ export class OrgDO extends MigratingDO {
    * changes cannot postpone delivery.
    */
   #scheduleDelivery(change: AclChange): void {
-    if (!(change.ok && change.changed)) return;
+    if (change.ok && change.changed) this.#scheduleAudit();
+  }
+
+  /** An audit row was written: the alarm delivers it soon, an earlier alarm kept. */
+  #scheduleAudit(): void {
     const at = this.#now() + AUDIT_RETRY_MS;
     void this.ctx.storage.getAlarm().then((current) => {
       if (current === null || current > at) return this.ctx.storage.setAlarm(at);
@@ -1395,6 +2199,12 @@ const teamNotFound = (slug: string): AclChange => ({
   code: "team_not_found",
   error: `No team ${slug} was found.`,
 });
+
+const PRINCIPAL_GONE = {
+  ok: false,
+  code: "principal_gone",
+  error: "The user is being deleted.",
+} as const;
 
 const LAST_OWNER = {
   ok: false,

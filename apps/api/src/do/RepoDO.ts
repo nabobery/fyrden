@@ -14,6 +14,7 @@ import {
 } from "@fyrden/adapters-cloudflare/git";
 import {
   atInvocationEnd,
+  countedD1,
   createLogger,
   createMetrics,
   currentInvocation,
@@ -21,8 +22,13 @@ import {
   type RequestMeta,
 } from "@fyrden/adapters-cloudflare/obs";
 import {
+  decideMetadataAction,
   type Envelope,
+  type LabelSpec,
+  type LockReason,
   protectsBranch,
+  type ReactionContent,
+  type ReactionTarget,
   type RepoRole,
   type ReviewEvent,
   rootIdentity,
@@ -50,6 +56,7 @@ import { packCapCompactionHandler } from "../git/maintenance/tail-merge-job.js";
 import { type PackCapPolicy, packCapPolicy } from "../git/maintenance/tail-merge-plan.js";
 import type { PushDecision } from "../git/push/commit.js";
 import { ACCESS_LOST } from "../git/push/reauthorize.js";
+import { reauthorizeByToken } from "../git/push/reauthorize-token.js";
 import {
   type BeginPushInput,
   type BeginPushResult,
@@ -83,6 +90,7 @@ import {
   forgetMerged,
   viewCompactionHandler,
 } from "../network/view-cap.js";
+import { resolveRepo } from "../repos/directory.js";
 import { platformSigner } from "../signing/platform-key.js";
 import { secretKeys } from "../webhooks/secrets.js";
 import {
@@ -94,7 +102,7 @@ import {
 } from "./base/audit-archiver.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
-import type { AclSnapshot } from "./OrgDO.js";
+import type { AclSnapshot, RoleConfirmation, TeamAudience } from "./OrgDO.js";
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { RepoAdministration, type RepoDetails, type RulesetChange } from "./repo/administration.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
@@ -104,6 +112,7 @@ import {
   type CommitView,
   type CompareView,
   fail,
+  guarded,
   type LogInput,
   type LogView,
   type RefView,
@@ -111,7 +120,25 @@ import {
   type TagPage,
 } from "./repo/browse.js";
 import { ChangeLists } from "./repo/change-lists.js";
-import { RepoComments } from "./repo/comments.js";
+import {
+  CODE_OWNER_MERGE_POLICY,
+  CodeOwnerFacts,
+  type CodeOwnerMergePolicy,
+} from "./repo/code-owner-facts.js";
+import {
+  CODE_OWNER_REQUEST_POLICY,
+  type CodeOwnerRequestHooks,
+  type CodeOwnerRequestPolicy,
+  CodeOwnerRequests,
+} from "./repo/code-owner-requests.js";
+import { RepoCodeOwners } from "./repo/code-owners.js";
+import {
+  CODEOWNERS_ERRORS_POLICY,
+  type CodeOwnersErrors,
+  type CodeOwnersErrorsPolicy,
+  codeOwnersErrors,
+} from "./repo/code-owners-errors.js";
+import { type CommentRecord, RepoComments } from "./repo/comments.js";
 import type { ConflictsView, MergedIntoHead } from "./repo/conflicts.js";
 import {
   type ContentsView,
@@ -133,8 +160,8 @@ import {
   type RepoIdentity,
   type RepoUpdate,
 } from "./repo/events.js";
-import { RepoFeed } from "./repo/feed.js";
-import { type FeedViewAnswer, RepoFeedView } from "./repo/feed-view.js";
+import { type FeedPageAsk, type FeedPageRead, RepoFeed } from "./repo/feed.js";
+import { type FeedMember, type FeedViewAnswer, RepoFeedView } from "./repo/feed-view.js";
 import {
   type FileWriteDeps,
   type FileWriteInput,
@@ -149,9 +176,17 @@ import {
   type UpdateBranchInput,
 } from "./repo/head-writes.js";
 import { type HookForDelivery, type HookView, RepoHooks } from "./repo/hooks.js";
+import {
+  type IssuePatch,
+  RepoIssues,
+  type Subject,
+  type SubjectKind,
+  type SubjectQuery,
+} from "./repo/issues.js";
 import { MERGE_POLICY, type MergeMade, type MergePolicy } from "./repo/merge.js";
 import { MERGEABILITY_POLICY, type PullView, RepoMergeability } from "./repo/mergeability.js";
 import {
+  type AudienceFit,
   type NewReviewComment,
   type PullChangeRefusal,
   PullDiscussion,
@@ -168,18 +203,44 @@ import {
   RepoPulls,
 } from "./repo/pulls.js";
 import { hasPrecheckRules } from "./repo/push-rules.js";
+import {
+  type Reacted,
+  type ReactionCounts,
+  type ReactionSubject,
+  RepoReactions,
+} from "./repo/reactions.js";
 import { REBASE_POLICY, type RebasePolicy } from "./repo/rebase-replay.js";
 import { RebaseSagas } from "./repo/rebase-saga.js";
+import { type IncomingReferences, RepoReferences } from "./repo/references.js";
 import { RepoReviewComments } from "./repo/review-comments.js";
+import {
+  MERGE_CONFIRM_POLICY,
+  type MergeConfirmPolicy,
+  ReviewerConfirmations,
+} from "./repo/reviewer-confirmation.js";
 import { RepoReviews } from "./repo/reviews.js";
 import { RepoRulesets, type RuleSuite, type RulesetRecord } from "./repo/rulesets.js";
 import { StorageCharges } from "./repo/storage-charges.js";
+import {
+  type Assignee,
+  type MetaInput,
+  type MetaPatch,
+  type MilestoneQuery,
+  RepoSubjectMeta,
+  type SubjectMeta,
+} from "./repo/subject-meta.js";
+import { RepoTeamRequests } from "./repo/team-requests.js";
 import {
   TemplateGeneration,
   type TemplateTree,
   type TemplateWriteInput,
   templateTree,
 } from "./repo/template.js";
+import {
+  RepoWebhookBlobs,
+  type WebhookBlobsAsk,
+  type WebhookBlobsRead,
+} from "./repo/webhook-blobs.js";
 import type { WriteContext, WriteRefusal } from "./repo/write-context.js";
 import { repoSchema } from "./schema/repo.js";
 
@@ -190,8 +251,21 @@ import { repoSchema } from "./schema/repo.js";
  * of CPU an alarm gets (measured on Workers Free, 2026-10-10).
  */
 const ALARM_BUDGET_MS = 5_000;
+/** When an alarm that could not take the restore generation tries again. Proposed. */
+const EPOCH_RETRY_MS = 60_000;
 /** How long an archive request builds before it answers "building". Proposed. */
 const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
+
+/** The job that prunes feed audience pages past their time, and how many a slice deletes. */
+const FEED_PAGES_JOB = "feed_pages_prune";
+const FEED_PAGES_PRUNE_BATCH = 500;
+const WEBHOOK_BLOBS_JOB = "webhook_blobs_prune";
+/** The job that settles team review requests no longer standing (see `RepoTeamRequests`). */
+const REVIEW_TEAMS_JOB = "review_teams";
+/** When the check of requested teams tries again after the organization could not answer. Proposed. */
+const REVIEW_TEAMS_RETRY_MS = 60_000;
+/** Webhook capture blobs one slice of their pruning deletes at most. Proposed. */
+const WEBHOOK_BLOBS_PRUNE_BATCH = 200;
 
 /** The job the deletion runs the audit archiver's slices as (they read no job state). */
 const DELETION_SLICE = {
@@ -203,6 +277,16 @@ const DELETION_SLICE = {
 } as const;
 
 /** One repository: refs, packs, its events and audit log. Keyed by the immutable repo id. */
+/** A label's change as `updateLabel` takes it. */
+type LabelPatch = {
+  readonly name?: string;
+  readonly color?: string;
+  readonly description?: string | null;
+};
+
+/** The label a form showed: its id, and the version it was at (when given). */
+type LabelExpectation = { readonly id: number; readonly version?: number };
+
 export class RepoDO extends MigratingDO {
   static readonly schema = repoSchema;
 
@@ -240,6 +324,8 @@ export class RepoDO extends MigratingDO {
 
   /** Review requests, diff threads and the standing a merge is judged by. */
   readonly #discussion: PullDiscussion;
+  readonly #codeOwnerFacts: CodeOwnerFacts;
+  readonly #codeOwnerRequests: CodeOwnerRequests;
 
   /** Merges of pull requests into their base branches. */
   readonly #merging: PullMerging;
@@ -255,6 +341,32 @@ export class RepoDO extends MigratingDO {
 
   /** Pulls the account's ACL snapshot for this repository. Tests may replace it. */
   pullAcl: (accountId: string) => Promise<AclSnapshot>;
+
+  /**
+   * The organization's confirmation of principals' and teams' roles here
+   * and of team memberships, at a merge. Tests may replace it.
+   */
+  confirmRoles: (
+    accountId: string,
+    principals: readonly string[],
+    teams?: readonly string[],
+    pairs?: readonly string[],
+  ) => Promise<RoleConfirmation>;
+
+  /** Limits of a merge's confirmation of its reviewers. Tests may replace them. */
+  mergeConfirmPolicy: MergeConfirmPolicy = MERGE_CONFIRM_POLICY;
+
+  /** Limits of the code owners a merge resolves. Tests may replace them. */
+  codeOwnerMergePolicy: CodeOwnerMergePolicy = CODE_OWNER_MERGE_POLICY;
+
+  /** The CODEOWNERS errors endpoint's budgets. Tests may replace them. */
+  codeOwnersErrorsPolicy: CodeOwnersErrorsPolicy = CODEOWNERS_ERRORS_POLICY;
+
+  /** Asking code owners to review: a slice's budgets. Tests may replace them. */
+  codeOwnerRequestPolicy: CodeOwnerRequestPolicy = CODE_OWNER_REQUEST_POLICY;
+
+  /** Hooks into asking code owners to review. For tests. */
+  codeOwnerRequestHooks: CodeOwnerRequestHooks = {};
 
   /** Where audit records are archived. Tests may replace it. */
   auditBucket: Pick<R2Bucket, "put">;
@@ -273,8 +385,21 @@ export class RepoDO extends MigratingDO {
 
   /** Reviews of pull requests, and reviews requested. */
   readonly reviews: RepoReviews;
+  readonly teamRequests: RepoTeamRequests;
 
-  /** Conversation comments on pull requests. */
+  /** Issues, numbered with pull requests. */
+  readonly issues: RepoIssues;
+
+  /** Labels and milestones, and what issues and pull requests carry of them and who is assigned. */
+  readonly subjectMeta: RepoSubjectMeta;
+
+  /** Reactions to issues, pull requests and their comments. */
+  readonly reactions: RepoReactions;
+
+  /** References between issues and pull requests, here and across repositories. */
+  readonly references: RepoReferences;
+
+  /** Conversation comments on issues and pull requests. */
   readonly comments: RepoComments;
 
   /** Comments on pull requests' diffs, and their threads. */
@@ -282,6 +407,7 @@ export class RepoDO extends MigratingDO {
 
   /** Whether open pull requests merge cleanly, worked out in the background. */
   readonly mergeability: RepoMergeability;
+  readonly codeOwners: RepoCodeOwners;
 
   /** This repository's branches that are heads of pull requests into other members of its network. */
   readonly pullSource: PullSource;
@@ -295,9 +421,16 @@ export class RepoDO extends MigratingDO {
   /** The repository's webhooks. */
   readonly hooks: RepoHooks;
   readonly feed: RepoFeed;
+  readonly webhookBlobStore: RepoWebhookBlobs;
 
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
+    // Every D1 statement counted against the invocation's tally: work bounded by D1's queries
+    // an invocation is admitted against what it ran.
+    super(ctx, {
+      ...env,
+      DIRECTORY: countedD1(env.DIRECTORY),
+      ORG_READ: countedD1(env.ORG_READ),
+    });
     this.metricsDataset = env.METRICS;
     this.git = new RepoGitStorage({
       storage: ctx.storage,
@@ -333,16 +466,55 @@ export class RepoDO extends MigratingDO {
       () => {
         this.pullSource.restored();
         reclaimAfterRestore(this.git);
+        // An ownership repaired may leave team requests of another owner to settle.
+        this.#scheduleReviewTeams();
+        // Code owners shown for pairs the restored state may not have: checked again.
+        this.codeOwners.restored();
+        // Its owners asked of again, as after a transfer (an ownership repaired among them).
+        this.#codeOwnerRequests.queueAll();
       },
     );
     this.changeLists = new ChangeLists(this.git);
+    this.reactions = new RepoReactions({ git: this.git, events: this.events });
+    this.references = new RepoReferences({
+      git: this.git,
+      events: this.events,
+      repoId: () => this.#repoId(),
+      kindOf: (number) => this.issues.kindOf(number),
+      resolve: async (owner, name) =>
+        (await resolveRepo(this.env, owner, name, { metrics: this.git.context.metrics }))?.id ??
+        null,
+    });
+    this.subjectMeta = new RepoSubjectMeta({
+      git: this.git,
+      events: this.events,
+      repoId: () => this.#repoId(),
+      kindOf: (number) => this.issues.kindOf(number),
+      reactionsOf: (numbers) => this.reactions.countsOf("subject", numbers),
+      touch: (kind, number, events, actor) =>
+        kind === "issue"
+          ? this.issues.touch(number, events, actor)
+          : this.pulls.touch(number, events, actor),
+    });
     this.pulls = new RepoPulls({
       git: this.git,
       events: this.events,
       repoId: () => this.#repoId(),
-      stale: (number, open) => this.mergeability.stale(number, open),
-      staleBase: (branch) => this.mergeability.staleBase(branch),
+      snapshotMeta: (number) => this.subjectMeta.snapshot(number),
+      described: (number, body, actor) =>
+        this.references.sync({ kind: "pull", number, comment: 0 }, body, actor),
+      merged: (pull, actor) => this.#closeOnMerge(pull, actor),
+      stale: (number, open, event) => {
+        this.mergeability.stale(number, open);
+        this.codeOwners.stale(number, open, event);
+      },
+      staleBase: (branch) => {
+        this.mergeability.staleBase(branch);
+        this.codeOwners.staleBase(branch);
+      },
       follow: (pull) => this.#forkPulls.follow(pull),
+      view: (pull) => this.#viewed(pull),
+      milestone: (number) => this.subjectMeta.milestone(number),
     });
     this.pullSource = new PullSource({
       git: this.git,
@@ -364,6 +536,16 @@ export class RepoDO extends MigratingDO {
         const pull = this.pulls.get(row.number);
         return pull !== undefined && (await this.#headReadable(row.headRepoId, pull.authorRoot));
       },
+    });
+    this.codeOwners = new RepoCodeOwners({
+      git: this.git,
+      pulls: this.pulls,
+      memoryBlocks: () => this.#memoryBlocks(),
+      writable: () => this.#writeRefusal() === undefined,
+      log: () => this.#log(),
+      published: (number) => this.#codeOwnerRequests.published(number),
+      ready: (number) => this.#codeOwnerRequests.queue(number),
+      closed: (number) => this.#codeOwnerRequests.closed(number),
     });
     this.mergeability = new RepoMergeability({
       git: this.git,
@@ -388,22 +570,46 @@ export class RepoDO extends MigratingDO {
     });
     this.feed = new RepoFeed({
       git: this.git,
-      mayRead: (principal) =>
-        this.events.visibility() === "public" || this.acl.lastRoleOf(principal) !== null,
+      readers: () => {
+        // Anyone reads a public repository: no participant's place is ever reclaimed there.
+        if (this.events.visibility() === "public") return { mayRead: () => true, key: "public" };
+        const { roleOf, key } = this.acl.lastRoles();
+        return { mayRead: (principal) => roleOf(principal) !== null, key };
+      },
       roleOf: (principal) => this.acl.lastRoleOf(principal),
+      prunePagesAt: (at) => this.git.jobs.ensure("feed_pages_prune", FEED_PAGES_JOB, { runAt: at }),
       refreshAccess: () => this.acl.refresh(),
       resolveHandles: (handles) => this.#feedView.resolveHandles(handles),
+      prepareTexts: (texts) => this.references.prepare(texts),
       metrics: this.git.context.metrics,
     });
-    this.events.routeFeed((type, actor, data, row) => this.feed.blockFor(type, actor, data, row));
+    this.webhookBlobStore = new RepoWebhookBlobs({
+      git: this.git,
+      metrics: this.git.context.metrics,
+      pruneAt: (at) =>
+        this.git.jobs.ensure("webhook_blobs_prune", WEBHOOK_BLOBS_JOB, { runAt: at }),
+    });
+    this.events.routeCaptures((blobs, deadline) => this.webhookBlobStore.store(blobs, deadline));
+    this.events.routeFeed((type, actor, data, row, event) =>
+      this.feed.blockFor(type, actor, data, row, event),
+    );
+    const reviewers = new ReviewerConfirmations({
+      acl: () => this.acl,
+      account: () => this.events.account(),
+      confirmRoles: (accountId, principals, teams, pairs) =>
+        this.confirmRoles(accountId, principals, teams, pairs),
+      policy: () => this.mergeConfirmPolicy,
+    });
     this.rebases = new RebaseSagas(
       {
         writeDeps: () => this.#writeDeps(),
+        reviewers,
         pulls: this.pulls,
         repoId: () => this.#repoId(),
-        standing: (number, pull, method, upToDate) =>
-          this.#discussion.standing(number, pull, method, upToDate),
+        standing: (number, pull, method, upToDate, merger, budgeted) =>
+          this.#discussion.standing(number, pull, method, upToDate, merger, budgeted),
         internalCalls: () => currentInvocation()?.tally.internal ?? 0,
+        standingQueries: (number, pull) => this.#discussion.standingQueries(number, pull),
         committed: () => {
           this.#armOutbox();
           this.#ensureAuditArchive();
@@ -415,27 +621,67 @@ export class RepoDO extends MigratingDO {
       },
       this.git,
     );
+    this.teamRequests = new RepoTeamRequests({
+      git: this.git,
+      events: this.events,
+      feed: this.feed,
+      pulls: this.pulls,
+      schedule: () => this.#scheduleReviewTeams(),
+      freed: (number) => this.#codeOwnerRequests.freed(number),
+    });
     this.reviews = new RepoReviews({
       git: this.git,
       events: this.events,
       pulls: this.pulls,
+      feed: this.feed,
+      teams: this.teamRequests,
       repoId: () => this.#repoId(),
+      freed: (number) => this.#codeOwnerRequests.freed(number),
+      reviewed: (number) => this.#codeOwnerRequests.reviewed(number),
     });
-    this.comments = new RepoComments({
+    this.issues = new RepoIssues({
       git: this.git,
       events: this.events,
       pulls: this.pulls,
       repoId: () => this.#repoId(),
+      meta: {
+        snapshot: (number) => this.subjectMeta.snapshot(number),
+        forget: (number) => this.subjectMeta.forget(number),
+        forgetReactions: (number) => this.reactions.forgetSubject(number),
+        described: (number, body, actor) =>
+          this.references.sync({ kind: "issue", number, comment: 0 }, body, actor),
+        forgetReferences: (number, actor) => this.references.forgetSubject(number, actor),
+        ofMany: (numbers) => this.subjectMeta.ofMany(numbers),
+        of: (number) => this.subjectMeta.of(number),
+        milestone: (number) => this.subjectMeta.milestone(number),
+      },
+    });
+    this.comments = new RepoComments({
+      git: this.git,
+      events: this.events,
+      issues: this.issues,
+      repoId: () => this.#repoId(),
+      forgetReactions: (id) => this.reactions.forget("comment", id),
+      reactionsOf: (id) => this.reactions.countsOf("comment", [id]).get(id) as ReactionCounts,
+      described: (comment, kind, text, actor) =>
+        this.references.sync({ kind, number: comment.number, comment: comment.id }, text, actor),
     });
     this.reviewComments = new RepoReviewComments({
       git: this.git,
       events: this.events,
       pulls: this.pulls,
       repoId: () => this.#repoId(),
+      forgetReactions: (id) => this.reactions.forget("review_comment", id),
+      reactionsOf: (id) =>
+        this.reactions.countsOf("review_comment", [id]).get(id) as ReactionCounts,
     });
     this.pullAcl = async (accountId) => {
       this.git.context.metrics.count("do.request", { class: "OrgDO", method: "snapshotFor" });
       return env.ORG.getByName(accountId).snapshotFor(this.#repoId());
+    };
+    this.confirmRoles = async (accountId, principals, teams = [], pairs = []) => {
+      this.git.context.metrics.count("do.request", { class: "OrgDO", method: "confirmRoles" });
+      return env.ORG.getByName(accountId).confirmRoles(this.#repoId(), principals, teams, pairs);
     };
     this.acl = new RepoAcl({
       storage: ctx.storage,
@@ -443,6 +689,7 @@ export class RepoDO extends MigratingDO {
       metrics: this.git.context.metrics,
       account: () => this.events.account(),
       pull: (accountId) => this.pullAcl(accountId),
+      observed: (accountId, epochGen) => this.teamRequests.observe(accountId, epochGen),
     });
     this.#generation = new TemplateGeneration({
       git: this.git,
@@ -486,22 +733,73 @@ export class RepoDO extends MigratingDO {
       acl: this.acl,
       authority: this.#authority,
       pulls: this.pulls,
+      issues: this.issues,
       comments: this.comments,
       reviewComments: this.reviewComments,
       isPublic: () => this.events.visibility() === "public",
       refusesReads: () => this.#refusesReads(),
       isTransferring: () => this.events.isTransferring(),
+      epoch: () => this.events.epochGen(),
+    });
+    this.#codeOwnerFacts = new CodeOwnerFacts({
+      codeOwners: this.codeOwners,
+      env: () => this.env,
+      account: () => this.events.account(),
+      acl: () => this.acl,
+      authority: this.#authority,
+      teams: (accountId, slugs, principals) =>
+        this.env.ORG.getByName(accountId).codeOwnerTeams(this.#repoId(), slugs, principals),
+      policy: () => this.codeOwnerMergePolicy,
+      metrics: this.git.context.metrics,
     });
     this.#discussion = new PullDiscussion({
       git: this.git,
       pulls: this.pulls,
       reviews: this.reviews,
       reviewComments: this.reviewComments,
+      reacted: (comments) => this.reactions.attach("review_comment", comments),
       authority: this.#authority,
+      codeOwnerFacts: this.#codeOwnerFacts,
+      codeOwnersStamp: (pull) => this.codeOwners.stampFor(pull),
       memoryBlocks: () => this.#memoryBlocks(),
       viewed: (pull) => this.#viewed(pull),
-      pullChange: (method, actor, change, prepare, texts) =>
-        this.#pullChange(method, actor, change, prepare, texts),
+      pullChange: (method, actor, change, prepare, texts, last) =>
+        this.#pullChange(method, actor, change, prepare, texts, last),
+      teamAudience: (slugs) => this.#teamAudience(slugs),
+      audienceFit: (audience) => this.#audienceFit(audience),
+      adoptAudience: (audience) =>
+        this.acl.invalidate(audience.accountId, audience.epochGen, audience.version),
+    });
+    this.#codeOwnerRequests = new CodeOwnerRequests({
+      git: this.git,
+      pulls: this.pulls,
+      reviews: this.reviews,
+      teams: this.teamRequests,
+      codeOwners: this.codeOwners,
+      facts: this.#codeOwnerFacts,
+      reviewersNow: (number) => this.#discussion.reviewersNow(number),
+      authority: this.#authority,
+      acl: () => this.acl,
+      account: () => this.events.account(),
+      teamFacts: (accountId, slugs, probe) =>
+        this.env.ORG.getByName(accountId).codeOwnerTeamFacts(this.#repoId(), slugs, probe),
+      teamAudience: (slugs) => this.#teamAudience(slugs),
+      audienceFit: (audience) => this.#audienceFit(audience),
+      adoptAudience: (audience) =>
+        this.acl.invalidate(audience.accountId, audience.epochGen, audience.version),
+      prepareFeed: async () => {
+        await this.feed.prepare();
+      },
+      withFeed: (actor, change) => this.feed.within(actor, change),
+      writable: () => this.#writeRefusal() === undefined && this.events.canEmit(),
+      committed: () => {
+        this.#armOutbox();
+        this.#ensureAuditArchive();
+      },
+      policy: () => this.codeOwnerRequestPolicy,
+      hooks: () => this.codeOwnerRequestHooks,
+      metrics: this.git.context.metrics,
+      log: () => this.#log(),
     });
     const writes: WriteContext = {
       git: this.git,
@@ -525,6 +823,7 @@ export class RepoDO extends MigratingDO {
       feed: this.feed,
       mergePolicy: () => this.mergePolicy,
       rebasePolicy: () => this.rebasePolicy,
+      reviewers,
       hooks: () => this.mergeHooks,
     });
     this.#headWrites = new HeadBranchWrites({
@@ -652,7 +951,13 @@ export class RepoDO extends MigratingDO {
     return measureInvocation(
       this.git.context.metrics,
       { where: "do", op: method, doClass: "RepoDO" },
-      fn,
+      // The restore generation first (once an instance): a restored object learns from the
+      // directory what happened since its backup, its deletion included, before any work. An
+      // erasing or erased object has nothing left to learn it for.
+      async () => {
+        if (!this.#closed) await this.checkEpoch();
+        return fn();
+      },
     ).finally(() => {
       this.#inFlight--;
     });
@@ -678,6 +983,8 @@ export class RepoDO extends MigratingDO {
     identity?: RepoIdentity & { readonly actor: string | null },
     /** The template this repository is generated from: it takes no other write until then. */
     templateId?: string,
+    /** The labels it starts with (its account's defaults); needs `identity`. */
+    labels: readonly LabelSpec[] = [],
   ): Promise<{ ok: true } | { ok: false; error: string }> {
     if (!isNetworkId(networkId)) return { ok: false, error: "not a network id" };
     try {
@@ -688,6 +995,7 @@ export class RepoDO extends MigratingDO {
       this.git.initialize(networkId, defaultBranch);
       if (identity) {
         this.events.init(identity, identity.actor);
+        this.subjectMeta.copyLabels(labels, null);
         this.#armOutbox();
       }
       return { ok: true };
@@ -876,16 +1184,65 @@ export class RepoDO extends MigratingDO {
   /** What a delivery attempt needs of the hook now (its open secrets included); `gone` once deleted. */
   hookForDelivery(id: number): Promise<HookForDelivery> {
     // Erased (or being erased): gone for good, not unavailable.
-    if (this.#refusesReads()) return Promise.resolve({ kind: "gone" as const });
+    if (this.#gone()) return Promise.resolve({ kind: "gone" as const });
     return this.#measured("hookForDelivery", async () => {
       if (this.#refusesReads()) return { kind: "gone" as const };
       return this.hooks.forDelivery(id, this.events.visibility() !== "public");
     });
   }
 
+  /** `hookForDelivery` for several hooks in one call (an event's first attempts), in `ids`' order. */
+  hooksForDelivery(ids: readonly number[]): Promise<HookForDelivery[]> {
+    if (this.#gone()) return Promise.resolve(ids.map(() => ({ kind: "gone" as const })));
+    return this.#measured("hooksForDelivery", async () => {
+      if (this.#refusesReads()) return ids.map(() => ({ kind: "gone" as const }));
+      const repoPrivate = this.events.visibility() !== "public";
+      const hooks: HookForDelivery[] = [];
+      for (const id of ids) hooks.push(await this.hooks.forDelivery(id, repoPrivate));
+      return hooks;
+    });
+  }
+
+  /**
+   * A page of an event's further feed recipients, for its feed effect: only
+   * while the event is still this repository's (the restore generation
+   * taken first, then deletion, restore and ownership checked with the
+   * read).
+   */
+  feedAudiencePage(ask: FeedPageAsk): Promise<FeedPageRead> {
+    if (this.#gone()) return Promise.resolve({ missing: "deleted" as const });
+    return this.#measured("feedAudiencePage", async () => {
+      await this.checkEpoch();
+      if (this.#refusesReads()) return { missing: "deleted" as const };
+      return this.feed.readPage(ask, {
+        epochGen: this.events.epochGen(),
+        ownerGen: this.events.account()?.ownerGen ?? 0,
+      });
+    });
+  }
+
+  /**
+   * The webhook capture blobs an event's delivery needs, while the event is
+   * still this repository's (the restore generation taken first, then
+   * deletion, restore and ownership checked with the read).
+   */
+  webhookBlobs(ask: WebhookBlobsAsk): Promise<WebhookBlobsRead> {
+    if (this.#gone()) return Promise.resolve({ missing: "deleted" as const });
+    return this.#measured("webhookBlobs", async () => {
+      await this.checkEpoch();
+      if (this.#refusesReads()) return { missing: "deleted" as const };
+      return this.webhookBlobStore.read(ask, {
+        epochGen: this.events.epochGen(),
+        ownerGen: this.events.account()?.ownerGen ?? 0,
+      });
+    });
+  }
+
   /** Turns the hook off after its receiver answered 410 Gone (unless it changed since). */
-  disableHook(id: number, configVersion: number, reason: string): boolean {
+  async disableHook(id: number, configVersion: number, reason: string): Promise<boolean> {
     // Erased: no hook left to turn off.
+    if (this.#gone()) return false;
+    await this.checkEpoch();
     if (this.#refusesReads()) return false;
     return this.hooks.disable(id, configVersion, reason);
   }
@@ -911,16 +1268,20 @@ export class RepoDO extends MigratingDO {
 
   /** The repository's pull requests, newest first, below `before` (a number) when given. */
   listPulls(state: PullRecord["state"] | "all", before: number | undefined, limit: number) {
-    return this.#measured("listPulls", () =>
-      this.#refusesReads()
-        ? null
-        : this.pulls.list(state, before, limit).map((p) => this.#viewed(p)),
-    );
+    return this.#measured("listPulls", () => {
+      if (this.#refusesReads()) return null;
+      const pulls = this.pulls.list(state, before, limit);
+      const metas = this.subjectMeta.ofMany(pulls);
+      return pulls.map((p) => this.#viewed(p, metas.get(p.number)));
+    });
   }
 
-  /** A pull request with whether it merges, as far as that is known now. */
-  #viewed(pull: PullRecord): PullView {
-    return { ...pull, ...this.mergeability.view(pull) };
+  /** A pull request with whether it merges, as far as that is known now, and its labels, assignees and milestone. */
+  #viewed(
+    pull: PullRecord,
+    meta: SubjectMeta = this.subjectMeta.ofMany([pull]).get(pull.number) as SubjectMeta,
+  ): PullView {
+    return { ...pull, ...this.mergeability.view(pull), meta };
   }
 
   /** One pull request; undefined when there is none with that number. */
@@ -960,7 +1321,9 @@ export class RepoDO extends MigratingDO {
    * page) are followed again, as when opened. Answers the number to go on
    * after, or null when there are no more.
    */
-  followHeadAgain(headRepoId: string, after: number): number | null {
+  async followHeadAgain(headRepoId: string, after: number): Promise<number | null> {
+    if (this.#gone()) return null;
+    await this.checkEpoch();
     if (this.#refusesReads()) return null;
     return this.#forkPulls.followAgain(headRepoId, after);
   }
@@ -980,7 +1343,17 @@ export class RepoDO extends MigratingDO {
    * Changes a pull request as the mutation matrix allows the caller, with
    * its role and root identity worked out here (no await before the change).
    */
-  changePull(
+  changePull(number: number, patch: PullPatch, actor: RefActor) {
+    return this.#changePull(undefined, number, patch, actor);
+  }
+
+  /** As `changePull`, only while the pull request is still at `expected` (see `changeIssueAt`). */
+  changePullAt(expected: number, number: number, patch: PullPatch, actor: RefActor) {
+    return this.#changePull(expected, number, patch, actor);
+  }
+
+  #changePull(
+    expected: number | undefined,
     number: number,
     patch: PullPatch,
     actor: RefActor,
@@ -989,13 +1362,17 @@ export class RepoDO extends MigratingDO {
     | { ok: false; code: "already_exists"; number: number }
     | {
         ok: false;
-        code: Exclude<PullChangeFailure, "already_exists"> | PullChangeRefusal | "busy";
+        code: Exclude<PullChangeFailure, "already_exists"> | PullChangeRefusal | "busy" | "stale";
       }
   > {
     return this.#pullChange(
       "changePull",
       actor,
       (caller) => {
+        // A missing pull request is the change's to refuse (not found), never stale.
+        const current = this.pulls.get(number);
+        if (expected !== undefined && current && current.version !== expected)
+          return { ok: false as const, code: "stale" as const, version: current.version };
         const changed = this.pulls.change(number, patch, caller);
         // Nothing awaits between the read and the commit: a conflict means a
         // concurrent change no retry here could see past.
@@ -1011,7 +1388,11 @@ export class RepoDO extends MigratingDO {
 
   /** Merges a pull request into its base branch (see `PullMerging.merge`). */
   mergePull(input: MergePullInput, actor: RefActor): Promise<Browsed<MergeMade>> {
-    return this.#measured("mergePull", () => this.#merging.merge(input, actor));
+    return this.#measured("mergePull", async () => {
+      // What the description closes in other repositories is resolved now, for the merge to read.
+      await this.references.prepare([this.pulls.get(input.number)?.body]);
+      return this.#merging.merge(input, actor);
+    });
   }
 
   /** A page of the files a pull request changes (see `pullFilesListing`). */
@@ -1078,63 +1459,851 @@ export class RepoDO extends MigratingDO {
     );
   }
 
-  /** The principals reviews of a pull request are requested of; undefined without it. */
+  /**
+   * Who owns what pull request `number` changes, as far as it is worked out
+   * for its current pair (see `RepoCodeOwners.view`); null when the
+   * repository is gone.
+   */
+  pullCodeOwners(
+    number: number,
+    page: { readonly evalId: number; readonly after: number } | null,
+    limit: number,
+  ) {
+    return this.#measured("pullCodeOwners", () => {
+      if (this.#refusesReads()) return null;
+      return this.codeOwners.view(number, page, limit);
+    });
+  }
+
+  /** Queues the settling of team review requests no longer standing (see `RepoTeamRequests`). */
+  /**
+   * The repository's organization's teams `slugs`, as a review request
+   * asks them; `unavailable` when they could not be read.
+   */
+  async #teamAudience(slugs: readonly string[]): Promise<TeamAudience | "unavailable"> {
+    const account = this.events.account();
+    if (!account) return { accountId: "", epochGen: 0, version: 0, teams: [], missing: [...slugs] };
+    this.git.context.metrics.count("do.request", { class: "OrgDO", method: "teamAudience" });
+    let audience: TeamAudience;
+    try {
+      audience = await this.env.ORG.getByName(account.accountId).teamAudience(
+        this.#repoId(),
+        slugs,
+      );
+    } catch (error) {
+      this.#log().warn("reading the teams asked to review failed", { error });
+      return "unavailable";
+    }
+    this.teamRequests.observe(audience.accountId, audience.epochGen);
+    return audience;
+  }
+
+  /** How `audience`'s ACL compares with the one the repository decides by now. */
+  #audienceFit(audience: TeamAudience): AudienceFit {
+    // No team found: nothing was read with the ACL (the request is refused for that).
+    if (audience.teams.length === 0) return "same";
+    const account = this.events.account();
+    if (!account || audience.accountId !== account.accountId) return "unavailable";
+    const basis = this.acl.basis();
+    if (basis === "none") return "unavailable";
+    // None to decide by now (too old, or a pull failed): the answer's is pulled.
+    if (basis === "unknown") return "newer";
+    if (basis.epochGen === audience.epochGen && basis.version === audience.version) return "same";
+    return basis.epochGen < audience.epochGen ||
+      (basis.epochGen === audience.epochGen && basis.version < audience.version)
+      ? "newer"
+      : "older";
+  }
+
+  #scheduleReviewTeams(): void {
+    this.git.jobs.ensure("review_teams", REVIEW_TEAMS_JOB);
+  }
+
+  /**
+   * The principals and teams reviews of a pull request are requested of
+   * (the teams asked under the owner it has now); undefined without it.
+   */
   requestedReviewers(number: number) {
     return this.#measured("requestedReviewers", () => {
       if (this.#refusesReads()) return null;
       if (!this.pulls.get(number)) return undefined;
-      return this.reviews.requested(number);
+      return {
+        users: this.reviews.requested(number),
+        teams: this.reviews.requestedTeams(number).map((request) => request.team),
+      };
     });
   }
 
-  /** A pull request's comments, oldest first; null when the repository is gone, undefined without the pull request. */
-  listComments(number: number, after: number, limit: number) {
+  /**
+   * An issue's or pull request's comments, oldest first; null when the
+   * repository is gone, undefined without that number among `kinds` (the
+   * kinds the caller may read).
+   */
+  /** A page of a conversation's comments; with `viewer`, that principal's own reactions to each. */
+  listComments(
+    number: number,
+    after: number,
+    limit: number,
+    kinds: readonly SubjectKind[],
+    viewer?: string,
+  ) {
     return this.#measured("listComments", () => {
       if (this.#refusesReads()) return null;
-      if (!this.pulls.get(number)) return undefined;
-      return this.comments.list(number, after, limit);
+      const kind = this.issues.kindOf(number);
+      if (!kind || !kinds.includes(kind)) return undefined;
+      return this.reactions.attach("comment", this.comments.list(number, after, limit), viewer);
     });
   }
 
-  /** One comment; null when the repository is gone. */
-  getComment(id: number) {
-    return this.#measured("getComment", () =>
-      this.#refusesReads() ? null : (this.comments.get(id) ?? undefined),
-    );
+  /** One comment, on a subject of `kinds`; null when the repository is gone. */
+  getComment(id: number, kinds: readonly SubjectKind[]) {
+    return this.#measured("getComment", () => {
+      if (this.#refusesReads()) return null;
+      const kind = this.comments.kindOf(id);
+      const comment = kind && kinds.includes(kind) ? this.comments.get(id) : undefined;
+      return comment && this.reactions.attach("comment", [comment])[0];
+    });
   }
 
-  createComment(number: number, body: string, actor: RefActor) {
+  createComment(number: number, body: string, actor: RefActor, kinds: readonly SubjectKind[]) {
     return this.#pullChange(
       "createComment",
       actor,
-      (caller) => this.comments.create(number, body, caller),
+      (caller) => this.#reacted(this.comments.create(number, body, caller, kinds)),
       undefined,
       [body],
     );
   }
 
-  editComment(id: number, body: string, actor: RefActor) {
+  editComment(id: number, body: string, actor: RefActor, kinds: readonly SubjectKind[]) {
+    return this.#editComment(undefined, id, body, actor, kinds);
+  }
+
+  /** As `editComment`, only while the comment is still at `expected` (see `changeIssueAt`). */
+  editCommentAt(
+    expected: number,
+    id: number,
+    body: string,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#editComment(expected, id, body, actor, kinds);
+  }
+
+  #editComment(
+    expected: number | undefined,
+    id: number,
+    body: string,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
     return this.#pullChange(
       "editComment",
       actor,
-      (caller) => this.comments.edit(id, body, caller),
+      (caller) => {
+        // Only a comment the caller may see is compared (the edit refuses any other as not
+        // found): a version must not tell of one on a kind it cannot read.
+        const current = this.comments.get(id);
+        const kind = current && this.issues.kindOf(current.number);
+        if (
+          expected !== undefined &&
+          current &&
+          kind &&
+          kinds.includes(kind) &&
+          current.version !== expected
+        )
+          return { ok: false as const, code: "stale" as const, version: current.version };
+        return this.#reacted(this.comments.edit(id, body, caller, kinds));
+      },
       undefined,
       [body],
     );
   }
 
-  deleteComment(id: number, actor: RefActor) {
-    return this.#pullChange("deleteComment", actor, (caller) => this.comments.delete(id, caller));
+  deleteComment(id: number, actor: RefActor, kinds: readonly SubjectKind[]) {
+    return this.#pullChange("deleteComment", actor, (caller) =>
+      this.comments.delete(id, caller, kinds),
+    );
   }
 
-  /** Requests reviews of principals, each one's access checked here (see `PullDiscussion`). */
-  requestReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
-    return this.#discussion.requestReviewers(number, reviewerIds, actor);
+  /**
+   * In a merge's transaction: a pull request merged into the default branch
+   * closes what its description names after a closing keyword: issues here
+   * at once; elsewhere by a `reference.close` event carrying the merger's
+   * credential (none without a token to check there).
+   */
+  #closeOnMerge(pull: PullRecord, actor: RefActor): void {
+    // Merged, it cannot reopen: its teams' members are settled and no longer kept.
+    this.teamRequests.releaseMerged(pull.number, actor);
+    if (this.git.refStore.head() !== `refs/heads/${pull.baseRef}`) return;
+    const { here, elsewhere } = this.references.closing(pull.number, pull.body);
+    for (const number of here) this.issues.closeByReference(number, pull.number, actor);
+    if (elsewhere.length > 0 && actor.tokenId)
+      this.events.emitActivity("reference.close", actor, {
+        source_number: pull.number,
+        token_id: actor.tokenId,
+        targets: elsewhere.map((t) => ({ repo_id: t.repoId, number: t.number })),
+      });
   }
 
-  /** Withdraws review requests. */
-  removeRequestedReviewers(number: number, reviewerIds: readonly string[], actor: RefActor) {
-    return this.#discussion.removeRequestedReviewers(number, reviewerIds, actor);
+  /** A comment change's comment as the API answers it, with its reactions counted. */
+  #reacted<R extends { ok: true; comment: CommentRecord } | { ok: false }>(result: R) {
+    return result.ok
+      ? {
+          ...result,
+          comment: this.reactions.attach("comment", [result.comment])[0] as Reacted<CommentRecord>,
+        }
+      : (result as Exclude<R, { ok: true }>);
+  }
+
+  /** A page of the issues and pull requests of `query.kinds` (see `RepoIssues.list`); null when gone. */
+  listSubjects(query: SubjectQuery) {
+    return this.#measured("listSubjects", () =>
+      this.#refusesReads() ? null : this.issues.list(query),
+    );
+  }
+
+  /** The issue or pull request numbered `number`, of `kinds`; null when gone, undefined for none. */
+  /** With `viewer`, that principal's own reactions to it too. */
+  getSubject(number: number, kinds: readonly SubjectKind[], viewer?: string) {
+    return this.#measured("getSubject", (): Subject | null | undefined => {
+      if (this.#refusesReads()) return null;
+      const kind = this.issues.kindOf(number);
+      if (!kind || !kinds.includes(kind)) return undefined;
+      const subject = this.#subject(number, kind);
+      if (!subject || viewer === undefined) return subject;
+      const own = this.reactions.ownOf("subject", [number], viewer).get(number) ?? [];
+      return { ...subject, meta: { ...subject.meta, viewerReactions: own } } as Subject;
+    });
+  }
+
+  /** The issue or pull request numbered `number`, of kind `kind`, with what it is sorted by. */
+  #subject(number: number, kind: SubjectKind): Subject | undefined {
+    const meta = this.subjectMeta.of(number);
+    if (kind === "issue") {
+      const issue = this.issues.get(number);
+      return issue && { kind, issue, meta };
+    }
+    const pull = this.pulls.get(number);
+    return pull && { kind, pull, meta };
+  }
+
+  /**
+   * Opens an issue as the caller, its root identity worked out here, with
+   * the labels, assignees and milestone `meta` gives it (triage).
+   */
+  createIssue(
+    input: { readonly title: string; readonly body: string | null },
+    actor: RefActor,
+    meta: MetaInput = {},
+  ) {
+    return this.#pullChange(
+      "createIssue",
+      actor,
+      (caller, ceilings) => {
+        // An object from before identities has no events to record an issue with.
+        if (!this.events.hasIdentity())
+          return { ok: false as const, code: "repo_not_ready" as const };
+        const planned = hasMeta(meta)
+          ? this.subjectMeta.planNew(this.#metaPatch(meta, ceilings), caller)
+          : undefined;
+        if (planned && !planned.ok) return planned;
+        const record = this.issues.open(input, caller, planned?.plan);
+        return {
+          ok: true as const,
+          subject: {
+            kind: "issue" as const,
+            issue: record,
+            meta: this.subjectMeta.of(record.number),
+          },
+        };
+      },
+      () => this.#assigneeCeilings(meta),
+      [input.body],
+    );
+  }
+
+  /**
+   * Changes an issue as the matrix allows (see `RepoIssues.change`), with
+   * its labels, assignees and milestone (`meta`), all of it or nothing;
+   * `readable`: the kinds a duplicate may be. A pull request's number (of
+   * `kinds`) takes only `meta`: its title, body and state change through
+   * `changePull`.
+   */
+  changeIssue(
+    number: number,
+    patch: IssuePatch,
+    actor: RefActor,
+    readable: readonly SubjectKind[],
+    kinds: readonly SubjectKind[] = ["issue"],
+    meta: MetaInput = {},
+  ) {
+    return this.#changeIssue(undefined, number, patch, actor, readable, kinds, meta);
+  }
+
+  /**
+   * As `changeIssue`, only while the issue (or pull request) is still at
+   * `expected` (its `version`), checked in the change; `stale` when it moved
+   * on. A method of its own: an earlier object (while a deploy rolls out)
+   * refuses it rather than ignore the precondition.
+   */
+  changeIssueAt(
+    expected: number,
+    number: number,
+    patch: IssuePatch,
+    actor: RefActor,
+    readable: readonly SubjectKind[],
+    kinds: readonly SubjectKind[],
+    meta: MetaInput,
+  ) {
+    return this.#changeIssue(expected, number, patch, actor, readable, kinds, meta);
+  }
+
+  #changeIssue(
+    expected: number | undefined,
+    number: number,
+    patch: IssuePatch,
+    actor: RefActor,
+    readable: readonly SubjectKind[],
+    kinds: readonly SubjectKind[],
+    meta: MetaInput,
+  ) {
+    return this.#pullChange(
+      "changeIssue",
+      actor,
+      (caller, ceilings) => {
+        const kind = this.issues.kindOf(number);
+        if (!kind || !kinds.includes(kind))
+          return { ok: false as const, code: "not_found" as const };
+        const current = kind === "pull" ? this.pulls.get(number) : this.issues.get(number);
+        if (expected !== undefined && current && current.version !== expected)
+          return { ok: false as const, code: "stale" as const, version: current.version };
+        const planned = hasMeta(meta)
+          ? this.subjectMeta.plan(number, this.#metaPatch(meta, ceilings), caller, kinds)
+          : undefined;
+        if (planned && !planned.ok) return planned;
+        if (kind === "pull") {
+          if (Object.keys(patch).length > 0)
+            return { ok: false as const, code: "pull_request_fields" as const };
+          if (planned?.plan.changes)
+            this.git.context.storage.transactionSync(() => planned.plan.apply(true));
+        } else {
+          const changed = this.issues.change(number, patch, caller, readable, planned?.plan);
+          if (!changed.ok) return changed;
+        }
+        return { ok: true as const, subject: this.#subject(number, kind) as Subject };
+      },
+      () => this.#assigneeCeilings(meta),
+      [patch.body],
+    );
+  }
+
+  /** An issue's or pull request's labels (of `kinds`); null when gone, undefined for none. */
+  subjectLabels(number: number, kinds: readonly SubjectKind[]) {
+    return this.#measured("subjectLabels", () => {
+      if (this.#refusesReads()) return null;
+      const kind = this.issues.kindOf(number);
+      if (!kind || !kinds.includes(kind)) return undefined;
+      return this.subjectMeta.of(number, false).labels;
+    });
+  }
+
+  /** Changes an issue's or pull request's labels or assignees (of `kinds`; triage). */
+  changeSubjectMeta(
+    number: number,
+    meta: MetaInput,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#changeSubjectMeta([], number, meta, actor, kinds);
+  }
+
+  /**
+   * As `changeSubjectMeta`, only while each name of `expected` still names
+   * the label of its id (a picker's labels, renamed and their names taken
+   * since: `stale`); a method of its own, as `changeIssueAt`'s.
+   */
+  changeSubjectMetaAt(
+    expected: readonly { readonly name: string; readonly id: number }[],
+    number: number,
+    meta: MetaInput,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#changeSubjectMeta(expected, number, meta, actor, kinds);
+  }
+
+  #changeSubjectMeta(
+    expected: readonly { readonly name: string; readonly id: number }[],
+    number: number,
+    meta: MetaInput,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#pullChange(
+      "changeSubjectMeta",
+      actor,
+      (caller, ceilings) => {
+        const planned = this.subjectMeta.plan(
+          number,
+          this.#metaPatch(meta, ceilings),
+          caller,
+          kinds,
+        );
+        // Planned first: a subject the caller cannot see, or a label the repository lacks,
+        // answers as without the precondition.
+        if (!planned.ok) return planned;
+        if (expected.some((e) => this.subjectMeta.label(e.name)?.id !== e.id))
+          return { ok: false as const, code: "stale" as const };
+        if (planned.plan.changes)
+          this.git.context.storage.transactionSync(() => planned.plan.apply(true));
+        return {
+          ok: true as const,
+          subject: this.#subject(number, planned.plan.kind) as Subject,
+        };
+      },
+      () => this.#assigneeCeilings(meta),
+    );
+  }
+
+  /** A page of a target's reactions (of a conversation of `kinds`); null when gone, undefined for none. */
+  listReactions(
+    target: ReactionTarget,
+    targetId: number,
+    content: ReactionContent | null,
+    after: number,
+    limit: number,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#measured("listReactions", () => {
+      if (this.#refusesReads()) return null;
+      const on = this.#reactionSubject(target, targetId, kinds);
+      return on && this.reactions.list(target, targetId, content, after, limit);
+    });
+  }
+
+  /** Reacts to a target (of a conversation of `kinds`) as the caller (see `RepoReactions.react`). */
+  createReaction(
+    target: ReactionTarget,
+    targetId: number,
+    content: ReactionContent,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#pullChange("createReaction", actor, (caller) => {
+      const on = this.#reactionSubject(target, targetId, kinds);
+      if (!on) return { ok: false as const, code: "not_found" as const };
+      return this.#withIdentity(() => this.reactions.react(on, content, caller));
+    });
+  }
+
+  /** Takes the caller's reaction `id` to a target back (see `RepoReactions.delete`). */
+  deleteReaction(
+    target: ReactionTarget,
+    targetId: number,
+    id: number,
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#pullChange("deleteReaction", actor, (caller) => {
+      const on = this.#reactionSubject(target, targetId, kinds);
+      if (!on) return { ok: false as const, code: "not_found" as const };
+      return this.reactions.delete(on, id, caller);
+    });
+  }
+
+  /**
+   * What a reaction to `targetId` is on, when it exists and its
+   * conversation is of `kinds` (a diff comment's is a pull request's):
+   * its number and whether it is locked.
+   */
+  #reactionSubject(
+    target: ReactionTarget,
+    targetId: number,
+    kinds: readonly SubjectKind[],
+  ): ReactionSubject | undefined {
+    const number =
+      target === "subject"
+        ? targetId
+        : target === "comment"
+          ? this.comments.get(targetId)?.number
+          : this.reviewComments.get(targetId)?.number;
+    const conversation = number === undefined ? undefined : this.issues.conversation(number);
+    if (!conversation || number === undefined || !kinds.includes(conversation.kind))
+      return undefined;
+    if (target === "review_comment" && conversation.kind !== "pull") return undefined;
+    return { target, targetId, number, locked: conversation.locked };
+  }
+
+  /**
+   * What refers to issue or pull request `number` (of `kinds`): a page by
+   * source repository, number and comment; null when gone, undefined for
+   * none. The caller checks the sources it may read.
+   */
+  listReferences(
+    number: number,
+    kinds: readonly SubjectKind[],
+    cursor: string | null,
+    limit: number,
+  ) {
+    return this.#measured("listReferences", async () => {
+      if (this.#refusesReads()) return null;
+      const kind = this.issues.kindOf(number);
+      if (!kind || !kinds.includes(kind)) return undefined;
+      return this.references.page(number, cursor, limit);
+    });
+  }
+
+  /**
+   * From another repository's effect: a source's references here (see
+   * `RepoReferences.apply`). `retry` while a transfer holds the
+   * repository; nothing for one gone.
+   */
+  applyReferences(input: IncomingReferences): Promise<"applied" | "gone" | "retry"> {
+    return this.#measured("applyReferences", async () => {
+      await this.checkEpoch();
+      const refused = this.#writeRefusal();
+      if (refused) return refused.code === "repo_transferring" ? "retry" : "gone";
+      if (!this.events.hasIdentity()) return "gone";
+      this.references.apply(input);
+      return "applied";
+    });
+  }
+
+  /**
+   * From another repository's effect: a pull request merged there names
+   * issue `number` here after a closing keyword. Its merger's credential
+   * must hold here now (`issues:write`, its repository restrictions, a live
+   * grant and agents' ceilings) with triage; else nothing closes, and the
+   * refusal is audited (for good: it is not retried). `retry` while a
+   * transfer holds the repository.
+   */
+  closeFromReference(input: {
+    /** The effect asking it: a repeat answers what came of the first. */
+    readonly effectId: string;
+    readonly number: number;
+    readonly principal: string;
+    readonly tokenId: string;
+    readonly actChain: readonly string[];
+  }): Promise<"closed" | "unchanged" | "refused" | "gone" | "retry"> {
+    return this.#measured("closeFromReference", async () => {
+      await this.checkEpoch();
+      const refused = this.#writeRefusal();
+      if (refused) return refused.code === "repo_transferring" ? "retry" : "gone";
+      if (!this.events.hasIdentity()) return "gone";
+      const done = this.references.closeOutcome(input.effectId);
+      if (done) return done;
+      const issue = this.issues.get(input.number);
+      if (issue?.state !== "open") {
+        this.references.recordClose(input.effectId, "unchanged");
+        return "unchanged";
+      }
+      const actor: RefActor = {
+        principal: input.principal,
+        tokenId: input.tokenId,
+        actChain: [...input.actChain],
+        via: "api",
+      };
+      // Who hears of the close is read from the access list: brought up to date first.
+      await this.feed.prepare();
+      // The decision holds for the ownership it was made in.
+      const ownerGen = this.events.account()?.ownerGen;
+      const decision = await reauthorizeByToken(
+        this.env.DIRECTORY,
+        { tokenId: input.tokenId, principal: input.principal, repoId: this.#repoId() },
+        (principalId) => this.acl.roleOf(principalId, "write"),
+        { permission: "issues:write", minRole: "triage" },
+      );
+      await this.changeHooks.beforeChange?.("closeFromReference");
+      if (this.#writeRefusal()) return "retry";
+      const outcome = this.ctx.storage.transactionSync(() => {
+        // Another delivery of the same effect may have finished meanwhile.
+        const already = this.references.closeOutcome(input.effectId);
+        if (already) return already;
+        // Transferred meanwhile, or the merger's role (or an acting agent's owner's) changed:
+        // decided again on a later try.
+        if (
+          this.events.account()?.ownerGen !== ownerGen ||
+          (decision.refusal === undefined &&
+            !(decision.checked ?? [input.principal]).every((id) => this.acl.allows(id, "triage")))
+        )
+          return "retry" as const;
+        let outcome: "closed" | "unchanged" | "refused";
+        if (decision.refusal !== undefined) {
+          this.events.auditChange("issue.close_refused", actor, {
+            number: input.number,
+            refusal: decision.refusal,
+          });
+          outcome = "refused";
+        } else
+          outcome = this.issues.closeByReference(input.number, null, actor)
+            ? "closed"
+            : "unchanged";
+        this.references.recordClose(input.effectId, outcome);
+        return outcome;
+      });
+      if (outcome === "retry") return outcome;
+      this.#armOutbox();
+      this.#ensureAuditArchive();
+      return outcome;
+    });
+  }
+
+  /** A page of the repository's labels by name, after `after`, those starting with `prefix` only when given; null when gone. */
+  listLabels(after: string | null, limit: number, prefix: string | null = null) {
+    return this.#measured("listLabels", () =>
+      this.#refusesReads() ? null : this.subjectMeta.labels(after, limit, prefix),
+    );
+  }
+
+  /** The label named `name` (ignoring case); null when gone, undefined for none. */
+  getLabel(name: string) {
+    return this.#measured("getLabel", () =>
+      this.#refusesReads() ? null : this.subjectMeta.label(name),
+    );
+  }
+
+  /** Creates a label (write). */
+  createLabel(spec: LabelSpec, actor: RefActor) {
+    return this.#pullChange("createLabel", actor, (caller) =>
+      this.#withIdentity(() => this.subjectMeta.createLabel(spec, caller)),
+    );
+  }
+
+  /** Changes a label (write). */
+  updateLabel(name: string, patch: LabelPatch, actor: RefActor) {
+    return this.#updateLabel(undefined, name, patch, actor);
+  }
+
+  /**
+   * As `updateLabel`, only while `name` still names label `expected.id`
+   * at `expected.version` (see `changeIssueAt`).
+   */
+  updateLabelAt(expected: LabelExpectation, name: string, patch: LabelPatch, actor: RefActor) {
+    return this.#updateLabel(expected, name, patch, actor);
+  }
+
+  #updateLabel(
+    expected: LabelExpectation | undefined,
+    name: string,
+    patch: LabelPatch,
+    actor: RefActor,
+  ) {
+    return this.#pullChange("updateLabel", actor, (caller) =>
+      this.#withIdentity(
+        () => this.#labelStale(name, expected) ?? this.subjectMeta.updateLabel(name, patch, caller),
+      ),
+    );
+  }
+
+  /** Deletes a label (write). */
+  deleteLabel(name: string, actor: RefActor) {
+    return this.#deleteLabel(undefined, name, actor);
+  }
+
+  /** As `deleteLabel`, only while `name` still names label `expected.id` at `expected.version`. */
+  deleteLabelAt(expected: LabelExpectation, name: string, actor: RefActor) {
+    return this.#deleteLabel(expected, name, actor);
+  }
+
+  #deleteLabel(expected: LabelExpectation | undefined, name: string, actor: RefActor) {
+    return this.#pullChange("deleteLabel", actor, (caller) =>
+      this.#withIdentity(
+        () => this.#labelStale(name, expected) ?? this.subjectMeta.deleteLabel(name, caller),
+      ),
+    );
+  }
+
+  /**
+   * The stale refusal when `name` no longer names the label `expected`
+   * describes, with the version of the label it names now; none with no
+   * expectation, or no such label (the change's to refuse as not found).
+   */
+  #labelStale(name: string, expected: LabelExpectation | undefined) {
+    const label = expected && this.subjectMeta.label(name);
+    if (
+      !expected ||
+      !label ||
+      (label.id === expected.id &&
+        (expected.version === undefined || label.version === expected.version))
+    )
+      return undefined;
+    return { ok: false as const, code: "stale" as const, version: label.version };
+  }
+
+  /** Copies labels in (an account's defaults; write): names already here are kept. */
+  copyLabels(specs: readonly LabelSpec[], actor: RefActor) {
+    return this.#pullChange("copyLabels", actor, (caller) =>
+      this.#withIdentity(() =>
+        decideMetadataAction("manage_labels", caller.role).ok
+          ? { ok: true as const, labels: this.subjectMeta.copyLabels(specs, caller.actor) }
+          : { ok: false as const, code: "forbidden" as const },
+      ),
+    );
+  }
+
+  /** A page of the repository's milestones (see `RepoSubjectMeta.milestones`); null when gone. */
+  listMilestones(query: MilestoneQuery) {
+    return this.#measured("listMilestones", () =>
+      this.#refusesReads() ? null : this.subjectMeta.milestones(query),
+    );
+  }
+
+  /** One milestone; null when gone, undefined for none. */
+  getMilestone(number: number) {
+    return this.#measured("getMilestone", () =>
+      this.#refusesReads() ? null : this.subjectMeta.milestone(number),
+    );
+  }
+
+  /** Creates a milestone (write). */
+  createMilestone(input: Parameters<RepoSubjectMeta["createMilestone"]>[0], actor: RefActor) {
+    return this.#pullChange("createMilestone", actor, (caller) =>
+      this.#withIdentity(() => this.subjectMeta.createMilestone(input, caller)),
+    );
+  }
+
+  /** Changes a milestone (write). */
+  updateMilestone(
+    number: number,
+    patch: Parameters<RepoSubjectMeta["updateMilestone"]>[1],
+    actor: RefActor,
+  ) {
+    return this.#updateMilestone(undefined, number, patch, actor);
+  }
+
+  /** As `updateMilestone`, only while the milestone is still at `expected` (see `changeIssueAt`). */
+  updateMilestoneAt(
+    expected: number,
+    number: number,
+    patch: Parameters<RepoSubjectMeta["updateMilestone"]>[1],
+    actor: RefActor,
+  ) {
+    return this.#updateMilestone(expected, number, patch, actor);
+  }
+
+  #updateMilestone(
+    expected: number | undefined,
+    number: number,
+    patch: Parameters<RepoSubjectMeta["updateMilestone"]>[1],
+    actor: RefActor,
+  ) {
+    return this.#pullChange("updateMilestone", actor, (caller) =>
+      this.#withIdentity(() => {
+        const current = this.subjectMeta.milestone(number);
+        if (expected !== undefined && current && current.version !== expected)
+          return { ok: false as const, code: "stale" as const, version: current.version };
+        return this.subjectMeta.updateMilestone(number, patch, caller);
+      }),
+    );
+  }
+
+  /** Deletes a milestone (write). */
+  deleteMilestone(number: number, actor: RefActor) {
+    return this.#pullChange("deleteMilestone", actor, (caller) =>
+      this.#withIdentity(() => this.subjectMeta.deleteMilestone(number, caller)),
+    );
+  }
+
+  /** A change that records events, refused for an object from before identities (it has none to record them with). */
+  #withIdentity<R>(change: () => R): R | { ok: false; code: "repo_not_ready" } {
+    return this.events.hasIdentity() ? change() : { ok: false, code: "repo_not_ready" };
+  }
+
+  /** Before a change: the ceilings of the principals it assigns (an agent is capped by its owners). */
+  async #assigneeCeilings(meta: MetaInput): Promise<Map<string, string[]>> {
+    const ceilings = new Map<string, string[]>();
+    const op = meta.assignees;
+    if (!op || "remove" in op) return ceilings;
+    for (const id of new Set("add" in op ? op.add : op.set))
+      ceilings.set(id, await this.#authority.rolesPulled(id, null));
+    return ceilings;
+  }
+
+  /** In the change: what `meta` asks, each assignee with its root identity and role now. */
+  #metaPatch(meta: MetaInput, ceilings: ReadonlyMap<string, readonly string[]>): MetaPatch {
+    const op = meta.assignees;
+    const assignee = (id: string): Assignee => {
+      const owners = [...(ceilings.get(id) ?? [])];
+      return {
+        id,
+        root: rootIdentity({ principalId: id, grantId: null, ceilingIds: owners }),
+        role: this.#authority.roleNow(id, owners),
+      };
+    };
+    return {
+      ...(meta.labels && { labels: meta.labels }),
+      ...(op && {
+        assignees:
+          "remove" in op
+            ? { remove: op.remove }
+            : "add" in op
+              ? { add: op.add.map(assignee) }
+              : { set: op.set.map(assignee) },
+      }),
+      ...(meta.milestone !== undefined && { milestone: meta.milestone }),
+    };
+  }
+
+  /** Locks or unlocks an issue's or pull request's conversation, of `kinds`. */
+  setConversationLock(
+    number: number,
+    lock: { readonly locked: boolean; readonly reason: LockReason | null },
+    actor: RefActor,
+    kinds: readonly SubjectKind[],
+  ) {
+    return this.#pullChange("setConversationLock", actor, (caller) =>
+      this.issues.setLock(number, lock, caller, kinds),
+    );
+  }
+
+  /** Deletes an issue for good (admin). */
+  deleteIssue(number: number, actor: RefActor) {
+    return this.#pullChange("deleteIssue", actor, (caller) => this.issues.delete(number, caller));
+  }
+
+  /**
+   * Requests reviews of principals and of teams of the repository's
+   * organization (by slug), each one's access checked here (see `PullDiscussion`).
+   */
+  requestReviewers(
+    number: number,
+    reviewerIds: readonly string[],
+    actor: RefActor,
+    teamSlugs: readonly string[] = [],
+  ) {
+    return this.#discussion.requestReviewers(number, reviewerIds, actor, teamSlugs);
+  }
+
+  /** Withdraws review requests of principals and of teams (by the slugs they were asked by). */
+  removeRequestedReviewers(
+    number: number,
+    reviewerIds: readonly string[],
+    actor: RefActor,
+    teamSlugs: readonly string[] = [],
+  ) {
+    return this.#discussion.removeRequestedReviewers(number, reviewerIds, actor, teamSlugs);
+  }
+
+  /**
+   * As `removeRequestedReviewers`, teams named by id too. A method of its
+   * own: an earlier object (while a deploy rolls out) refuses it rather
+   * than ignore the ids it does not know.
+   */
+  removeRequestedReviewersById(
+    number: number,
+    reviewerIds: readonly string[],
+    actor: RefActor,
+    teamSlugs: readonly string[],
+    teamIds: readonly string[],
+  ) {
+    return this.#discussion.removeRequestedReviewers(
+      number,
+      reviewerIds,
+      actor,
+      teamSlugs,
+      teamIds,
+    );
   }
 
   /**
@@ -1239,13 +2408,15 @@ export class RepoDO extends MigratingDO {
    * before `change`, whether the repository takes changes and the caller's
    * role now.
    */
-  #pullChange<R, P = undefined>(
+  #pullChange<R, P = undefined, L = undefined>(
     method: string,
     actor: RefActor,
-    change: (caller: PullCaller, prepared: P) => R,
+    change: (caller: PullCaller, prepared: P, last: L) => R,
     prepare?: () => Promise<P>,
     /** Texts the change writes, whose mentions its activity-feed entries name. */
     texts: readonly (string | null | undefined)[] = [],
+    /** Read after everything else, right before the change (its answer goes to `change`). */
+    last?: () => Promise<L>,
   ): Promise<R | { ok: false; code: PullChangeRefusal }> {
     return this.#measured(method, async () => {
       await this.checkEpoch();
@@ -1257,13 +2428,15 @@ export class RepoDO extends MigratingDO {
       });
       const prepared = (prepare ? await prepare() : undefined) as P;
       const mentioned = await this.feed.prepare(texts);
+      await this.changeHooks.beforeChange?.(method);
+      const lastly = (last ? await last() : undefined) as L;
       const refused = this.#writeRefusal();
       if (refused)
         return { ok: false as const, code: refused.code as "repo_not_found" | "repo_transferring" };
       const role = this.#authority.roleNow(actor.principal, ceilings);
       if (role === null) return { ok: false as const, code: "access_lost" as const };
       const result = this.feed.within({ root, role, mentioned }, () =>
-        change({ actor, root, role }, prepared),
+        change({ actor, root, role }, prepared, lastly),
       );
       this.#armOutbox();
       this.#ensureAuditArchive();
@@ -1310,6 +2483,8 @@ export class RepoDO extends MigratingDO {
   /** Transfer `transferId` called off: the repository takes changes again. */
   unfreezeTransfer(transferId: string): void {
     this.events.unfreezeTransfer(transferId);
+    // Team requests are settled or checked by nothing while it moves: what was left resumes.
+    this.#scheduleReviewTeams();
   }
 
   /** The owner generation transfer `transferId` lands the repository in (for the read model's fence). */
@@ -1334,9 +2509,13 @@ export class RepoDO extends MigratingDO {
     return this.#measured("completeTransfer", async () => {
       await this.checkEpoch();
       const { ownerGen, changed } = this.events.completeTransfer(to, actor);
-      // Only when it moved: the old account's snapshot and floor mean nothing now.
+      // Only when it moved: the old account's snapshot and floor mean nothing now, nor its
+      // teams' review requests (settled by a job).
       if (changed) {
         this.acl.reset();
+        this.#scheduleReviewTeams();
+        // Its code owners qualify by the new account's access: asked of or taken back again.
+        this.ctx.storage.transactionSync(() => this.#codeOwnerRequests.queueAll());
         this.#armOutbox();
         this.#ensureAuditArchive();
       }
@@ -1447,8 +2626,11 @@ export class RepoDO extends MigratingDO {
 
   /** The trees and files of the default branch, for a repository generated from this one. */
   templateTree(): Promise<Browsed<TemplateTree>> {
-    if (this.#refusesReads()) return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
-    return this.#browse("templateTree", (b) => templateTree(b));
+    // Called by id (a generation's source): what the restore generation says decides.
+    if (this.#gone()) return Promise.resolve(fail(404, "repo_not_found", REPO_DELETED));
+    return this.#browse("templateTree", (b) =>
+      this.#refusesReads() ? fail(404, "repo_not_found", REPO_DELETED) : templateTree(b),
+    );
   }
 
   /**
@@ -1519,6 +2701,23 @@ export class RepoDO extends MigratingDO {
 
   browseReadme(ref: string | undefined): Promise<Browsed<{ commit: string; view: ContentsView }>> {
     return this.#browse("browseReadme", (b) => readme(b, ref));
+  }
+
+  /** The errors of the CODEOWNERS file at `ref` (see `code-owners-errors.ts`). */
+  codeOwnersErrors(ref: string | undefined): Promise<Browsed<CodeOwnersErrors>> {
+    const policy = this.codeOwnersErrorsPolicy;
+    const browse = new RepoBrowse({
+      git: this.git,
+      memoryBlocks: this.#memoryBlocks(),
+      policy: { maxBuiltBytes: policy.maxBuiltBytes },
+    });
+    return this.#measured("codeOwnersErrors", async () => {
+      try {
+        return await guarded(() => codeOwnersErrors(browse, this.git.memory, ref, policy));
+      } finally {
+        browse.close();
+      }
+    });
   }
 
   browseTree(ref: string | undefined, recursive: boolean): Promise<Browsed<TreeListing>> {
@@ -1782,7 +2981,8 @@ export class RepoDO extends MigratingDO {
    * The row and data of an event too large for its queue message, as the
    * JSON `{ row, data }`, by event key; null once its retention has passed.
    */
-  eventPayload(key: string): string | null {
+  async eventPayload(key: string): Promise<string | null> {
+    await this.#epochFirst();
     const stored = this.ctx.storage.sql
       .exec<{ payload: string }>("SELECT payload FROM event_payloads WHERE event_key = ?", key)
       .toArray()[0];
@@ -1801,14 +3001,29 @@ export class RepoDO extends MigratingDO {
 
   /** Runs due background jobs; the job queue re-arms the alarm for the next one. */
   override async alarm(): Promise<void> {
+    // One tally of the platform invocation's calls and D1 statements, its epoch check included
+    // (the alarm's own invocation, measured inside it, shares it).
+    await measureInvocation(
+      this.git.context.metrics,
+      { where: "do", op: "alarm.epoch", doClass: "RepoDO" },
+      () => this.#alarm(),
+    );
+  }
+
+  async #alarm(): Promise<void> {
+    // Nothing runs before the restore generation is taken: a restored object may be one the
+    // directory deleted since. Unknown (the directory unreachable): tried again later.
+    try {
+      await this.checkEpoch();
+    } catch (error) {
+      this.#log().warn("checking the repository's epoch failed", { error });
+      await this.ctx.storage.setAlarm(this.git.context.now() + EPOCH_RETRY_MS);
+      return;
+    }
     await this.#measured("alarm", async () => {
       // Maintenance changes the packs without a commit.
       this.#recordStorage();
       try {
-        // Background jobs may commit (an import).
-        await this.checkEpoch().catch((error: unknown) =>
-          this.#log().warn("checking the repository's epoch failed", { error }),
-        );
         await this.#drainOutbox();
         this.#parkJobs();
         await this.#runJobs();
@@ -1881,6 +3096,8 @@ export class RepoDO extends MigratingDO {
     return {
       storage_confirm: this.#storageCharges.confirmHandler(),
       mergeability: this.mergeability.handler(),
+      code_owners: this.codeOwners.handler(),
+      code_owner_requests: this.#codeOwnerRequests.handler(),
       merge_saga: this.rebases.handler("alarm"),
       pull_notices: this.pullSource.noticesHandler(),
       revision_import: this.pullImports.handler(),
@@ -1916,6 +3133,54 @@ export class RepoDO extends MigratingDO {
       import: this.#imports().handler(),
       archive: this.#archives().handler(),
       audit_archive: this.#auditArchiver(),
+      review_teams: {
+        runSlice: async () => {
+          await this.checkEpoch();
+          if (this.teamRequests.settleSlice()) {
+            this.#armOutbox();
+            return { done: false, cursor: null };
+          }
+          let more: boolean;
+          try {
+            more = await this.teamRequests.reconcileSlice((accountId, teamIds) => {
+              this.git.context.metrics.count("do.request", {
+                class: "OrgDO",
+                method: "teamsPresent",
+              });
+              return this.env.ORG.getByName(accountId).teamsPresent(teamIds);
+            });
+          } catch (error) {
+            // The organization could not answer (or answered from an older restore generation):
+            // tried again later however long that takes, never given up as a failed job.
+            this.#log().warn("checking the requested teams failed", { error });
+            return { done: false, cursor: null, runAfterMs: REVIEW_TEAMS_RETRY_MS };
+          }
+          this.#armOutbox();
+          // Done only if nothing is left now, read with no await before the job records it: a
+          // transfer or restore landing while the organization was asked left work behind.
+          return more || this.teamRequests.hasWork()
+            ? { done: false, cursor: null }
+            : { done: true };
+        },
+      },
+      feed_pages_prune: {
+        runSlice: async () => {
+          const now = this.git.context.now();
+          const { nextAt } = this.feed.prunePages(now, FEED_PAGES_PRUNE_BATCH);
+          return nextAt === null
+            ? { done: true }
+            : { done: false, cursor: null, runAfterMs: Math.max(0, nextAt - now) };
+        },
+      },
+      webhook_blobs_prune: {
+        runSlice: async () => {
+          const now = this.git.context.now();
+          const { nextAt } = this.webhookBlobStore.prune(now, WEBHOOK_BLOBS_PRUNE_BATCH);
+          return nextAt === null
+            ? { done: true }
+            : { done: false, cursor: null, runAfterMs: Math.max(0, nextAt - now) };
+        },
+      },
       reap_orphans: orphanReaperHandler(this.git, {
         sweepNetwork: () => soleNetworkMember(this.env, this.git.networkId(), this.#repoId()),
       }),
@@ -1953,6 +3218,12 @@ export class RepoDO extends MigratingDO {
   /** Hooks into applying suggestions. For tests. */
   suggestionHooks: { beforeWrite?: () => Promise<void> } = {};
 
+  /**
+   * Hooks into a change of pull requests, issues or comments: after what it
+   * prepared (and awaited), right before its checks and write. For tests.
+   */
+  changeHooks: { beforeChange?: (method: string) => Promise<void> } = {};
+
   /** A merge's budgets. Tests may replace them. */
   mergePolicy: MergePolicy = MERGE_POLICY;
 
@@ -1961,6 +3232,7 @@ export class RepoDO extends MigratingDO {
 
   /** Hooks into a rebase merge's commit. For tests. */
   rebaseHooks: {
+    beforeFinish?: (queries: number) => void;
     beforeFinalize?: () => Promise<void>;
     afterFinalize?: () => Promise<void>;
   } = {};
@@ -1990,14 +3262,16 @@ export class RepoDO extends MigratingDO {
   }
 
   /** A parent's half of fork creation: branches, tags, tips and live packs, read-leased by `holder`. */
-  exportForFork(holder: string, ttlMs: number): Promise<ForkExport> {
+  async exportForFork(holder: string, ttlMs: number): Promise<ForkExport> {
+    await this.#epochFirst();
     // Its packs are about to be erased: a fork must not borrow them.
     if (this.events.isDeleted()) throw new Error(REPO_DELETED);
     return this.#network().exportForFork(holder, ttlMs);
   }
 
   /** One page of the commit-graph closure from `frontier` (a fork's graph copy). */
-  forkCommitPage(frontier: readonly string[], limit: number): CommitPage {
+  async forkCommitPage(frontier: readonly string[], limit: number): Promise<CommitPage> {
+    await this.#epochFirst();
     return this.#network().commitPage(frontier, limit);
   }
 
@@ -2030,13 +3304,18 @@ export class RepoDO extends MigratingDO {
   feedView(
     principal: string,
     grantId: string | null,
-    members: readonly string[],
+    members: readonly FeedMember[],
+    threads: readonly string[] = [],
   ): Promise<FeedViewAnswer> {
-    return this.#measured("feedView", () => this.#feedView.view(principal, grantId, members));
+    return this.#measured("feedView", () =>
+      this.#feedView.view(principal, grantId, members, threads),
+    );
   }
 
   /** Whether `principalId` may read this repository (public, or a role here). */
   async readableBy(principalId: string): Promise<boolean> {
+    if (this.#gone()) return false;
+    await this.checkEpoch();
     if (this.#refusesReads()) return false;
     if (this.events.visibility() === "public") return true;
     const ceilings = await this.#authority.rolesPulled(principalId, null);
@@ -2068,19 +3347,26 @@ export class RepoDO extends MigratingDO {
   }
 
   /** A pull request of `baseRepoId` no longer follows a branch here (as of `generation`). */
-  unregisterOutgoingPull(baseRepoId: string, number: number, generation: number): void {
+  async unregisterOutgoingPull(baseRepoId: string, number: number, generation: number) {
+    await this.#epochFirst();
     this.pullSource.unregister(baseRepoId, number, generation);
   }
 
   /** A revision a pull request's base imports: the live packs, leased, if `sha` is a commit here. */
-  exportRevision(input: { readonly sha: string; readonly holder: string; readonly ttlMs: number }) {
+  async exportRevision(input: {
+    readonly sha: string;
+    readonly holder: string;
+    readonly ttlMs: number;
+  }) {
+    await this.#epochFirst();
     return this.pullSource.exportRevision(input);
   }
 
-  /** A new fork's storage: its network, HEAD and borrowed packs. */
+  /** A new fork's storage: its network, HEAD and borrowed packs, and the labels it starts with (its account's defaults; needs `identity`). */
   initFork(
     input: { networkId: string; head: string | null; packs: readonly ViewPack[] },
     identity?: RepoIdentity & { readonly actor: string | null },
+    labels: readonly LabelSpec[] = [],
   ): void {
     if (identity) this.events.assertIdentity(identity);
     if (isNetworkId(input.networkId))
@@ -2088,6 +3374,7 @@ export class RepoDO extends MigratingDO {
     this.#network().initFork(input);
     if (identity) {
       this.events.init(identity, identity.actor);
+      this.subjectMeta.copyLabels(labels, null);
       this.#armOutbox();
     }
   }
@@ -2110,15 +3397,38 @@ export class RepoDO extends MigratingDO {
    */
   async checkEpoch(): Promise<void> {
     await this.events.checkEpoch((recorded) =>
-      readDirectoryEpoch(this.env, this.git.context.metrics, this.#repoId(), recorded),
+      readDirectoryEpoch(
+        this.env,
+        this.git.context.metrics,
+        this.#repoId(),
+        recorded,
+        this.git.context.now(),
+      ),
     );
     // A new epoch's snapshot goes out even if nothing else is written.
     this.#armOutbox();
   }
 
+  /**
+   * The restore generation, taken before an entry other objects call by id
+   * does any work (they reach it without the directory, which would have
+   * missed a deleted repository); not for an erasing or erased object.
+   */
+  async #epochFirst(): Promise<void> {
+    if (!this.#gone()) await this.checkEpoch();
+  }
+
   /** The repository's current snapshot for a read-model rebuild (null without an identity). */
   exportSnapshot(): RepoExport | null {
     return this.events.exportSnapshot();
+  }
+
+  /** The tombstone the deletion puts into the read model (null without an identity). */
+  async deletionTombstone(): Promise<RepoExport | "not_frozen" | null> {
+    // Erased (or being erased) here: nothing left to put in.
+    if (this.#closed) return null;
+    await this.checkEpoch();
+    return this.events.deletionTombstone();
   }
 
   /**
@@ -2132,6 +3442,9 @@ export class RepoDO extends MigratingDO {
     actor: JobActor | string | null,
     budgetMs: number,
   ): Promise<{ ready: boolean; events: number; auditRows: number }> {
+    // Erased (or being erased) here, by a run of the deletion before it was reopened: nothing
+    // left to send or archive.
+    if (this.#closed) return Promise.resolve({ ready: true, events: 0, auditRows: 0 });
     return this.#measured("prepareDeletion", async () => {
       await this.checkEpoch();
       this.events.markDeleted(actor);
@@ -2220,6 +3533,15 @@ export class RepoDO extends MigratingDO {
     return undefined;
   }
 
+  /**
+   * Erased, or being erased, here: what an entry may answer before taking
+   * the restore generation (anything else may be an object restored from
+   * before its deletion, which only the generation tells).
+   */
+  #gone(): boolean {
+    return this.#closed || !this.#hasGitStorage();
+  }
+
   /** No read: the repository is gone or going (a transfer does not stop reads). */
   #refusesReads(): boolean {
     return this.#closed || !this.#hasGitStorage() || this.events.isDeleted();
@@ -2237,12 +3559,14 @@ export class RepoDO extends MigratingDO {
   }
 
   /** One slice of compacting borrowed packs to keep the view under the cap. */
-  compactViewSlice(input: CompactSliceInput) {
+  async compactViewSlice(input: CompactSliceInput) {
+    await this.#epochFirst();
     return this.#network().compactSlice(input);
   }
 
   /** Swaps a finished view compaction in. */
-  swapCompactedView(output: string, sources: readonly string[]): ViewPack {
+  async swapCompactedView(output: string, sources: readonly string[]): Promise<ViewPack> {
+    await this.#epochFirst();
     return this.#network().swapCompacted(output, sources);
   }
 
@@ -2250,10 +3574,11 @@ export class RepoDO extends MigratingDO {
    * The registry rows of packs under `networkId` (the network collection's
    * snapshot), which it claims at `claimSeq`.
    */
-  networkSnapshot(networkId: string, claimSeq: number): MemberPack[] {
+  async networkSnapshot(networkId: string, claimSeq: number): Promise<MemberPack[]> {
     // An erased object restarted with empty storage holds nothing: it says
     // so by failing, and the network checks the directory.
     if (!this.#hasGitStorage()) throw new Error("git storage is not initialized");
+    await this.#epochFirst();
     return this.#network().networkSnapshot(networkId, claimSeq);
   }
 
@@ -2262,20 +3587,28 @@ export class RepoDO extends MigratingDO {
    * when leases on them end; refuses for packs its view holds, which the
    * network then claims again at `claim.seq`.
    */
-  condemnShared(
+  async condemnShared(
     packIds: readonly string[],
     claim: { readonly networkId: string; readonly seq: number },
-  ): CondemnAnswer {
+  ): Promise<CondemnAnswer> {
+    await this.#epochFirst();
     return this.#network().condemnShared(packIds, claim);
   }
 
   /** Of `packIds`, those this registry names (the network's orphan sweep asks every member). */
-  registeredPacks(packIds: readonly string[]): string[] {
+  async registeredPacks(packIds: readonly string[]): Promise<string[]> {
+    await this.#epochFirst();
     return this.#network().registeredPacks(packIds);
   }
 
   /** Starts a detach into `newNetworkId` (the network object calls this); it runs in the alarm. */
-  beginDetach(newNetworkId: string): { ok: true } | { ok: false; error: string } {
+  async beginDetach(newNetworkId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    // Refused, not thrown: the network undoes its own step for an answer.
+    try {
+      await this.#epochFirst();
+    } catch {
+      return { ok: false, error: "the repository's restore generation could not be read" };
+    }
     const now = this.git.context.now();
     // The one it leaves too (an object older than the history has no record of it).
     if (this.#hasGitStorage()) recordNetwork(this.ctx.storage, this.git.networkId(), now);
@@ -2294,4 +3627,9 @@ export class RepoDO extends MigratingDO {
     createLogger({ ...meta, do: "RepoDO" }).debug("healthz probe", { ok });
     return ok;
   }
+}
+
+/** Whether a change asks anything of labels, assignees or the milestone. */
+function hasMeta(meta: MetaInput): boolean {
+  return meta.labels !== undefined || meta.assignees !== undefined || meta.milestone !== undefined;
 }

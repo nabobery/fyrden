@@ -105,6 +105,8 @@ export default function Tokens({ loaderData }: Route.ComponentProps) {
               "contents:read",
               "contents:write",
               "metadata:read",
+              "issues:read",
+              "issues:write",
               "pull_requests:read",
               "pull_requests:write",
               "administration:write",

@@ -6,14 +6,15 @@ import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
-import { SESSION_COOKIE, startSession } from "../src/oauth/session.js";
+import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { ApiRpc } from "../src/rpc.js";
 import { api, json, user } from "./helpers/api.js";
 import { ORIGIN } from "./helpers/git-http.js";
+import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
 
 async function sessionCookie(userId: string): Promise<string> {
-  const { cookie } = await startSession(env, userId, { via: "test" });
+  const { cookie } = await testSession(userId);
   return `${SESSION_COOKIE}=${cookie}`;
 }
 

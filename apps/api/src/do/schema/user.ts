@@ -33,6 +33,8 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   (unlike a tombstone, which an opening entry shows); kept until entries
  *   that old are dropped for their age (`event_at`: the item's last event),
  *   or past their cap the oldest.
+ * - `feed_retired` (v4): the principal was deleted: the feed holds nothing
+ *   and takes nothing from then on.
  */
 export const userSchema: readonly DoMigration[] = [
   {
@@ -101,6 +103,27 @@ export const userSchema: readonly DoMigration[] = [
         PRIMARY KEY (repo_id, thread_key, kind)
       ) STRICT, WITHOUT ROWID;
       CREATE INDEX feed_evictions_at ON feed_evictions (event_at);
+    `,
+  },
+  {
+    version: 3,
+    // A token that reads one kind of thread (issues or pull requests) reads
+    // its feed through this index: the other kind's items cost nothing.
+    name: "feed_items_subject",
+    sql: `
+      CREATE INDEX feed_items_subject
+        ON feed_items (substr(thread_key, 1, instr(thread_key, '/') - 1), feed_seq)
+        WHERE feed_seq IS NOT NULL;
+    `,
+  },
+  {
+    version: 4,
+    name: "feed_retired",
+    sql: `
+      CREATE TABLE feed_retired (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        at INTEGER NOT NULL
+      ) STRICT;
     `,
   },
 ];

@@ -9,7 +9,7 @@ import {
   setTeamMembership,
   setTeamRepo,
 } from "../ops/access.js";
-import { createToken, createUser } from "../ops/admin.js";
+import { createToken, createUser, deleteUser, suspendUser, unsuspendUser } from "../ops/admin.js";
 import {
   createAgent,
   createAgentToken,
@@ -35,7 +35,13 @@ import {
   listComments,
   updateComment,
 } from "../ops/comments.js";
-import { getContents, getReadme, getRootContents, getTree } from "../ops/contents.js";
+import {
+  getCodeOwnersErrors,
+  getContents,
+  getReadme,
+  getRootContents,
+  getTree,
+} from "../ops/contents.js";
 import { ackFeedItem, getFeed, syncFeed } from "../ops/feed.js";
 import { createFileCommit, deleteContents, putContents } from "../ops/file-writes.js";
 import { createGrant, listGrants, revokeGrant } from "../ops/grants.js";
@@ -54,8 +60,49 @@ import {
   updateHook,
 } from "../ops/hooks.js";
 import { createImport, getImport } from "../ops/imports.js";
+import {
+  createIssue,
+  deleteIssue,
+  getIssue,
+  listIssueReferences,
+  listIssues,
+  lockIssue,
+  unlockIssue,
+  updateIssue,
+} from "../ops/issues.js";
+import {
+  addAssignees,
+  addIssueLabels,
+  clearIssueLabels,
+  copyDefaultLabels,
+  createLabel,
+  deleteLabel,
+  getDefaultLabels,
+  getLabel,
+  listIssueLabels,
+  listLabels,
+  removeAssignees,
+  removeIssueLabel,
+  setDefaultLabels,
+  setIssueLabels,
+  updateLabel,
+} from "../ops/labels.js";
 import { listSigningKeys, whoami } from "../ops/meta.js";
-import { createOrg, listMembers, removeMembership, setMembership, updateOrg } from "../ops/orgs.js";
+import {
+  createMilestone,
+  deleteMilestone,
+  getMilestone,
+  listMilestones,
+  updateMilestone,
+} from "../ops/milestones.js";
+import {
+  addOrgOwner,
+  createOrg,
+  listMembers,
+  removeMembership,
+  setMembership,
+  updateOrg,
+} from "../ops/orgs.js";
 import {
   createPull,
   getPull,
@@ -69,6 +116,17 @@ import {
   updatePullBranch,
 } from "../ops/pulls.js";
 import { getOrgQuota, getUserQuota, setQuota } from "../ops/quotas.js";
+import {
+  createCommentReaction,
+  createIssueReaction,
+  createReviewCommentReaction,
+  deleteCommentReaction,
+  deleteIssueReaction,
+  deleteReviewCommentReaction,
+  listCommentReactions,
+  listIssueReactions,
+  listReviewCommentReactions,
+} from "../ops/reactions.js";
 import {
   createOrgRepo,
   createRepo,
@@ -97,6 +155,7 @@ import {
 import {
   createReview,
   dismissReview,
+  getPullCodeOwners,
   getReview,
   listRequestedReviewers,
   listReviews,
@@ -136,6 +195,9 @@ export const registry = defineRegistry([
   createGitToken,
   createUser,
   createToken,
+  suspendUser,
+  unsuspendUser,
+  deleteUser,
   createAgent,
   listAgents,
   getAgent,
@@ -203,11 +265,49 @@ export const registry = defineRegistry([
   listRequestedReviewers,
   requestReviewers,
   removeRequestedReviewers,
+  getPullCodeOwners,
+  listIssues,
+  createIssue,
+  getIssue,
+  updateIssue,
+  deleteIssue,
+  lockIssue,
+  unlockIssue,
+  listIssueReferences,
+  listLabels,
+  getLabel,
+  createLabel,
+  updateLabel,
+  deleteLabel,
+  copyDefaultLabels,
+  listIssueLabels,
+  addIssueLabels,
+  setIssueLabels,
+  removeIssueLabel,
+  clearIssueLabels,
+  addAssignees,
+  removeAssignees,
+  getDefaultLabels,
+  setDefaultLabels,
+  listMilestones,
+  getMilestone,
+  createMilestone,
+  updateMilestone,
+  deleteMilestone,
   listComments,
   createComment,
   getComment,
   updateComment,
   deleteComment,
+  listIssueReactions,
+  createIssueReaction,
+  deleteIssueReaction,
+  listCommentReactions,
+  createCommentReaction,
+  deleteCommentReaction,
+  listReviewCommentReactions,
+  createReviewCommentReaction,
+  deleteReviewCommentReaction,
   starRepo,
   unstarRepo,
   listStarred,
@@ -226,6 +326,7 @@ export const registry = defineRegistry([
   getRootContents,
   getContents,
   getReadme,
+  getCodeOwnersErrors,
   getTree,
   getArchive,
   putContents,
@@ -233,6 +334,7 @@ export const registry = defineRegistry([
   createFileCommit,
   setMembership,
   removeMembership,
+  addOrgOwner,
   listMembers,
   createOrgRepo,
   listOrgRepos,

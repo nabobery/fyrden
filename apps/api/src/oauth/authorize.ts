@@ -16,6 +16,9 @@ import { sessionUser } from "./session.js";
  * user, so a cross-site form cannot approve one.
  */
 
+/** Hooks into the authorization step's writes. For tests. */
+export const authorizeHooks: { beforeWrite?: () => Promise<void> } = {};
+
 /** Proposed. */
 export const AUTHORIZE_POLICY = {
   /** How long a user has to answer the consent page. */
@@ -139,12 +142,15 @@ export async function authorizeRequest(c: OAuthContext): Promise<Response> {
   const id = randomSecret();
   const now = clock();
   // Only while the user has fewer than its share waiting (checked in the insert).
+  await authorizeHooks.beforeWrite?.();
   const inserted = await c.env.DIRECTORY.prepare(
     `INSERT INTO oauth_requests (id, user_id, client_id, redirect_uri, code_challenge, scopes,
        resource, state, expires_at, dpop_jkt)
      SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?12
      WHERE (SELECT count(*) FROM oauth_requests WHERE user_id = ?2 AND code_hash IS NULL
-       AND expires_at > ?10) < ?11`,
+       AND expires_at > ?10) < ?11
+       -- Only while the session asking is live: a suspension since revoked it.
+       AND EXISTS (SELECT 1 FROM sessions WHERE id = ?13 AND revoked_at IS NULL)`,
   )
     .bind(
       id,
@@ -159,8 +165,12 @@ export async function authorizeRequest(c: OAuthContext): Promise<Response> {
       now,
       AUTHORIZE_POLICY.pendingPerUser,
       dpopJkt,
+      user.sessionId,
     )
     .run();
+  // Refused: too many waiting, or the session ended meanwhile (signed out, or suspended).
+  if ((inserted.meta.changes ?? 0) === 0 && !(await sessionUser(c)))
+    return page(c, 401, "Sign in to Fyrden first", html("<p>Sign in, then start again.</p>"));
   if ((inserted.meta.changes ?? 0) === 0)
     return page(
       c,
@@ -248,11 +258,21 @@ export async function authorizeDecision(c: OAuthContext): Promise<Response> {
     });
   }
   const code = randomSecret();
+  await authorizeHooks.beforeWrite?.();
   const issued = await c.env.DIRECTORY.prepare(
-    `UPDATE oauth_requests SET code_hash = ?, code_expires_at = ?
-     WHERE id = ? AND user_id = ? AND code_hash IS NULL AND expires_at > ?`,
+    `UPDATE oauth_requests SET code_hash = ?1, code_expires_at = ?2
+     WHERE id = ?3 AND user_id = ?4 AND code_hash IS NULL AND expires_at > ?5
+       -- Only while the session consenting is live: a suspension since revoked it.
+       AND EXISTS (SELECT 1 FROM sessions WHERE id = ?6 AND revoked_at IS NULL)`,
   )
-    .bind(await sha256Hex(code), now + AUTHORIZE_POLICY.codeTtlMs, id, user.userId, now)
+    .bind(
+      await sha256Hex(code),
+      now + AUTHORIZE_POLICY.codeTtlMs,
+      id,
+      user.userId,
+      now,
+      user.sessionId,
+    )
     .run();
   if ((issued.meta.changes ?? 0) === 0)
     return badRequest(c, "This request was answered already; start again from the application.");

@@ -144,6 +144,40 @@ const fatal = (message: string, sideband: boolean): PushProgress => ({
 
 type Planned = NonNullable<PushRecord["planned"]>;
 
+/** A merge's reviewers' access could not be confirmed (see `PushLogMeta.confirm`). */
+export const AUTHORIZATION_UNAVAILABLE =
+  "the reviewers' access could not be confirmed; try the merge again";
+
+/**
+ * What a merge's rules relied on that only the account can confirm: the
+ * roots whose approvals they count, and the principals, teams and team
+ * memberships (`membershipKey`) its code owners' approvals rest on.
+ */
+export interface ConfirmationNeeds {
+  readonly roots: readonly string[];
+  readonly principals: readonly string[];
+  readonly teams: readonly string[];
+  readonly pairs: readonly string[];
+}
+
+/** What a merge's confirmation found no longer holds: principals and teams without write access, memberships gone. */
+export interface LostAccess {
+  readonly principals: ReadonlySet<string>;
+  readonly teams: ReadonlySet<string>;
+  readonly pairs: ReadonlySet<string>;
+}
+
+/** What a merge's confirmation learned (see `PushLogMeta.confirm`). */
+export interface ApprovalConfirmation {
+  /**
+   * In the commit's transaction: a refusal when the answer no longer binds
+   * the repository, or what it found no longer holds.
+   */
+  readonly lost: () => string | LostAccess;
+  /** After the commit attempt, committed or not. */
+  readonly settle: () => void;
+}
+
 export interface PushLogMeta {
   readonly requestId?: string;
   readonly repoId?: string;
@@ -161,6 +195,14 @@ export interface PushLogMeta {
   readonly merge?: MergeContext;
   /** A last refusal of the caller's, checked in the commit's transaction after the push's own. */
   readonly fence?: () => string | undefined;
+  /**
+   * A merge's confirmation of what its rules relied on (the roots whose
+   * approvals they count, its code owners' claims), by whoever decides
+   * access: the last await before the commit (after the rule check). In
+   * the commit's transaction the rules are judged again without what it
+   * found lost; a throw refuses the commit.
+   */
+  readonly confirm?: (needs: ConfirmationNeeds) => Promise<ApprovalConfirmation>;
   /** How the change is made, for the reflog (a pull request's merge: `merge`). */
   readonly via?: RefActor["via"];
   /**
@@ -220,6 +262,15 @@ export class RepoPush {
           restamp: () => string;
           writable: boolean;
           refusals: ReadonlyMap<number, string>;
+          /**
+           * A merge's: what its rules relied on that only the account can
+           * confirm, and its rules judged again (with no await) without what
+           * a confirmation found lost.
+           */
+          approvals?: {
+            readonly needs: ConfirmationNeeds;
+            readonly recheck: (lost: LostAccess) => string | undefined;
+          };
         }>;
       }
     | undefined;
@@ -526,8 +577,20 @@ export class RepoPush {
     const committed: CommittedTransaction[] = [];
     const merged: TailMergeOutcome[] = [];
     let rulesStamp:
-      | { readonly stamp: string; readonly restamp: () => string; readonly writable: boolean }
+      | Pick<
+          Awaited<ReturnType<NonNullable<RepoPush["rules"]>["check"]>>,
+          "stamp" | "restamp" | "writable" | "approvals"
+        >
       | undefined;
+    // The merge's confirmation of its approvers: what it learned, or why it failed.
+    let confirmed: ApprovalConfirmation | string | undefined;
+    const confirmedRefusal = (): string | undefined => {
+      if (confirmed === undefined || typeof confirmed === "string") return confirmed;
+      const lost = confirmed.lost();
+      if (typeof lost === "string") return lost;
+      const nothing = lost.principals.size + lost.teams.size + lost.pairs.size === 0;
+      return nothing ? undefined : rulesStamp?.approvals?.recheck(lost);
+    };
     const rules = this.rules;
     const outcome = await this.git.locks.withLock(
       LOCK_REF_COMMIT,
@@ -582,7 +645,8 @@ export class RepoPush {
                   : rulesStamp.restamp() !== rulesStamp.stamp
                     ? RULESETS_CHANGED
                     : undefined) ??
-              meta.fence?.(),
+              meta.fence?.() ??
+              confirmedRefusal(),
             // In the commit's transaction: the account is owed its confirmation (told after,
             // or later should that fail), and the caller's own writes.
             () => {
@@ -591,11 +655,23 @@ export class RepoPush {
             },
             meta.via,
             meta.maintainerFor,
+            async () => {
+              const needs = rulesStamp?.approvals?.needs;
+              if (!meta.confirm || !needs) return;
+              if (needs.roots.length + needs.principals.length + needs.teams.length === 0) return;
+              try {
+                confirmed = await meta.confirm(needs);
+              } catch {
+                confirmed = AUTHORIZATION_UNAVAILABLE;
+              }
+            },
           ),
         });
         return { plan, indexed, result };
       },
     );
+    // Newer access it learned decides from now on, whether it committed or not.
+    if (typeof confirmed === "object") confirmed.settle();
     if (!outcome.ok) {
       if (!meta.yields?.()) await this.#discard(uploadId);
       return encodeFatalError(PUSH_BUSY, sideband);

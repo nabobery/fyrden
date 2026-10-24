@@ -49,7 +49,7 @@ describe("retention", () => {
     expect(await tombstones()).toEqual([]);
     // Nothing shown was deleted: cursors stay good.
     expect(
-      await stub.listFeed({ epoch: (await stub.syncFeed(null, 1, null)).epoch, seq: 0 }, 50, {}),
+      await stub.listFeed({ epoch: (await stub.syncFeed(null, 1, {})).epoch, seq: 0 }, 50, {}),
     ).toMatchObject({ expired: false, items: [] });
     expect(await runInDurableObject(stub, (_: UserDO, state) => state.storage.getAlarm())).toBe(
       null,

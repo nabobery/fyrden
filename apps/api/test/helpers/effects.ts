@@ -1,21 +1,22 @@
-import { env } from "cloudflare:workers";
-import { sweepEffects } from "../../src/effects/dispatcher.js";
+import type { Publish } from "../../src/effects/queues.js";
+
+/** What was sent to effects queues, in order. */
+export type Sent = { sink: string; ids: string[]; delaySeconds?: number }[];
 
 /**
- * Settles every effect other tests left due by `at` (the journal is shared
- * by every test file): with no sinks they fail at once, without side
- * effects, so a sweep after it meets only the effects the caller makes.
+ * A stand-in for the effects queues: messages are kept, not sent (a real
+ * queue's consumer would deliver them in the background while a test reads
+ * them). `failNext(n)` makes the next `n` sends fail.
  */
-export async function settleOthersDue(at: number): Promise<void> {
-  for (let round = 0; round < 100; round++) {
-    const due = await env.ORG_READ.prepare(
-      `SELECT count(*) AS n FROM effects WHERE state = 'pending' AND next_attempt_at <= ?1
-         AND (lease_until IS NULL OR lease_until <= ?1)`,
-    )
-      .bind(at)
-      .first<{ n: number }>();
-    if (!due?.n) return;
-    await sweepEffects({ db: env.ORG_READ, env, sinks: [], now: () => at });
-  }
-  throw new Error("effects other tests left due did not settle");
+export function recordingPublish() {
+  const sent: Sent = [];
+  let failing = 0;
+  const publish: Publish = async (sink, ids, delaySeconds) => {
+    if (failing > 0) {
+      failing--;
+      throw new Error("queue unavailable");
+    }
+    sent.push({ sink, ids: [...ids], ...(delaySeconds !== undefined && { delaySeconds }) });
+  };
+  return { publish, sent, failNext: (n: number) => (failing = n) };
 }

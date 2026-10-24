@@ -21,7 +21,7 @@ CREATE TABLE effects (
   lease_until INTEGER,
   created_at INTEGER NOT NULL,
   done_at INTEGER
-) STRICT;
+, source_id TEXT, epoch_gen INTEGER, owner_gen INTEGER, any_owner INTEGER NOT NULL DEFAULT 0 CHECK (any_owner IN (0, 1)), recover_at INTEGER NOT NULL DEFAULT 0) STRICT;
 
 -- table repos
 CREATE TABLE repos (
@@ -90,6 +90,17 @@ CREATE TABLE webhook_deliveries (
   expires_at INTEGER NOT NULL
 , attempt_limit INTEGER) STRICT;
 
+-- table webhook_payloads
+CREATE TABLE webhook_payloads (
+  event_key TEXT PRIMARY KEY,
+  repo_id TEXT NOT NULL,
+  payload_key TEXT NOT NULL UNIQUE,
+  state TEXT NOT NULL CHECK (state IN ('intent', 'established', 'expired')),
+  -- The stored body's size, once established.
+  bytes INTEGER,
+  expires_at INTEGER NOT NULL
+) STRICT;
+
 -- index effects_done
 CREATE INDEX effects_done ON effects (done_at) WHERE state = 'done';
 
@@ -98,6 +109,13 @@ CREATE INDEX effects_due_order ON effects (next_attempt_at, effect_id) WHERE sta
 
 -- index effects_failed
 CREATE INDEX effects_failed ON effects (next_attempt_at) WHERE state = 'failed';
+
+-- index effects_failed_reportable
+CREATE INDEX effects_failed_reportable ON effects (next_attempt_at)
+  WHERE state = 'failed' AND coalesce(last_error, '') NOT LIKE 'invalidated:%';
+
+-- index effects_recover
+CREATE INDEX effects_recover ON effects (recover_at, effect_id) WHERE state = 'pending';
 
 -- index repos_owner
 CREATE INDEX repos_owner ON repos (owner_id, name) WHERE deleted = 0;
@@ -128,3 +146,9 @@ CREATE INDEX webhook_deliveries_payload ON webhook_deliveries (payload_key, deli
 
 -- index webhook_deliveries_pending
 CREATE INDEX webhook_deliveries_pending ON webhook_deliveries (repo_id, hook_id) WHERE state = 'pending';
+
+-- index webhook_payloads_expiry
+CREATE INDEX webhook_payloads_expiry ON webhook_payloads (expires_at);
+
+-- index webhook_payloads_repo
+CREATE INDEX webhook_payloads_repo ON webhook_payloads (repo_id);

@@ -23,6 +23,8 @@ export interface SessionUser {
   readonly userId: string;
   readonly handle: string;
   readonly isInstanceAdmin: boolean;
+  /** The user's lifecycle generation (see `TokenRecord.lifecycleGen`). */
+  readonly lifecycleGen: number;
   readonly expiresAt: number;
 }
 
@@ -32,7 +34,7 @@ export async function sessionUser(c: OAuthContext): Promise<SessionUser | undefi
   if (!cookie || !parseToken(cookie).ok || !cookie.startsWith("fyrden_ses_")) return undefined;
   const row = await c.env.DIRECTORY.withSession("first-primary")
     .prepare(
-      `SELECT s.id, s.user_id, p.handle, p.is_instance_admin, s.expires_at
+      `SELECT s.id, s.user_id, p.handle, p.is_instance_admin, p.lifecycle_gen, s.expires_at
        FROM sessions s JOIN principals p ON p.id = s.user_id
        WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
          AND p.type = 'user' AND p.disabled_at IS NULL`,
@@ -43,6 +45,7 @@ export async function sessionUser(c: OAuthContext): Promise<SessionUser | undefi
       user_id: string;
       handle: string;
       is_instance_admin: number;
+      lifecycle_gen: number;
       expires_at: number;
     }>();
   return row
@@ -51,34 +54,45 @@ export async function sessionUser(c: OAuthContext): Promise<SessionUser | undefi
         userId: row.user_id,
         handle: row.handle,
         isInstanceAdmin: row.is_instance_admin === 1,
+        lifecycleGen: row.lifecycle_gen,
         expiresAt: row.expires_at,
       }
     : undefined;
 }
 
-/** Starts a session for `userId`, audited; returns the cookie's value, shown once. */
+/**
+ * Starts a session for `userId`, audited, if the user is still active at
+ * `lifecycleGen` (the generation it was authenticated at: a suspension
+ * since, even one lifted, refuses it); returns the cookie's value, shown
+ * once, or undefined when refused.
+ */
 export async function startSession(
   env: Env,
   userId: string,
+  lifecycleGen: number,
   audit: { readonly requestId?: string; readonly via: string },
-): Promise<{ cookie: string; sessionId: string; expiresAt: number }> {
+): Promise<{ cookie: string; sessionId: string; expiresAt: number } | undefined> {
   const cookie = generateToken("ses", secureRandomBytes);
   const sessionId = newId("ses");
   const now = clock();
   const expiresAt = now + SESSION_POLICY.ttlMs;
   const db = env.DIRECTORY;
-  await db.batch([
+  const [started] = await db.batch([
     db
       .prepare(
-        "INSERT INTO sessions (id, token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+        `INSERT INTO sessions (id, token_hash, user_id, created_at, expires_at)
+         SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM principals
+           WHERE id = ?3 AND type = 'user' AND lifecycle = 'active' AND lifecycle_gen = ?6)`,
       )
-      .bind(sessionId, await hashToken(cookie), userId, now, expiresAt),
+      .bind(sessionId, await hashToken(cookie), userId, now, expiresAt, lifecycleGen),
     db
       .prepare(
         `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
-         VALUES (?, ?, 'session.start', ?, json_object('via', ?), ?)`,
+         SELECT ?1, ?2, 'session.start', ?3, json_object('via', ?4), ?5
+         WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ?3)`,
       )
       .bind(now, userId, sessionId, audit.via, audit.requestId ?? null),
   ]);
+  if ((started?.meta.changes ?? 0) === 0) return undefined;
   return { cookie, sessionId, expiresAt };
 }
