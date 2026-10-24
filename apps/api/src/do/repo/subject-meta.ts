@@ -5,6 +5,7 @@ import {
   type LabelSpec,
   labelNameKey,
   MAX_ASSIGNEES,
+  MAX_LABEL_NAME_LENGTH,
   MAX_REPO_LABELS,
   MAX_SUBJECT_LABELS,
   MILESTONE_ENTITY,
@@ -215,16 +216,21 @@ export class RepoSubjectMeta {
 
   // --- Labels -------------------------------------------------------------
 
-  /** A page of the repository's labels by name (ignoring case), after `after`. */
-  labels(after: string | null, limit: number): LabelRecord[] {
-    return (
-      after === null
-        ? this.#exec<LabelRow>("SELECT * FROM labels ORDER BY name COLLATE NOCASE LIMIT ?", limit)
-        : this.#exec<LabelRow>(
-            "SELECT * FROM labels WHERE name > ? COLLATE NOCASE ORDER BY name COLLATE NOCASE LIMIT ?",
-            after,
-            limit,
-          )
+  /** A page of the repository's labels by name (ignoring case), after `after`; with `prefix`, only names starting with it. */
+  labels(after: string | null, limit: number, prefix: string | null = null): LabelRecord[] {
+    // Names starting with `prefix` (as names compare) are exactly those from it up to it followed
+    // by the last code point as many times as a name has characters: one past that differs
+    // earlier, one before it is less. Both bounds hold on every page, whatever the cursor says.
+    const where = [
+      ...(after === null ? [] : ["name > ? COLLATE NOCASE"]),
+      ...(prefix === null ? [] : ["name >= ? COLLATE NOCASE", "name <= ? COLLATE NOCASE"]),
+    ];
+    return this.#exec<LabelRow>(
+      `SELECT * FROM labels ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+       ORDER BY name COLLATE NOCASE LIMIT ?`,
+      ...(after === null ? [] : [after]),
+      ...(prefix === null ? [] : [prefix, prefix + "\u{10FFFF}".repeat(MAX_LABEL_NAME_LENGTH)]),
+      limit,
     ).map(labelRecord);
   }
 

@@ -81,21 +81,24 @@ export async function listLabelsOperation(
   input: Input<typeof listLabels>,
 ): Promise<Output<typeof listLabels>> {
   const { entry } = await subjectAccess(ctx, input.owner, input.repo, "read");
-  // The cursor is the last label's name.
-  const after = decodeCursor(
-    input.cursor,
-    (name) => name.length <= MAX_LABEL_NAME_LENGTH && LABEL_NAME.test(name),
+  const prefix = input.q ?? null;
+  // The cursor is the last label's name; with `q`, marked and bound to it (a name holds no
+  // control character, so neither kind of cursor passes for the other).
+  const bound = (name: string) => (prefix === null ? name : `\u0001${prefix}\u0000${name}`);
+  const named = (name: string) => name.length <= MAX_LABEL_NAME_LENGTH && LABEL_NAME.test(name);
+  const cursor = decodeCursor(input.cursor, (value) =>
+    prefix === null
+      ? named(value)
+      : value.startsWith(bound("")) && named(value.slice(bound("").length)),
   );
-  const labels = await repo(ctx, entry, "listLabels").listLabels(
-    after === "" ? null : after,
-    input.per_page + 1,
-  );
+  const after = cursor === "" ? null : cursor.slice(bound("").length);
+  const labels = await repo(ctx, entry, "listLabels").listLabels(after, input.per_page + 1, prefix);
   if (labels === null) throw failure(entry, "repo_not_found");
   const page = labels.slice(0, input.per_page);
   const last = page.at(-1);
   return {
     labels: page.map(labelOutput),
-    next_cursor: labels.length > input.per_page && last ? encodeCursor(last.name) : null,
+    next_cursor: labels.length > input.per_page && last ? encodeCursor(bound(last.name)) : null,
   };
 }
 

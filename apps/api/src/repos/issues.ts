@@ -10,12 +10,13 @@ import type {
   unlockIssue,
   updateIssue,
 } from "@fyrden/api-contract";
-import type { Subject, SubjectBoundary, SubjectKind } from "../do/repo/issues.js";
+import type { SubjectBoundary, SubjectFilter, SubjectKind } from "../do/repo/issues.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { authorize, findReposById, type RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
+import { principalsByLogin } from "./reviews.js";
 import { subjectOutput } from "./shapes.js";
 import { sortingFailure, sortingInput } from "./sorting.js";
 import { subjectAccess, subjectNotFound, tokenKinds } from "./subjects.js";
@@ -85,7 +86,87 @@ function issueFailure(entry: RepoEntry, code: string, number: number): Operation
 type ListingContext = Pick<Input<typeof listIssues>, "state" | "sort" | "direction"> & {
   readonly repoId: string;
   readonly type: "issues" | "pulls" | "both";
+  /** The filters, normalized (none: undefined): a cursor is valid only with the same ones. */
+  readonly filters: string | undefined;
 };
+
+/** Label names a `labels` filter takes at most. */
+const MAX_FILTER_LABELS = 20;
+
+/**
+ * The listing's filters as the repository object takes them (handles
+ * found as principals, disabled ones too), and as a cursor binds them;
+ * null when nothing can match (a handle that names no one).
+ */
+async function listingFilter(
+  ctx: OpContext,
+  input: Input<typeof listIssues>,
+): Promise<{ filter: SubjectFilter; key: string | undefined } | null> {
+  const labelNames =
+    input.labels === undefined ? undefined : [...new Set(input.labels.split(",").map(asciiLower))];
+  if (labelNames && (labelNames.length > MAX_FILTER_LABELS || labelNames.some((n) => n === "")))
+    throw new OperationError(
+      422,
+      "invalid_filter",
+      `labels takes 1 to ${MAX_FILTER_LABELS} names separated by commas.`,
+    );
+  const labelIds =
+    input.label_ids === undefined
+      ? undefined
+      : [...new Set(input.label_ids.split(",").map(Number))].sort((a, b) => a - b);
+  // `none` and `*` are the assignee filter's words; a creator is always a handle.
+  const assigneeHandle =
+    input.assignee === undefined || input.assignee === "none" || input.assignee === "*"
+      ? undefined
+      : input.assignee;
+  const handles = [assigneeHandle, input.creator].filter((h): h is string => h !== undefined);
+  const found = handles.length > 0 ? await principalsByLogin(ctx, handles, true) : new Map();
+  const principal = (handle: string) => found.get(handle.toLowerCase()) as string | undefined;
+  let assignee: SubjectFilter["assignee"];
+  if (input.assignee === "none") assignee = "none";
+  else if (input.assignee === "*") assignee = "any";
+  else if (assigneeHandle !== undefined) {
+    const id = principal(assigneeHandle);
+    if (!id) return null;
+    assignee = { principal: id };
+  }
+  let creator: string | undefined;
+  if (input.creator !== undefined) {
+    creator = principal(input.creator);
+    if (!creator) return null;
+  }
+  const milestone =
+    input.milestone === undefined
+      ? undefined
+      : input.milestone === "none"
+        ? "none"
+        : input.milestone === "*"
+          ? "any"
+          : Number(input.milestone);
+  const filter: SubjectFilter = {
+    ...(labelNames && { labelNames: [...labelNames].sort() }),
+    ...(labelIds && { labelIds }),
+    ...(assignee && { assignee }),
+    ...(milestone !== undefined && { milestone }),
+    ...(creator && { creator }),
+  };
+  // The cursor holds a digest of the filters, not the filters (20 long label names would not fit).
+  return {
+    filter,
+    key: Object.keys(filter).length > 0 ? await digest(JSON.stringify(filter)) : undefined,
+  };
+}
+
+/** A short digest of `text` (SHA-256, the first 16 bytes, hex). */
+async function digest(text: string): Promise<string> {
+  const hash = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
+  );
+  return [...hash.subarray(0, 16)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** `name` with ASCII letters lower-cased: label names compare so (SQLite's `NOCASE`). */
+const asciiLower = (name: string) => name.replace(/[A-Z]/g, (c) => c.toLowerCase());
 
 function encodeListingCursor(context: ListingContext, at: SubjectBoundary): string {
   const value = {
@@ -95,6 +176,7 @@ function encodeListingCursor(context: ListingContext, at: SubjectBoundary): stri
     d: context.direction,
     st: context.state,
     t: context.type,
+    f: context.filters,
     k: at.key,
     n: at.number,
   };
@@ -121,6 +203,7 @@ function decodeListingCursor(
     value.d === context.direction &&
     value.st === context.state &&
     value.t === context.type &&
+    value.f === context.filters &&
     Number.isSafeInteger(value.k) &&
     (value.k as number) >= 0 &&
     Number.isSafeInteger(value.n) &&
@@ -136,36 +219,31 @@ export async function listIssuesOperation(
 ): Promise<Output<typeof listIssues>> {
   const { entry, kinds } = await subjectAccess(ctx, input.owner, input.repo, "read");
   const type = input.type ?? "both";
-  const context: ListingContext = { ...input, repoId: entry.id, type };
+  const filtering = await listingFilter(ctx, input);
+  const context: ListingContext = {
+    ...input,
+    repoId: entry.id,
+    type,
+    filters: filtering?.key,
+  };
   const after = decodeListingCursor(input.cursor, context);
   const wanted = kinds.filter(
     (kind) => type === "both" || (type === "issues" ? kind === "issue" : kind === "pull"),
   );
-  if (wanted.length === 0) return { issues: [], next_cursor: null };
-  const subjects = await repo(ctx, entry, "listSubjects").listSubjects({
+  if (wanted.length === 0 || filtering === null) return { issues: [], next_cursor: null };
+  const listing = await repo(ctx, entry, "listSubjects").listSubjects({
     kinds: wanted,
     state: input.state,
     sort: input.sort,
     direction: input.direction,
     after,
-    limit: input.per_page + 1,
+    limit: input.per_page,
+    filter: filtering.filter,
   });
-  if (subjects === null) throw failure(entry, "repo_not_found");
-  const page = subjects.slice(0, input.per_page);
-  const last = page.at(-1);
-  const boundary = (s: Subject): SubjectBoundary => {
-    const record = s.kind === "issue" ? s.issue : s.pull;
-    return {
-      key: input.sort === "created" ? record.number : record.updatedAt,
-      number: record.number,
-    };
-  };
+  if (listing === null) throw failure(entry, "repo_not_found");
   return {
-    issues: page.map((s) => subjectOutput(s, kinds)),
-    next_cursor:
-      subjects.length > input.per_page && last
-        ? encodeListingCursor(context, boundary(last))
-        : null,
+    issues: listing.subjects.map((s) => subjectOutput(s, kinds)),
+    next_cursor: listing.next ? encodeListingCursor(context, listing.next) : null,
   };
 }
 

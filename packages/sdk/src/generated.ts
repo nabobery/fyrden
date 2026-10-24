@@ -3259,6 +3259,16 @@ export type IssuesListInput = {
   type?: "issues" | "pulls";
   sort?: "created" | "updated";
   direction?: "asc" | "desc";
+  /** Label names separated by commas, ignoring case: only items with all of them (none when one is not the repository's). A name holding a comma: use `label_ids`. */
+  labels?: string;
+  /** Fyrden: label ids separated by commas (at most 20): only items with all of them. Not with `labels`. */
+  label_ids?: string;
+  /** A handle: items assigned to that user or agent; `none`: unassigned; `*`: assigned. */
+  assignee?: string;
+  /** A milestone's number; `none`: in no milestone; `*`: in any. */
+  milestone?: string;
+  /** A handle: items opened by that user or agent (as `user` shows them: the user when agents acted for one). */
+  creator?: string;
   /** Page size, 1-100. */
   per_page?: number;
   /** From a previous page's `next_cursor`, with the same filters. */
@@ -3758,6 +3768,8 @@ export type LabelsListInput = {
   owner: string;
   /** The repository's name. */
   repo: string;
+  /** Fyrden: only labels whose name starts with this, ignoring case. */
+  q?: string;
   /** Page size, 1-100. */
   per_page?: number;
   /** From a previous page's `next_cursor`. */

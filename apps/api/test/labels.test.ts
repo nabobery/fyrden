@@ -8,6 +8,7 @@ import { type DomainEvent, type FeedBlock, GITHUB_DEFAULT_LABELS } from "@fyrden
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import { encodeCursor } from "../src/ops/cursor.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
@@ -680,6 +681,166 @@ describe("issues sorted on creation and update", () => {
     expect((await events("milestone.")).map((e) => e.type)).toEqual(["milestone.created"]);
     expect((await events("label.")).map((e) => e.type)).toEqual(
       GITHUB_DEFAULT_LABELS.map(() => "label.created"),
+    );
+  });
+});
+
+describe("the issue listing's filters", () => {
+  const listed = (query: string, who: Who = owner) =>
+    json<{ issues: Sorted[]; next_cursor: string | null; code?: string }>(
+      api("GET", `${path}/issues?state=all&${query}`, who.token),
+    );
+  const numbers = (body: { issues: Sorted[] }) =>
+    body.issues.map((i) => i.number).sort((a, b) => a - b);
+
+  it("take labels by name or id, an assignee, a milestone and a creator, each a handle or none or any", async () => {
+    const other = await collaborator("triage");
+    await label(owner, "Bug");
+    const comma = (await label(owner, "needs,discussion")).body;
+    await label(owner, "needs");
+    await label(owner, "discussion");
+    const due = (await milestone(owner, { title: "v1" })).body;
+    const a = (await openIssue(owner, { labels: ["bug"], assignees: [other.handle] })).body;
+    const b = (await openIssue(owner, { labels: ["needs,discussion"], milestone: due.number }))
+      .body;
+    const c = (await openIssue(owner, { labels: ["needs", "discussion"] })).body;
+    const d = (await openIssue(other, {})).body;
+    const cases: [string, number[]][] = [
+      ["labels=BUG", [a.number]],
+      [`label_ids=${comma.id}`, [b.number]],
+      ["labels=needs,discussion", [c.number]],
+      ["labels=needs,missing", []],
+      [`assignee=${other.handle.toUpperCase()}`, [a.number]],
+      ["assignee=none", [b.number, c.number, d.number]],
+      ["assignee=*", [a.number]],
+      [`milestone=${due.number}`, [b.number]],
+      ["milestone=none", [a.number, c.number, d.number]],
+      ["milestone=*", [b.number]],
+      [`creator=${other.handle}`, [d.number]],
+      [`creator=${owner.handle}&labels=bug`, [a.number]],
+      ["assignee=nobody-here", []],
+      ["creator=nobody-here", []],
+    ];
+    for (const [query, expected] of cases) {
+      const res = await listed(query);
+      expect(res.status, query).toBe(200);
+      expect(numbers(res.body), query).toEqual(expected.sort((x, y) => x - y));
+    }
+  });
+
+  it("refuse labels with label_ids, too many names, and a cursor made with other filters", async () => {
+    await label(owner, "bug");
+    for (let i = 0; i < 3; i++) await openIssue(owner, { labels: ["bug"] });
+    expect((await listed("labels=bug&label_ids=1")).status).toBe(422);
+    const many = Array.from({ length: 21 }, (_, i) => `l${i}`).join(",");
+    expect((await listed(`labels=${many}`)).body.code).toBe("invalid_filter");
+    const first = await listed("labels=bug&per_page=1");
+    expect(first.body.next_cursor).not.toBeNull();
+    const cursor = encodeURIComponent(first.body.next_cursor as string);
+    expect((await listed(`labels=bug&per_page=1&cursor=${cursor}`)).status).toBe(200);
+    for (const other of ["", "labels=Bug,x", "milestone=none", "assignee=*"])
+      expect((await listed(`${other}&per_page=1&cursor=${cursor}`)).body.code, other).toBe(
+        "invalid_cursor",
+      );
+  });
+});
+
+describe("the issue listing's filters, at their edges", () => {
+  const listed = (query: string) =>
+    json<{ issues: Sorted[]; next_cursor: string | null; code?: string }>(
+      api("GET", `${path}/issues?state=all&${query}`, owner.token),
+    );
+
+  it("match nothing for a deleted label or milestone, and treat what they left as none", async () => {
+    const gone = (await label(owner, "gone")).body;
+    const due = (await milestone(owner, { title: "gone" })).body;
+    const issue = (await openIssue(owner, { labels: ["gone"], milestone: due.number })).body;
+    expect((await api("DELETE", `${path}/labels/gone`, owner.token)).ok).toBe(true);
+    expect((await api("DELETE", `${path}/milestones/${due.number}`, owner.token)).ok).toBe(true);
+    for (const query of [
+      `label_ids=${gone.id}`,
+      "labels=gone",
+      `milestone=${due.number}`,
+      "milestone=*",
+    ])
+      expect((await listed(query)).body.issues, query).toEqual([]);
+    expect((await listed("milestone=none")).body.issues.map((i) => i.number)).toEqual([
+      issue.number,
+    ]);
+  });
+
+  it("take none as a creator's handle, the assignee's words aside", async () => {
+    const none = await user();
+    await env.DIRECTORY.prepare("UPDATE principals SET handle = 'none' WHERE id = ?")
+      .bind(none.principalId)
+      .run();
+    expect(
+      (await api("PUT", `${path}/collaborators/none`, owner.token, { permission: "pull" })).status,
+    ).toBe(200);
+    const theirs = (await openIssue(none)).body;
+    await openIssue(owner);
+    expect((await listed("creator=none")).body.issues.map((i) => i.number)).toEqual([
+      theirs.number,
+    ]);
+  });
+
+  it("follow a cursor made with the most labels a filter names", async () => {
+    const longNames = Array.from(
+      { length: 20 },
+      (_, i) => `${String(i).padStart(2, "0")}${"x".repeat(48)}`,
+    );
+    for (const name of longNames) expect((await label(owner, name)).status).toBe(201);
+    for (let i = 0; i < 2; i++) await openIssue(owner, { labels: longNames });
+    const query = `labels=${encodeURIComponent(longNames.join(","))}&per_page=1`;
+    const first = await listed(query);
+    expect(first.body.issues).toHaveLength(1);
+    const next = await listed(
+      `${query}&cursor=${encodeURIComponent(first.body.next_cursor as string)}`,
+    );
+    expect(next.status).toBe(200);
+    expect(next.body.issues).toHaveLength(1);
+  });
+});
+
+describe("label search", () => {
+  it("finds names starting with q, ignoring ASCII case, a page at a time, the cursor bound to q", async () => {
+    for (const name of ["zz-a", "ZZ-b", "zz-c", "zza", "zy"]) await label(owner, name);
+    const page = (query: string) =>
+      json<{ labels: Label[]; next_cursor: string | null; code?: string }>(
+        api("GET", `${path}/labels?${query}`, owner.token),
+      );
+    const first = await page("q=zz-&per_page=2");
+    expect(names(first.body.labels)).toEqual(["zz-a", "ZZ-b"]);
+    const cursor = encodeURIComponent(first.body.next_cursor as string);
+    const last = await page(`q=zz-&per_page=2&cursor=${cursor}`);
+    expect(names(last.body.labels)).toEqual(["zz-c"]);
+    expect(last.body.next_cursor).toBeNull();
+    expect(names((await page("q=ZZ")).body.labels)).toEqual(["zz-a", "ZZ-b", "zz-c", "zza"]);
+    expect((await page("q=nothing")).body.labels).toEqual([]);
+    // A cursor holds its q: another q, or none, refuses it; a plain cursor is refused with q.
+    expect((await page(`q=zz&per_page=2&cursor=${cursor}`)).body.code).toBe("invalid_cursor");
+    expect((await page(`per_page=2&cursor=${cursor}`)).body.code).toBe("invalid_cursor");
+    const plain = await page("per_page=2");
+    const plainCursor = encodeURIComponent(plain.body.next_cursor as string);
+    expect((await page(`q=zz&cursor=${plainCursor}`)).body.code).toBe("invalid_cursor");
+    // A cursor made up to start before the prefix still lists only names starting with it.
+    const forged = encodeURIComponent(encodeCursor("\u0001zz\u0000aa"));
+    expect(names((await page(`q=zz&cursor=${forged}`)).body.labels)).toEqual([
+      "zz-a",
+      "ZZ-b",
+      "zz-c",
+      "zza",
+    ]);
+  });
+
+  it("finds names that go on past the last code point", async () => {
+    for (const name of ["x", "x\u{10FFFF}a", "x\u{10FFFF}\u{10FFFF}", "xa", "y"])
+      expect((await label(owner, name)).status, name).toBe(201);
+    const found = await json<{ labels: Label[] }>(
+      api("GET", `${path}/labels?q=x&per_page=100`, owner.token),
+    );
+    expect(names(found.body.labels).sort()).toEqual(
+      ["x", "x\u{10FFFF}a", "x\u{10FFFF}\u{10FFFF}", "xa"].sort(),
     );
   });
 });
