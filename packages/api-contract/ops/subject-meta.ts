@@ -1,6 +1,24 @@
 import { MILESTONE_STATES } from "@fyrden/domain";
 import { z } from "zod";
 
+/** Fyrden's version of what an answer shows: an update's `expected_version`. */
+export const Version = z
+  .number()
+  .int()
+  .describe(
+    "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise).",
+  );
+
+/** An update's precondition (Fyrden's): the `version` it was made from. */
+export const ExpectedVersion = z
+  .number()
+  .int()
+  .min(1)
+  .optional()
+  .describe(
+    "Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since.",
+  );
+
 /** A label as the API answers it (GitHub's shape). */
 export const Label = z.object({
   id: z.number().int(),
@@ -8,6 +26,7 @@ export const Label = z.object({
   color: z.string(),
   description: z.string().nullable(),
   default: z.boolean().describe("Copied in from a default set."),
+  version: Version,
 });
 
 /** A milestone as the API answers it (GitHub's shape). */
@@ -30,6 +49,7 @@ export const Milestone = z.object({
   created_at: z.number().int().describe("Unix time in milliseconds."),
   updated_at: z.number().int().describe("Unix time in milliseconds."),
   closed_at: z.number().int().nullable().describe("Unix time in milliseconds."),
+  version: Version,
 });
 
 /** Who is assigned, and what it is sorted by, as issues and pull requests answer it. */

@@ -11,6 +11,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "description": "Stable machine-readable error code.",
             "type": "string",
           },
+          "current_version": {
+            "description": "Fyrden: with \`stale\`, the version it is at now (read it again to see what changed).",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer",
+          },
           "detail": {
             "type": "string",
           },
@@ -11712,6 +11718,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "name": {
                                   "type": "string",
                                 },
+                                "version": {
+                                  "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                                  "maximum": 9007199254740991,
+                                  "minimum": -9007199254740991,
+                                  "type": "integer",
+                                },
                               },
                               "required": [
                                 "id",
@@ -11719,6 +11731,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "color",
                                 "description",
                                 "default",
+                                "version",
                               ],
                               "type": "object",
                             },
@@ -11821,6 +11834,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                     "minimum": -9007199254740991,
                                     "type": "integer",
                                   },
+                                  "version": {
+                                    "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
                                 },
                                 "required": [
                                   "id",
@@ -11835,6 +11854,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                   "created_at",
                                   "updated_at",
                                   "closed_at",
+                                  "version",
                                 ],
                                 "type": "object",
                               },
@@ -11988,6 +12008,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             ],
                             "type": "object",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -12004,6 +12030,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "closed_by",
                           "created_at",
                           "updated_at",
+                          "version",
                           "closed_at",
                           "labels",
                           "assignee",
@@ -12288,6 +12315,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -12295,6 +12328,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -12397,6 +12431,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "minimum": -9007199254740991,
                               "type": "integer",
                             },
+                            "version": {
+                              "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
                           },
                           "required": [
                             "id",
@@ -12411,6 +12451,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "created_at",
                             "updated_at",
                             "closed_at",
+                            "version",
                           ],
                           "type": "object",
                         },
@@ -12564,6 +12605,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -12580,6 +12627,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "closed_by",
                     "created_at",
                     "updated_at",
+                    "version",
                     "closed_at",
                     "labels",
                     "assignee",
@@ -12862,6 +12910,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -12871,6 +12925,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "body",
                     "created_at",
                     "updated_at",
+                    "version",
                     "reactions",
                   ],
                   "type": "object",
@@ -12948,6 +13003,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                   "body": {
                     "maxLength": 65536,
                     "type": "string",
+                  },
+                  "expected_version": {
+                    "description": "Fyrden: the \`version\` the change was made from; refused with 409 \`stale\` when it changed since.",
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer",
                   },
                 },
                 "required": [
@@ -13075,6 +13136,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -13084,6 +13151,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "body",
                     "created_at",
                     "updated_at",
+                    "version",
                     "reactions",
                   ],
                   "type": "object",
@@ -13838,6 +13906,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -13845,6 +13919,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -13947,6 +14022,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "minimum": -9007199254740991,
                               "type": "integer",
                             },
+                            "version": {
+                              "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
                           },
                           "required": [
                             "id",
@@ -13961,6 +14042,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "created_at",
                             "updated_at",
                             "closed_at",
+                            "version",
                           ],
                           "type": "object",
                         },
@@ -14114,6 +14196,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -14130,6 +14218,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "closed_by",
                     "created_at",
                     "updated_at",
+                    "version",
                     "closed_at",
                     "labels",
                     "assignee",
@@ -14236,6 +14325,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "description": "Fyrden: with \`state_reason: duplicate\`, the issue or pull request this one duplicates; the caller must be able to read it.",
                     "exclusiveMinimum": 0,
                     "maximum": 9007199254740991,
+                    "type": "integer",
+                  },
+                  "expected_version": {
+                    "description": "Fyrden: the \`version\` the change was made from; refused with 409 \`stale\` when it changed since.",
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
                     "type": "integer",
                   },
                   "labels": {
@@ -14445,6 +14540,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -14452,6 +14553,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -14554,6 +14656,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "minimum": -9007199254740991,
                               "type": "integer",
                             },
+                            "version": {
+                              "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
                           },
                           "required": [
                             "id",
@@ -14568,6 +14676,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "created_at",
                             "updated_at",
                             "closed_at",
+                            "version",
                           ],
                           "type": "object",
                         },
@@ -14721,6 +14830,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -14737,6 +14852,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "closed_by",
                     "created_at",
                     "updated_at",
+                    "version",
                     "closed_at",
                     "labels",
                     "assignee",
@@ -14997,6 +15113,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -15004,6 +15126,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -15106,6 +15229,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "minimum": -9007199254740991,
                               "type": "integer",
                             },
+                            "version": {
+                              "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
                           },
                           "required": [
                             "id",
@@ -15120,6 +15249,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "created_at",
                             "updated_at",
                             "closed_at",
+                            "version",
                           ],
                           "type": "object",
                         },
@@ -15273,6 +15403,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -15289,6 +15425,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "closed_by",
                     "created_at",
                     "updated_at",
+                    "version",
                     "closed_at",
                     "labels",
                     "assignee",
@@ -15538,6 +15675,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -15545,6 +15688,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -15647,6 +15791,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "minimum": -9007199254740991,
                               "type": "integer",
                             },
+                            "version": {
+                              "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
                           },
                           "required": [
                             "id",
@@ -15661,6 +15811,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "created_at",
                             "updated_at",
                             "closed_at",
+                            "version",
                           ],
                           "type": "object",
                         },
@@ -15814,6 +15965,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -15830,6 +15987,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "closed_by",
                     "created_at",
                     "updated_at",
+                    "version",
                     "closed_at",
                     "labels",
                     "assignee",
@@ -16060,6 +16218,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             ],
                             "type": "object",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -16069,6 +16233,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "body",
                           "created_at",
                           "updated_at",
+                          "version",
                           "reactions",
                         ],
                         "type": "object",
@@ -16289,6 +16454,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -16298,6 +16469,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "body",
                     "created_at",
                     "updated_at",
+                    "version",
                     "reactions",
                   ],
                   "type": "object",
@@ -16402,6 +16574,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -16409,6 +16587,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -16518,6 +16697,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -16525,6 +16710,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -16606,6 +16792,15 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "application/json": {
               "schema": {
                 "properties": {
+                  "expected_ids": {
+                    "description": "Fyrden: the id of each label of \`labels\`, in order, as a form showed it; refused with 409 \`stale\` when a name names another label now (renamed, then taken).",
+                    "items": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer",
+                    },
+                    "type": "array",
+                  },
                   "labels": {
                     "description": "Label names, matched ignoring case; each must exist in the repository.",
                     "items": {
@@ -16661,6 +16856,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -16668,6 +16869,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -16804,6 +17006,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -16811,6 +17019,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -16902,6 +17111,25 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             },
           },
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "expected_id": {
+                    "description": "Fyrden: the id of the label \`name\` named when the change was made; refused with 409 \`stale\` when the name names another now (renamed, then taken). \`expected_version\` needs it.",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
         "responses": {
           "200": {
             "content": {
@@ -16934,6 +17162,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -16941,6 +17175,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -17912,6 +18147,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -17919,6 +18160,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -18052,6 +18294,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "name": {
                       "type": "string",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -18059,6 +18307,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "color",
                     "description",
                     "default",
+                    "version",
                   ],
                   "type": "object",
                 },
@@ -18151,6 +18400,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -18158,6 +18413,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -18238,6 +18494,31 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             },
           },
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "expected_id": {
+                    "description": "Fyrden: the id of the label \`name\` named when the change was made; refused with 409 \`stale\` when the name names another now (renamed, then taken). \`expected_version\` needs it.",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer",
+                  },
+                  "expected_version": {
+                    "description": "Fyrden: the \`version\` the change was made from; refused with 409 \`stale\` when it changed since.",
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
         "responses": {
           "200": {
             "content": {
@@ -18354,6 +18635,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "name": {
                       "type": "string",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -18361,6 +18648,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "color",
                     "description",
                     "default",
+                    "version",
                   ],
                   "type": "object",
                 },
@@ -18452,6 +18740,18 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     ],
                     "description": "Null clears it.",
                   },
+                  "expected_id": {
+                    "description": "Fyrden: the id of the label \`name\` named when the change was made; refused with 409 \`stale\` when the name names another now (renamed, then taken). \`expected_version\` needs it.",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer",
+                  },
+                  "expected_version": {
+                    "description": "Fyrden: the \`version\` the change was made from; refused with 409 \`stale\` when it changed since.",
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer",
+                  },
                   "new_name": {
                     "description": "A label's name (matched ignoring the case of ASCII letters); not \`.\` or \`..\`.",
                     "maxLength": 50,
@@ -18495,6 +18795,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "name": {
                       "type": "string",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -18502,6 +18808,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "color",
                     "description",
                     "default",
+                    "version",
                   ],
                   "type": "object",
                 },
@@ -18723,6 +19030,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "minimum": -9007199254740991,
                             "type": "integer",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -18737,6 +19050,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "created_at",
                           "updated_at",
                           "closed_at",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -18944,6 +19258,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "minimum": -9007199254740991,
                       "type": "integer",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -18958,6 +19278,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "created_at",
                     "updated_at",
                     "closed_at",
+                    "version",
                   ],
                   "type": "object",
                 },
@@ -19214,6 +19535,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "minimum": -9007199254740991,
                       "type": "integer",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -19228,6 +19555,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "created_at",
                     "updated_at",
                     "closed_at",
+                    "version",
                   ],
                   "type": "object",
                 },
@@ -19326,6 +19654,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       },
                     ],
                     "description": "Null clears it.",
+                  },
+                  "expected_version": {
+                    "description": "Fyrden: the \`version\` the change was made from; refused with 409 \`stale\` when it changed since.",
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer",
                   },
                   "state": {
                     "enum": [
@@ -19443,6 +19777,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "minimum": -9007199254740991,
                       "type": "integer",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "id",
@@ -19457,6 +19797,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "created_at",
                     "updated_at",
                     "closed_at",
+                    "version",
                   ],
                   "type": "object",
                 },
@@ -19724,6 +20065,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "name": {
                                   "type": "string",
                                 },
+                                "version": {
+                                  "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                                  "maximum": 9007199254740991,
+                                  "minimum": -9007199254740991,
+                                  "type": "integer",
+                                },
                               },
                               "required": [
                                 "id",
@@ -19731,6 +20078,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "color",
                                 "description",
                                 "default",
+                                "version",
                               ],
                               "type": "object",
                             },
@@ -19914,6 +20262,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                     "minimum": -9007199254740991,
                                     "type": "integer",
                                   },
+                                  "version": {
+                                    "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
                                 },
                                 "required": [
                                   "id",
@@ -19928,6 +20282,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                   "created_at",
                                   "updated_at",
                                   "closed_at",
+                                  "version",
                                 ],
                                 "type": "object",
                               },
@@ -20040,6 +20395,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             ],
                             "type": "object",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "number",
@@ -20062,6 +20423,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "head_ref_deleted",
                           "created_at",
                           "updated_at",
+                          "version",
                           "closed_at",
                           "merged_at",
                           "merge_commit_sha",
@@ -20350,6 +20712,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -20357,6 +20725,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -20540,6 +20909,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "minimum": -9007199254740991,
                               "type": "integer",
                             },
+                            "version": {
+                              "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
                           },
                           "required": [
                             "id",
@@ -20554,6 +20929,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "created_at",
                             "updated_at",
                             "closed_at",
+                            "version",
                           ],
                           "type": "object",
                         },
@@ -20666,6 +21042,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "number",
@@ -20688,6 +21070,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "head_ref_deleted",
                     "created_at",
                     "updated_at",
+                    "version",
                     "closed_at",
                     "merged_at",
                     "merge_commit_sha",
@@ -22075,6 +22458,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -22082,6 +22471,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -22265,6 +22655,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "minimum": -9007199254740991,
                               "type": "integer",
                             },
+                            "version": {
+                              "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
                           },
                           "required": [
                             "id",
@@ -22279,6 +22675,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "created_at",
                             "updated_at",
                             "closed_at",
+                            "version",
                           ],
                           "type": "object",
                         },
@@ -22391,6 +22788,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "number",
@@ -22413,6 +22816,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "head_ref_deleted",
                     "created_at",
                     "updated_at",
+                    "version",
                     "closed_at",
                     "merged_at",
                     "merge_commit_sha",
@@ -22516,6 +22920,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                   "draft": {
                     "description": "Fyrden: mark it a draft, or ready for review.",
                     "type": "boolean",
+                  },
+                  "expected_version": {
+                    "description": "Fyrden: the \`version\` the change was made from; refused with 409 \`stale\` when it changed since.",
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer",
                   },
                   "maintainer_can_modify": {
                     "description": "The author only: let the base's maintainers change a head branch in a fork.",
@@ -22701,6 +23111,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -22708,6 +23124,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -22891,6 +23308,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "minimum": -9007199254740991,
                               "type": "integer",
                             },
+                            "version": {
+                              "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
                           },
                           "required": [
                             "id",
@@ -22905,6 +23328,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "created_at",
                             "updated_at",
                             "closed_at",
+                            "version",
                           ],
                           "type": "object",
                         },
@@ -23017,6 +23441,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "number",
@@ -23039,6 +23469,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "head_ref_deleted",
                     "created_at",
                     "updated_at",
+                    "version",
                     "closed_at",
                     "merged_at",
                     "merge_commit_sha",
@@ -25163,6 +25594,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -25170,6 +25607,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -25353,6 +25791,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "minimum": -9007199254740991,
                               "type": "integer",
                             },
+                            "version": {
+                              "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
                           },
                           "required": [
                             "id",
@@ -25367,6 +25811,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "created_at",
                             "updated_at",
                             "closed_at",
+                            "version",
                           ],
                           "type": "object",
                         },
@@ -25479,6 +25924,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "number",
@@ -25501,6 +25952,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "head_ref_deleted",
                     "created_at",
                     "updated_at",
+                    "version",
                     "closed_at",
                     "merged_at",
                     "merge_commit_sha",
@@ -25897,6 +26349,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "name": {
                             "type": "string",
                           },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
                         },
                         "required": [
                           "id",
@@ -25904,6 +26362,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "color",
                           "description",
                           "default",
+                          "version",
                         ],
                         "type": "object",
                       },
@@ -26087,6 +26546,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "minimum": -9007199254740991,
                               "type": "integer",
                             },
+                            "version": {
+                              "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
                           },
                           "required": [
                             "id",
@@ -26101,6 +26566,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "created_at",
                             "updated_at",
                             "closed_at",
+                            "version",
                           ],
                           "type": "object",
                         },
@@ -26213,6 +26679,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
                   },
                   "required": [
                     "number",
@@ -26235,6 +26707,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "head_ref_deleted",
                     "created_at",
                     "updated_at",
+                    "version",
                     "closed_at",
                     "merged_at",
                     "merge_commit_sha",

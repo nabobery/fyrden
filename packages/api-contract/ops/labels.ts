@@ -14,7 +14,7 @@ import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { Issue } from "./issues.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
-import { Label } from "./subject-meta.js";
+import { ExpectedVersion, Label } from "./subject-meta.js";
 
 const RepoInput = {
   owner: z
@@ -50,6 +50,23 @@ const Logins = z
   .min(1)
   .max(MAX_ASSIGNEES)
   .describe("Handles of users and agents who can read the repository.");
+
+/** The label a form showed, by id: a precondition on a change made by name (Fyrden's). */
+const ExpectedLabelId = z
+  .number()
+  .int()
+  .positive()
+  .optional()
+  .describe(
+    "Fyrden: the id of the label `name` named when the change was made; refused with 409 `stale` when the name names another now (renamed, then taken). `expected_version` needs it.",
+  );
+
+/** A label's version is checked only with its id (a version alone could be another label's). */
+const versionWithId = (input: {
+  expected_id?: number | undefined;
+  expected_version?: number | undefined;
+}) => input.expected_version === undefined || input.expected_id !== undefined;
+const VERSION_WITH_ID = { message: "expected_version needs expected_id." };
 
 /** Principal ids (`usr_…`, `agt_…`), as an issue's or pull request's answer names them. */
 const PrincipalIds = z
@@ -154,13 +171,17 @@ export const updateLabel = defineOperation({
   path: "/repos/{owner}/{repo}/labels/{name}",
   summary: "Update a label",
   description: `Renames a label (\`new_name\`), or changes its color or description; issues and pull requests keep it. ${MANAGE}`,
-  input: z.object({
-    ...RepoInput,
-    name: LabelName,
-    new_name: LabelName.optional(),
-    color: Color.optional(),
-    description: Description.nullable().optional().describe("Null clears it."),
-  }),
+  input: z
+    .object({
+      ...RepoInput,
+      name: LabelName,
+      new_name: LabelName.optional(),
+      color: Color.optional(),
+      description: Description.nullable().optional().describe("Null clears it."),
+      expected_id: ExpectedLabelId,
+      expected_version: ExpectedVersion,
+    })
+    .refine(versionWithId, VERSION_WITH_ID),
   output: Label,
   permission: "metadata:read",
   principals: ["user", "agent"],
@@ -180,7 +201,14 @@ export const deleteLabel = defineOperation({
   path: "/repos/{owner}/{repo}/labels/{name}",
   summary: "Delete a label",
   description: `Deletes a label; issues and pull requests carrying it no longer do. Answers what was deleted (GitHub answers 204). ${MANAGE}`,
-  input: z.object({ ...RepoInput, name: LabelName }),
+  input: z
+    .object({
+      ...RepoInput,
+      name: LabelName,
+      expected_id: ExpectedLabelId,
+      expected_version: ExpectedVersion,
+    })
+    .refine(versionWithId, VERSION_WITH_ID),
   output: z.object({ name: z.string(), state: z.literal("deleted") }),
   permission: "metadata:read",
   principals: ["user", "agent"],
@@ -241,7 +269,23 @@ export const addIssueLabels = defineOperation({
   path: "/repos/{owner}/{repo}/issues/{issue_number}/labels",
   summary: "Add labels to an issue",
   description: `Adds labels to an issue or pull request (it holds at most 100); ones it has are kept. Names that do not exist are refused (GitHub creates them). Answers its labels. ${ON_SUBJECT}`,
-  input: z.object({ ...RepoInput, issue_number: IssueNumber, labels: Names.min(1) }),
+  input: z
+    .object({
+      ...RepoInput,
+      issue_number: IssueNumber,
+      labels: Names.min(1),
+      expected_ids: z
+        .array(z.number().int().positive())
+        .optional()
+        .describe(
+          "Fyrden: the id of each label of `labels`, in order, as a form showed it; refused with 409 `stale` when a name names another label now (renamed, then taken).",
+        ),
+    })
+    .refine(
+      (input) =>
+        input.expected_ids === undefined || input.expected_ids.length === input.labels.length,
+      { message: "expected_ids gives one id for each label." },
+    ),
   output: Labels,
   permission: "metadata:read",
   principals: ["user", "agent"],
@@ -281,7 +325,12 @@ export const removeIssueLabel = defineOperation({
   path: "/repos/{owner}/{repo}/issues/{issue_number}/labels/{name}",
   summary: "Remove a label from an issue",
   description: `Takes a label off an issue or pull request (one it does not have changes nothing; one the repository does not have is not found). Answers its labels. ${ON_SUBJECT}`,
-  input: z.object({ ...RepoInput, issue_number: IssueNumber, name: LabelName }),
+  input: z.object({
+    ...RepoInput,
+    issue_number: IssueNumber,
+    name: LabelName,
+    expected_id: ExpectedLabelId,
+  }),
   output: Labels,
   permission: "metadata:read",
   principals: ["user", "agent"],

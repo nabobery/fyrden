@@ -58,6 +58,8 @@ export class OperationError extends Error {
     detail: string,
     /** Where the client starts over (for an expired cursor). */
     readonly resync?: string,
+    /** For `stale`: the version it is at now. */
+    readonly currentVersion?: number,
   ) {
     super(detail);
   }
@@ -68,7 +70,7 @@ function fail(
   status: number,
   code: string,
   detail: string,
-  extra: Pick<ProblemInit, "missingPermission" | "resync"> = {},
+  extra: Pick<ProblemInit, "missingPermission" | "resync" | "currentVersion"> = {},
 ): OpResult {
   return {
     ok: false,
@@ -195,6 +197,7 @@ export async function executeOperation(
     }
     result = fail(ctx, error.status, error.code, error.message, {
       ...(error.resync !== undefined && { resync: error.resync }),
+      ...(error.currentVersion !== undefined && { currentVersion: error.currentVersion }),
     });
   }
   if (claim) await finishIdempotent(ctx.env, claim, outcomeOf(op, result), ctx.metrics);

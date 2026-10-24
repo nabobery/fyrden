@@ -32,6 +32,7 @@ export function labelOutput(label: LabelRecord): Output<typeof getLabel> {
     color: label.color,
     description: label.description,
     default: label.isDefault,
+    version: label.version,
   };
 }
 
@@ -58,6 +59,7 @@ export function milestoneOutput(
     created_at: milestone.createdAt,
     updated_at: milestone.updatedAt,
     closed_at: milestone.closedAt,
+    version: milestone.version,
   };
 }
 
@@ -106,6 +108,7 @@ export function issueOutput(
     created_at: issue.createdAt,
     updated_at: issue.updatedAt,
     closed_at: issue.closedAt,
+    version: issue.version,
     ...sortingOutput(meta, readable),
   };
 }
@@ -132,6 +135,7 @@ function pullAsIssue(
     created_at: pull.createdAt,
     updated_at: pull.updatedAt,
     closed_at: pull.closedAt,
+    version: pull.version,
     ...sortingOutput(meta, readable),
     pull_request: { merged_at: pull.mergedAt },
   };
@@ -153,6 +157,7 @@ export function commentOutput(comment: Reacted<CommentRecord>): Output<typeof ge
     body: comment.body,
     created_at: comment.createdAt,
     updated_at: comment.updatedAt,
+    version: comment.version,
     reactions: reactionRollup(comment.reactions),
   };
 }
@@ -184,6 +189,7 @@ export function pullOutput(
     created_at: pull.createdAt,
     updated_at: pull.updatedAt,
     closed_at: pull.closedAt,
+    version: pull.version,
     merged_at: pull.mergedAt,
     merge_commit_sha: pull.mergeCommitSha,
     merged_by: pull.mergedBy === null ? null : { id: pull.mergedBy },

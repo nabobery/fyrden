@@ -53,6 +53,24 @@ const pullNotFound = (number: number) =>
   new OperationError(404, "pull_not_found", `The repository has no pull request ${number}.`);
 
 /** The problem for a refusal the repository object answered with. */
+/**
+ * 409 `stale`: a change made from a version (or a label's id) that moved on,
+ * with the version it is at now when the refusal knows it.
+ */
+export function staleError(currentVersion?: number): OperationError {
+  return new OperationError(
+    409,
+    "stale",
+    "It changed since the version given (expected_version or expected_id): read it again.",
+    undefined,
+    currentVersion,
+  );
+}
+
+/** The version a refusal carries (`stale`'s), if any. */
+export const refusedVersion = (result: object): number | undefined =>
+  "version" in result && typeof result.version === "number" ? result.version : undefined;
+
 export function failure(entry: RepoEntry, code: string, number?: number): OperationError {
   switch (code) {
     case "not_found":
@@ -179,6 +197,8 @@ export function failure(entry: RepoEntry, code: string, number?: number): Operat
       );
     case "busy":
       return new OperationError(409, "busy", "The repository is busy; try again.");
+    case "stale":
+      return staleError();
     default:
       return repoNotFound(entry);
   }
@@ -302,21 +322,27 @@ export async function updatePullOperation(
   input: Input<typeof updatePull>,
 ): Promise<Output<typeof updatePull>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:write");
-  ctx.metrics.count("do.request", { class: "RepoDO", method: "changePull" });
-  const result = await ctx.env.REPO.getByName(entry.id).changePull(
-    input.pull_number,
-    {
-      ...(input.title !== undefined && { title: input.title }),
-      ...(input.body !== undefined && { body: input.body === "" ? null : input.body }),
-      ...(input.state !== undefined && { state: input.state }),
-      ...(input.base !== undefined && { base: input.base }),
-      ...(input.draft !== undefined && { draft: input.draft }),
-      ...(input.maintainer_can_modify !== undefined && {
-        maintainerCanModify: input.maintainer_can_modify,
-      }),
-    },
-    actorOf(ctx),
-  );
+  const patch = {
+    ...(input.title !== undefined && { title: input.title }),
+    ...(input.body !== undefined && { body: input.body === "" ? null : input.body }),
+    ...(input.state !== undefined && { state: input.state }),
+    ...(input.base !== undefined && { base: input.base }),
+    ...(input.draft !== undefined && { draft: input.draft }),
+    ...(input.maintainer_can_modify !== undefined && {
+      maintainerCanModify: input.maintainer_can_modify,
+    }),
+  };
+  const stub = ctx.env.REPO.getByName(entry.id);
+  // With a precondition, through a method an earlier object lacks (it fails, never skips it).
+  ctx.metrics.count("do.request", {
+    class: "RepoDO",
+    method: input.expected_version === undefined ? "changePull" : "changePullAt",
+  });
+  const result =
+    input.expected_version === undefined
+      ? await stub.changePull(input.pull_number, patch, actorOf(ctx))
+      : await stub.changePullAt(input.expected_version, input.pull_number, patch, actorOf(ctx));
+  if (!result.ok && result.code === "stale") throw staleError(refusedVersion(result));
   if (!result.ok)
     throw failure(entry, result.code, "number" in result ? result.number : input.pull_number);
   return pullOutput(result.record, readable(ctx, entry));

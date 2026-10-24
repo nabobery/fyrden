@@ -23,7 +23,7 @@ import type { MetaInput } from "../do/repo/subject-meta.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import type { RepoEntry } from "./directory.js";
-import { actorOf, failure } from "./pulls.js";
+import { actorOf, failure, refusedVersion, staleError } from "./pulls.js";
 import { labelOutput, subjectOutput } from "./shapes.js";
 import { assigneesByLogin, sortingFailure, unassigneesByLogin } from "./sorting.js";
 import { subjectAccess, subjectNotFound, tokenKinds } from "./subjects.js";
@@ -128,21 +128,37 @@ export async function createLabelOperation(
   return labelOutput(result.label);
 }
 
+/** A change's label precondition: the id it was made for, and its version when given. */
+const expectedLabel = (input: {
+  expected_id?: number | undefined;
+  expected_version?: number | undefined;
+}) => ({
+  id: input.expected_id as number,
+  ...(input.expected_version !== undefined && { version: input.expected_version }),
+});
+
 /** The `labels.update` operation. */
 export async function updateLabelOperation(
   ctx: OpContext,
   input: Input<typeof updateLabel>,
 ): Promise<Output<typeof updateLabel>> {
   const { entry } = await subjectAccess(ctx, input.owner, input.repo, "write");
-  const result = await repo(ctx, entry, "updateLabel").updateLabel(
-    input.name,
-    {
-      ...(input.new_name !== undefined && { name: input.new_name }),
-      ...(input.color !== undefined && { color: input.color }),
-      ...(input.description !== undefined && { description: input.description }),
-    },
-    actorOf(ctx),
-  );
+  const patch = {
+    ...(input.new_name !== undefined && { name: input.new_name }),
+    ...(input.color !== undefined && { color: input.color }),
+    ...(input.description !== undefined && { description: input.description }),
+  };
+  // With a precondition, through a method an earlier object lacks (it fails, never skips it).
+  const result =
+    input.expected_id === undefined
+      ? await repo(ctx, entry, "updateLabel").updateLabel(input.name, patch, actorOf(ctx))
+      : await repo(ctx, entry, "updateLabelAt").updateLabelAt(
+          expectedLabel(input),
+          input.name,
+          patch,
+          actorOf(ctx),
+        );
+  if (!result.ok && result.code === "stale") throw staleError(refusedVersion(result));
   if (!result.ok)
     throw labelFailure(
       entry,
@@ -158,7 +174,15 @@ export async function deleteLabelOperation(
   input: Input<typeof deleteLabel>,
 ): Promise<Output<typeof deleteLabel>> {
   const { entry } = await subjectAccess(ctx, input.owner, input.repo, "write");
-  const result = await repo(ctx, entry, "deleteLabel").deleteLabel(input.name, actorOf(ctx));
+  const result =
+    input.expected_id === undefined
+      ? await repo(ctx, entry, "deleteLabel").deleteLabel(input.name, actorOf(ctx))
+      : await repo(ctx, entry, "deleteLabelAt").deleteLabelAt(
+          expectedLabel(input),
+          input.name,
+          actorOf(ctx),
+        );
+  if (!result.ok && result.code === "stale") throw staleError(refusedVersion(result));
   if (!result.ok) throw labelFailure(entry, result.code, input.name);
   return { name: input.name, state: "deleted" };
 }
@@ -196,14 +220,26 @@ async function changeSubject(
   meta: MetaInput | (() => Promise<MetaInput>),
   /** What a label it names that the repository does not have answers (GitHub: 404 to remove one). */
   unknownLabel?: (code: string) => OperationError | undefined,
+  /** The labels a form showed, by name and id (Fyrden's): through a method an earlier object lacks. */
+  expected: readonly { readonly name: string; readonly id: number }[] = [],
 ) {
   const { entry, kinds } = await subjectAccess(ctx, input.owner, input.repo, "write");
-  const result = await repo(ctx, entry, "changeSubjectMeta").changeSubjectMeta(
-    input.issue_number,
-    typeof meta === "function" ? await meta() : meta,
-    actorOf(ctx),
-    kinds,
-  );
+  const patch = typeof meta === "function" ? await meta() : meta;
+  const result =
+    expected.length > 0
+      ? await repo(ctx, entry, "changeSubjectMetaAt").changeSubjectMetaAt(
+          expected,
+          input.issue_number,
+          patch,
+          actorOf(ctx),
+          kinds,
+        )
+      : await repo(ctx, entry, "changeSubjectMeta").changeSubjectMeta(
+          input.issue_number,
+          patch,
+          actorOf(ctx),
+          kinds,
+        );
   if (!result.ok)
     throw unknownLabel?.(result.code) ?? subjectFailure(entry, result.code, input.issue_number);
   return { subject: result.subject, entry };
@@ -214,7 +250,13 @@ export async function addIssueLabelsOperation(
   ctx: OpContext,
   input: Input<typeof addIssueLabels>,
 ): Promise<Output<typeof addIssueLabels>> {
-  const { subject } = await changeSubject(ctx, input, { labels: { add: input.labels } });
+  const { subject } = await changeSubject(
+    ctx,
+    input,
+    { labels: { add: input.labels } },
+    undefined,
+    (input.expected_ids ?? []).map((id, i) => ({ name: input.labels[i] as string, id })),
+  );
   return { labels: subject.meta.labels.map(labelOutput) };
 }
 
@@ -237,6 +279,7 @@ export async function removeIssueLabelOperation(
     input,
     { labels: { remove: [input.name] } },
     (code) => (code === "label_not_found" ? labelNotFound(input.name) : undefined),
+    input.expected_id === undefined ? [] : [{ name: input.name, id: input.expected_id }],
   );
   return { labels: subject.meta.labels.map(labelOutput) };
 }

@@ -10,7 +10,7 @@ import { defineOperation } from "../src/op.js";
 import { CommitObject } from "./browse.js";
 import { BoundedPerPage } from "./pages.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
-import { ReactionRollup, SortingOutput } from "./subject-meta.js";
+import { ExpectedVersion, ReactionRollup, SortingOutput, Version } from "./subject-meta.js";
 
 const RepoInput = {
   owner: z
@@ -91,6 +91,7 @@ export const PullRequest = z.object({
     ),
   created_at: z.number().int().describe("Unix time in milliseconds."),
   updated_at: z.number().int().describe("Unix time in milliseconds."),
+  version: Version,
   closed_at: z.number().int().nullable().describe("Unix time in milliseconds."),
   merged_at: z.number().int().nullable().describe("Unix time in milliseconds."),
   merge_commit_sha: z
@@ -223,6 +224,7 @@ export const updatePull = defineOperation({
       .boolean()
       .optional()
       .describe("The author only: let the base's maintainers change a head branch in a fork."),
+    expected_version: ExpectedVersion,
   }),
   output: PullRequest,
   permission: "pull_requests:write",
