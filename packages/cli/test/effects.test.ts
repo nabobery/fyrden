@@ -163,9 +163,11 @@ describe("effects repair", () => {
     try {
       await mkdir(join(root, "apps", "api"), { recursive: true });
       const config = await readFile(join(realRoot, "apps/api/wrangler.jsonc"), "utf8");
+      // Another account's id, as the config's first key.
+      const open = config.indexOf("{") + 1;
       await writeFile(
         join(root, "apps/api/wrangler.jsonc"),
-        config.replace("{", '{\n  "account_id": "acct-other",'),
+        `${config.slice(0, open)}\n  "account_id": "acct-other",${config.slice(open)}`,
       );
       await cp(join(realRoot, "apps/api/migrations"), join(root, "apps/api/migrations"), {
         recursive: true,
