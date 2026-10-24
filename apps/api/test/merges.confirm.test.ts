@@ -420,7 +420,7 @@ describe("a merge's confirmation by the organization", () => {
     await approve(bob);
     const calls = await recordConfirmations();
     await inRepo(stub(), (r: RepoDO) => {
-      r.mergeConfirmPolicy = { maxReviewers: 1 };
+      r.mergeConfirmPolicy = { ...r.mergeConfirmPolicy, maxReviewers: 1 };
     });
     const refused = await merge();
     expect(refused.status).toBe(422);

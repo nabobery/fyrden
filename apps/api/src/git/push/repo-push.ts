@@ -148,13 +148,32 @@ type Planned = NonNullable<PushRecord["planned"]>;
 export const AUTHORIZATION_UNAVAILABLE =
   "the reviewers' access could not be confirmed; try the merge again";
 
-/** What a merge's confirmation of the reviewers its approvals count learned (see `PushLogMeta.confirm`). */
+/**
+ * What a merge's rules relied on that only the account can confirm: the
+ * roots whose approvals they count, and the principals, teams and team
+ * memberships (`membershipKey`) its code owners' approvals rest on.
+ */
+export interface ConfirmationNeeds {
+  readonly roots: readonly string[];
+  readonly principals: readonly string[];
+  readonly teams: readonly string[];
+  readonly pairs: readonly string[];
+}
+
+/** What a merge's confirmation found no longer holds: principals and teams without write access, memberships gone. */
+export interface LostAccess {
+  readonly principals: ReadonlySet<string>;
+  readonly teams: ReadonlySet<string>;
+  readonly pairs: ReadonlySet<string>;
+}
+
+/** What a merge's confirmation learned (see `PushLogMeta.confirm`). */
 export interface ApprovalConfirmation {
   /**
    * In the commit's transaction: a refusal when the answer no longer binds
-   * the repository, or the roots asked about that no longer have write access.
+   * the repository, or what it found no longer holds.
    */
-  readonly revoked: () => string | ReadonlySet<string>;
+  readonly lost: () => string | LostAccess;
   /** After the commit attempt, committed or not. */
   readonly settle: () => void;
 }
@@ -177,12 +196,13 @@ export interface PushLogMeta {
   /** A last refusal of the caller's, checked in the commit's transaction after the push's own. */
   readonly fence?: () => string | undefined;
   /**
-   * A merge's confirmation of the roots its rules count approvals of, by
-   * whoever decides their access: the last await before the commit (after
-   * the rule check). In the commit's transaction the rules are judged again
-   * with the roots it confirms; a throw refuses the commit.
+   * A merge's confirmation of what its rules relied on (the roots whose
+   * approvals they count, its code owners' claims), by whoever decides
+   * access: the last await before the commit (after the rule check). In
+   * the commit's transaction the rules are judged again without what it
+   * found lost; a throw refuses the commit.
    */
-  readonly confirm?: (approvers: readonly string[]) => Promise<ApprovalConfirmation>;
+  readonly confirm?: (needs: ConfirmationNeeds) => Promise<ApprovalConfirmation>;
   /** How the change is made, for the reflog (a pull request's merge: `merge`). */
   readonly via?: RefActor["via"];
   /**
@@ -243,12 +263,13 @@ export class RepoPush {
           writable: boolean;
           refusals: ReadonlyMap<number, string>;
           /**
-           * A merge's: the roots its rules count approvals of, and its rules
-           * judged again (with no await) as if `revoked` could not write.
+           * A merge's: what its rules relied on that only the account can
+           * confirm, and its rules judged again (with no await) without what
+           * a confirmation found lost.
            */
           approvals?: {
-            readonly approvers: readonly string[];
-            readonly recheck: (revoked: ReadonlySet<string>) => string | undefined;
+            readonly needs: ConfirmationNeeds;
+            readonly recheck: (lost: LostAccess) => string | undefined;
           };
         }>;
       }
@@ -565,9 +586,10 @@ export class RepoPush {
     let confirmed: ApprovalConfirmation | string | undefined;
     const confirmedRefusal = (): string | undefined => {
       if (confirmed === undefined || typeof confirmed === "string") return confirmed;
-      const revoked = confirmed.revoked();
-      if (typeof revoked === "string") return revoked;
-      return revoked.size === 0 ? undefined : rulesStamp?.approvals?.recheck(revoked);
+      const lost = confirmed.lost();
+      if (typeof lost === "string") return lost;
+      const nothing = lost.principals.size + lost.teams.size + lost.pairs.size === 0;
+      return nothing ? undefined : rulesStamp?.approvals?.recheck(lost);
     };
     const rules = this.rules;
     const outcome = await this.git.locks.withLock(
@@ -634,10 +656,11 @@ export class RepoPush {
             meta.via,
             meta.maintainerFor,
             async () => {
-              const approvers = rulesStamp?.approvals?.approvers ?? [];
-              if (!meta.confirm || approvers.length === 0) return;
+              const needs = rulesStamp?.approvals?.needs;
+              if (!meta.confirm || !needs) return;
+              if (needs.roots.length + needs.principals.length + needs.teams.length === 0) return;
               try {
-                confirmed = await meta.confirm(approvers);
+                confirmed = await meta.confirm(needs);
               } catch {
                 confirmed = AUTHORIZATION_UNAVAILABLE;
               }

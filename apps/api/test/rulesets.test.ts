@@ -692,9 +692,15 @@ describe("pull request rule parameters", () => {
     });
   });
 
-  it("refuse code owners, parameters on another rule, and a method twice", async () => {
+  it("take code owners' review, and refuse parameters on another rule and a method twice", async () => {
+    expect(
+      (
+        await ruleset({
+          rules: [{ type: "pull_request", parameters: { require_code_owner_review: true } }],
+        })
+      ).status,
+    ).toBe(201);
     for (const rules of [
-      [{ type: "pull_request", parameters: { require_code_owner_review: true } }],
       [{ type: "deletion", parameters: { required_approving_review_count: 1 } }],
       [{ type: "pull_request", parameters: { allowed_merge_methods: ["squash", "squash"] } }],
       [{ type: "pull_request", parameters: { required_approving_review_count: 11 } }],

@@ -23,33 +23,39 @@ import { MANUAL, type RepoTeamRequests, type TeamRequest } from "./team-requests
 /** The entity type review snapshots travel as in events. */
 export const REVIEW_ENTITY = "pull_request_review";
 
-/** One seek for one reviewer's last review in `filter`, by itself or by an agent (`k`). */
+/**
+ * One seek for one reviewer's last review in `filter`, by itself or by an
+ * agent acting for it (`k`: a delegation's reviews are its user's).
+ */
 const latest = (filter: string) =>
   `SELECT (SELECT review_id FROM reviews
-     WHERE pr_number = ?1 AND reviewer_root = k.root AND by_agent = k.by_agent
+     WHERE pr_number = ?1 AND reviewer_id = k.id AND by_agent = k.by_agent
        AND dismissed_at IS NULL AND ${filter}
      ORDER BY review_id DESC LIMIT 1) FROM keys k`;
 
 /**
  * What `standing` reads (?1 the pull request, ?2 its head, ?3 the last
  * review before its retarget): the reviewers one seek at a time (each next
- * root after the last), then for each, by itself and by an agent, its last
- * request for changes and its last approval since the retarget, of any
- * head and of the head. The index's order is submission order.
+ * principal after the last), then for each, by itself and by an agent
+ * acting for it, its last request for changes and its last approval since
+ * the retarget, of any head and of the head. Per reviewer, so code owners
+ * tell a person's agents apart; a root's standing review, the latest of
+ * its reviewers' picks, is among them. The index's order is submission
+ * order.
  */
 export const STANDING_REVIEWS_SQL = `
-  WITH RECURSIVE roots(root) AS (
-    SELECT (SELECT reviewer_root FROM reviews WHERE pr_number = ?1 AND dismissed_at IS NULL
-            ORDER BY reviewer_root LIMIT 1)
+  WITH RECURSIVE reviewers(id) AS (
+    SELECT (SELECT reviewer_id FROM reviews WHERE pr_number = ?1 AND dismissed_at IS NULL
+            ORDER BY reviewer_id LIMIT 1)
     UNION ALL
-    SELECT (SELECT reviewer_root FROM reviews WHERE pr_number = ?1 AND dismissed_at IS NULL
-              AND reviewer_root > roots.root ORDER BY reviewer_root LIMIT 1)
-    FROM roots WHERE roots.root IS NOT NULL
+    SELECT (SELECT reviewer_id FROM reviews WHERE pr_number = ?1 AND dismissed_at IS NULL
+              AND reviewer_id > reviewers.id ORDER BY reviewer_id LIMIT 1)
+    FROM reviewers WHERE reviewers.id IS NOT NULL
   ),
-  keys(root, by_agent) AS (
-    SELECT root, 0 FROM roots WHERE root IS NOT NULL
+  keys(id, by_agent) AS (
+    SELECT id, 0 FROM reviewers WHERE id IS NOT NULL
     UNION ALL
-    SELECT root, 1 FROM roots WHERE root IS NOT NULL
+    SELECT id, 1 FROM reviewers WHERE id IS NOT NULL
   ),
   picks(id) AS (
     ${latest("state = 'CHANGES_REQUESTED'")}
@@ -57,8 +63,9 @@ export const STANDING_REVIEWS_SQL = `
     UNION ALL ${latest("commit_sha = ?2 AND state = 'CHANGES_REQUESTED'")}
     UNION ALL ${latest("commit_sha = ?2 AND state = 'APPROVED' AND review_id > ?3")}
   )
-  SELECT review_id, reviewer_root, by_agent, commit_sha, state, submitted_at FROM reviews
-  WHERE review_id IN (SELECT id FROM picks)`;
+  SELECT review_id, reviewer_id, reviewer_root, by_agent, act_chain, commit_sha, state,
+    submitted_at
+  FROM reviews WHERE review_id IN (SELECT id FROM picks)`;
 
 export interface ReviewRecord {
   readonly id: number;
@@ -159,7 +166,11 @@ export class RepoReviews {
    * Found by seeking the indexes, so the work follows the reviewers, not
    * how often each reviewed.
    */
-  standing(number: number): { reviews: ReviewFact[]; stamp: string } {
+  standing(number: number): {
+    /** Each with the agents it was submitted through (a delegation's), whose activity counts too. */
+    reviews: (Omit<ReviewFact, "active"> & { readonly actChain: readonly string[] })[];
+    stamp: string;
+  } {
     const { sql } = this.deps.git.context.storage;
     const pull = sql
       .exec<{ head_sha: string; approvals_after: number }>(
@@ -172,12 +183,21 @@ export class RepoReviews {
           .exec<
             Pick<
               Row,
-              "review_id" | "reviewer_root" | "by_agent" | "commit_sha" | "state" | "submitted_at"
+              | "review_id"
+              | "reviewer_id"
+              | "reviewer_root"
+              | "by_agent"
+              | "act_chain"
+              | "commit_sha"
+              | "state"
+              | "submitted_at"
             >
           >(STANDING_REVIEWS_SQL, number, pull.head_sha, pull.approvals_after)
           .toArray()
           .map((row) => ({
+            reviewerId: row.reviewer_id,
             reviewerRoot: row.reviewer_root,
+            actChain: row.act_chain ? (JSON.parse(row.act_chain) as string[]) : [],
             byAgent: row.by_agent === 1,
             commitSha: row.commit_sha,
             state: row.state,

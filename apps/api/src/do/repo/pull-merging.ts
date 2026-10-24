@@ -165,21 +165,18 @@ export class PullMerging {
       );
     }
 
-    const {
-      merge,
-      asRead,
-      stamps,
-      ceilings: reviewerCeilings,
-    } = await this.deps.discussion.standing(number, pull, method, upToDate);
+    const standing = await this.deps.discussion.standing(number, pull, method, upToDate, {
+      principal: actor.principal,
+      grantId: actor.grantId ?? null,
+    });
+    const { merge, asRead, stamps } = standing;
     // Bound, with no await since, to the ownership the reviewers were just judged under.
-    const confirm = this.deps.reviewers.for(reviewerCeilings);
-    // More reviewers than the commit's confirmation reads: refused before anything is stored.
-    if (this.deps.reviewers.tooMany(merge.approvals.eligibleRoots.size))
-      return fail(
-        422,
-        "too_many_reviewers",
-        "The pull request has more reviewers with write access than a merge here confirms.",
-      );
+    const confirm = this.deps.reviewers.for(standing.ceilings);
+    if (standing.refusal)
+      return fail(standing.refusal.status, standing.refusal.code, standing.refusal.error);
+    // More than the commit's confirmation reads: refused before anything is stored.
+    const tooMany = this.deps.reviewers.tooMany(standing);
+    if (tooMany) return fail(422, tooMany.code, tooMany.error);
     const baseRef = `refs/heads/${pull.baseRef}`;
     const precheck = await authority.precheckUpdates(
       actor.principal,

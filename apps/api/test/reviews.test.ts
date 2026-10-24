@@ -238,13 +238,15 @@ describe("what a merge reads of the reviews", () => {
       const all = sql
         .exec<{
           review_id: number;
+          reviewer_id: string;
           reviewer_root: string;
           by_agent: number;
           commit_sha: string;
           state: ReviewFact["state"];
           submitted_at: number;
         }>(
-          `SELECT r.review_id, r.reviewer_root, r.by_agent, r.commit_sha, r.state, r.submitted_at
+          `SELECT r.review_id, r.reviewer_id, r.reviewer_root, r.by_agent, r.commit_sha, r.state,
+             r.submitted_at
            FROM reviews r JOIN pull_requests p ON p.number = r.pr_number
            WHERE r.pr_number = 1 AND r.state != 'COMMENTED' AND r.dismissed_at IS NULL
              AND NOT (r.state = 'APPROVED' AND r.review_id <= p.approvals_after)`,
@@ -252,7 +254,9 @@ describe("what a merge reads of the reviews", () => {
         .toArray()
         .map(
           (row): ReviewFact => ({
+            reviewerId: row.reviewer_id,
             reviewerRoot: row.reviewer_root,
+            active: true,
             byAgent: row.by_agent === 1,
             commitSha: row.commit_sha,
             state: row.state,
@@ -261,7 +265,10 @@ describe("what a merge reads of the reviews", () => {
             dismissed: false,
           }),
         );
-      return { all, standing: r.reviews.standing(1).reviews };
+      return {
+        all,
+        standing: r.reviews.standing(1).reviews.map((review) => ({ ...review, active: true })),
+      };
     });
   /** The facts a merge reads judge as the whole history does, under every ruleset setting. */
   const judgedAsHistory = (
@@ -287,6 +294,7 @@ describe("what a merge reads of the reviews", () => {
                 authorRoot: "bob",
                 lastPush: { pusherRoot: "carol", at: lastPushAt },
                 eligibleRoots: new Set(eligible),
+                eligiblePrincipals: new Set(eligible),
               };
               expect(evaluateApprovals({ ...input, reviews: history.standing }, settings)).toEqual(
                 evaluateApprovals({ ...input, reviews: history.all }, settings),
@@ -352,6 +360,7 @@ describe("what a merge reads of the reviews", () => {
               authorRoot: "bob",
               lastPush: { pusherRoot: "carol", at: 100 },
               eligibleRoots: new Set(["alice"]),
+              eligiblePrincipals: new Set(["alice"]),
             },
             {
               required: 0,
@@ -365,6 +374,34 @@ describe("what a merge reads of the reviews", () => {
         const last = (order === "reversed" ? reviews[0] : reviews.at(-1)) as Stored;
         expect(lastPushApproved()).toBe(last.state === "APPROVED" && last.sha === undefined);
       });
+
+  it("keeps a person's own approval beside their delegated agent's later one", async () => {
+    // A delegation's reviews are the user's, by an agent: picked apart from the user's own.
+    const { standing } = await stored([
+      { root: "alice", state: "APPROVED", at: 1 },
+      { root: "alice", state: "APPROVED", at: 2, agent: true },
+    ]);
+    expect(standing.map((r) => r.byAgent).sort()).toEqual([false, true]);
+  });
+
+  it("keeps each of a person's agents' latest approval, not one per person", async () => {
+    const standing = await inRepo(env.REPO.getByName(repo.id), (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      for (const [reviewer, at] of [
+        ["agt_a", 1],
+        ["agt_b", 2],
+      ] as const)
+        sql.exec(
+          `INSERT INTO reviews (pr_number, reviewer_id, reviewer_root, by_agent, state, commit_sha,
+             submitted_at) VALUES (1, ?, 'alice', 1, 'APPROVED', ?, ?)`,
+          reviewer,
+          fx.c2,
+          at,
+        );
+      return r.reviews.standing(1).reviews;
+    });
+    expect(standing.map((r) => r.reviewerId).sort()).toEqual(["agt_a", "agt_b"]);
+  });
 
   it("finds each reviewer's latest by seeking the index, however many it submitted", async () => {
     const dave = Array.from(
@@ -393,8 +430,8 @@ describe("what a merge reads of the reviews", () => {
     });
     // Seeks only: no sort, no scan of the reviews, whatever their number.
     expect(plan.join("\n")).not.toMatch(/TEMP B-TREE|SCAN reviews/);
-    expect(plan.join("\n")).toMatch(/reviews_standing_head/);
-    expect(plan.join("\n")).toMatch(/reviews_standing /);
+    expect(plan.join("\n")).toMatch(/reviews_by_reviewer_head/);
+    expect(plan.join("\n")).toMatch(/reviews_by_reviewer /);
     expect(rowsRead).toBeLessThan(100);
   });
 

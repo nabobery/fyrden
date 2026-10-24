@@ -117,6 +117,21 @@ export type CodeOwnersView =
       readonly next: { readonly evalId: number; readonly line: number } | null;
     };
 
+/** What a merge judges its code owners by (see `RepoCodeOwners.forMerge`). */
+export type MergeCodeOwners = { readonly stamp: string } & (
+  | { readonly state: "none" }
+  | { readonly state: "refused"; readonly reason: string }
+  | {
+      readonly state: "complete";
+      readonly rules: readonly {
+        readonly line: number;
+        /** Its owners as written (`@handle`, `@org/slug`). */
+        readonly owners: readonly string[];
+        readonly example: string;
+      }[];
+    }
+);
+
 export interface CodeOwnersDeps {
   readonly git: RepoGitStorage;
   readonly pulls: RepoPulls;
@@ -309,6 +324,57 @@ export class RepoCodeOwners {
       unmatchableExample: evaluation.unmatchable_example,
       next: rules.length > limit && last ? { evalId: pointer.eval_id, line: last.line } : null,
     };
+  }
+
+  /**
+   * What a merge of `pull` judges its code owners by now: the rules that
+   * decide a changed path and name owners (at most the parser's 1,000), or
+   * that none are required (no CODEOWNERS at the base tip), or why they
+   * cannot be judged; and the stamp of the result it read (the merge's
+   * fence compares it at the commit). One not worked out for its current
+   * pair is queued, as a read of it is.
+   */
+  forMerge(pull: PullRecord): MergeCodeOwners {
+    const pointer = this.#pointer(pull);
+    if (!pointer) {
+      this.view(pull.number, null, 0);
+      return {
+        state: "refused",
+        reason: "code owners are still being worked out",
+        stamp: "pending",
+      };
+    }
+    const stamp = stampOf(pointer);
+    const evaluation = pointer.eval_id === null ? undefined : this.#evalRow(pointer.eval_id);
+    if (!evaluation || evaluation.state === "too_large" || evaluation.state === "pending") {
+      const why = evaluation?.reason ?? pointer.reason ?? pointer.outcome ?? "unreadable";
+      return { state: "refused", reason: `code owners could not be worked out (${why})`, stamp };
+    }
+    if (evaluation.state === "none") return { state: "none", stamp };
+    if (evaluation.errors > 0)
+      return {
+        state: "refused",
+        reason: `CODEOWNERS has ${evaluation.errors} error${evaluation.errors === 1 ? "" : "s"}`,
+        stamp,
+      };
+    if (evaluation.unmatchable > 0)
+      return {
+        state: "refused",
+        reason: `${evaluation.unmatchable} changed path${evaluation.unmatchable === 1 ? "" : "s"} cannot be matched against CODEOWNERS (${evaluation.unmatchable_example ?? "not UTF-8"})`,
+        stamp,
+      };
+    const rules = this.#rows<{ line: number; owners: string; example: string }>(
+      `SELECT line, owners, example FROM code_owner_rules
+       WHERE eval_id = ? AND paths > 0 AND owners <> '[]' ORDER BY line`,
+      evaluation.eval_id,
+    ).map((r) => ({ line: r.line, owners: JSON.parse(r.owners) as string[], example: r.example }));
+    return { state: "complete", rules, stamp };
+  }
+
+  /** The stamp of what `pull` shows now, as `forMerge` gives it, read alone (for a merge's fence). */
+  stampFor(pull: PullRecord): string {
+    const pointer = this.#pointer(pull);
+    return pointer ? stampOf(pointer) : "pending";
   }
 
   /** The queue's job: a restore's scan first, then one slice of the oldest due pull request, then pruning. */
@@ -984,6 +1050,11 @@ function heavySlice(
 }
 
 /** An owner as CODEOWNERS writes it. */
+/** What a merge's fence compares of a pull request's code owners: its result and evaluator version. */
+function stampOf(pointer: Pointer): string {
+  return `${pointer.eval_id ?? pointer.outcome}:${pointer.version}`;
+}
+
 function token(owner: CodeOwner): string {
   return owner.kind === "user" ? `@${owner.handle}` : `@${owner.org}/${owner.slug}`;
 }

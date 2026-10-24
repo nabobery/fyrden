@@ -971,8 +971,8 @@ export type ReposRulesetsListOutput = {
         require_last_push_approval: boolean;
         /** Every review thread must be resolved. */
         required_review_thread_resolution: boolean;
-        /** Code owners are not supported yet: must be false. */
-        require_code_owner_review: false;
+        /** A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access). */
+        require_code_owner_review: boolean;
         allowed_merge_methods: ("merge" | "squash" | "rebase")[];
         /** Reviews required from specific teams are not supported yet: empty or left out. */
         required_reviewers?: unknown[];
@@ -1076,8 +1076,8 @@ export type ReposRulesetsGetOutput = {
       require_last_push_approval: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution: boolean;
-      /** Code owners are not supported yet: must be false. */
-      require_code_owner_review: false;
+      /** A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access). */
+      require_code_owner_review: boolean;
       allowed_merge_methods: ("merge" | "squash" | "rebase")[];
       /** Reviews required from specific teams are not supported yet: empty or left out. */
       required_reviewers?: unknown[];
@@ -1128,8 +1128,8 @@ export type ReposRulesetsCreateInput = {
       require_last_push_approval?: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution?: boolean;
-      /** Code owners are not supported yet: must be false. */
-      require_code_owner_review?: false;
+      /** A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access). */
+      require_code_owner_review?: boolean;
       allowed_merge_methods?: ("merge" | "squash" | "rebase")[];
       /** Reviews required from specific teams are not supported yet: empty or left out. */
       required_reviewers?: unknown[];
@@ -1174,8 +1174,8 @@ export type ReposRulesetsCreateOutput = {
       require_last_push_approval: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution: boolean;
-      /** Code owners are not supported yet: must be false. */
-      require_code_owner_review: false;
+      /** A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access). */
+      require_code_owner_review: boolean;
       allowed_merge_methods: ("merge" | "squash" | "rebase")[];
       /** Reviews required from specific teams are not supported yet: empty or left out. */
       required_reviewers?: unknown[];
@@ -1228,8 +1228,8 @@ export type ReposRulesetsUpdateInput = {
       require_last_push_approval?: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution?: boolean;
-      /** Code owners are not supported yet: must be false. */
-      require_code_owner_review?: false;
+      /** A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access). */
+      require_code_owner_review?: boolean;
       allowed_merge_methods?: ("merge" | "squash" | "rebase")[];
       /** Reviews required from specific teams are not supported yet: empty or left out. */
       required_reviewers?: unknown[];
@@ -1274,8 +1274,8 @@ export type ReposRulesetsUpdateOutput = {
       require_last_push_approval: boolean;
       /** Every review thread must be resolved. */
       required_review_thread_resolution: boolean;
-      /** Code owners are not supported yet: must be false. */
-      require_code_owner_review: false;
+      /** A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access). */
+      require_code_owner_review: boolean;
       allowed_merge_methods: ("merge" | "squash" | "rebase")[];
       /** Reviews required from specific teams are not supported yet: empty or left out. */
       required_reviewers?: unknown[];
