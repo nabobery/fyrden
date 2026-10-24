@@ -421,15 +421,16 @@ export class PullDiscussion {
     }
   }
 
-  /** Withdraws review requests, of principals and of teams (by the slugs they were asked by). */
+  /** Withdraws review requests, of principals and of teams (by the slugs they were asked by, or by id). */
   removeRequestedReviewers(
     number: number,
     reviewerIds: readonly string[],
     actor: RefActor,
     teamSlugs: readonly string[] = [],
+    teamIds: readonly string[] = [],
   ) {
     return this.deps.pullChange("removeRequestedReviewers", actor, (caller) =>
-      this.#withView(this.deps.reviews.unrequest(number, reviewerIds, caller, teamSlugs)),
+      this.#withView(this.deps.reviews.unrequest(number, reviewerIds, caller, teamSlugs, teamIds)),
     );
   }
 

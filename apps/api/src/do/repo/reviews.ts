@@ -530,14 +530,15 @@ export class RepoReviews {
 
   /**
    * Withdraws review requests of principals and of the teams `teamSlugs`
-   * name; ones not requested are ignored. Each settles whom it asked
-   * unless another request still asks them.
+   * name (as asked) or `teamIds` are; ones not requested are ignored. Each
+   * settles whom it asked unless another request still asks them.
    */
   unrequest(
     number: number,
     reviewerIds: readonly string[],
     caller: PullCaller,
     teamSlugs: readonly string[] = [],
+    teamIds: readonly string[] = [],
   ): { ok: true; pull: PullRecord } | { ok: false; code: ReviewFailure } {
     const pull = this.#requestable(number, caller);
     if (!pull.ok) return pull;
@@ -546,7 +547,7 @@ export class RepoReviews {
     const { teams } = this.deps;
     this.deps.git.context.storage.transactionSync(() => {
       for (const id of removed) this.#withdrawPrincipal(number, id, caller.actor);
-      const teamsRemoved = teams.withdraw(number, teamSlugs, caller.actor);
+      const teamsRemoved = teams.withdraw(number, teamSlugs, caller.actor, teamIds);
       if (removed.length > 0 || teamsRemoved.length > 0)
         this.deps.events.auditChange("pull_request.remove_review_request", caller.actor, {
           number,

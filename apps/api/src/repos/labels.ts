@@ -267,7 +267,14 @@ export async function removeAssigneesOperation(
   input: Input<typeof removeAssignees>,
 ): Promise<Output<typeof removeAssignees>> {
   const { subject, entry } = await changeSubject(ctx, input, async () => ({
-    assignees: { remove: await unassigneesByLogin(ctx, input.assignees) },
+    assignees: {
+      remove: [
+        ...new Set([
+          ...(input.assignees ? await unassigneesByLogin(ctx, input.assignees) : []),
+          ...(input.assignee_ids ?? []),
+        ]),
+      ],
+    },
   }));
   return subjectOutput(subject, tokenKinds(ctx, entry, "read"));
 }

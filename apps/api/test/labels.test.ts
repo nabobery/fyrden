@@ -844,3 +844,54 @@ describe("label search", () => {
     );
   });
 });
+
+describe("assignees removed by id", () => {
+  it("removes exactly the ids named, deleted users' included", async () => {
+    const [a, b, c] = [
+      await collaborator("triage"),
+      await collaborator("triage"),
+      await collaborator("triage"),
+    ];
+    const issue = (await openIssue(owner, { assignees: [a.handle, b.handle, c.handle] })).body;
+    // a and b deleted: their handles become their ids, the old ones name no one.
+    for (const who of [a, b])
+      await env.DIRECTORY.prepare("UPDATE principals SET handle = id WHERE id = ?")
+        .bind(who.principalId)
+        .run();
+    const removed = await json<Sorted>(
+      api("DELETE", `${path}/issues/${issue.number}/assignees`, owner.token, {
+        assignee_ids: [a.principalId],
+      }),
+    );
+    expect(removed.status).toBe(200);
+    expect(removed.body.assignees.map((x) => x.id).sort()).toEqual(
+      [b.principalId, c.principalId].sort(),
+    );
+    expect(
+      (await api("DELETE", `${path}/issues/${issue.number}/assignees`, owner.token, {})).status,
+    ).toBe(422);
+  });
+});
+
+describe("a repository's permissions for its caller", () => {
+  it("say what the caller's role allows, as GitHub's", async () => {
+    const perms = async (who: Who) =>
+      (await json<{ permissions: Record<string, boolean> }>(api("GET", path, who.token))).body
+        .permissions;
+    expect(await perms(owner)).toEqual({
+      admin: true,
+      maintain: true,
+      push: true,
+      triage: true,
+      pull: true,
+    });
+    expect(await perms(await collaborator("triage"))).toEqual({
+      admin: false,
+      maintain: false,
+      push: false,
+      triage: true,
+      pull: true,
+    });
+    expect(await perms(await collaborator("push"))).toMatchObject({ push: true, maintain: false });
+  });
+});

@@ -50,6 +50,18 @@ export const Repo = z.object({
       "Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise.",
     ),
   created_at: z.number().int().describe("Unix time in milliseconds."),
+  permissions: z
+    .object({
+      admin: z.boolean(),
+      maintain: z.boolean(),
+      push: z.boolean(),
+      triage: z.boolean(),
+      pull: z.boolean(),
+    })
+    .optional()
+    .describe(
+      "Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+    ),
 });
 
 export const createRepo = defineOperation({

@@ -204,14 +204,20 @@ export class RepoTeamRequests {
 
   /**
    * In a change's transaction: withdraws the standing requests of the
-   * teams `slugs` name (as asked); one not asked is ignored. Each one's
-   * event settles its members no other request still asks.
+   * teams `slugs` name (as asked) or `ids` are; one not asked is ignored.
+   * Each one's event settles its members no other request still asks.
    */
-  withdraw(number: number, slugs: readonly string[], actor: RefActor): readonly TeamRequest[] {
+  withdraw(
+    number: number,
+    slugs: readonly string[],
+    actor: RefActor,
+    ids: readonly string[] = [],
+  ): readonly TeamRequest[] {
     const wanted = new Set(slugs);
+    const byId = new Set(ids);
     return this.withdrawRequests(
       number,
-      this.live(number).filter((r) => wanted.has(r.team.slug)),
+      this.live(number).filter((r) => wanted.has(r.team.slug) || byId.has(r.team.id)),
       actor,
     );
   }

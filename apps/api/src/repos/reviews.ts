@@ -188,13 +188,25 @@ export async function removeRequestedReviewersOperation(
 ): Promise<Output<typeof removeRequestedReviewers>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:write");
   // A handle that names no one cannot have been requested: nothing to withdraw for it.
-  const ids = [...(await principalsByLogin(ctx, input.reviewers ?? [], true)).values()];
-  const result = await repo(ctx, entry, "removeRequestedReviewers").removeRequestedReviewers(
-    input.pull_number,
-    ids,
-    actorOf(ctx),
-    input.team_reviewers ?? [],
-  );
+  const ids = new Set([
+    ...(await principalsByLogin(ctx, input.reviewers ?? [], true)).values(),
+    ...(input.reviewer_ids ?? []),
+  ]);
+  // Teams by id through a method an earlier object lacks (it fails, never ignores them).
+  const result = input.team_ids?.length
+    ? await repo(ctx, entry, "removeRequestedReviewersById").removeRequestedReviewersById(
+        input.pull_number,
+        [...ids],
+        actorOf(ctx),
+        input.team_reviewers ?? [],
+        input.team_ids,
+      )
+    : await repo(ctx, entry, "removeRequestedReviewers").removeRequestedReviewers(
+        input.pull_number,
+        [...ids],
+        actorOf(ctx),
+        input.team_reviewers ?? [],
+      );
   if (!result.ok) throw failure(entry, result.code, input.pull_number);
   return pullOutput(result.pull, readable(ctx, entry));
 }
