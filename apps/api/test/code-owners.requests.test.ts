@@ -1139,6 +1139,43 @@ describe("a request job's bounds", () => {
     expect(await requested()).toEqual({ users: [], teams: [] });
   });
 
+  it("starts over when a team's membership that satisfied a rule went, other organizations' teams left to read", async () => {
+    // Carol, in Core, approved; the rest of the rule is another organization's teams.
+    const foreign = Array.from({ length: 3 }, (_, i) => `@elsewhere/t${i}`);
+    await pullChanging(
+      { "src/a.ts": "b\n" },
+      {
+        file: `/src/ @${bob.handle} @${org.login}/${core.slug} ${foreign.join(" ")}`,
+        settle: false,
+      },
+    );
+    await ok(
+      api("PUT", `${path}/collaborators/${carol.handle}`, owner.token, { permission: "push" }),
+    );
+    await approve(carol);
+    await inRepo(stub(), (r: RepoDO) => {
+      r.codeOwnerRequestPolicy = { ...r.codeOwnerRequestPolicy, maxTeams: 1 };
+      let slices = 0;
+      r.codeOwnerRequestHooks = {
+        afterSlice: async () => {
+          // After the slice that found her in Core: she leaves it, the repository not told.
+          if (++slices === 1)
+            await inOrg(
+              (sql) =>
+                sql.exec(
+                  "DELETE FROM team_members WHERE team_id = ? AND principal_id = ?",
+                  core.id,
+                  carol.principalId,
+                ),
+              false,
+            );
+        },
+      };
+    });
+    await drained();
+    expect(await requested()).toEqual({ users: ids(bob), teams: [core.id] });
+  });
+
   it("probes a team's candidates across slices, finding its only member last", async () => {
     const extra = await readers(4);
     for (const who of extra)
