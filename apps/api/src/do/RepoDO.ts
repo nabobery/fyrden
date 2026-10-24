@@ -161,7 +161,7 @@ import {
   type RepoUpdate,
 } from "./repo/events.js";
 import { type FeedPageAsk, type FeedPageRead, RepoFeed } from "./repo/feed.js";
-import { type FeedViewAnswer, RepoFeedView } from "./repo/feed-view.js";
+import { type FeedMember, type FeedViewAnswer, RepoFeedView } from "./repo/feed-view.js";
 import {
   type FileWriteDeps,
   type FileWriteInput,
@@ -729,6 +729,7 @@ export class RepoDO extends MigratingDO {
       isPublic: () => this.events.visibility() === "public",
       refusesReads: () => this.#refusesReads(),
       isTransferring: () => this.events.isTransferring(),
+      epoch: () => this.events.epochGen(),
     });
     this.#codeOwnerFacts = new CodeOwnerFacts({
       codeOwners: this.codeOwners,
@@ -3087,7 +3088,7 @@ export class RepoDO extends MigratingDO {
   feedView(
     principal: string,
     grantId: string | null,
-    members: readonly string[],
+    members: readonly FeedMember[],
     threads: readonly string[] = [],
   ): Promise<FeedViewAnswer> {
     return this.#measured("feedView", () =>

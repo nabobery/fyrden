@@ -55,6 +55,13 @@ export interface FeedPosition {
   readonly seq: number;
 }
 
+/** A thread a read found gone for good, in the repository's restore generation it was found in. */
+export interface GoneThread {
+  readonly repoId: string;
+  readonly threadKey: string;
+  readonly epoch: number;
+}
+
 export interface FeedItem {
   readonly repoId: string;
   readonly threadKey: string;
@@ -662,15 +669,18 @@ export class Feed {
    * entry of one comes back only to be found gone again. Call within a
    * transaction. Returns the shown items deleted.
    */
-  forgetThreads(
-    threads: readonly { readonly repoId: string; readonly threadKey: string }[],
-  ): number {
+  forgetThreads(threads: readonly GoneThread[]): number {
     let deleted = 0;
-    for (const { repoId, threadKey } of threads)
+    // Only what was told in the generation the thread was found gone in, or before: a restore
+    // can give its number to a new conversation, whose items stay. A caller of the earlier shape
+    // (no generation, while a deploy rolls out) binds null, which matches nothing.
+    for (const { repoId, threadKey, epoch } of threads)
       for (const row of this.sql.exec<{ feed_seq: number | null }>(
-        "DELETE FROM feed_items WHERE repo_id = ? AND thread_key = ? RETURNING feed_seq",
+        `DELETE FROM feed_items WHERE repo_id = ? AND thread_key = ? AND thread_epoch <= ?
+         RETURNING feed_seq`,
         repoId,
         threadKey,
+        epoch ?? null,
       ))
         if (row.feed_seq !== null) deleted++;
     if (deleted > 0) this.sql.exec("UPDATE feed_meta SET items = items - ? WHERE id = 1", deleted);
