@@ -8,12 +8,15 @@
 // (owner teams' grants and memberships included).
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import { currentInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, beforeEach, describe, expect, inject, it } from "vitest";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import { D1_QUERIES_PER_INVOCATION } from "../src/do/repo/directory-budget.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
+import { countingD1 } from "./helpers/d1.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
@@ -684,6 +687,271 @@ describe("code owners' review, its bounds and what it confirms", () => {
     );
     expect(plan).toMatch(/USING INDEX/);
     expect(plan).not.toMatch(/SCAN teams/);
+  });
+});
+
+/** An agent of `who` with `role` on the repository of its own (a collaborator grant put in directly), the repository told. */
+async function agentWithGrant(who: Who, role: "read" | "write") {
+  const agent = await agentFor(who, ["pull_requests:write", "contents:read"]);
+  await grantAgent(agent, role);
+  return agent;
+}
+/** `agent`'s own collaborator grant set to `role` (none for null), the repository told. */
+async function grantAgent(agent: { id: string; handle: string }, role: "read" | "write" | null) {
+  const { epoch, version } = await runInDurableObject(orgStub(), (_: OrgDO, state) => {
+    const sql = state.storage.sql;
+    sql.exec("DELETE FROM collaborators WHERE principal_id = ?", agent.id);
+    if (role !== null) {
+      sql.exec(
+        "INSERT OR IGNORE INTO members (principal_id, handle, role, added_at) VALUES (?, ?, 'member', 0)",
+        agent.id,
+        agent.handle,
+      );
+      sql.exec(
+        "INSERT INTO collaborators (repo_id, principal_id, handle, role, added_at) VALUES (?, ?, ?, ?, 0)",
+        repo.id,
+        agent.id,
+        agent.handle,
+        role,
+      );
+    }
+    return sql
+      .exec<{ epoch: number; version: number }>(
+        `UPDATE org_meta SET acl_version = acl_version + 1
+         RETURNING epoch_gen AS epoch, acl_version AS version`,
+      )
+      .one();
+  });
+  await stub().invalidateAcl(org.id, epoch, version);
+}
+
+describe("a merge's reviewers, kept by who can write", () => {
+  it("still refuses for a read-only agent's request for changes, its user writing", async () => {
+    await pullChanging({ "other.txt": "b\n" });
+    await ruleset({
+      require_code_owner_review: false,
+      required_approving_review_count: 1,
+      allow_agent_approvals: true,
+    });
+    const agent = await agentWithGrant(alice, "read");
+    await ok(
+      api("POST", `${path}/pulls/1/reviews`, agent.own, {
+        commit_id: await head(),
+        event: "REQUEST_CHANGES",
+        body: "no",
+      }),
+    );
+    await approve(bob);
+    const refused = await merge();
+    expect(refused.body).toMatchObject({ code: "merge_refused" });
+    expect(refused.body.detail).toContain("changes");
+  });
+
+  it("keeps an agent's reviews for its writing user once its own grant goes, as no code owner", async () => {
+    // Its request for changes still blocks; its approval still counts for alice.
+    await pullChanging({ "other.txt": "b\n" });
+    await ruleset({
+      require_code_owner_review: false,
+      required_approving_review_count: 1,
+      allow_agent_approvals: true,
+    });
+    const agent = await agentWithGrant(alice, "write");
+    const review = async (event: "APPROVE" | "REQUEST_CHANGES") =>
+      ok(
+        api("POST", `${path}/pulls/1/reviews`, agent.own, {
+          commit_id: await head(),
+          event,
+          ...(event === "REQUEST_CHANGES" && { body: "no" }),
+        }),
+      );
+    await review("REQUEST_CHANGES");
+    await grantAgent(agent, null);
+    await approve(bob);
+    expect((await merge()).body).toMatchObject({ code: "merge_refused" });
+    await grantAgent(agent, "write");
+    await review("APPROVE");
+    await grantAgent(agent, null);
+    await inRepo(stub(), (r: RepoDO) => {
+      r.git.context.storage.sql.exec("DELETE FROM reviews WHERE reviewer_id = ?", bob.principalId);
+      r.git.context.storage.sql.exec(
+        "UPDATE pull_requests SET reviews_revision = reviews_revision + 1",
+      );
+    });
+    expect((await merge()).status).toBe(200);
+  });
+
+  it("takes no agent without write of its own as a code owner, its user owning the path", async () => {
+    await pullChanging({ "src/a.ts": "b\n" });
+    await ruleset({ allow_agent_approvals: true });
+    const agent = await agentWithGrant(alice, "write");
+    await approve(alice, agent.own);
+    await grantAgent(agent, null);
+    const refused = await merge();
+    expect(refused.body.detail).toContain(
+      `code owners must approve: line 1 (src/a.ts: @${alice.handle})`,
+    );
+  });
+});
+
+describe("a merge's fence and reviewers left out", () => {
+  it("refuses a merge whose read-only reviewer requesting changes gains write before the commit", async () => {
+    await pullChanging({ "other.txt": "b\n" });
+    await ruleset({ require_code_owner_review: false, required_approving_review_count: 1 });
+    await approve(alice);
+    // Dave reads only: his request for changes is left out of the decision.
+    await ok(
+      api("POST", `${path}/pulls/1/reviews`, dave.token, {
+        commit_id: await head(),
+        event: "REQUEST_CHANGES",
+        body: "no",
+      }),
+    );
+    await inRepo(stub(), (r: RepoDO) => {
+      r.mergeHooks = {
+        beforeFinish: async () => {
+          r.mergeHooks = {};
+          await ok(
+            api("PUT", `${path}/collaborators/${dave.handle}`, owner.token, { permission: "push" }),
+          );
+          await r.acl.roleOf(dave.principalId, "write");
+        },
+      };
+    });
+    expect((await merge()).body).toMatchObject({ code: "pull_changed" });
+    expect((await merge()).body).toMatchObject({ code: "merge_refused" });
+  });
+});
+
+describe("a rebase's finish within an invocation's directory queries", () => {
+  it("refuses a rebase whose code owners are worked out again between its budget and its standing", async () => {
+    await pullChanging({ "src/a.ts": "b\n" });
+    await ruleset({});
+    await approve(alice);
+    await inRepo(stub(), (r: RepoDO) => {
+      r.rebaseHooks = {
+        beforeFinish: () => {
+          r.rebaseHooks = {};
+          r.git.context.storage.sql.exec(
+            "UPDATE code_owner_pointers SET eval_id = NULL, outcome = 'unreadable'",
+          );
+        },
+      };
+    });
+    expect((await merge("rebase")).body).toMatchObject({ code: "pull_changed" });
+  });
+
+  it("ends its alarm's invocation when its finish fails after its queries", async () => {
+    await pullChanging({ "src/a.ts": "b\n" });
+    await ruleset({});
+    await approve(alice);
+    await inRepo(stub(), (r: RepoDO) => {
+      r.rebaseHooks = {
+        beforeFinalize: async () => {
+          throw new Error("stopped before the commit");
+        },
+      };
+    });
+    expect((await merge("rebase")).body).toMatchObject({ code: "merge_in_progress" });
+    const behind = await inRepo(stub(), async (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      r.git.jobs.ensure("feed_pages_prune", "feed_pages_prune");
+      const now = r.git.context.now();
+      sql.exec("UPDATE jobs SET next_run_at = ? WHERE kind = 'merge_saga'", now - 1);
+      sql.exec("UPDATE jobs SET next_run_at = ? WHERE kind = 'feed_pages_prune'", now);
+      await r.alarm();
+      r.rebaseHooks = {};
+      return sql
+        .exec<{ state: string }>("SELECT state FROM jobs WHERE kind = 'feed_pages_prune'")
+        .one().state;
+    });
+    expect(behind).toBe("queued");
+  });
+
+  for (const left of ["exactly its budget", "one query less"] as const)
+    it(`finishes when ${left === "exactly its budget" ? "the invocation has" : "it has"} ${left}${left === "one query less" ? ", in the next invocation" : ""}`, async () => {
+      await pullChanging({ "src/a.ts": "b\n" });
+      await ruleset({});
+      await approve(alice);
+      const count = { queries: 0 };
+      let budget = 0;
+      await inRepo(stub(), (r: RepoDO) => {
+        r.rebaseHooks = {
+          beforeFinish: (need) => {
+            r.rebaseHooks = {};
+            budget = need;
+            const invocation = currentInvocation();
+            if (invocation)
+              invocation.tally.d1 =
+                D1_QUERIES_PER_INVOCATION - need + (left === "one query less" ? 1 : 0);
+            const self = r as unknown as { env: Env };
+            const real = self.env;
+            self.env = { ...real, DIRECTORY: countingD1(real.DIRECTORY, count) };
+            r.rebaseHooks = {
+              afterFinalize: async () => {
+                r.rebaseHooks = {};
+                self.env = real;
+              },
+            };
+          },
+        };
+      });
+      const first = await merge("rebase");
+      if (left === "one query less") {
+        expect(first.body).toMatchObject({ code: "merge_in_progress" });
+        await runJobs();
+        expect((await merge("rebase")).status).toBe(200);
+      } else expect(first.status).toBe(200);
+      expect(budget).toBeGreaterThan(0);
+      expect(count.queries).toBeLessThanOrEqual(budget);
+    });
+
+  it("bounds a delegated merger's finish by its budget, and runs no job after it in its alarm", async () => {
+    await pullChanging({ "src/a.ts": "b\n" });
+    await ruleset({});
+    await approve(alice);
+    const agent = await agentFor(owner, ["pull_requests:write", "contents:write"]);
+    // The request stops before the commit; the alarm finishes it.
+    await inRepo(stub(), (r: RepoDO) => {
+      r.rebaseHooks = {
+        beforeFinalize: async () => {
+          r.rebaseHooks = {};
+          throw new Error("stopped before the commit");
+        },
+      };
+    });
+    expect(
+      (
+        await json<Merged>(
+          api("PUT", `${path}/pulls/1/merge`, agent.delegated, { merge_method: "rebase" }),
+        )
+      ).body,
+    ).toMatchObject({ code: "merge_in_progress" });
+    const count = { queries: 0 };
+    let budget = 0;
+    const behind = await inRepo(stub(), async (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      // Another job due right behind the saga's.
+      r.git.jobs.ensure("feed_pages_prune", "feed_pages_prune");
+      const now = r.git.context.now();
+      sql.exec("UPDATE jobs SET next_run_at = ? WHERE kind = 'merge_saga'", now - 1);
+      sql.exec("UPDATE jobs SET next_run_at = ? WHERE kind = 'feed_pages_prune'", now);
+      r.rebaseHooks = {
+        beforeFinish: (need) => {
+          r.rebaseHooks = {};
+          budget = need;
+          const self = r as unknown as { env: Env };
+          self.env = { ...self.env, DIRECTORY: countingD1(self.env.DIRECTORY, count) };
+        },
+      };
+      await r.alarm();
+      return sql
+        .exec<{ state: string }>("SELECT state FROM jobs WHERE kind = 'feed_pages_prune'")
+        .one().state;
+    });
+    expect(behind).toBe("queued");
+    expect(budget).toBeGreaterThan(0);
+    expect(count.queries).toBeLessThanOrEqual(budget);
+    expect((await merge("rebase")).status).toBe(200);
   });
 });
 

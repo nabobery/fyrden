@@ -11,6 +11,8 @@ CREATE UNIQUE INDEX code_owner_evaluations_key
         ON code_owner_evaluations (merge_base, head, file_blob, version);
 CREATE INDEX code_owner_jobs_due ON code_owner_jobs (requested_at, pr_number);
 CREATE INDEX code_owner_pointers_eval ON code_owner_pointers (eval_id);
+CREATE INDEX code_owner_request_jobs_due
+        ON code_owner_request_jobs (requested_at, pr_number);
 CREATE INDEX comments_number ON comments (number, comment_id);
 CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
 CREATE INDEX feed_audience_pages_expiry ON feed_audience_pages (expires_at);
@@ -152,6 +154,13 @@ CREATE TABLE claim_releases (
         network_id TEXT NOT NULL,
         up_to INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;
+CREATE TABLE code_owner_asked (
+        pr_number INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('principal', 'team')),
+        id TEXT NOT NULL,
+        asked_at INTEGER NOT NULL,
+        PRIMARY KEY (pr_number, kind, id)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE code_owner_evaluations (
         eval_id INTEGER PRIMARY KEY AUTOINCREMENT,
         merge_base TEXT NOT NULL,
@@ -189,6 +198,12 @@ CREATE TABLE code_owner_pointers (
         attempts INTEGER NOT NULL DEFAULT 0,
         retry_at INTEGER
       ) STRICT;
+CREATE TABLE code_owner_request_jobs (
+        pr_number INTEGER PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        requested_at INTEGER NOT NULL,
+        state TEXT CHECK (state IS NULL OR json_valid(state))
+      ) STRICT;
 CREATE TABLE code_owner_restore (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         after INTEGER NOT NULL
@@ -201,6 +216,10 @@ CREATE TABLE code_owner_rules (
         example TEXT NOT NULL,
         PRIMARY KEY (eval_id, line)
       ) STRICT, WITHOUT ROWID;
+CREATE TABLE code_owner_waiting (
+        pr_number INTEGER PRIMARY KEY,
+        reason TEXT NOT NULL CHECK (reason IN ('room', 'reviewers'))
+      ) STRICT;
 CREATE TABLE collect_requests (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         due_at INTEGER NOT NULL

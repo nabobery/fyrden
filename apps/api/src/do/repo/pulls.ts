@@ -168,7 +168,7 @@ export class RepoPulls {
        * In the transaction of a change: whether the pull request merges must
        * be worked out again (open), or no longer (closed or merged).
        */
-      readonly stale?: (number: number, open: boolean) => void;
+      readonly stale?: (number: number, open: boolean, event: string) => void;
       /** In a commit's transaction: base branch `branch` moved, so its open pull requests' too. */
       readonly staleBase?: (branch: string) => void;
       /**
@@ -887,7 +887,7 @@ export class RepoPulls {
       pull.number,
       pull.headSha,
     );
-    this.deps.stale?.(pull.number, pull.state === "open");
+    this.deps.stale?.(pull.number, pull.state === "open", event);
     // The head's repository is told what the pull request now asks of it (its consent too).
     if (
       pull.headRepoId &&

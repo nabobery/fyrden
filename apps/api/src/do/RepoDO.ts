@@ -14,6 +14,7 @@ import {
 } from "@fyrden/adapters-cloudflare/git";
 import {
   atInvocationEnd,
+  countedD1,
   createLogger,
   createMetrics,
   currentInvocation,
@@ -123,6 +124,12 @@ import {
   CodeOwnerFacts,
   type CodeOwnerMergePolicy,
 } from "./repo/code-owner-facts.js";
+import {
+  CODE_OWNER_REQUEST_POLICY,
+  type CodeOwnerRequestHooks,
+  type CodeOwnerRequestPolicy,
+  CodeOwnerRequests,
+} from "./repo/code-owner-requests.js";
 import { RepoCodeOwners } from "./repo/code-owners.js";
 import { type CommentRecord, RepoComments } from "./repo/comments.js";
 import type { ConflictsView, MergedIntoHead } from "./repo/conflicts.js";
@@ -172,6 +179,7 @@ import {
 import { MERGE_POLICY, type MergeMade, type MergePolicy } from "./repo/merge.js";
 import { MERGEABILITY_POLICY, type PullView, RepoMergeability } from "./repo/mergeability.js";
 import {
+  type AudienceFit,
   type NewReviewComment,
   type PullChangeRefusal,
   PullDiscussion,
@@ -299,6 +307,8 @@ export class RepoDO extends MigratingDO {
 
   /** Review requests, diff threads and the standing a merge is judged by. */
   readonly #discussion: PullDiscussion;
+  readonly #codeOwnerFacts: CodeOwnerFacts;
+  readonly #codeOwnerRequests: CodeOwnerRequests;
 
   /** Merges of pull requests into their base branches. */
   readonly #merging: PullMerging;
@@ -331,6 +341,12 @@ export class RepoDO extends MigratingDO {
 
   /** Limits of the code owners a merge resolves. Tests may replace them. */
   codeOwnerMergePolicy: CodeOwnerMergePolicy = CODE_OWNER_MERGE_POLICY;
+
+  /** Asking code owners to review: a slice's budgets. Tests may replace them. */
+  codeOwnerRequestPolicy: CodeOwnerRequestPolicy = CODE_OWNER_REQUEST_POLICY;
+
+  /** Hooks into asking code owners to review. For tests. */
+  codeOwnerRequestHooks: CodeOwnerRequestHooks = {};
 
   /** Where audit records are archived. Tests may replace it. */
   auditBucket: Pick<R2Bucket, "put">;
@@ -388,7 +404,13 @@ export class RepoDO extends MigratingDO {
   readonly webhookBlobStore: RepoWebhookBlobs;
 
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
+    // Every D1 statement counted against the invocation's tally: work bounded by D1's queries
+    // an invocation is admitted against what it ran.
+    super(ctx, {
+      ...env,
+      DIRECTORY: countedD1(env.DIRECTORY),
+      ORG_READ: countedD1(env.ORG_READ),
+    });
     this.metricsDataset = env.METRICS;
     this.git = new RepoGitStorage({
       storage: ctx.storage,
@@ -428,6 +450,8 @@ export class RepoDO extends MigratingDO {
         this.#scheduleReviewTeams();
         // Code owners shown for pairs the restored state may not have: checked again.
         this.codeOwners.restored();
+        // Its owners asked of again, as after a transfer (an ownership repaired among them).
+        this.#codeOwnerRequests.queueAll();
       },
     );
     this.changeLists = new ChangeLists(this.git);
@@ -460,9 +484,9 @@ export class RepoDO extends MigratingDO {
       described: (number, body, actor) =>
         this.references.sync({ kind: "pull", number, comment: 0 }, body, actor),
       merged: (pull, actor) => this.#closeOnMerge(pull, actor),
-      stale: (number, open) => {
+      stale: (number, open, event) => {
         this.mergeability.stale(number, open);
-        this.codeOwners.stale(number, open);
+        this.codeOwners.stale(number, open, event);
       },
       staleBase: (branch) => {
         this.mergeability.staleBase(branch);
@@ -499,6 +523,9 @@ export class RepoDO extends MigratingDO {
       memoryBlocks: () => this.#memoryBlocks(),
       writable: () => this.#writeRefusal() === undefined,
       log: () => this.#log(),
+      published: (number) => this.#codeOwnerRequests.published(number),
+      ready: (number) => this.#codeOwnerRequests.queue(number),
+      closed: (number) => this.#codeOwnerRequests.closed(number),
     });
     this.mergeability = new RepoMergeability({
       git: this.git,
@@ -559,9 +586,10 @@ export class RepoDO extends MigratingDO {
         reviewers,
         pulls: this.pulls,
         repoId: () => this.#repoId(),
-        standing: (number, pull, method, upToDate, merger) =>
-          this.#discussion.standing(number, pull, method, upToDate, merger),
+        standing: (number, pull, method, upToDate, merger, budgeted) =>
+          this.#discussion.standing(number, pull, method, upToDate, merger, budgeted),
         internalCalls: () => currentInvocation()?.tally.internal ?? 0,
+        standingQueries: (number, pull) => this.#discussion.standingQueries(number, pull),
         committed: () => {
           this.#armOutbox();
           this.#ensureAuditArchive();
@@ -579,6 +607,7 @@ export class RepoDO extends MigratingDO {
       feed: this.feed,
       pulls: this.pulls,
       schedule: () => this.#scheduleReviewTeams(),
+      freed: (number) => this.#codeOwnerRequests.freed(number),
     });
     this.reviews = new RepoReviews({
       git: this.git,
@@ -587,6 +616,8 @@ export class RepoDO extends MigratingDO {
       feed: this.feed,
       teams: this.teamRequests,
       repoId: () => this.#repoId(),
+      freed: (number) => this.#codeOwnerRequests.freed(number),
+      reviewed: (number) => this.#codeOwnerRequests.reviewed(number),
     });
     this.issues = new RepoIssues({
       git: this.git,
@@ -689,6 +720,17 @@ export class RepoDO extends MigratingDO {
       refusesReads: () => this.#refusesReads(),
       isTransferring: () => this.events.isTransferring(),
     });
+    this.#codeOwnerFacts = new CodeOwnerFacts({
+      codeOwners: this.codeOwners,
+      env: () => this.env,
+      account: () => this.events.account(),
+      acl: () => this.acl,
+      authority: this.#authority,
+      teams: (accountId, slugs, principals) =>
+        this.env.ORG.getByName(accountId).codeOwnerTeams(this.#repoId(), slugs, principals),
+      policy: () => this.codeOwnerMergePolicy,
+      metrics: this.git.context.metrics,
+    });
     this.#discussion = new PullDiscussion({
       git: this.git,
       pulls: this.pulls,
@@ -696,58 +738,47 @@ export class RepoDO extends MigratingDO {
       reviewComments: this.reviewComments,
       reacted: (comments) => this.reactions.attach("review_comment", comments),
       authority: this.#authority,
-      codeOwnerFacts: new CodeOwnerFacts({
-        codeOwners: this.codeOwners,
-        env: () => this.env,
-        account: () => this.events.account(),
-        acl: () => this.acl,
-        authority: this.#authority,
-        teams: (accountId, slugs, principals) =>
-          this.env.ORG.getByName(accountId).codeOwnerTeams(this.#repoId(), slugs, principals),
-        policy: () => this.codeOwnerMergePolicy,
-        metrics: this.git.context.metrics,
-      }),
+      codeOwnerFacts: this.#codeOwnerFacts,
       codeOwnersStamp: (pull) => this.codeOwners.stampFor(pull),
       memoryBlocks: () => this.#memoryBlocks(),
       viewed: (pull) => this.#viewed(pull),
       pullChange: (method, actor, change, prepare, texts, last) =>
         this.#pullChange(method, actor, change, prepare, texts, last),
-      teamAudience: async (slugs) => {
-        const account = this.events.account();
-        if (!account)
-          return { accountId: "", epochGen: 0, version: 0, teams: [], missing: [...slugs] };
-        this.git.context.metrics.count("do.request", { class: "OrgDO", method: "teamAudience" });
-        let audience: TeamAudience;
-        try {
-          audience = await this.env.ORG.getByName(account.accountId).teamAudience(
-            this.#repoId(),
-            slugs,
-          );
-        } catch (error) {
-          this.#log().warn("reading the teams asked to review failed", { error });
-          return "unavailable" as const;
-        }
-        this.teamRequests.observe(audience.accountId, audience.epochGen);
-        return audience;
-      },
-      audienceFit: (audience) => {
-        // No team found: nothing was read with the ACL (the request is refused for that).
-        if (audience.teams.length === 0) return "same";
-        const account = this.events.account();
-        if (!account || audience.accountId !== account.accountId) return "unavailable";
-        const basis = this.acl.basis();
-        if (basis === "none") return "unavailable";
-        // None to decide by now (too old, or a pull failed): the answer's is pulled.
-        if (basis === "unknown") return "newer";
-        if (basis.epochGen === audience.epochGen && basis.version === audience.version)
-          return "same";
-        return basis.epochGen < audience.epochGen ||
-          (basis.epochGen === audience.epochGen && basis.version < audience.version)
-          ? "newer"
-          : "older";
-      },
+      teamAudience: (slugs) => this.#teamAudience(slugs),
+      audienceFit: (audience) => this.#audienceFit(audience),
       adoptAudience: (audience) =>
         this.acl.invalidate(audience.accountId, audience.epochGen, audience.version),
+    });
+    this.#codeOwnerRequests = new CodeOwnerRequests({
+      git: this.git,
+      pulls: this.pulls,
+      reviews: this.reviews,
+      teams: this.teamRequests,
+      codeOwners: this.codeOwners,
+      facts: this.#codeOwnerFacts,
+      reviewersNow: (number) => this.#discussion.reviewersNow(number),
+      authority: this.#authority,
+      acl: () => this.acl,
+      account: () => this.events.account(),
+      teamFacts: (accountId, slugs, probe) =>
+        this.env.ORG.getByName(accountId).codeOwnerTeamFacts(this.#repoId(), slugs, probe),
+      teamAudience: (slugs) => this.#teamAudience(slugs),
+      audienceFit: (audience) => this.#audienceFit(audience),
+      adoptAudience: (audience) =>
+        this.acl.invalidate(audience.accountId, audience.epochGen, audience.version),
+      prepareFeed: async () => {
+        await this.feed.prepare();
+      },
+      withFeed: (actor, change) => this.feed.within(actor, change),
+      writable: () => this.#writeRefusal() === undefined && this.events.canEmit(),
+      committed: () => {
+        this.#armOutbox();
+        this.#ensureAuditArchive();
+      },
+      policy: () => this.codeOwnerRequestPolicy,
+      hooks: () => this.codeOwnerRequestHooks,
+      metrics: this.git.context.metrics,
+      log: () => this.#log(),
     });
     const writes: WriteContext = {
       git: this.git,
@@ -1410,6 +1441,45 @@ export class RepoDO extends MigratingDO {
   }
 
   /** Queues the settling of team review requests no longer standing (see `RepoTeamRequests`). */
+  /**
+   * The repository's organization's teams `slugs`, as a review request
+   * asks them; `unavailable` when they could not be read.
+   */
+  async #teamAudience(slugs: readonly string[]): Promise<TeamAudience | "unavailable"> {
+    const account = this.events.account();
+    if (!account) return { accountId: "", epochGen: 0, version: 0, teams: [], missing: [...slugs] };
+    this.git.context.metrics.count("do.request", { class: "OrgDO", method: "teamAudience" });
+    let audience: TeamAudience;
+    try {
+      audience = await this.env.ORG.getByName(account.accountId).teamAudience(
+        this.#repoId(),
+        slugs,
+      );
+    } catch (error) {
+      this.#log().warn("reading the teams asked to review failed", { error });
+      return "unavailable";
+    }
+    this.teamRequests.observe(audience.accountId, audience.epochGen);
+    return audience;
+  }
+
+  /** How `audience`'s ACL compares with the one the repository decides by now. */
+  #audienceFit(audience: TeamAudience): AudienceFit {
+    // No team found: nothing was read with the ACL (the request is refused for that).
+    if (audience.teams.length === 0) return "same";
+    const account = this.events.account();
+    if (!account || audience.accountId !== account.accountId) return "unavailable";
+    const basis = this.acl.basis();
+    if (basis === "none") return "unavailable";
+    // None to decide by now (too old, or a pull failed): the answer's is pulled.
+    if (basis === "unknown") return "newer";
+    if (basis.epochGen === audience.epochGen && basis.version === audience.version) return "same";
+    return basis.epochGen < audience.epochGen ||
+      (basis.epochGen === audience.epochGen && basis.version < audience.version)
+      ? "newer"
+      : "older";
+  }
+
   #scheduleReviewTeams(): void {
     this.git.jobs.ensure("review_teams", REVIEW_TEAMS_JOB);
   }
@@ -2217,6 +2287,8 @@ export class RepoDO extends MigratingDO {
       if (changed) {
         this.acl.reset();
         this.#scheduleReviewTeams();
+        // Its code owners qualify by the new account's access: asked of or taken back again.
+        this.ctx.storage.transactionSync(() => this.#codeOwnerRequests.queueAll());
         this.#armOutbox();
         this.#ensureAuditArchive();
       }
@@ -2685,6 +2757,16 @@ export class RepoDO extends MigratingDO {
 
   /** Runs due background jobs; the job queue re-arms the alarm for the next one. */
   override async alarm(): Promise<void> {
+    // One tally of the platform invocation's calls and D1 statements, its epoch check included
+    // (the alarm's own invocation, measured inside it, shares it).
+    await measureInvocation(
+      this.git.context.metrics,
+      { where: "do", op: "alarm.epoch", doClass: "RepoDO" },
+      () => this.#alarm(),
+    );
+  }
+
+  async #alarm(): Promise<void> {
     // Nothing runs before the restore generation is taken: a restored object may be one the
     // directory deleted since. Unknown (the directory unreachable): tried again later.
     try {
@@ -2771,6 +2853,7 @@ export class RepoDO extends MigratingDO {
       storage_confirm: this.#storageCharges.confirmHandler(),
       mergeability: this.mergeability.handler(),
       code_owners: this.codeOwners.handler(),
+      code_owner_requests: this.#codeOwnerRequests.handler(),
       merge_saga: this.rebases.handler("alarm"),
       pull_notices: this.pullSource.noticesHandler(),
       revision_import: this.pullImports.handler(),
@@ -2905,6 +2988,7 @@ export class RepoDO extends MigratingDO {
 
   /** Hooks into a rebase merge's commit. For tests. */
   rebaseHooks: {
+    beforeFinish?: (queries: number) => void;
     beforeFinalize?: () => Promise<void>;
     afterFinalize?: () => Promise<void>;
   } = {};

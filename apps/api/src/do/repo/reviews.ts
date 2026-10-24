@@ -18,7 +18,13 @@ import type { TeamAudience } from "../OrgDO.js";
 import type { RepoEvents } from "./events.js";
 import type { RepoFeed } from "./feed.js";
 import type { PullCaller, PullRecord, RepoPulls } from "./pulls.js";
-import { MANUAL, type RepoTeamRequests, type TeamRequest } from "./team-requests.js";
+import {
+  MANUAL,
+  OWNERS,
+  type RepoTeamRequests,
+  type TeamRequest,
+  type TeamToAsk,
+} from "./team-requests.js";
 
 /** The entity type review snapshots travel as in events. */
 export const REVIEW_ENTITY = "pull_request_review";
@@ -95,6 +101,20 @@ export interface RequestedReviewer {
   readonly role: RepoRole | null;
 }
 
+/** What the repository asks of code owners on a pull request in one change (see `RepoReviews.askOwners`). */
+export interface OwnersAsk {
+  /** Principals to ask, each with the root identity it counts as. */
+  readonly principals: readonly { readonly id: string; readonly root: string }[];
+  /** Teams to ask, each through the members it asks (its pull request's author left out). */
+  readonly teams: readonly TeamToAsk[];
+  /** The teams' answer's account and restore generation (see `RepoTeamRequests.askedAt`). */
+  readonly audience?: { readonly accountId: string; readonly epochGen: number };
+  /** Standing requests asked of code owners too: principals' ids, teams' request ids. */
+  readonly mark: { readonly principals: readonly string[]; readonly teams: readonly number[] };
+  /** Code owners' requests taken back: principals' ids, teams' request ids. */
+  readonly takeBack: { readonly principals: readonly string[]; readonly teams: readonly number[] };
+}
+
 export type ReviewFailure =
   | "not_found"
   | "review_not_found"
@@ -140,6 +160,10 @@ export class RepoReviews {
       readonly feed: RepoFeed;
       readonly teams: RepoTeamRequests;
       readonly repoId: () => string;
+      /** In the transaction of a request's end: pull request `number` has room it did not have. */
+      readonly freed?: (number: number) => void;
+      /** In the transaction of a change of a review that can count on pull request `number`. */
+      readonly reviewed?: (number: number) => void;
     },
   ) {}
 
@@ -288,6 +312,7 @@ export class RepoReviews {
         actor.principal,
       );
       const members = teams.completeBy(number, actor.principal, caller.root);
+      this.deps.freed?.(number);
       const asked = teams.addressed(number);
       const resolutions = this.deps.feed.settlements(
         number,
@@ -357,10 +382,32 @@ export class RepoReviews {
 
   /** The principals a review is requested of, in the order requested. */
   requested(number: number): string[] {
-    return this.#rows<{ reviewer_id: string }>(
-      "SELECT reviewer_id FROM review_requests WHERE pr_number = ? ORDER BY requested_at, reviewer_id",
+    return this.#requests(number).map((row) => row.reviewerId);
+  }
+
+  /** The requests of principals, in the order requested, with why each was asked. */
+  #requests(number: number): { reviewerId: string; reasons: number; requestId: number }[] {
+    return this.#rows<{ reviewer_id: string; reasons: number; request_id: number }>(
+      `SELECT reviewer_id, reasons, request_id FROM review_requests WHERE pr_number = ?
+       ORDER BY requested_at, reviewer_id`,
       number,
-    ).map((row) => row.reviewer_id);
+    ).map((row) => ({
+      reviewerId: row.reviewer_id,
+      reasons: row.reasons,
+      requestId: row.request_id,
+    }));
+  }
+
+  /**
+   * Changes with any change of the pull request's standing requests (one
+   * made, ended, or its reasons changed): each request's id and reasons,
+   * of principals and of teams. A few rows (at most `MAX_REQUESTED_REVIEWERS`).
+   */
+  requestsStamp(number: number): string {
+    return JSON.stringify([
+      this.#requests(number).map((r) => [r.requestId, r.reasons]),
+      this.deps.teams.live(number).map((r) => [r.requestId, r.reasons]),
+    ]);
   }
 
   /**
@@ -390,15 +437,18 @@ export class RepoReviews {
       if (reviewer.role === null) return { ok: false, code: "reviewer_no_access" };
     }
     if (audience && audience.missing.length > 0) return { ok: false, code: "team_not_found" };
+    const { teams } = this.deps;
+    const standing = teams.live(number);
+    const asked = new Set(standing.map((r) => r.team.id));
     for (const team of audience?.teams ?? []) {
       // One that cannot read the repository is answered as one not found: a caller outside the
       // organization learns no more of its teams than their names it asked with.
       if (team.role === null) return { ok: false, code: "team_not_found" };
-      if (team.members === null) return { ok: false, code: "team_too_large" };
+      // Too large to ask now; one asked already keeps the members it asked (and becomes the
+      // person's request too).
+      if (team.members === null && !asked.has(team.id))
+        return { ok: false, code: "team_too_large" };
     }
-    const { teams } = this.deps;
-    const standing = teams.live(number);
-    const asked = new Set(standing.map((r) => r.team.id));
     const author = new Set([pull.pull.authorId, pull.pull.authorRoot]);
     const newTeams = [...new Map((audience?.teams ?? []).map((team) => [team.id, team])).values()]
       .filter((team) => !asked.has(team.id))
@@ -413,8 +463,16 @@ export class RepoReviews {
       MAX_PULL_TEAM_REVIEWERS
     )
       return { ok: false, code: "team_too_large" };
-    const already = new Set(this.requested(number));
+    const requests = this.#requests(number);
+    const already = new Set(requests.map((r) => r.reviewerId));
     const added = [...new Set(reviewers.map((r) => r.id))].filter((id) => !already.has(id));
+    // Asked already, by the repository only (a code owner): asked by a person now too.
+    const wanted = new Set(reviewers.map((r) => r.id));
+    const promoted = requests.filter((r) => wanted.has(r.reviewerId) && !(r.reasons & MANUAL));
+    const teamsWanted = new Set((audience?.teams ?? []).map((team) => team.id));
+    const teamsPromoted = standing.filter(
+      (r) => teamsWanted.has(r.team.id) && !(r.reasons & MANUAL),
+    );
     const places = already.size + standing.length + added.length + newTeams.length;
     const freed =
       places > MAX_REQUESTED_REVIEWERS ? [...already].filter((id) => deleted.has(id)) : [];
@@ -428,11 +486,13 @@ export class RepoReviews {
           number,
           id,
         );
-      if (freed.length > 0)
+      if (freed.length > 0) {
         this.deps.events.auditChange("pull_request.prune_review_requests", caller.actor, {
           number,
           reviewers: freed,
         });
+        this.deps.freed?.(number);
+      }
       for (const id of added) {
         const root = reviewers.find((r) => r.id === id)?.root ?? id;
         this.#run(
@@ -448,6 +508,13 @@ export class RepoReviews {
         );
         this.#emitRequest("review_requested", number, id, caller.actor, root);
       }
+      for (const r of promoted)
+        this.#run(
+          "UPDATE review_requests SET reasons = reasons | ? WHERE request_id = ?",
+          MANUAL,
+          r.requestId,
+        );
+      for (const r of teamsPromoted) teams.setReasons(r.requestId, r.reasons | MANUAL);
       if (audience && newTeams.length > 0)
         teams.askedAt(audience.accountId, audience.epochGen, standing.length > 0);
       for (const team of newTeams) teams.ask(number, team, caller.actor, now);
@@ -478,26 +545,7 @@ export class RepoReviews {
     const removed = [...new Set(reviewerIds)].filter((id) => requested.has(id));
     const { teams } = this.deps;
     this.deps.git.context.storage.transactionSync(() => {
-      for (const id of removed) {
-        const [gone] = this.deps.git.context.storage.sql
-          .exec<{ reviewer_root: string | null }>(
-            "DELETE FROM review_requests WHERE pr_number = ? AND reviewer_id = ? RETURNING reviewer_root",
-            number,
-            id,
-          )
-          .toArray();
-        this.#count(1);
-        const root = gone?.reviewer_root ?? undefined;
-        const resolutions = teams.addressed(number).has(id)
-          ? []
-          : this.deps.feed.settlements(
-              number,
-              [{ id, root: root ?? id }],
-              caller.actor.principal,
-              "review_request_removed",
-            );
-        this.#emitRequest("review_request_removed", number, id, caller.actor, root, resolutions);
-      }
+      for (const id of removed) this.#withdrawPrincipal(number, id, caller.actor);
       const teamsRemoved = teams.withdraw(number, teamSlugs, caller.actor);
       if (removed.length > 0 || teamsRemoved.length > 0)
         this.deps.events.auditChange("pull_request.remove_review_request", caller.actor, {
@@ -507,6 +555,118 @@ export class RepoReviews {
         });
     });
     return { ok: true, pull: pull.pull };
+  }
+
+  /**
+   * In a change's transaction: withdraws the request of `id`, settling
+   * them unless another request still asks them, with its event.
+   */
+  #withdrawPrincipal(number: number, id: string, actor: RefActor): void {
+    const [gone] = this.deps.git.context.storage.sql
+      .exec<{ reviewer_root: string | null }>(
+        "DELETE FROM review_requests WHERE pr_number = ? AND reviewer_id = ? RETURNING reviewer_root",
+        number,
+        id,
+      )
+      .toArray();
+    this.#count(1);
+    this.deps.freed?.(number);
+    const root = gone?.reviewer_root ?? undefined;
+    const resolutions = this.deps.teams.addressed(number).has(id)
+      ? []
+      : this.deps.feed.settlements(
+          number,
+          [{ id, root: root ?? id }],
+          actor.principal,
+          "review_request_removed",
+        );
+    this.#emitRequest("review_request_removed", number, id, actor, root, resolutions);
+  }
+
+  /**
+   * In a change's transaction: what the repository asks of code owners on
+   * pull request `number`, by `actor` (its author; no permission of theirs
+   * is checked: the repository asks), as `ask` says: requests made for
+   * `OWNERS` (each with its event, as a person's request has), requests
+   * standing already marked as code owners' too, and code owners'
+   * requests taken back (a person's request of the same reviewer stays,
+   * as theirs; one with no reason left is withdrawn, as `unrequest` does).
+   * Who may be asked and whether they fit was decided by the caller. How
+   * many requests were withdrawn (places freed).
+   */
+  askOwners(number: number, ask: OwnersAsk, actor: RefActor): { withdrawn: number } {
+    const { teams } = this.deps;
+    const now = this.deps.git.context.now();
+    const requests = new Map(this.#requests(number).map((r) => [r.reviewerId, r]));
+    const live = new Map(teams.live(number).map((r) => [r.requestId, r]));
+    for (const id of ask.mark.principals) {
+      const r = requests.get(id);
+      if (r && !(r.reasons & OWNERS))
+        this.#run(
+          "UPDATE review_requests SET reasons = ? WHERE request_id = ?",
+          r.reasons | OWNERS,
+          r.requestId,
+        );
+    }
+    for (const requestId of ask.mark.teams) {
+      const r = live.get(requestId);
+      if (r && !(r.reasons & OWNERS)) teams.setReasons(requestId, r.reasons | OWNERS);
+    }
+    const withdrawn: string[] = [];
+    for (const id of ask.takeBack.principals) {
+      const r = requests.get(id);
+      if (!r || !(r.reasons & OWNERS)) continue;
+      if (r.reasons & MANUAL)
+        this.#run(
+          "UPDATE review_requests SET reasons = ? WHERE request_id = ?",
+          MANUAL,
+          r.requestId,
+        );
+      else {
+        this.#withdrawPrincipal(number, id, actor);
+        withdrawn.push(id);
+      }
+    }
+    const teamsWithdrawn: TeamRequest[] = [];
+    for (const requestId of ask.takeBack.teams) {
+      const r = live.get(requestId);
+      if (!r || !(r.reasons & OWNERS)) continue;
+      if (r.reasons & MANUAL) teams.setReasons(requestId, MANUAL);
+      else teamsWithdrawn.push(r);
+    }
+    teams.withdrawRequests(number, teamsWithdrawn, actor);
+    if (withdrawn.length > 0 || teamsWithdrawn.length > 0)
+      this.deps.events.auditChange("pull_request.remove_review_request", actor, {
+        number,
+        reviewers: withdrawn,
+        ...(teamsWithdrawn.length > 0 && { teams: teamsWithdrawn.map((r) => r.team.slug) }),
+        code_owners: true,
+      });
+    for (const { id, root } of ask.principals) {
+      this.#run(
+        `INSERT INTO review_requests (pr_number, reviewer_id, requested_by, requested_at,
+           reviewer_root, reasons, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        number,
+        id,
+        actor.principal,
+        now,
+        root,
+        OWNERS,
+        teams.nextId(),
+      );
+      this.#emitRequest("review_requested", number, id, actor, root);
+    }
+    if (ask.audience && ask.teams.length > 0)
+      teams.askedAt(ask.audience.accountId, ask.audience.epochGen, live.size > 0);
+    for (const team of ask.teams) teams.ask(number, team, actor, now, OWNERS);
+    if (ask.principals.length > 0 || ask.teams.length > 0)
+      this.deps.events.auditChange("pull_request.request_reviewers", actor, {
+        number,
+        reviewers: ask.principals.map((p) => p.id),
+        ...(ask.teams.length > 0 && { teams: ask.teams.map((team) => team.slug) }),
+        code_owners: true,
+      });
+    return { withdrawn: withdrawn.length + teamsWithdrawn.length };
   }
 
   #requestable(
@@ -596,6 +756,7 @@ export class RepoReviews {
       "UPDATE pull_requests SET reviews_revision = reviews_revision + 1 WHERE number = ?",
       number,
     );
+    this.deps.reviewed?.(number);
   }
 
   #run(query: string, ...bindings: SqlStorageValue[]): void {

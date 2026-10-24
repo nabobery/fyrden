@@ -6,6 +6,7 @@ import { encodeJson } from "../../git/maintenance/storage.js";
 import { reauthorizeByToken } from "../../git/push/reauthorize-token.js";
 import { PUSH_BUSY, PUSH_CANCELLED, PUSH_EXPIRED } from "../../git/push/repo-push.js";
 import { type Browsed, type BrowseFailure, fail } from "./browse.js";
+import { d1Room } from "./directory-budget.js";
 import type { FeedActor } from "./feed.js";
 import {
   FILE_WRITE_POLICY,
@@ -65,11 +66,18 @@ export interface RebaseDeps {
     method: "rebase",
     upToDate: boolean,
     merger: { readonly principal: string; readonly grantId: string | null },
+    /** The code owners' result its budget was worked out for. */
+    budgeted?: string,
   ) => Promise<MergeStanding>;
   /** Confirms, at the commit, the reviewers whose approvals the merge counts. */
   readonly reviewers: ReviewerConfirmations;
   /** Internal-service calls the invocation has made so far. */
   readonly internalCalls: () => number;
+  /** The directory queries `standing` runs for the pull request at most, worked out before it runs. */
+  readonly standingQueries: (
+    number: number,
+    pull: PullRecord,
+  ) => { readonly queries: number; readonly codeOwners: string };
   /** After a commit: what the object does after any commit it makes (outbox, audit). */
   readonly committed: () => void;
   readonly policy: () => RebasePolicy;
@@ -78,10 +86,19 @@ export interface RebaseDeps {
   readonly withFeed: <R>(actor: FeedActor, change: () => R) => R;
   /** For tests: runs before the final push is committed, and right after. */
   readonly hooks: () => {
+    /** Before the finish checks its room for directory queries, with what it needs. */
+    readonly beforeFinish?: (queries: number) => void;
     readonly beforeFinalize?: () => Promise<void>;
     readonly afterFinalize?: () => Promise<void>;
   };
 }
+
+/**
+ * Directory queries a rebase's finish runs besides its standing, at most:
+ * the token's reauthorization (the token, a delegation's grant links), the
+ * feed actor's roles (its grant or an agent's owner). Measured, with room.
+ */
+const FINISH_QUERIES = 6;
 
 export type SagaState = "running" | "done" | "failed";
 
@@ -185,6 +202,14 @@ const NOTHING = fail(
   "Every commit of the pull request is already in the base branch: there is nothing to rebase.",
 );
 /** The pull request's saga (the latest one), its runs, and the job that drives it. */
+/** A finish failed after it spent its directory queries (`cause`: why). */
+class FinishFailed extends Error {
+  override name = "FinishFailed";
+  constructor(cause: unknown) {
+    super("the rebase's finish failed", { cause });
+  }
+}
+
 export class RebaseSagas {
   readonly #log = createLogger({ op: "rebase.saga" });
 
@@ -326,11 +351,20 @@ export class RebaseSagas {
         try {
           result = await this.#slice(job, row, mode);
         } catch (error) {
-          result = await this.#failedSlice(job, row, error);
+          const finishing = error instanceof FinishFailed;
+          result = await this.#failedSlice(job, row, finishing ? error.cause : error);
+          // A finish that failed after its directory queries: nothing after it in this invocation.
+          if (finishing) result = { ...result, endInvocation: true };
         }
         // A saga started meanwhile (a request replaced the one this slice ran): go on with it.
         if (result.done && this.#row(number)?.state === "running")
-          return { done: false, cursor: null, runAfterMs: 0 };
+          return {
+            done: false,
+            cursor: null,
+            runAfterMs: 0,
+            // What this slice spent is the invocation's whichever saga runs next.
+            ...(result.endInvocation && { endInvocation: true }),
+          };
         return result;
       },
     };
@@ -350,7 +384,7 @@ export class RebaseSagas {
     // The key changed: nothing was published, so the saga starts again under the new one.
     if (keyId !== row.key_id) return this.#restart(job, row, keyId);
     if (row.next < row.commits.byteLength / 20) return this.#replay(job, row, writeDeps, mode);
-    return this.#finish(job, row, writeDeps);
+    return this.#finish(job, row, writeDeps, mode);
   }
 
   /** Replays commits from `next` within the slice's bounds, each kept in its own transaction. */
@@ -430,7 +464,12 @@ export class RebaseSagas {
   }
 
   /** Every commit replayed: one pack of the kept objects, stored, indexed and committed. */
-  async #finish(job: Job, row: SagaRow, writeDeps: FileWriteDeps): Promise<SliceResult> {
+  async #finish(
+    job: Job,
+    row: SagaRow,
+    writeDeps: FileWriteDeps,
+    mode: "request" | "alarm",
+  ): Promise<SliceResult> {
     const number = row.pr_number;
     if (row.tip === row.base_tip) return this.#fail(job, row, NOTHING);
     // Indexing and the commit need a fresh share of the invocation's calls.
@@ -477,10 +516,54 @@ export class RebaseSagas {
     if (this.deps.internalCalls() > this.policy.commitCalls)
       return this.#later(row, this.policy.waitMs);
     const pull = JSON.parse(row.pull_json) as PullRecord;
-    const standing = await this.deps.standing(number, pull, "rebase", row.up_to_date === 1, {
-      principal: actor.principal,
-      grantId: actor.grantId ?? null,
-    });
+    // Every directory query left (its standing's, its token's, its feed's) in this invocation, or
+    // the finish waits for the next: D1's queries an invocation are few on Free.
+    const bound = this.deps.standingQueries(number, pull);
+    const queries = bound.queries + FINISH_QUERIES;
+    this.deps.hooks().beforeFinish?.(queries);
+    if (!d1Room(queries)) return { ...this.#later(row, 0), endInvocation: true };
+    let finished: SliceResult;
+    try {
+      finished = await this.#finalize(
+        job,
+        row,
+        writeDeps,
+        upload,
+        actor,
+        writer,
+        pull,
+        bound.codeOwners,
+      );
+    } catch (error) {
+      throw new FinishFailed(error);
+    }
+    // Its queries spent: in the alarm nothing after it runs in this invocation. A request goes on
+    // only with this saga (a push to make again is admitted against the tally again, as this one
+    // was), and ends once it is done.
+    return finished.done || mode === "alarm" ? { ...finished, endInvocation: true } : finished;
+  }
+
+  /** The finish's commit: the standing judged again, the token reauthorized, the push finalized. */
+  async #finalize(
+    job: Job,
+    row: SagaRow,
+    writeDeps: FileWriteDeps,
+    upload: StoredUpload,
+    actor: Omit<RefActor, "via">,
+    writer: Parameters<typeof storeUpload>[1],
+    pull: PullRecord,
+    budgeted: string,
+  ): Promise<SliceResult> {
+    const number = row.pr_number;
+    const yields = () => !this.git.jobs.checkpoint(job, this.#cursor(row));
+    const standing = await this.deps.standing(
+      number,
+      pull,
+      "rebase",
+      row.up_to_date === 1,
+      { principal: actor.principal, grantId: actor.grantId ?? null },
+      budgeted,
+    );
     // Bound, with no await since, to the ownership the reviewers were just judged under.
     const confirm = this.deps.reviewers.for(standing.ceilings);
     if (standing.refusal) {

@@ -349,7 +349,7 @@ describe("code owners of a pull request", () => {
     expect(await stale.json()).toMatchObject({ code: "invalid_cursor" });
   });
 
-  it("cost about 21 rows for a typical pull request, and about 6 more a slice (measured)", async () => {
+  it("cost about 28 rows for a typical pull request, and about 6 more a slice (measured)", async () => {
     await commit("main", { CODEOWNERS: "* @me\n*.md @docs\n/src/ @src\n" });
     await branchAt("feature", await commit("main", { "a.txt": "a\n" }));
     await commit("feature", { "a.txt": "b\n", "b.md": "b\n", "src/c.ts": "c\n" });
@@ -372,8 +372,9 @@ describe("code owners of a pull request", () => {
     const slices = result.rules.reduce((n, r) => n + r.paths, 0) + result.unmatched_paths;
     const perSlice = sliced / slices;
     // Measured 2026-10-23: 21 rows typical (11 of its own tables with their indexes, 10 of the
-    // job queue's); 136 for 23 one-change slices, about 6 a slice.
-    expect(typical).toBeLessThanOrEqual(24);
+    // job queue's); 136 for 23 one-change slices, about 6 a slice. Since its owners are asked
+    // (2026-10-24), 7 more for the request job a new result queues (its queue row, the job's).
+    expect(typical).toBeLessThanOrEqual(31);
     expect(perSlice).toBeLessThanOrEqual(7);
   });
 

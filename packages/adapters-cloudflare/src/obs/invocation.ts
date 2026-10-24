@@ -94,6 +94,12 @@ export class PointBudget {
 export class SubrequestTally {
   internal = 0;
   external = 0;
+  /**
+   * D1 statements run (each of a batch too), counted at the binding (see
+   * `countedD1`): D1 allows a Free invocation 50 queries besides its
+   * share of the internal calls (https://developers.cloudflare.com/d1/platform/limits/).
+   */
+  d1 = 0;
 }
 
 /** Points written outside any invocation that the platform refused, reported by the next invocation. */
@@ -305,6 +311,17 @@ export function atInvocationEnd(key: string, fn: () => void): void {
 /** The invocation the caller runs in, if any. */
 export function currentInvocation(): Invocation | undefined {
   return scope.getStore();
+}
+
+/** D1 statements the platform invocation the caller runs in has run (0 outside any). */
+export function d1StatementsRun(): number {
+  return scope.getStore()?.tally.d1 ?? 0;
+}
+
+/** Counts `n` D1 statements in the current invocation (none: not counted). */
+export function countD1Statements(n = 1): void {
+  const invocation = scope.getStore();
+  if (invocation) invocation.tally.d1 += n;
 }
 
 /** Counts `n` calls against `budget` in the current invocation (none: not counted). */

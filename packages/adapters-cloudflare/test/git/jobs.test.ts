@@ -350,6 +350,68 @@ describe("slices that end their invocation", () => {
     expect(result.rearmed).toBe(1_000_000);
     expect(result.viaRunJob).toEqual({ slices: 1, state: "queued" });
   });
+
+  it("end their invocation even when their job was taken over meanwhile", async () => {
+    const { stub } = await newProbe();
+    const result = await inProbe(stub, async ({ git }) => {
+      const clock = { now: 1_000_000 };
+      const context = withClock(git.context, clock);
+      const jobs = new JobQueue(context, () => {}, policy);
+      const memory = createDoMemoryBudget(1024);
+      const first = jobs.enqueue("archive", null, clock.now - 1);
+      const behind = jobs.enqueue("compact", null, clock.now);
+      const ran: string[] = [];
+      const handlers = {
+        archive: {
+          async runSlice() {
+            ran.push("ending");
+            // Another run takes the job over before this slice records anything.
+            jobs.restart("archive", first);
+            return { done: true as const, endInvocation: true };
+          },
+        },
+        compact: {
+          async runSlice() {
+            ran.push("behind");
+            return { done: true as const };
+          },
+        },
+      };
+      await jobs.runDue(handlers, memory, clock.now + 10_000);
+      return { ran, behind: jobs.get(behind)?.state };
+    });
+    expect(result).toEqual({ ran: ["ending"], behind: "queued" });
+  });
+
+  it("end their invocation when done too", async () => {
+    const { stub } = await newProbe();
+    const result = await inProbe(stub, async ({ git }) => {
+      const clock = { now: 1_000_000 };
+      const context = withClock(git.context, clock);
+      const jobs = new JobQueue(context, () => {}, policy);
+      const memory = createDoMemoryBudget(1024);
+      jobs.enqueue("archive", null, clock.now - 1);
+      const behind = jobs.enqueue("compact", null, clock.now);
+      const ran: string[] = [];
+      const handlers = {
+        archive: {
+          async runSlice() {
+            ran.push("finishing");
+            return { done: true as const, endInvocation: true };
+          },
+        },
+        compact: {
+          async runSlice() {
+            ran.push("behind");
+            return { done: true as const };
+          },
+        },
+      };
+      const slices = await jobs.runDue(handlers, memory, clock.now + 10_000);
+      return { slices, ran, behind: jobs.get(behind)?.state };
+    });
+    expect(result).toEqual({ slices: 1, ran: ["finishing"], behind: "queued" });
+  });
 });
 
 describe("memory admission and delays", () => {
