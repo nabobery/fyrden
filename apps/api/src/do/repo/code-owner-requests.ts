@@ -465,7 +465,9 @@ export class CodeOwnerRequests {
       if (!held && group.slugs.length > 0) groups.push(group);
     }
     let answer: CodeOwnerTeamFacts | undefined;
-    if (account && slugs.size > 0) {
+    // Read whenever the slice has teams of ours, or a pass under way read the organization
+    // before (its partial work holds only while that answer does, teams to read or not).
+    if (account && (slugs.size > 0 || pass.teams !== null)) {
       const from =
         groups[0] && plan[0]?.continuing && groups[0].index === pass.rule
           ? (pass.part?.from ?? 0)
