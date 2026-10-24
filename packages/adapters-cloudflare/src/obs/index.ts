@@ -1,4 +1,5 @@
 export * from "./alerts.js";
+export * from "./d1.js";
 export * from "./invocation.js";
 export * from "./logger.js";
 export * from "./metrics.js";

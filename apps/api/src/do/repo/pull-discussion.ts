@@ -9,11 +9,12 @@ import {
   MAX_REQUESTED_REVIEWERS,
   type MergeContext,
   ownershipCandidates,
+  type ReviewFact,
   rootIdentity,
 } from "@fyrden/domain";
 import { type BlockCache, oidFromHex, oidToHex } from "@fyrden/git-core";
 import type { TeamAudience } from "../OrgDO.js";
-import type { RepoAuthority } from "./authority.js";
+import { ACTIVE_BATCH, MAX_ACTIVITY_PRINCIPALS, type RepoAuthority } from "./authority.js";
 import { type BrowseFailure, RepoBrowse } from "./browse.js";
 import type { CodeOwnerFacts } from "./code-owner-facts.js";
 import { rawFile } from "./contents.js";
@@ -86,6 +87,8 @@ export interface MergeStamps {
   readonly principals: string;
   /** The code owners' result an enforced requirement was judged by; empty without one. */
   readonly codeOwners: string;
+  /** Reviewers left out for want of write access who have it now (none when read). */
+  readonly promoted: string;
 }
 
 /** The pull request's merge context and stamps, as `mergePull` works them out. */
@@ -106,6 +109,28 @@ export interface MergeStanding {
   readonly refusal?: { readonly status: 409 | 422; readonly code: string; readonly error: string };
   /** The stamps now (called again in the commit's transaction). */
   readonly stamps: () => MergeStamps;
+}
+
+/** A pull request's reviews as they count now (see `PullDiscussion.reviewersNow`). */
+export interface ReviewersNow {
+  /** The reviews' stamp as read (`RepoReviews.stamp`). */
+  readonly stamp: string;
+  /** The reviews that can matter, each active or not. */
+  readonly facts: readonly ReviewFact[];
+  /** Active principals among their reviewers, roots and agents → the owners capping each. */
+  readonly active: ReadonlyMap<string, readonly string[]>;
+  readonly roots: ReadonlySet<string>;
+  readonly principals: ReadonlySet<string>;
+  /** Roots and reviewers with write access now (effective: an agent capped by its owner). */
+  readonly eligibleRoots: ReadonlySet<string>;
+  readonly eligiblePrincipals: ReadonlySet<string>;
+  /** Of `of`, those active with write access now (read again in a commit's transaction). */
+  readonly writers: (of: ReadonlySet<string>) => string[];
+  /**
+   * Of the roots and reviewers of the reviews left out (none could write),
+   * those that write now: any is a review the decision did not weigh.
+   */
+  readonly promoted: () => string[];
 }
 
 /** The first comment of a new thread on a pull request's diff, as the Worker asks for it. */
@@ -155,12 +180,73 @@ export class PullDiscussion {
   constructor(private readonly deps: DiscussionDeps) {}
 
   /**
+   * A pull request's reviews as they count now, from the repository's own
+   * records: its picked reviews (`RepoReviews.standing`) that can matter
+   * (whose root or reviewer writes by its own role), whose reviewers,
+   * roots and the agents a delegation's review went through are active,
+   * read once here (each with the owner capping it), and who of them has
+   * write access now, by root for counting and by reviewer for code
+   * owners (`writers` asks again, in the commit's transaction). Undefined
+   * when more of them matter than one read of their activity covers.
+   */
+  async reviewersNow(number: number): Promise<ReviewersNow | undefined> {
+    const { reviews, authority } = this.deps;
+    const standing = reviews.standing(number);
+    const read = await authority.reviewerActivity(standing.reviews);
+    if (!read) return undefined;
+    const { kept, left, active } = read;
+    const writers = (of: ReadonlySet<string>) => {
+      const roles = authority.rolesNow();
+      return [...active]
+        .filter(([id, owners]) => of.has(id) && atLeast(roles(id, owners), "write"))
+        .map(([id]) => id);
+    };
+    const roots = new Set(kept.map((r) => r.reviewerRoot));
+    const principals = new Set(kept.map((r) => r.reviewerId));
+    return {
+      stamp: standing.stamp,
+      facts: kept.map(({ actChain, ...r }) => ({
+        ...r,
+        active: active.has(r.reviewerId) && actChain.every((agent) => active.has(agent)),
+      })),
+      active,
+      roots,
+      principals,
+      eligibleRoots: new Set(writers(roots)),
+      eligiblePrincipals: new Set(writers(principals)),
+      writers,
+      promoted: () => {
+        const writes = authority.writersNow();
+        return left.filter(writes);
+      },
+    };
+  }
+
+  /**
+   * The directory queries `standing` runs for `pull` at most, worked out
+   * before it runs: its reviewers' activity (a query a thousand), its code
+   * owners' handles (`CodeOwnerFacts.queriesFor`), and the last pusher's
+   * and the merger's owners (a query each).
+   */
+  standingQueries(number: number, pull: PullRecord): { queries: number; codeOwners: string } {
+    const picks = this.deps.reviews.standing(number).reviews;
+    const principals = new Set(picks.flatMap((r) => [r.reviewerRoot, r.reviewerId, ...r.actChain]));
+    return {
+      queries:
+        Math.ceil(Math.min(principals.size, MAX_ACTIVITY_PRINCIPALS) / ACTIVE_BATCH) +
+        this.deps.codeOwnerFacts.queriesFor(pull) +
+        2,
+      // The code owners' result the bound was worked out for (`standing` holds to it).
+      codeOwners: this.deps.codeOwnersStamp(pull),
+    };
+  }
+
+  /**
    * What the rulesets judge a merge by `merger`, from the repository's own
-   * records: the pull request's reviews, whose of them count (active
-   * reviewers' with write access now, by root and by reviewer), its last
-   * push and threads, and its code owners when the merger's rules ask for
-   * them; `asRead` stamps them as read (before any wait), `stamps` as they
-   * are when called (in the commit's transaction).
+   * records: the pull request's reviews as they count now (`reviewersNow`),
+   * its last push and threads, and its code owners when the merger's rules
+   * ask for them; `asRead` stamps them as read (before any wait), `stamps`
+   * as they are when called (in the commit's transaction).
    */
   async standing(
     number: number,
@@ -168,29 +254,14 @@ export class PullDiscussion {
     method: MergeContext["method"],
     upToDate: boolean,
     merger: { readonly principal: string; readonly grantId: string | null },
+    /** The code owners' result a budget of its queries was worked out for (`standingQueries`). */
+    budgeted?: string,
   ): Promise<MergeStanding & { readonly asRead: MergeStamps }> {
     const { reviews, reviewComments, authority } = this.deps;
-    const standing = reviews.standing(number);
     const threadsThen = reviewComments.stamp(number);
-    // Who is active (read once, here: reviewers, their roots and the agents a delegation's
-    // review went through, each with the owner capping it), and whose reviews count: those with
-    // write access now (checked again in the commit's transaction), by root for counting and by
-    // reviewer for code owners.
-    const active = await authority.activeOwnersPulled([
-      ...new Set(standing.reviews.flatMap((r) => [r.reviewerRoot, r.reviewerId, ...r.actChain])),
-    ]);
-    const writers = (of: ReadonlySet<string>) =>
-      [...active]
-        .filter(([id, owners]) => of.has(id) && atLeast(authority.roleNow(id, owners), "write"))
-        .map(([id]) => id);
-    const roots = new Set(standing.reviews.map((r) => r.reviewerRoot));
-    const principals = new Set(standing.reviews.map((r) => r.reviewerId));
-    const eligibleRoots = new Set(writers(roots));
-    const eligiblePrincipals = new Set(writers(principals));
-    const facts = standing.reviews.map(({ actChain, ...r }) => ({
-      ...r,
-      active: active.has(r.reviewerId) && actChain.every((agent) => active.has(agent)),
-    }));
+    const now = await this.reviewersNow(number);
+    if (!now) return tooManyReviewers(number, pull, method, upToDate);
+    const { active, roots, principals, eligibleRoots, eligiblePrincipals, writers } = now;
     const lastPush =
       pull.lastPusher === null || pull.lastPushAt === null
         ? null
@@ -209,7 +280,7 @@ export class PullDiscussion {
     );
     const demand = asked?.demand;
     const approvals: ApprovalInput = {
-      reviews: facts,
+      reviews: now.facts,
       headSha: pull.headSha,
       authorRoot: pull.authorRoot,
       lastPush,
@@ -232,10 +303,12 @@ export class PullDiscussion {
       ? candidatesOf(asked.demand === "enforced" ? asked.enforced : asked.evaluated)
       : [];
     const owners = asked
-      ? await this.deps.codeOwnerFacts.prepare(pull, asked.demand, {
-          required,
-          optional: candidatesOf(asked.evaluated),
-        })
+      ? await this.deps.codeOwnerFacts.prepare(
+          pull,
+          asked.demand,
+          { required, optional: candidatesOf(asked.evaluated) },
+          budgeted,
+        )
       : undefined;
     const merge: MergeContext = {
       number,
@@ -256,12 +329,13 @@ export class PullDiscussion {
       ownerCandidates: demand === "enforced" ? required : [],
       ...(owners?.refusal && { refusal: owners.refusal }),
       asRead: {
-        reviews: standing.stamp,
+        reviews: now.stamp,
         threads: threadsThen,
         eligible: [...eligibleRoots].join(" "),
         // Reviewers' own access matters only to an enforced code-owner requirement.
         principals: demand === "enforced" ? [...eligiblePrincipals].join(" ") : "",
         codeOwners: demand === "enforced" ? (owners?.stamp ?? "") : "",
+        promoted: "",
       },
       stamps: () => ({
         reviews: reviews.stamp(number),
@@ -269,6 +343,7 @@ export class PullDiscussion {
         eligible: writers(roots).join(" "),
         principals: demand === "enforced" ? writers(principals).join(" ") : "",
         codeOwners: ownersStamp(),
+        promoted: now.promoted().join(" "),
       }),
     };
   }
@@ -596,4 +671,49 @@ export class PullDiscussion {
       () => this.#comparedFor(number, reviewComments.thread(number, threadId)),
     );
   }
+}
+
+/**
+ * The standing of a merge refused before anything is read further: more of
+ * its reviewers matter than one read of their activity covers.
+ */
+function tooManyReviewers(
+  number: number,
+  pull: PullRecord,
+  method: MergeContext["method"],
+  upToDate: boolean,
+): MergeStanding & { readonly asRead: MergeStamps } {
+  const none = {
+    reviews: "",
+    threads: "",
+    eligible: "",
+    principals: "",
+    codeOwners: "",
+    promoted: "",
+  };
+  return {
+    merge: {
+      number,
+      method,
+      approvals: {
+        reviews: [],
+        headSha: pull.headSha,
+        authorRoot: pull.authorRoot,
+        lastPush: null,
+        eligibleRoots: new Set(),
+        eligiblePrincipals: new Set(),
+      },
+      unresolvedThreads: 0,
+      upToDate,
+    },
+    ceilings: new Map(),
+    ownerCandidates: [],
+    refusal: {
+      status: 422,
+      code: "too_many_reviewers",
+      error: `More of the pull request's reviewers can count than a merge here reads (${MAX_ACTIVITY_PRINCIPALS} with their roots and agents).`,
+    },
+    asRead: none,
+    stamps: () => none,
+  };
 }

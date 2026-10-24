@@ -139,6 +139,16 @@ export interface CodeOwnersDeps {
   /** Whether the repository takes changes (results wait while it does not). */
   readonly writable: () => boolean;
   readonly log: () => Logger;
+  /**
+   * In the transaction publishing a result for pull request `number` (shown
+   * from now on) that may answer differently from the one it showed
+   * (another evaluation, or another base branch).
+   */
+  readonly published?: (number: number) => void;
+  /** In the transaction of a change of pull request `number` that showed its result already: it was marked ready. */
+  readonly ready?: (number: number) => void;
+  /** In the transaction of pull request `number` closing. */
+  readonly closed?: (number: number) => void;
 }
 
 type Job = { pr_number: number; seq: number; asked: number };
@@ -205,8 +215,9 @@ export class RepoCodeOwners {
    * open, ready and not shown for its current pair already; forgotten when
    * closed. A draft's queued run (asked for) is superseded.
    */
-  stale(number: number, open: boolean): void {
+  stale(number: number, open: boolean, event?: string): void {
     if (!open) {
+      this.deps.closed?.(number);
       this.#run("DELETE FROM code_owner_jobs WHERE pr_number = ?", number);
       const dropped = this.#sql.exec("DELETE FROM code_owner_pointers WHERE pr_number = ?", number);
       this.#count(dropped.rowsWritten);
@@ -220,8 +231,9 @@ export class RepoCodeOwners {
       this.#run("UPDATE code_owner_jobs SET seq = seq + 1 WHERE pr_number = ?", number);
       return;
     }
-    if (this.#shown(pull)) return;
-    this.#queue(number, false);
+    if (!this.#shown(pull)) this.#queue(number, false);
+    // Worked out while a draft (it was asked for): its owners are asked now.
+    else if (event === "ready_for_review") this.deps.ready?.(number);
   }
 
   /** In a commit's transaction: base branch `branch` moved, so its open ready pull requests' did. */
@@ -335,15 +347,16 @@ export class RepoCodeOwners {
    * pair is queued, as a read of it is.
    */
   forMerge(pull: PullRecord): MergeCodeOwners {
+    const shown = this.shownFor(pull);
+    if (shown) return shown;
+    this.view(pull.number, null, 0);
+    return { state: "refused", reason: "code owners are still being worked out", stamp: "pending" };
+  }
+
+  /** What `forMerge` answers for `pull`, or undefined while none is worked out for its pair (nothing is queued). */
+  shownFor(pull: PullRecord): MergeCodeOwners | undefined {
     const pointer = this.#pointer(pull);
-    if (!pointer) {
-      this.view(pull.number, null, 0);
-      return {
-        state: "refused",
-        reason: "code owners are still being worked out",
-        stamp: "pending",
-      };
-    }
+    if (!pointer) return undefined;
     const stamp = stampOf(pointer);
     const evaluation = pointer.eval_id === null ? undefined : this.#evalRow(pointer.eval_id);
     if (!evaluation || evaluation.state === "too_large" || evaluation.state === "pending") {
@@ -740,6 +753,14 @@ export class RepoCodeOwners {
     await this.hooks.beforePublish?.();
     this.deps.git.context.storage.transactionSync(() => {
       if (!this.#fenced(job, target)) return;
+      const before = this.#rows<{ eval_id: number | null; version: number; base_ref: string }>(
+        "SELECT eval_id, version, base_ref FROM code_owner_pointers WHERE pr_number = ?",
+        target.number,
+      )[0];
+      const changed =
+        before?.eval_id !== evalId ||
+        before.version !== CODEOWNERS_EVALUATION_VERSION ||
+        before.base_ref !== target.baseRef;
       this.#setPointer(target, {
         eval_id: evalId,
         file_path: located?.path ?? null,
@@ -749,11 +770,11 @@ export class RepoCodeOwners {
         attempts: 0,
         retry_at: null,
       });
+      if (changed) this.deps.published?.(target.number);
       this.#done(job);
     });
   }
 
-  /** Points the pull request at an outcome reached before an evaluation could be keyed. */
   /**
    * A slice that could not read what the diff needs first within its reads:
    * tried again (unreadable, its delay doubling) until as many slices in a

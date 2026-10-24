@@ -1326,4 +1326,37 @@ export const repoSchema: readonly DoMigration[] = [
         WHERE dismissed_at IS NULL;
     `,
   },
+  {
+    version: 44,
+    // Code owners asked to review. `code_owner_request_jobs`: the pull
+    // requests whose owners are to be asked (a newer request bumps `seq`),
+    // each with its pass's partial work (`state`, JSON: where it is in the
+    // rules and what it was read under; none to start from the first rule).
+    // `code_owner_asked`: who was asked once for its ownership on each pull
+    // request (never again there). `code_owner_waiting`: pull requests with
+    // owners left to ask, for room (places, members) or until their
+    // reviewers are fewer.
+    name: "code_owner_requests",
+    sql: `
+      CREATE TABLE code_owner_request_jobs (
+        pr_number INTEGER PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        requested_at INTEGER NOT NULL,
+        state TEXT CHECK (state IS NULL OR json_valid(state))
+      ) STRICT;
+      CREATE INDEX code_owner_request_jobs_due
+        ON code_owner_request_jobs (requested_at, pr_number);
+      CREATE TABLE code_owner_asked (
+        pr_number INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('principal', 'team')),
+        id TEXT NOT NULL,
+        asked_at INTEGER NOT NULL,
+        PRIMARY KEY (pr_number, kind, id)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE code_owner_waiting (
+        pr_number INTEGER PRIMARY KEY,
+        reason TEXT NOT NULL CHECK (reason IN ('room', 'reviewers'))
+      ) STRICT;
+    `,
+  },
 ];

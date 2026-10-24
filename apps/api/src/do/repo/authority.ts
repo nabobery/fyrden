@@ -42,7 +42,14 @@ import { factOf } from "./signature.js";
 const OWNER_BATCH = 50;
 
 /** Principals one activity query reads, as one JSON array. */
-const ACTIVE_BATCH = 1_000;
+export const ACTIVE_BATCH = 1_000;
+
+/**
+ * Principals one read of a pull request's reviewers' activity covers at
+ * most (20 queries): the reviewers that can matter, their roots and the
+ * agents their reviews went through. Proposed.
+ */
+export const MAX_ACTIVITY_PRINCIPALS = 20_000;
 
 /** Stands for a commit not made yet in a ruleset precheck (only the update's kind matters there). */
 export const ZERO_ID = "0".repeat(40);
@@ -78,22 +85,15 @@ export class RepoAuthority {
     );
   }
 
-  /** The strongest role the current ACL snapshot allows (an owner's: admin). */
-  #ruleRoleNow(principal: string): RepoRole | null {
-    for (const role of [...REPO_ROLES].reverse())
-      if (this.deps.acl.allows(principal, role)) return role;
-    return null;
-  }
-
   /** The principal's effective role now: the weakest of its own and its `ceilings`'. */
   roleNow(principal: string, ceilings: readonly string[]): RepoRole | null {
-    let role = this.#ruleRoleNow(principal);
-    for (const id of ceilings) {
-      const cap = this.#ruleRoleNow(id);
-      if (cap === null || (role !== null && REPO_ROLES.indexOf(cap) < REPO_ROLES.indexOf(role)))
-        role = cap;
-    }
-    return role;
+    return effectiveRole((id, min) => this.deps.acl.allows(id, min), principal, ceilings);
+  }
+
+  /** `roleNow` for many principals from one read of the current snapshot. */
+  rolesNow(): (principal: string, ceilings: readonly string[]) => RepoRole | null {
+    const allows = this.deps.acl.allowsNow();
+    return (principal, ceilings) => effectiveRole(allows, principal, ceilings);
   }
 
   /**
@@ -150,6 +150,47 @@ export class RepoAuthority {
     for (const id of new Set([...owners.keys(), ...[...owners.values()].flat()]))
       await this.deps.acl.roleOf(id, "write");
     return owners;
+  }
+
+  /**
+   * Of a pull request's picked `reviews`, those that can matter: whose
+   * root or whose reviewer has at least write by its own role in the ACL
+   * snapshot (pulled within the write window first), as counting goes by
+   * root and ownership by reviewer; and which of them, their roots and the
+   * agents they went through are active (`activeOwnersPulled`); and the
+   * roots and reviewers of the reviews left out (whose writing later must
+   * stop a decision made without them). Undefined when that is more than
+   * `max` principals: nothing is read then.
+   */
+  async reviewerActivity<
+    R extends {
+      readonly reviewerId: string;
+      readonly reviewerRoot: string;
+      readonly actChain: readonly string[];
+    },
+  >(
+    reviews: readonly R[],
+    max = MAX_ACTIVITY_PRINCIPALS,
+  ): Promise<{ kept: R[]; left: string[]; active: Map<string, string[]> } | undefined> {
+    await this.deps.acl.pullForWrite();
+    const writes = this.writersNow();
+    const kept: R[] = [];
+    const left = new Set<string>();
+    for (const r of reviews)
+      if (writes(r.reviewerRoot) || writes(r.reviewerId)) kept.push(r);
+      else left.add(r.reviewerRoot).add(r.reviewerId);
+    const principals = new Set(kept.flatMap((r) => [r.reviewerRoot, r.reviewerId, ...r.actChain]));
+    if (principals.size > max) return undefined;
+    return { kept, left: [...left], active: await this.activeOwnersPulled([...principals]) };
+  }
+
+  /**
+   * Whether a principal has at least write by its own role, for many from
+   * one read of the current snapshot.
+   */
+  writersNow(): (principal: string) => boolean {
+    const allows = this.deps.acl.allowsNow();
+    return (principal) => allows(principal, "write");
   }
 
   /**
@@ -403,4 +444,23 @@ export class RepoAuthority {
       },
     };
   }
+}
+
+/** The weakest of `principal`'s strongest role and its `ceilings`', as `allows` answers them. */
+function effectiveRole(
+  allows: (principal: string, min: RepoRole) => boolean,
+  principal: string,
+  ceilings: readonly string[],
+): RepoRole | null {
+  const strongest = (id: string): RepoRole | null => {
+    for (const role of [...REPO_ROLES].reverse()) if (allows(id, role)) return role;
+    return null;
+  };
+  let role = strongest(principal);
+  for (const id of ceilings) {
+    const cap = strongest(id);
+    if (cap === null || (role !== null && REPO_ROLES.indexOf(cap) < REPO_ROLES.indexOf(role)))
+      role = cap;
+  }
+  return role;
 }

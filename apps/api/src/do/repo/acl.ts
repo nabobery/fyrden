@@ -105,6 +105,31 @@ export class RepoAcl {
   }
 
   /**
+   * `allows` for many decisions from one read of the snapshot (a pull
+   * request's reviewers by the thousand): a function answering as `allows`
+   * answers now.
+   */
+  allowsNow(): (principalId: string, min: RepoRole) => boolean {
+    const account = this.deps.account();
+    if (!account) return () => true;
+    const row = this.#usable(account.accountId, ACL_POLICY.writeWindowMs);
+    const roles = row && this.#roles(row);
+    return (principalId, min) =>
+      ownsUserAccount(principalId, account.ownerId) ||
+      principalId === account.accountId ||
+      (roles !== undefined && atLeast(roles.get(principalId) ?? null, min));
+  }
+
+  /**
+   * Pulls a snapshot unless one within the write window is stored, so that
+   * `allows` answers from it (a failed pull leaves none it answers from).
+   */
+  async pullForWrite(): Promise<void> {
+    const account = this.deps.account();
+    if (account) await this.#snapshot(account, "write");
+  }
+
+  /**
    * Pulls a snapshot unless one within the read TTL is stored, so that
    * `lastRoleOf` answers from it (a failed pull leaves the stored one).
    */

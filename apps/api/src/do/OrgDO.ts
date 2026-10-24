@@ -177,8 +177,36 @@ export interface CodeOwnerTeams {
   readonly members: readonly string[];
 }
 
+/**
+ * What a request job reads of the organization's teams its code owners
+ * name (see `codeOwnerTeamFacts`), read after the epoch check with the ACL
+ * `(epochGen, version)` it was read at.
+ */
+export interface CodeOwnerTeamFacts {
+  readonly accountId: string;
+  readonly epochGen: number;
+  readonly version: number;
+  /** Slug (lowercased) → its team and role on the repository; a slug left out names no team. */
+  readonly teams: Readonly<
+    Record<string, { readonly teamId: string; readonly role: RepoRole | null }>
+  >;
+  /**
+   * Each group of slugs probed, in order, until the probes ran out: one of
+   * the candidates is a member of one of its teams with write (`member`),
+   * none is (`none`), or where the probes stopped (the team's index in the
+   * group and the candidate to go on from).
+   */
+  readonly groups: readonly (
+    | { readonly outcome: "member" | "none" }
+    | { readonly outcome: "stopped"; readonly team: number; readonly from: number }
+  )[];
+}
+
 /** Most principals one confirmation reads (a merge's reviewers, owners and their owners). Proposed. */
 export const MAX_CONFIRMED_PRINCIPALS = 1_024;
+
+/** Most teams one read of code owners' team facts names. Proposed. */
+export const MAX_TEAM_FACTS_SLUGS = 16;
 
 /** Most team memberships one confirmation reads. Proposed. */
 export const MAX_CONFIRMED_PAIRS = 4_096;
@@ -481,6 +509,88 @@ export class OrgDO extends MigratingDO {
       .toArray()
       .map((m) => membershipKey(m.team_id, m.principal_id));
     return { teams, members };
+  }
+
+  /**
+   * What a request job needs of the organization's teams its code owners
+   * name: for each of `slugs` (at most `MAX_TEAM_FACTS_SLUGS`), its id and
+   * role on repository `repoId` (absent: no such team); and, for each of
+   * `probe.groups` in order (one rule's teams each, as slugs among
+   * `slugs`), whether one of `probe.candidates` is a member of one of its
+   * teams with at least write, the first group from `probe.start`, by
+   * indexed lookups of at most `probe.probes` candidates in all, saying
+   * where they stopped. Read after the epoch check with no await between,
+   * answered with the ACL version and restore generation they hold at. An
+   * account that is not an organization has no teams.
+   */
+  async codeOwnerTeamFacts(
+    repoId: string,
+    slugs: readonly string[],
+    probe: {
+      readonly groups: readonly (readonly string[])[];
+      readonly candidates: readonly string[];
+      readonly start: { readonly team: number; readonly from: number };
+      readonly probes: number;
+    },
+  ): Promise<CodeOwnerTeamFacts> {
+    const unique = [...new Set(slugs.map((slug) => slug.toLowerCase()))];
+    if (unique.length > MAX_TEAM_FACTS_SLUGS)
+      throw new Error(`more than ${MAX_TEAM_FACTS_SLUGS} teams to read`);
+    await this.#checkEpoch();
+    const meta = this.#meta();
+    // No teams: none of their members approved.
+    const none = probe.groups.map(() => ({ outcome: "none" as const }));
+    if (!meta) return { accountId: "", epochGen: 0, version: 0, teams: {}, groups: none };
+    const basis = {
+      accountId: meta.account_id,
+      epochGen: meta.epoch_gen,
+      version: meta.acl_version,
+    };
+    if (meta.kind !== "org") return { ...basis, teams: {}, groups: none };
+    const sql = this.ctx.storage.sql;
+    const teams: Record<string, { teamId: string; role: RepoRole | null }> = {};
+    for (const slug of unique) {
+      const found = sql
+        .exec<{ team_id: string }>("SELECT team_id FROM teams WHERE slug = ?", slug)
+        .toArray()[0];
+      if (found)
+        teams[slug] = { teamId: found.team_id, role: this.#teamRoleOn(repoId, found.team_id) };
+    }
+    const { candidates } = probe;
+    let left = probe.probes;
+    const groups: CodeOwnerTeamFacts["groups"][number][] = [];
+    probing: for (const [g, group] of probe.groups.entries()) {
+      const first = g === 0 ? probe.start : { team: 0, from: 0 };
+      for (let t = first.team; t < group.length; t++) {
+        const team = teams[(group[t] as string).toLowerCase()];
+        if (!team || !atLeast(team.role, "write")) continue;
+        let from = t === first.team ? first.from : 0;
+        while (from < candidates.length) {
+          if (left === 0) {
+            groups.push({ outcome: "stopped", team: t, from });
+            break probing;
+          }
+          const take = Math.min(left, candidates.length - from);
+          left -= take;
+          const member =
+            sql
+              .exec(
+                `SELECT 1 FROM team_members WHERE team_id = ?
+                   AND principal_id IN (SELECT value FROM json_each(?)) LIMIT 1`,
+                team.teamId,
+                JSON.stringify(candidates.slice(from, from + take)),
+              )
+              .toArray().length > 0;
+          if (member) {
+            groups.push({ outcome: "member" });
+            continue probing;
+          }
+          from += take;
+        }
+      }
+      groups.push({ outcome: "none" });
+    }
+    return { ...basis, teams, groups };
   }
 
   /** Team `teamId`'s role on repository `repoId`, or null (no grant, or no such team). */

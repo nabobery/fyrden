@@ -29,7 +29,7 @@ export const CODE_OWNER_MERGE_POLICY = {
 export type CodeOwnerMergePolicy = typeof CODE_OWNER_MERGE_POLICY;
 
 /** Handles one directory query looks up (D1 binds at most 100 parameters). */
-const HANDLE_BATCH = 90;
+export const HANDLE_BATCH = 90;
 
 export interface CodeOwnerFactsDeps {
   readonly codeOwners: RepoCodeOwners;
@@ -85,9 +85,22 @@ export class CodeOwnerFacts {
     pull: PullRecord,
     demand: "enforced" | "evaluated",
     candidates: { readonly required: readonly string[]; readonly optional: readonly string[] },
+    /** The result's stamp the caller's budget was worked out for: another refuses, unread. */
+    budgeted?: string,
   ): Promise<PreparedCodeOwners> {
     const view = this.deps.codeOwners.forMerge(pull);
     const none = new Map<string, string[]>();
+    if (budgeted !== undefined && view.stamp !== budgeted)
+      return {
+        stamp: view.stamp,
+        ownerCeilings: none,
+        refusal: {
+          status: 409,
+          code: "pull_changed",
+          error:
+            "The pull request's code owners were worked out again while it was merged; merge again.",
+        },
+      };
     if (view.state === "none")
       return { input: { state: "none" }, stamp: view.stamp, ownerCeilings: none };
     if (view.state === "refused")
@@ -136,6 +149,23 @@ export class CodeOwnerFacts {
     }
   }
 
+  /**
+   * The directory queries `prepare` runs for `pull` at most: a query a 90
+   * of its deciding rules' handles (none past the bound: refused unread),
+   * and one for the account; none without rules to judge.
+   */
+  queriesFor(pull: PullRecord): number {
+    const view = this.deps.codeOwners.shownFor(pull);
+    if (view?.state !== "complete") return 0;
+    const handles = new Set(
+      view.rules.flatMap((rule) =>
+        rule.owners.filter((t) => !t.includes("/")).map((t) => t.toLowerCase()),
+      ),
+    );
+    if (handles.size > this.deps.policy().maxHandles) return 0;
+    return Math.ceil(handles.size / HANDLE_BATCH) + 1;
+  }
+
   /** Every owner token of `rules` resolved and qualified (keyed lowercased), and the memberships asked for. */
   async #resolve(
     rules: readonly { readonly owners: readonly string[] }[],
@@ -164,31 +194,7 @@ export class CodeOwnerFacts {
     if (teams.size > policy.maxTeams) throw new TooLarge(`${teams.size} teams`);
 
     const account = this.deps.account();
-    const rows = await this.#directory([...handles.values()], account?.accountId);
-    const byHandle = new Map(
-      rows.filter((r) => r.handle).map((r) => [r.handle.toLowerCase(), r] as const),
-    );
-    const accountHandle = rows.find((r) => r.id === account?.accountId)?.handle.toLowerCase();
-
-    const facts = new Map<string, CodeOwnerFact>();
-    const ownerCeilings = new Map<string, string[]>();
-    for (const [key, handle] of handles) {
-      const token = `@${handle}`;
-      const row = byHandle.get(handle.toLowerCase());
-      const reason = await this.#unqualified(row);
-      if (!row || reason !== undefined) {
-        facts.set(key, {
-          kind: row?.type === "agent" ? "agent" : row?.type === "user" ? "user" : "unknown",
-          token,
-          qualified: false,
-          reason: reason ?? "no such user",
-        });
-        continue;
-      }
-      const kind = row.type as "user" | "agent";
-      if (kind === "agent" && row.owner_id) ownerCeilings.set(row.id, [row.owner_id]);
-      facts.set(key, { kind, token, principal: row.id, qualified: true });
-    }
+    const { facts, ownerCeilings, accountHandle } = await this.resolveHandles(handles);
 
     // Teams of the repository's own organization, from its object.
     const ours = [...teams].filter(
@@ -231,6 +237,46 @@ export class CodeOwnerFacts {
     };
   }
 
+  /**
+   * Owners `handles` names (owner token lowercased → its handle) resolved
+   * and qualified now, keyed as given; each qualified agent → the owner
+   * capping it; and the repository's account's handle (lowercased), which
+   * tells its own teams. One directory query a 90 handles, and one for the
+   * account.
+   */
+  async resolveHandles(handles: ReadonlyMap<string, string>): Promise<{
+    facts: Map<string, CodeOwnerFact>;
+    ownerCeilings: Map<string, string[]>;
+    accountHandle: string | undefined;
+  }> {
+    const account = this.deps.account();
+    const rows = await this.#directory([...handles.values()], account?.accountId);
+    const byHandle = new Map(
+      rows.filter((r) => r.handle).map((r) => [r.handle.toLowerCase(), r] as const),
+    );
+    const accountHandle = rows.find((r) => r.id === account?.accountId)?.handle.toLowerCase();
+    const facts = new Map<string, CodeOwnerFact>();
+    const ownerCeilings = new Map<string, string[]>();
+    for (const [key, handle] of handles) {
+      const token = `@${handle}`;
+      const row = byHandle.get(handle.toLowerCase());
+      const reason = await this.#unqualified(row);
+      if (!row || reason !== undefined) {
+        facts.set(key, {
+          kind: row?.type === "agent" ? "agent" : row?.type === "user" ? "user" : "unknown",
+          token,
+          qualified: false,
+          reason: reason ?? "no such user",
+        });
+        continue;
+      }
+      const kind = row.type as "user" | "agent";
+      if (kind === "agent" && row.owner_id) ownerCeilings.set(row.id, [row.owner_id]);
+      facts.set(key, { kind, token, principal: row.id, qualified: true });
+    }
+    return { facts, ownerCeilings, accountHandle };
+  }
+
   /** Why a user or agent owner does not qualify now, or undefined when it does. */
   async #unqualified(row: DirectoryRow | undefined): Promise<string | undefined> {
     if (!row) return "no such user";
@@ -245,6 +291,9 @@ export class CodeOwnerFacts {
       return "its owner is not active";
     const ceilings = row.type === "agent" && row.owner_id ? [row.owner_id] : [];
     for (const id of [row.id, ...ceilings]) await this.deps.acl().roleOf(id, "write");
+    // No snapshot to decide by (a pull failed): no answer, not a denial.
+    if (this.deps.acl().basis() === "unknown")
+      throw new Error("the repository's access could not be read");
     return atLeast(this.deps.authority.roleNow(row.id, ceilings), "write")
       ? undefined
       : "no write access";

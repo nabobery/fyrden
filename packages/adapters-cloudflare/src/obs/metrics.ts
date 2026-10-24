@@ -86,6 +86,7 @@ export const METRICS = {
   // participants.
   "feed.audience_dropped": [],
   "feed.participants_overflow": [],
+  "code_owners.request_skipped": ["reason"],
   // Wall time of one stage of making webhook deliveries, in ms: an event's
   // rows, body, claim and hooks once per event; post and record once per
   // attempt the event's effect makes. The clock advances only on I/O.

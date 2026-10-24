@@ -24,6 +24,8 @@ const SLICE_MEMBERS = 2_000;
 const LOOKUP_TEAMS = 100;
 /** Bit of a request's reasons: someone asked for it. */
 export const MANUAL = 1;
+/** Bit of a request's reasons: asked of a code owner by the repository (see `code-owner-requests.ts`). */
+export const OWNERS = 2;
 
 /** The event that settles team requests without a webhook of its own (a merge, a transfer). */
 export const SETTLED_EVENT = "pull_request.review_requests_settled";
@@ -44,6 +46,8 @@ export interface TeamRequest {
   readonly members: number;
   /** Whether its members are still kept (not after its pull request merged). */
   readonly audience: boolean;
+  /** Why it was asked (`MANUAL`, `OWNERS`). */
+  readonly reasons: number;
   readonly requestedBy: string;
   readonly requestedAt: number;
 }
@@ -61,6 +65,7 @@ type Row = {
   name: string;
   members: number;
   audience: number;
+  reasons: number;
   requested_by: string;
   requested_at: number;
 };
@@ -80,6 +85,8 @@ export interface TeamRequestsDeps {
   readonly pulls: RepoPulls;
   /** Queues the job that settles requests no longer standing (see `settleSlice`). */
   readonly schedule: () => void;
+  /** In the transaction of a request's end: pull request `number` has room it did not have. */
+  readonly freed?: (number: number) => void;
 }
 
 export class RepoTeamRequests {
@@ -149,9 +156,9 @@ export class RepoTeamRequests {
 
   /**
    * In a change's transaction: asks `team` (under the ownership standing
-   * now) through `team.members`, and emits the request.
+   * now) through `team.members`, for `reasons`, and emits the request.
    */
-  ask(number: number, team: TeamToAsk, actor: RefActor, now: number): void {
+  ask(number: number, team: TeamToAsk, actor: RefActor, now: number, reasons = MANUAL): void {
     const gen = this.liveGen();
     if (gen === null) throw new Error("no team is asked while the repository moves");
     const requestId = this.nextId();
@@ -164,7 +171,7 @@ export class RepoTeamRequests {
       team.id,
       team.slug,
       team.name,
-      MANUAL,
+      reasons,
       gen,
       team.members.length,
       actor.principal,
@@ -186,14 +193,35 @@ export class RepoTeamRequests {
     );
   }
 
+  /** In a change's transaction: sets request `requestId`'s reasons (no event: who it asks is the same). */
+  setReasons(requestId: number, reasons: number): void {
+    this.#run(
+      "UPDATE review_team_requests SET reasons = ? WHERE request_id = ?",
+      reasons,
+      requestId,
+    );
+  }
+
   /**
    * In a change's transaction: withdraws the standing requests of the
    * teams `slugs` name (as asked); one not asked is ignored. Each one's
    * event settles its members no other request still asks.
    */
-  withdraw(number: number, slugs: readonly string[], actor: RefActor): TeamRequest[] {
+  withdraw(number: number, slugs: readonly string[], actor: RefActor): readonly TeamRequest[] {
     const wanted = new Set(slugs);
-    const removed = this.live(number).filter((r) => wanted.has(r.team.slug));
+    return this.withdrawRequests(
+      number,
+      this.live(number).filter((r) => wanted.has(r.team.slug)),
+      actor,
+    );
+  }
+
+  /** In a change's transaction: withdraws `removed`, standing requests of pull request `number`, as `withdraw` does. */
+  withdrawRequests(
+    number: number,
+    removed: readonly TeamRequest[],
+    actor: RefActor,
+  ): readonly TeamRequest[] {
     for (const request of removed)
       this.#settle(number, [request], actor, "review_request_removed", (resolutions) =>
         this.deps.events.emitActivity(
@@ -470,6 +498,7 @@ export class RepoTeamRequests {
   ): void {
     const members = requests.flatMap((r) => this.members(r.requestId));
     for (const r of requests) this.#remove(r.requestId);
+    this.deps.freed?.(number);
     const asked = this.addressed(number);
     emit(
       this.deps.feed.settlements(
@@ -533,6 +562,7 @@ function record(row: Row): TeamRequest {
     team: { id: row.team_id, slug: row.slug, name: row.name },
     members: row.members,
     audience: row.audience === 1,
+    reasons: row.reasons,
     requestedBy: row.requested_by,
     requestedAt: row.requested_at,
   };
