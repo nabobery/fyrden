@@ -47,6 +47,21 @@ describe("a counted D1 binding", () => {
     expect(d1StatementsRun()).toBe(0);
   });
 
+  it("writes one point of the platform invocation's statements when it ends", async () => {
+    const db = countedD1(fakeD1());
+    const { dataset, points } = createFakeDataset();
+    const metrics = createMetrics(dataset);
+    await measureInvocation(metrics, { where: "do", op: "outer" }, async () => {
+      await db.prepare("SELECT 1").first();
+      await measureInvocation(metrics, { where: "do", op: "inner" }, () =>
+        db.prepare("SELECT 2").first(),
+      );
+    });
+    expect(
+      points.filter((p) => p.name === "d1.invocation_statements").map((p) => [p.blobs, p.value]),
+    ).toEqual([[["do", "outer"], 2]]);
+  });
+
   it("shares the count with an invocation measured inside another", async () => {
     const db = countedD1(fakeD1());
     const metrics = createMetrics(createFakeDataset().dataset);

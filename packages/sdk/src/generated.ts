@@ -5647,6 +5647,35 @@ export type ReposReadmeGetOutput = {
   sha: string;
 };
 
+/** Input of `repos.codeowners.errors`: List CODEOWNERS errors. */
+export type ReposCodeownersErrorsInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A branch, a tag or a full commit SHA; the default branch when absent. */
+  ref?: string;
+};
+
+/** Output of `repos.codeowners.errors`. */
+export type ReposCodeownersErrorsOutput = {
+  errors: ({
+    /** From 1; 0 for the file as a whole. */
+    line: number;
+    /** From 1, where the error starts; 0 for the file as a whole. */
+    column: number;
+    kind: string;
+    /** The line as written (cut to 1,024 characters). */
+    source: string;
+    suggestion: string | null;
+    message: string;
+    /** The CODEOWNERS file's path. */
+    path: string;
+  })[];
+  /** Fyrden: more errors than one answer carries. */
+  truncated?: boolean;
+};
+
 /** Input of `repos.trees.get`: Get a tree. */
 export type ReposTreesGetInput = {
   /** The owner's handle. */
@@ -6579,6 +6608,7 @@ export const OPERATIONS = {
   "repos.contents.root": { method: "GET", path: "/repos/{owner}/{repo}/contents", pathParams: ["owner","repo"], idempotent: false, items: "entries" },
   "repos.contents.get": { method: "GET", path: "/repos/{owner}/{repo}/contents/{path+}", pathParams: ["owner","repo","path"], idempotent: false, items: "entries" },
   "repos.readme.get": { method: "GET", path: "/repos/{owner}/{repo}/readme", pathParams: ["owner","repo"], idempotent: false },
+  "repos.codeowners.errors": { method: "GET", path: "/repos/{owner}/{repo}/codeowners/errors", pathParams: ["owner","repo"], idempotent: false },
   "repos.trees.get": { method: "GET", path: "/repos/{owner}/{repo}/git/trees/{tree_sha+}", pathParams: ["owner","repo","tree_sha"], idempotent: false },
   "repos.archives.get": { method: "GET", path: "/repos/{owner}/{repo}/archives/{format}", pathParams: ["owner","repo","format"], idempotent: false },
   "repos.contents.put": { method: "PUT", path: "/repos/{owner}/{repo}/contents/{path+}", pathParams: ["owner","repo","path"], idempotent: true },
@@ -6893,6 +6923,8 @@ export interface Operations {
   "repos.contents.get": { input: ReposContentsGetInput; output: ReposContentsGetOutput };
   /** Get the README. The README file in the root directory at a branch, tag or commit (`README.md` first, then other README files). */
   "repos.readme.get": { input: ReposReadmeGetInput; output: ReposReadmeGetOutput };
+  /** List CODEOWNERS errors. The errors of the CODEOWNERS file a pull request onto a branch, tag or commit would read (`.github/`, the root, `docs/`: the first location holding a regular file), in line order. Syntax only: owners that do not exist or cannot write are not listed (a merge needing code owners' review names them when a rule's owners all fail to qualify). Each error's `source` is cut to 1,024 characters; an answer of more than 1 MiB stops early with Fyrden's `truncated: true`. 404 when the ref names no commit or no CODEOWNERS file is there. */
+  "repos.codeowners.errors": { input: ReposCodeownersErrorsInput; output: ReposCodeownersErrorsOutput };
   /** Get a tree. The root tree of a branch, tag or commit (`tree_sha` names one of them: a bare tree SHA is not accepted), with `recursive` every file and directory below it, as `git ls-tree -r -t` lists them. A listing of more than 10,000 entries, or of more trees than one request may read, is `truncated`. */
   "repos.trees.get": { input: ReposTreesGetInput; output: ReposTreesGetOutput };
   /** Get an archive link. Prepares the files of a branch, tag or commit as a tar.gz or zip archive and gives its link (`download_url`, GitHub's tarball or zipball route; the same token works). A large archive is built in the background: `state` is `building` until it is `ready`; ask again, or fetch the link, which answers 202 until then. Archives hold 1 GiB of files at most, each file 24 MiB at most, a zip 65,535 entries. */

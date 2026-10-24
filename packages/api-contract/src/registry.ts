@@ -35,7 +35,13 @@ import {
   listComments,
   updateComment,
 } from "../ops/comments.js";
-import { getContents, getReadme, getRootContents, getTree } from "../ops/contents.js";
+import {
+  getCodeOwnersErrors,
+  getContents,
+  getReadme,
+  getRootContents,
+  getTree,
+} from "../ops/contents.js";
 import { ackFeedItem, getFeed, syncFeed } from "../ops/feed.js";
 import { createFileCommit, deleteContents, putContents } from "../ops/file-writes.js";
 import { createGrant, listGrants, revokeGrant } from "../ops/grants.js";
@@ -320,6 +326,7 @@ export const registry = defineRegistry([
   getRootContents,
   getContents,
   getReadme,
+  getCodeOwnersErrors,
   getTree,
   getArchive,
   putContents,

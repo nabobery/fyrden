@@ -66,6 +66,11 @@ export interface BrowsePolicy {
   readonly compareMaxCommits: number;
   /** Commits a comparison lists (the newest ones); each costs a few R2 reads. */
   readonly compareListed: number;
+  /**
+   * Bytes the request's reader may build (objects inflated, delta programs
+   * and what they build, intermediates included); unbounded when absent.
+   */
+  readonly maxBuiltBytes?: number;
 }
 
 /** Limits of the history operations. Proposed. */
@@ -471,6 +476,9 @@ export class RepoBrowse {
       maxCacheCalls: this.#policy.cacheCalls,
       maxReads: this.#policy.maxReads,
       counts: this.#counts,
+      ...(this.#policy.maxBuiltBytes !== undefined && {
+        maxBuiltBytes: this.#policy.maxBuiltBytes,
+      }),
     });
     return this.#reader;
   }
@@ -546,7 +554,7 @@ function viewBytes(view: CommitView): number {
 }
 export const BUSY = fail(409, "busy", "The repository is busy; try again shortly.");
 const TOO_LARGE = fail(422, "too_large", "The answer would be larger than one response may be.");
-const TOO_EXPENSIVE = fail(
+export const TOO_EXPENSIVE = fail(
   422,
   "too_expensive",
   "Answering needs more storage reads than one request may make.",

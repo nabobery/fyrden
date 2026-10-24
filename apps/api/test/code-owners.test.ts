@@ -8,6 +8,7 @@ import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import { CODEOWNERS_EVALUATION_VERSION } from "../src/do/repo/code-owners.js";
 import { api, user, type Who } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
@@ -614,5 +615,23 @@ describe("code owners of a pull request", () => {
     expect((await ownersOf()).state).toBe("pending");
     await runJobs();
     expect((await ownersOf()).state).toBe("complete");
+  });
+
+  it("work out again a result an earlier evaluator left stuck, now that locating reads a tree at a time", async () => {
+    await branchAt("feature", await commit("main", { "a.txt": "a\n" }));
+    await commit("feature", { "a.txt": "b\n" });
+    await open();
+    await runJobs();
+    // As the previous version left it: final, for the same pair.
+    await inRepo(stub(), (r: RepoDO) => {
+      r.git.context.storage.sql.exec(
+        `UPDATE code_owner_pointers SET version = ?, eval_id = NULL, outcome = 'too_large',
+           reason = 'stuck'`,
+        CODEOWNERS_EVALUATION_VERSION - 1,
+      );
+    });
+    expect((await ownersOf()).state).toBe("pending");
+    await runJobs();
+    expect((await ownersOf()).state).toBe("none");
   });
 });

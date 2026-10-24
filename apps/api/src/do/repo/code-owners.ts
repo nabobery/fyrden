@@ -10,12 +10,13 @@ import {
 import {
   type BlockCache,
   isTreeMode,
+  type MemoryBudget,
+  type ObjectReader,
   type Oid,
   oidFromHex,
   oidToHex,
   ReadDeferred,
   ReaderWorkSpent,
-  type TreeEntry,
 } from "@fyrden/git-core";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
 import { BROWSE_POLICY } from "./browse.js";
@@ -30,6 +31,7 @@ import {
   type TooLargeReason,
 } from "./code-owner-slice.js";
 import {
+  type HeldReadLimits,
   ReadsBudgetSpent,
   ReadsMemoryBusy,
   ReadsTooLargeError,
@@ -54,7 +56,7 @@ import type { PullRecord, RepoPulls } from "./pulls.js";
  */
 
 /** Bumped with any change of what an evaluation answers for the same inputs (parser, matcher, locations, diff). */
-export const CODEOWNERS_EVALUATION_VERSION = 3;
+export const CODEOWNERS_EVALUATION_VERSION = 4;
 
 export const CODE_OWNERS_JOB_ID = "code_owners";
 
@@ -187,7 +189,7 @@ interface Target {
 }
 
 /** The file a base tip names: its location and blob, or none. */
-type Located = { readonly path: string; readonly blob: Oid } | null;
+export type Located = { readonly path: string; readonly blob: Oid } | null;
 
 export class RepoCodeOwners {
   /** Test seams. */
@@ -537,12 +539,10 @@ export class RepoCodeOwners {
         });
       const located = await first(
         () =>
-          withHeldReads(
-            reader,
-            memory,
-            { maxTreeBytes: policy.maxTreeBytes, maxReadBytes: policy.maxSliceTreeBytes },
-            (reads) => locate(reads.readTree, tipRow.tree),
-          ),
+          locateCodeOwners(reader, memory, tipRow.tree, {
+            maxTreeBytes: policy.maxTreeBytes,
+            maxReadBytes: policy.maxSliceTreeBytes,
+          }),
         "tree",
       );
       if (located === STOPPED) return;
@@ -1010,30 +1010,39 @@ export class RepoCodeOwners {
 /**
  * The CODEOWNERS file tree `root` names: the first of GitHub's locations
  * holding something; a regular file there is it, anything else (a
- * symlink, a submodule, a directory) is passed over (Fyrden's choice).
+ * symlink, a submodule or a directory) is passed over (Fyrden's choice).
+ * Read one tree at a time, each tree's memory held only while it is read
+ * and only what the locations need kept from it; the reads' bytes count
+ * against `limits` together (`limits.spent`, when given, across other work).
  */
-async function locate(
-  readTree: (oid: Oid) => Promise<readonly TreeEntry[]>,
+export async function locateCodeOwners(
+  reader: Pick<ObjectReader, "readHeader" | "readObject">,
+  memory: Pick<MemoryBudget, "tryReserve">,
   root: Oid,
+  limits: HeldReadLimits,
 ): Promise<Located> {
-  const trees = new Map<string, readonly TreeEntry[] | null>();
-  const dir = async (path: string): Promise<readonly TreeEntry[] | null> => {
-    if (trees.has(path)) return trees.get(path) ?? null;
-    let entries: readonly TreeEntry[] | null = null;
-    if (path === "") entries = await readTree(root);
-    else {
-      const parent = await dir("");
-      const entry = parent?.find((e) => isTreeMode(e.mode) && decode(e.name) === path);
-      entries = entry ? await readTree(entry.oid) : null;
-    }
-    trees.set(path, entries);
-    return entries;
-  };
+  const within = { ...limits, spent: limits.spent ?? { readBytes: 0 } };
+  /** Of tree `tree`, the entries named `names`, by name. */
+  const entriesOf = (tree: Oid, names: readonly string[]) =>
+    withHeldReads(reader, memory, within, async (reads) => {
+      const kept = new Map<string, { mode: number; oid: Oid }>();
+      for (const entry of await reads.readTree(tree)) {
+        const name = decode(entry.name);
+        if (names.includes(name)) kept.set(name, { mode: entry.mode, oid: entry.oid });
+      }
+      return kept;
+    });
+  const dirs = new Set(CODEOWNERS_PATHS.map((p) => p.slice(0, Math.max(0, p.lastIndexOf("/")))));
+  const top = await entriesOf(root, [...dirs, ...CODEOWNERS_PATHS.filter((p) => !p.includes("/"))]);
   for (const location of CODEOWNERS_PATHS) {
     const slash = location.lastIndexOf("/");
-    const entries = await dir(slash < 0 ? "" : location.slice(0, slash));
     const name = location.slice(slash + 1);
-    const entry = entries?.find((e) => decode(e.name) === name);
+    let entries: Map<string, { mode: number; oid: Oid }> | undefined = top;
+    if (slash >= 0) {
+      const dir = top.get(location.slice(0, slash));
+      entries = dir && isTreeMode(dir.mode) ? await entriesOf(dir.oid, [name]) : undefined;
+    }
+    const entry = entries?.get(name);
     if (!entry) continue;
     // A regular file (executable or not); a symlink, submodule or directory is passed over.
     if ((entry.mode & 0o170000) === 0o100000) return { path: location, blob: entry.oid };

@@ -147,6 +147,8 @@ export class Invocation {
   #samples = 0;
   #holds = 1;
   #reportingDropped = false;
+  /** Whether this is the platform invocation's own (not one measured inside another). */
+  readonly #outermost: boolean;
   /** Work to run once when the invocation ends, by key. */
   readonly #atEnd = new Map<string, () => void>();
 
@@ -158,6 +160,7 @@ export class Invocation {
     const outer = scope.getStore();
     this.pointBudget = outer?.pointBudget ?? new PointBudget();
     this.tally = outer?.tally ?? new SubrequestTally();
+    this.#outermost = outer === undefined;
     this.pointBudget.open++;
   }
 
@@ -265,6 +268,9 @@ export class Invocation {
     for (const budget of ["internal", "external"] as const) {
       if (this[budget] > 0) this.#metrics.count("subrequests", { where, budget, op }, this[budget]);
     }
+    // The platform invocation's D1 statements, all of them, once: how near it came to D1's limit.
+    if (this.#outermost && this.tally.d1 > 0)
+      this.#metrics.count("d1.invocation_statements", { where, op }, this.tally.d1);
     if (doClass !== undefined) {
       this.#metrics.count(
         "do.active_ms",
