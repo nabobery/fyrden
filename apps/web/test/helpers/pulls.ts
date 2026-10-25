@@ -4,6 +4,19 @@ import { fakeApi, json } from "./context.js";
 
 export const VIEWER = "usr_viewer";
 
+/** A subject's or comment's reactions with none counted. */
+export const NO_REACTIONS = {
+  total_count: 0,
+  "+1": 0,
+  "-1": 0,
+  laugh: 0,
+  confused: 0,
+  heart: 0,
+  hooray: 0,
+  rocket: 0,
+  eyes: 0,
+};
+
 export function pullRequest(overrides: Record<string, unknown> = {}) {
   return {
     number: 7,
@@ -28,6 +41,7 @@ export function pullRequest(overrides: Record<string, unknown> = {}) {
     merged_at: null,
     merge_commit_sha: null,
     merged_by: null,
+    reactions: NO_REACTIONS,
     ...overrides,
   };
 }

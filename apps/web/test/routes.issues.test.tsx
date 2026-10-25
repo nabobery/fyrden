@@ -558,3 +558,113 @@ describe("an action that cannot finish", () => {
     }
   });
 });
+
+describe("reactions", () => {
+  const rollup = (over: Record<string, unknown> = {}) => ({
+    total_count: 0,
+    "+1": 0,
+    "-1": 0,
+    laugh: 0,
+    confused: 0,
+    heart: 0,
+    hooray: 0,
+    rocket: 0,
+    eyes: 0,
+    ...over,
+  });
+
+  it("toggles the viewer's own off by its id, and adds the others", () => {
+    const html = renderPage(
+      IssuePage,
+      "/ada/demo/issues/7",
+      pageData({
+        issue: issue({
+          reactions: rollup({
+            total_count: 3,
+            heart: 2,
+            "+1": 1,
+            viewer: [{ id: 9, content: "heart" }],
+          }),
+        }),
+        comments: [comment(1, { reactions: rollup({ total_count: 1, eyes: 1, viewer: [] }) })],
+      }),
+    );
+    // The heart is the viewer's: taken back by its id.
+    expect(html).toMatch(
+      /value="unreact"\/><input type="hidden" name="target" value="issue"\/><input type="hidden" name="content" value="heart"\/><input type="hidden" name="reaction_id" value="9"\/>/,
+    );
+    expect(html).toMatch(
+      /aria-pressed="true"[^>]*><span aria-hidden="true">❤️<\/span><span class="visually-hidden">Heart<\/span> <!-- -->2/,
+    );
+    // Another's +1: one more is added.
+    expect(html).toMatch(
+      /value="react"\/><input type="hidden" name="target" value="issue"\/><input type="hidden" name="content" value="\+1"/,
+    );
+    // A comment's: by its id, with the viewer's form field.
+    expect(html).toMatch(
+      /value="react"\/><input type="hidden" name="target" value="1"\/><input type="hidden" name="content" value="eyes"\/><input type="hidden" name="viewer" value="usr_viewer"/,
+    );
+    // The rest, to add.
+    expect(html.match(/Add a reaction/g)).toHaveLength(2);
+  });
+
+  it("shows counts only to whoever may not react", () => {
+    const reacted = issue({ reactions: rollup({ total_count: 1, rocket: 1 }) });
+    for (const data of [
+      pageData({ issue: reacted, viewer: null }),
+      pageData({ issue: { ...reacted, locked: true }, permissions: READ_ONLY }),
+    ]) {
+      const html = renderPage(IssuePage, "/ada/demo/issues/7", data);
+      expect(html).toContain('<span class="visually-hidden">Rocket</span> <!-- -->1');
+      expect(html).not.toMatch(/value="(un)?react"/);
+      expect(html).not.toContain("Add a reaction");
+    }
+  });
+
+  async function react(fields: Record<string, string>) {
+    const { context, calls } = api({
+      "POST /api/repos/ada/demo/issues/7/reactions": () => json({ id: 3 }, 201),
+      "DELETE /api/repos/ada/demo/issues/7/reactions/9": () => json({ id: 9, state: "deleted" }),
+      "POST /api/repos/ada/demo/issues/comments/5/reactions": () => json({ id: 4 }, 201),
+    });
+    const outcome = await issueAction({
+      request: formPost("/ada/demo/issues/7", { viewer: VIEWER, ...fields }),
+      context,
+      params,
+    } as never);
+    const sent = calls.find((c) => c.method !== "GET" && !c.url.includes("/auth/"));
+    return {
+      outcome,
+      sent: sent && {
+        path: pathOf(sent),
+        body: sent.method === "DELETE" ? undefined : await sent.json(),
+      },
+    };
+  }
+
+  it("adds and takes back on the issue or a comment, and sends nothing malformed", async () => {
+    const added = await react({ intent: "react", target: "issue", content: "heart" });
+    expect(added.sent).toEqual({
+      path: "POST /api/repos/ada/demo/issues/7/reactions",
+      body: { content: "heart" },
+    });
+    expect(added.outcome).toMatchObject({ ok: "react" });
+    expect(
+      (await react({ intent: "unreact", target: "issue", content: "heart", reaction_id: "9" }))
+        .sent,
+    ).toEqual({ path: "DELETE /api/repos/ada/demo/issues/7/reactions/9", body: undefined });
+    expect((await react({ intent: "react", target: "5", content: "+1" })).sent).toEqual({
+      path: "POST /api/repos/ada/demo/issues/comments/5/reactions",
+      body: { content: "+1" },
+    });
+    for (const bad of [
+      { intent: "react", target: "issue", content: "thumbsup" },
+      { intent: "react", target: "../7", content: "heart" },
+      { intent: "unreact", target: "issue", reaction_id: "x" },
+    ]) {
+      const { sent, outcome } = await react(bad);
+      expect(sent, JSON.stringify(bad)).toBeUndefined();
+      expect(outcome).toMatchObject({ error: expect.any(String) });
+    }
+  });
+});

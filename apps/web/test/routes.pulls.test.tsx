@@ -15,7 +15,7 @@ import {
   loader as pullsLoader,
 } from "../app/routes/repo.pulls.js";
 import { formPost, json, ORIGIN } from "./helpers/context.js";
-import { api, pathOf, pullRequest, repo, VIEWER } from "./helpers/pulls.js";
+import { api, NO_REACTIONS, pathOf, pullRequest, repo, VIEWER } from "./helpers/pulls.js";
 import { ACTIVE_TAG, escaped, HOSTILE, renderPage } from "./helpers/render.js";
 
 const params = { owner: "ada", repo: "demo", number: "7" };
@@ -169,6 +169,7 @@ describe("a pull request's conversation", () => {
               body: "first",
               created_at: at(1),
               updated_at: at(1),
+              reactions: NO_REACTIONS,
             },
             {
               id: 2,
@@ -177,6 +178,7 @@ describe("a pull request's conversation", () => {
               body: "third",
               created_at: at(3),
               updated_at: at(4),
+              reactions: NO_REACTIONS,
             },
           ],
           next_cursor: "more",
@@ -238,6 +240,7 @@ describe("a pull request's conversation", () => {
               body: HOSTILE,
               created_at: 1,
               updated_at: 1,
+              reactions: NO_REACTIONS,
             },
           ],
           next_cursor: null,
@@ -348,5 +351,118 @@ describe("changing a pull request", () => {
       body: undefined,
     });
     expect((await act({ intent: "close" }, 403)).outcome).toEqual({ error: "Not yours." });
+  });
+});
+
+describe("reactions on a pull request", () => {
+  const base = {
+    owner: "ada",
+    repo: "demo",
+    body: "b",
+    commentPages: { next: null, first: null },
+    reviewPages: { next: null, first: null },
+    rules: null,
+    push: false,
+  };
+  const comment = {
+    kind: "comment",
+    id: 5,
+    at: 1,
+    author: "usr_other",
+    agents: [],
+    body: "c",
+    edited: false,
+    reactions: { ...NO_REACTIONS, total_count: 1, eyes: 1, viewer: [{ id: 8, content: "eyes" }] },
+  };
+  const reacted = pullRequest({
+    reactions: { ...NO_REACTIONS, total_count: 1, rocket: 1, viewer: [] },
+  });
+
+  it("toggles on the description and on each comment, by the viewer's own ids", () => {
+    const html = renderPage(Pull, "/ada/demo/pull/7", {
+      ...base,
+      pull: reacted,
+      viewer: VIEWER,
+      timeline: [comment],
+    });
+    expect(html).toMatch(
+      /value="react"\/><input type="hidden" name="target" value="issue"\/><input type="hidden" name="content" value="rocket"/,
+    );
+    expect(html).toMatch(
+      /value="unreact"\/><input type="hidden" name="target" value="5"\/><input type="hidden" name="content" value="eyes"\/><input type="hidden" name="reaction_id" value="8"/,
+    );
+  });
+
+  it("shows counts only when signed out, or locked without write access", () => {
+    for (const [viewer, pull, push] of [
+      [null, reacted, false],
+      [VIEWER, { ...reacted, locked: true }, false],
+    ] as const) {
+      const html = renderPage(Pull, "/ada/demo/pull/7", {
+        ...base,
+        pull,
+        viewer,
+        push,
+        timeline: [comment],
+      });
+      expect(html).toContain('<span class="visually-hidden">Rocket</span> <!-- -->1');
+      expect(html).not.toMatch(/value="(un)?react"/);
+    }
+    const writer = renderPage(Pull, "/ada/demo/pull/7", {
+      ...base,
+      pull: { ...reacted, locked: true },
+      viewer: VIEWER,
+      push: true,
+      timeline: [],
+    });
+    expect(writer).toMatch(/value="react"/);
+  });
+
+  it("asks a closed, locked pull request's repository whether the viewer still reacts", async () => {
+    const page = async (permissions: Record<string, boolean>) => {
+      const { context, calls } = api({
+        "GET /api/repos/ada/demo/pulls/7": () =>
+          json({ ...reacted, state: "closed", closed_at: 5, locked: true }),
+        "GET /api/repos/ada/demo/issues/7/comments": () =>
+          json({ comments: [], next_cursor: null }),
+        "GET /api/repos/ada/demo/pulls/7/reviews": () => json({ reviews: [], next_cursor: null }),
+        "GET /api/repos/ada/demo": () => json({ ...repo, permissions }),
+      });
+      const data = await pullLoader({
+        request: new Request(`${ORIGIN}/ada/demo/pull/7`, {
+          headers: { Cookie: "fyrden_session=s" },
+        }),
+        context,
+        params,
+      } as never);
+      // No rulesets for a closed one: the merge box is not shown.
+      expect(calls.map(pathOf)).not.toContain("GET /api/repos/ada/demo/rulesets");
+      return renderPage(Pull, "/ada/demo/pull/7", data);
+    };
+    expect(await page({ push: true, pull: true })).toMatch(/value="react"/);
+    expect(await page({ push: false, pull: true })).not.toMatch(/value="(un)?react"/);
+  });
+
+  it("adds to the pull request by its number, takes back a comment's", async () => {
+    const { context, calls } = api({
+      "POST /api/repos/ada/demo/issues/7/reactions": () => json({ id: 3 }, 201),
+      "DELETE /api/repos/ada/demo/issues/comments/5/reactions/8": () =>
+        json({ id: 8, state: "deleted" }),
+    });
+    const send = (fields: Record<string, string>) =>
+      pullAction({ request: formPost("/ada/demo/pull/7", fields), context, params } as never);
+    expect(await send({ intent: "react", target: "issue", content: "rocket" })).toMatchObject({
+      ok: "react",
+    });
+    expect(
+      await send({ intent: "unreact", target: "5", content: "eyes", reaction_id: "8" }),
+    ).toMatchObject({ ok: "unreact" });
+    expect(await send({ intent: "react", target: "issue", content: "nope" })).toMatchObject({
+      error: "No such reaction.",
+    });
+    expect(calls.filter((c) => c.method !== "GET").map(pathOf)).toEqual([
+      "POST /api/repos/ada/demo/issues/7/reactions",
+      "DELETE /api/repos/ada/demo/issues/comments/5/reactions/8",
+    ]);
   });
 });

@@ -232,8 +232,19 @@ describe("pull requests in the web UI", () => {
     await see(page.locator(".badge.status-draft")).toBeVisible();
     await page.getByRole("button", { name: "Ready for review" }).click();
     await see(page.locator(".badge.status-open")).toBeVisible();
+    // A reaction to the pull request, pressed as the viewer's own, then taken back.
+    const reactions = page
+      .locator("section", { has: page.getByRole("heading", { name: "Description" }) })
+      .getByRole("list", { name: "Reactions" });
+    await reactions.getByText("Add a reaction").click();
+    await reactions.getByRole("button", { name: "Hooray" }).click();
+    const hooray = reactions.getByRole("button", { name: "Hooray 1" });
+    await see(hooray).toHaveAttribute("aria-pressed", "true");
     await inert();
     await accessible(page, "pull request with a comment");
+    await hooray.click();
+    await see(page.getByRole("status")).toHaveText("Reaction taken back.");
+    await see(reactions.getByRole("button", { name: /^Hooray \d/ })).toHaveCount(0);
   });
 
   it("draws the files' changes, hostile names and lines as text", async () => {

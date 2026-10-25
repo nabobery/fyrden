@@ -2,6 +2,7 @@ import { type FormEvent, type ReactNode, useEffect, useReducer, useRef, useState
 import { Form, Link, redirect, useActionData, useNavigation } from "react-router";
 import { Markdown } from "../components/markdown.js";
 import { Pager } from "../components/pager.js";
+import { Reactions } from "../components/reactions.js";
 import {
   apiCall,
   apiCallBounded,
@@ -31,6 +32,7 @@ import {
   when,
   who,
 } from "../lib/pulls.js";
+import { reactionCall } from "../lib/reactions.js";
 import { pageUrl } from "../lib/target.js";
 import type { Repo } from "../lib/types.js";
 import type { Route } from "./+types/repo.issue";
@@ -287,6 +289,20 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
     }
     case "reopen":
       return send("PATCH", api, { state: "open" }, "reopen", "The issue was not reopened.");
+    case "react":
+    case "unreact": {
+      const call = reactionCall(form, api, repoApi);
+      if (!call) return { error: "No such reaction.", scope };
+      return send(
+        call.method,
+        call.path,
+        call.body,
+        field(form, "intent"),
+        "The reaction was not changed.",
+        undefined,
+        call.target,
+      );
+    }
     default:
       return { error: "Unknown action.", scope };
   }
@@ -299,6 +315,8 @@ const DONE: Record<string, string> = {
   "delete-comment": "Comment deleted.",
   close: "Closed.",
   reopen: "Reopened.",
+  react: "Reaction added.",
+  unreact: "Reaction taken back.",
 };
 
 type ActionData = Awaited<ReturnType<typeof action>> | undefined;
@@ -711,6 +729,13 @@ export default function IssuePage({ loaderData }: Route.ComponentProps) {
           Description
         </h2>
         {issue.body ? <Markdown source={issue.body} /> : <p className="muted">No description.</p>}
+        <Reactions
+          rollup={issue.reactions}
+          target="issue"
+          canReact={mayTalk}
+          busy={busy}
+          hidden={viewerField}
+        />
         {mayEdit && (
           <IssueEditor
             issue={issue}
@@ -744,6 +769,13 @@ export default function IssuePage({ loaderData }: Route.ComponentProps) {
                       {comment.updated_at > comment.created_at && " (edited)"}
                     </header>
                     <Markdown source={comment.body} />
+                    <Reactions
+                      rollup={comment.reactions}
+                      target={comment.id}
+                      canReact={mayTalk}
+                      busy={busy}
+                      hidden={viewerField}
+                    />
                     {mayTalk && (mine || push) && (
                       <DraftDetails
                         held={mine && drafts.get(`comment-${comment.id}`) !== undefined}

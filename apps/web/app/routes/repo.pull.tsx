@@ -5,6 +5,7 @@ import { MergeBox } from "../components/merge-box.js";
 import { Pager } from "../components/pager.js";
 import { PullHeader } from "../components/pull-header.js";
 import { inOrder, Timeline, type TimelineItem } from "../components/pull-timeline.js";
+import { Reactions } from "../components/reactions.js";
 import { ReviewForm } from "../components/review-form.js";
 import { apiCall, assertSameOrigin, bodyOf, readForm } from "../lib/api.server.js";
 import {
@@ -33,6 +34,7 @@ import {
   send,
   submitReview,
 } from "../lib/pulls.server.js";
+import { reactionCall } from "../lib/reactions.js";
 import type { Repo } from "../lib/types.js";
 import type { Route } from "./+types/repo.pull";
 
@@ -78,8 +80,10 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       `${repoApi}/issues/${number}/comments?${page(commentsAt)}`,
     ),
     apiCall<ReviewsPage>(context, request, "GET", `${api}/reviews?${page(reviewsAt)}`),
+    // For the merge box (its default branch), and for a locked conversation (whether the viewer
+    // has write access, which still reacts).
+    open || pull.locked ? apiCall<Repo>(context, request, "GET", repoApi) : null,
     // For the merge box only: what the base branch's rulesets ask of a merge.
-    open ? apiCall<Repo>(context, request, "GET", repoApi) : null,
     open ? apiCall<RulesetsPage>(context, request, "GET", `${repoApi}/rulesets`) : null,
   ]);
   const rules =
@@ -112,6 +116,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
         agents: c.performed_via_agents,
         body: c.body,
         edited: c.updated_at > c.created_at,
+        reactions: c.reactions,
       }),
     ),
     ...shownReviews.items.map(
@@ -155,6 +160,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       shownReviews.next && writeContinuation(shownReviews.next),
     ),
     rules,
+    // Write access reacts in a locked conversation (known only when the repository was read).
+    push: repo?.status === 200 && repo.body.permissions?.push === true,
   };
 }
 
@@ -217,6 +224,24 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
         "The branch was not updated.",
       );
     }
+    case "react":
+    case "unreact": {
+      const call = reactionCall(
+        form,
+        `${repoApiPath(params.owner, params.repo)}/issues/${pullNumber(params.number)}`,
+        repoApiPath(params.owner, params.repo),
+      );
+      if (!call) return { error: "No such reaction." };
+      return send(
+        context,
+        request,
+        call.method,
+        call.path,
+        call.body,
+        field(form, "intent"),
+        "The reaction was not changed.",
+      );
+    }
     default:
       return { error: "Unknown action." };
   }
@@ -230,14 +255,18 @@ const DONE: Record<string, string> = {
   draft: "Marked as a draft.",
   ready: "Marked ready for review.",
   maintainer: "Saved.",
+  react: "Reaction added.",
+  unreact: "Reaction taken back.",
 };
 
 export default function Pull({ loaderData }: Route.ComponentProps) {
   const result = useActionData<typeof action>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
-  const { owner, repo, pull, viewer, body, timeline, commentPages, reviewPages, rules } =
+  const { owner, repo, pull, viewer, body, timeline, commentPages, reviewPages, rules, push } =
     loaderData;
+  // A locked conversation takes reactions from write access only (the API decides each).
+  const react = { canReact: viewer !== null && (!pull.locked || push), busy };
   const isAuthor = viewer !== null && pull.user.id === viewer;
   const open = pull.state === "open";
   // A comment being written stays as the page is read again; only its own sending clears it.
@@ -253,6 +282,7 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
           Description
         </h2>
         {body ? <Markdown source={body} /> : <p className="muted">No description.</p>}
+        <Reactions rollup={pull.reactions} target="issue" {...react} />
         <details>
           <summary>Edit title and description</summary>
           <Form method="post">
@@ -279,7 +309,7 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
 
       <section aria-labelledby="conversation">
         <h2 id="conversation">Conversation</h2>
-        <Timeline items={timeline} viewer={viewer} />
+        <Timeline items={timeline} viewer={viewer} react={react} />
         <Pager links={commentPages} label="Comment" />
         <Pager links={reviewPages} label="Review" />
       </section>

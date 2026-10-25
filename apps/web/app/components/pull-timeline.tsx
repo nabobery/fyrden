@@ -1,5 +1,6 @@
 import { when, who } from "../lib/pulls.js";
 import { Markdown } from "./markdown.js";
+import { Reactions, type Rollup } from "./reactions.js";
 
 /** One event of a pull request's conversation, with its Markdown source. */
 export type TimelineItem =
@@ -11,6 +12,7 @@ export type TimelineItem =
       agents: string[];
       body: string;
       edited: boolean;
+      reactions: Rollup;
     }
   | {
       kind: "review";
@@ -55,7 +57,16 @@ function Byline({
 }
 
 /** A pull request's conversation: its comments, reviews, and when it was closed or merged. */
-export function Timeline({ items, viewer }: { items: TimelineItem[]; viewer: string | null }) {
+export function Timeline({
+  items,
+  viewer,
+  react,
+}: {
+  items: TimelineItem[];
+  viewer: string | null;
+  /** Whether the viewer may react to its comments, and whether a form is being sent. */
+  react: { canReact: boolean; busy: boolean };
+}) {
   if (items.length === 0) return <p className="muted">No comments or reviews yet.</p>;
   return (
     <ol className="timeline" aria-label="Conversation">
@@ -70,6 +81,12 @@ export function Timeline({ items, viewer }: { items: TimelineItem[]; viewer: str
                   {item.edited && " (edited)"}
                 </header>
                 <Markdown source={item.body} />
+                <Reactions
+                  rollup={item.reactions}
+                  target={item.id}
+                  canReact={react.canReact}
+                  busy={react.busy}
+                />
               </article>
             </li>
           );

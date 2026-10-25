@@ -223,6 +223,57 @@ describe("issues in the web UI", () => {
     await see(page.locator("#comment-body")).toHaveValue("the next comment, unsent");
   });
 
+  it("reacts to the issue and a comment, and takes a reaction back", async () => {
+    await page.goto(`${stack.origin}/${handle}/${name}/issues/1`);
+    const description = page.locator("section", {
+      has: page.getByRole("heading", { name: "Description" }),
+    });
+    const reactions = description.getByRole("list", { name: "Reactions" });
+    await reactions.getByText("Add a reaction").click();
+    await accessible("reaction picker");
+    await reactions.getByRole("button", { name: "Heart" }).click();
+    await see(page.getByRole("status")).toHaveText("Reaction added.");
+    const heart = reactions.getByRole("button", { name: "Heart 1" });
+    await see(heart).toHaveAttribute("aria-pressed", "true");
+    // Pressed again, it is taken back by its id.
+    await heart.click();
+    await see(page.getByRole("status")).toHaveText("Reaction taken back.");
+    await see(reactions.getByRole("button", { name: /^Heart \d/ })).toHaveCount(0);
+    // A comment's own, apart from the issue's.
+    const first = page.locator(".timeline li").first();
+    await first.getByText("Add a reaction").click();
+    await first.getByRole("button", { name: "Rocket" }).click();
+    await see(first.getByRole("button", { name: "Rocket 1" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await see(reactions.getByRole("button", { name: /^Rocket \d/ })).toHaveCount(0);
+    const issue = await rest<{ reactions: { total_count: number } }>(
+      "GET",
+      `/repos/${handle}/${name}/issues/1`,
+    );
+    expect(issue.reactions.total_count).toBe(0);
+  });
+
+  it("keeps focus on a reaction's toggle as it moves, from the keyboard", async () => {
+    await page.goto(`${stack.origin}/${handle}/${name}/issues/1`);
+    const reactions = page
+      .locator("section", { has: page.getByRole("heading", { name: "Description" }) })
+      .getByRole("list", { name: "Reactions" });
+    await reactions.getByText("Add a reaction").focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Tab");
+    await see(reactions.getByRole("button", { name: "Thumbs up" })).toBeFocused();
+    // Added, it moves out of the picker into the counted ones; focus goes with it.
+    await page.keyboard.press("Enter");
+    const counted = reactions.getByRole("button", { name: "Thumbs up 1" });
+    await see(counted).toBeFocused();
+    // Taken back, it moves into the picker again (still open), focus with it.
+    await page.keyboard.press("Enter");
+    await see(page.getByRole("status")).toHaveText("Reaction taken back.");
+    await see(reactions.getByRole("button", { name: "Thumbs up", exact: true })).toBeFocused();
+  });
+
   it("keeps an edit whose comment leaves the page, and resumes it when it comes back", async () => {
     const big = "€".repeat(65_536);
     const { number } = await rest<{ number: number }>("POST", `/repos/${handle}/${name}/issues`, {

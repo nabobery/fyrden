@@ -168,6 +168,25 @@ button.danger {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+/* A subject's or comment's reactions: counts, and toggles for who may react. */
+ul.reactions {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+}
+.reaction button,
+li.reaction {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 0 0.5rem;
+}
+.reaction button[aria-pressed="true"] {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.reaction-picker ul.reactions {
+  margin-top: 0.25rem;
+}
 .badge.verified {
   color: var(--ok);
   border-color: var(--ok);
