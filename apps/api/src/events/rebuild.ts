@@ -57,6 +57,20 @@ export async function applyExport(
 ): Promise<void> {
   const now = options.now?.() ?? Date.now();
   const db = readModelFor(env, shard);
+  const statements = exportStatements(db, exported, now);
+  options.metrics?.count("d1.query", { db: "org", op: "rebuild_apply" }, statements.length);
+  await db.batch(statements);
+}
+
+/**
+ * The statements that apply an exported snapshot: the source's epoch, then
+ * each entity through the consumer's guarded upsert.
+ */
+export function exportStatements(
+  db: D1Database,
+  exported: RepoExport,
+  now: number,
+): D1PreparedStatement[] {
   const { sourceId } = exported;
   const snapshots: Snapshot[] = exported.entities.map((entity) => ({
     id: {
@@ -73,12 +87,10 @@ export async function applyExport(
     data: null,
     stored: false,
   }));
-  const statements = [
+  return [
     epochStatement(db, sourceId, exported.epochGen, now),
     ...snapshots.map((snapshot) => repoStatement(db, sourceId, snapshot, now)),
   ];
-  options.metrics?.count("d1.query", { db: "org", op: "rebuild_apply" }, statements.length);
-  await db.batch(statements);
 }
 
 /**

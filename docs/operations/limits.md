@@ -878,6 +878,15 @@ their own.
 | Cursors and hidden items | A known limit: a cursor can move without anything the caller may see changing. When retention deletes items the caller cannot see, the low watermark passes them, and the cursors (and so the ETag) the caller gets move up to it |
 | Late purges of large items | A known limit: a purge arriving after an activity item has collected more than 100 members can leave it with fewer than a purge arriving first would, since the item keeps only its greatest 100 and those made before the purge then leave it |
 
+## Search (not yet served)
+
+Search's projections of issues, pull requests, labels and milestones are kept in the org read model; nothing writes or reads them in a running deployment yet.
+
+| What | Value |
+|---|---|
+| Projections | One row an issue or pull request (its state, text, author, labels, assignees and milestone), a label and a milestone, each written only forward (by the source's epoch, ownership and the entity's version) and only while the repository is not deleted; a deletion keeps a row without its text until a reconciliation covers it. Rows written (measured): an issue first projected 6, a change 5, a deletion 2, a label or milestone 2 |
+| Reconciliation | Compares a repository's projections with its own state and writes only differences: the repository's export, read from one position (200 entities and 2 MiB a page), sets the source's cutoff first (later events at or before it are refused), then 5 pages a call, each comparing at most 200 projection rows; a row the export lacks is marked deleted where the page found it gone (nothing at or before that place changes it again), unless an event after the export began wrote it; an entity made and deleted since the export began keeps its deleted row; a restore or transfer meanwhile starts the pass again, and a pass the source's fences refuse waits. Callers working the same page at once: the first one's writes stand. Deletions a cutoff covers are removed once a pass ends, 500 a table (Proposed); a deletion of unknown position (an issue deleted before positions were recorded) stays |
+
 ## Idempotent requests
 
 A REST write (any method but GET) sent with an `Idempotency-Key` header runs

@@ -399,19 +399,32 @@ describe("a deleted repository's search projections", () => {
         .prepare("INSERT INTO search_sources (repo_id, cutoff_epoch, cutoff_seq) VALUES (?, 1, 1)")
         .bind(repo)
         .run();
+      await db
+        .prepare(
+          `INSERT INTO search_reconciles (repo_id, gen, epoch_gen, owner_gen, watermark, kind,
+             started_at) VALUES (?, 1, 1, 1, 1, 'done', 0)`,
+        )
+        .bind(repo)
+        .run();
     }
     const target = { repoId: doomed, shard: "default", gen: 1 };
     expect(await cleanup.page(env, target)).toBe("more");
-    expect(await rows(doomed)).toEqual([1, 0, 0, 0]);
+    expect(await rows(doomed)).toEqual([1, 0, 0, 0, 0]);
     expect(await cleanup.page(env, target)).toBe("done");
-    expect(await rows(doomed)).toEqual([0, 0, 0, 0]);
-    expect(await rows(kept)).toEqual([CLEANUP_POLICY.searchPage + 1, 1, 1, 1]);
+    expect(await rows(doomed)).toEqual([0, 0, 0, 0, 0]);
+    expect(await rows(kept)).toEqual([CLEANUP_POLICY.searchPage + 1, 1, 1, 1, 1]);
   });
 });
 
 async function rows(repoId: string): Promise<number[]> {
   const counts = await db.batch<{ n: number }>(
-    ["search_docs", "search_labels", "search_milestones", "search_sources"].map((table) =>
+    [
+      "search_docs",
+      "search_labels",
+      "search_milestones",
+      "search_sources",
+      "search_reconciles",
+    ].map((table) =>
       db.prepare(`SELECT count(*) AS n FROM ${table} WHERE repo_id = ?`).bind(repoId),
     ),
   );
@@ -421,7 +434,8 @@ async function rows(repoId: string): Promise<number[]> {
 describe("search projections' write costs", () => {
   // Rows written, as D1 counts them (the row and each index entry it changes): an issue
   // first projected writes its row, its unique key and its four listing indexes; a change
-  // rewrites the row and the listing indexes; a deletion takes it out of them.
+  // rewrites the row and the listing indexes; a deletion takes it out of them and into the
+  // index of deletions waiting to be collected.
   it("are pinned", async () => {
     const repo = await source();
     const written = async (position: SearchPosition, snapshot: EntitySnapshot) => {
@@ -452,7 +466,7 @@ describe("search projections' write costs", () => {
       text: 5,
       metadata: 5,
       duplicate: 0,
-      deletion: 1,
+      deletion: 2,
       label: 2,
       milestone: 2,
     });

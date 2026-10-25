@@ -72,7 +72,7 @@ CREATE TABLE search_docs (
   owner_gen INTEGER NOT NULL,
   version INTEGER NOT NULL,
   -- The sequence of the event that wrote the row.
-  updated_seq INTEGER NOT NULL,
+  updated_seq INTEGER NOT NULL, deleted_epoch INTEGER, deleted_seq INTEGER,
   UNIQUE (repo_id, number),
   CHECK (deleted = 1 OR (state IS NOT NULL AND open_state IS NOT NULL AND title IS NOT NULL
     AND created_at IS NOT NULL AND updated_at IS NOT NULL))
@@ -89,7 +89,7 @@ CREATE TABLE search_labels (
   epoch_gen INTEGER NOT NULL,
   owner_gen INTEGER NOT NULL,
   version INTEGER NOT NULL,
-  updated_seq INTEGER NOT NULL,
+  updated_seq INTEGER NOT NULL, deleted_epoch INTEGER, deleted_seq INTEGER,
   PRIMARY KEY (repo_id, label_id),
   CHECK (deleted = 1 OR (name IS NOT NULL AND color IS NOT NULL))
 ) STRICT;
@@ -108,9 +108,21 @@ CREATE TABLE search_milestones (
   epoch_gen INTEGER NOT NULL,
   owner_gen INTEGER NOT NULL,
   version INTEGER NOT NULL,
-  updated_seq INTEGER NOT NULL,
+  updated_seq INTEGER NOT NULL, deleted_epoch INTEGER, deleted_seq INTEGER,
   PRIMARY KEY (repo_id, number),
   CHECK (deleted = 1 OR (title IS NOT NULL AND state IS NOT NULL))
+) STRICT;
+
+-- table search_reconciles
+CREATE TABLE search_reconciles (
+  repo_id TEXT PRIMARY KEY,
+  gen INTEGER NOT NULL CHECK (gen >= 1),
+  epoch_gen INTEGER NOT NULL,
+  owner_gen INTEGER NOT NULL,
+  watermark INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('subjects', 'labels', 'milestones', 'done')),
+  after INTEGER NOT NULL DEFAULT 0,
+  started_at INTEGER NOT NULL
 ) STRICT;
 
 -- table search_sources
@@ -199,6 +211,10 @@ CREATE INDEX effects_recover ON effects (recover_at, effect_id) WHERE state = 'p
 -- index repos_owner
 CREATE INDEX repos_owner ON repos (owner_id, name) WHERE deleted = 0;
 
+-- index search_docs_deleted
+CREATE INDEX search_docs_deleted ON search_docs (repo_id, deleted_epoch, deleted_seq)
+  WHERE deleted = 1 AND deleted_epoch IS NOT NULL;
+
 -- index search_docs_open_created
 CREATE INDEX search_docs_open_created ON search_docs (repo_id, open_state, created_at, doc_id)
   WHERE deleted = 0;
@@ -214,6 +230,14 @@ CREATE INDEX search_docs_state_created ON search_docs (repo_id, state, created_a
 -- index search_docs_state_updated
 CREATE INDEX search_docs_state_updated ON search_docs (repo_id, state, updated_at, doc_id)
   WHERE deleted = 0;
+
+-- index search_labels_deleted
+CREATE INDEX search_labels_deleted ON search_labels (repo_id, deleted_epoch, deleted_seq)
+  WHERE deleted = 1 AND deleted_epoch IS NOT NULL;
+
+-- index search_milestones_deleted
+CREATE INDEX search_milestones_deleted ON search_milestones (repo_id, deleted_epoch, deleted_seq)
+  WHERE deleted = 1 AND deleted_epoch IS NOT NULL;
 
 -- index webhook_deliveries_disable
 CREATE INDEX webhook_deliveries_disable ON webhook_deliveries (disable_retry_at)
