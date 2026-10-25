@@ -22,6 +22,13 @@ CREATE TABLE audit_segments (
   archived_at INTEGER
 ) STRICT;
 
+-- table deployment_settings
+CREATE TABLE deployment_settings (
+  name TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
 -- table dpop_proofs
 CREATE TABLE dpop_proofs (
   jkt TEXT NOT NULL,

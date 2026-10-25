@@ -9,7 +9,10 @@ import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import type { ExportPage, ExportPageRequest } from "../src/do/repo/export.js";
+import { epochStatement } from "../src/queues/events-consumer.js";
 import { RECONCILE_POLICY, reconcileSource } from "../src/search/reconcile.js";
+import { repairStatement } from "../src/search/repairs.js";
 import { docStatement, labelStatement } from "../src/search/statements.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
@@ -113,6 +116,35 @@ function recording(batches: number[]): Env {
   });
 }
 
+/** `env` whose repository object's exports are counted, and `onFirst` runs after the first. */
+function watched(calls: { n: number }, onFirst?: () => Promise<void>): Env {
+  const stubs = new Proxy(env.REPO, {
+    get(target, prop) {
+      if (prop !== "getByName") {
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return (name: string) => {
+        const real = target.getByName(name);
+        return {
+          exportPage: async (request: ExportPageRequest) => {
+            const page = await real.exportPage(request);
+            calls.n++;
+            if (calls.n === 1) await onFirst?.();
+            return page;
+          },
+        };
+      };
+    },
+  });
+  return new Proxy(env, {
+    get: (target, prop) => (prop === "REPO" ? stubs : Reflect.get(target, prop)),
+  });
+}
+
+const repairStateOf = (repoId: string) =>
+  db.prepare("SELECT dirty, covered FROM search_repairs WHERE repo_id = ?").bind(repoId).first();
+
 describe("search reconciliation", () => {
   it("brings the projection to the repository's state, its cutoff set at the export's position", async () => {
     await call("POST", "/issues", { title: "One" });
@@ -149,9 +181,10 @@ describe("search reconciliation", () => {
     expect(await reconcileSource(env, target())).toBe("done");
     const batches: number[] = [];
     expect(await reconcileSource(recording(batches), target())).toBe("done");
-    // The start (epoch, repository row, cutoff, pass), then each kind's page: its checkpoint
-    // alone; then the collection.
-    expect(batches).toEqual([4, 1, 1, 1, 3]);
+    // The start (epoch, cutoff, pass, its repair revision), then each kind's page: its
+    // checkpoint alone; then the repository's own row with the last checkpoint and the
+    // revision covered; then the collection.
+    expect(batches).toEqual([4, 1, 1, 1, 4, 3]);
   });
 
   it("marks deleted what the export lacks, unless an event after it began wrote it", async () => {
@@ -302,6 +335,9 @@ describe("search reconciliation", () => {
     expect(await count("search_docs")).toBe(1);
     expect(await reconcileSource(env, target(), { pages: 1 })).toBe("more");
     expect(await kind()).toBe("milestones");
+    // The walk through, the repository's own row is the last step, a page of its own.
+    expect(await reconcileSource(env, target(), { pages: 1 })).toBe("more");
+    expect(await kind()).toBe("milestones");
     expect(await reconcileSource(env, target(), { pages: 1 })).toBe("done");
     expect(await kind()).toBe("done");
   });
@@ -317,7 +353,7 @@ describe("search reconciliation", () => {
     await runInDurableObject(stub(), (_: RepoDO, state) => {
       state.storage.sql.exec("UPDATE repo_meta SET owner_gen = owner_gen + 1 WHERE id = 1");
     });
-    expect(await reconcileSource(env, target())).toBe("done");
+    expect(await reconcileSource(env, target(), { pages: 10 })).toBe("done");
     const pass = await db
       .prepare(
         "SELECT gen, epoch_gen, owner_gen, watermark, kind FROM search_reconciles WHERE repo_id = ?",
@@ -579,7 +615,7 @@ describe("search reconciliation", () => {
       // The start, then the subjects in three pages of at most 3 rows, each its rows the
       // export lacks marked deleted and its checkpoint (issue 1, matching, writes nothing).
       expect(batches.slice(1, 4)).toEqual([3, 4, 3]);
-      expect(Math.max(...batches)).toBeLessThanOrEqual(4);
+      expect(Math.max(...batches)).toBeLessThanOrEqual(5);
     } finally {
       RECONCILE_POLICY.rowsPerPage = rows;
     }
@@ -663,5 +699,97 @@ describe("search reconciliation", () => {
         .first(),
     ).toEqual({ kind: "subjects", after: 0 });
     expect(await count("search_docs")).toBe(0);
+  });
+
+  it("writes the repository's own row from a snapshot read after the pass took its revision", async () => {
+    await call("PATCH", "", { description: "before" });
+    await repairStatement(db, repo.id, "backfill", 1).run();
+    // Between the pass's first snapshot and its start: the repository changes, and its change
+    // asks for a repair (already pending: nothing written).
+    let first = true;
+    const stubs = new Proxy(env.REPO, {
+      get(target, prop) {
+        if (prop !== "getByName") {
+          const value = Reflect.get(target, prop);
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+        return (name: string) => {
+          const real = target.getByName(name);
+          return {
+            exportPage: async (request: ExportPageRequest) => {
+              const page = await real.exportPage(request);
+              if (first) {
+                first = false;
+                await call("PATCH", "", { description: "after" });
+                await repairStatement(db, repo.id, "changed", 2).run();
+              }
+              return page;
+            },
+          };
+        };
+      },
+    });
+    const racing = new Proxy(env, {
+      get: (target, prop) => (prop === "REPO" ? stubs : Reflect.get(target, prop)),
+    });
+    expect(await reconcileSource(racing, target())).toBe("done");
+    expect(
+      await db.prepare("SELECT description FROM repos WHERE repo_id = ?").bind(repo.id).first(),
+    ).toEqual({ description: "after" });
+    expect(await repairStateOf(repo.id)).toEqual({ dirty: 1, covered: 1 });
+  });
+
+  it("marks deleted a label whose deletion was asked for before the pass took its revision", async () => {
+    await call("POST", "/labels", { name: "racing", color: "123456" });
+    expect(await reconcileSource(env, target())).toBe("done");
+    await repairStatement(db, repo.id, "backfill", 1).run();
+    const id = (
+      await db
+        .prepare("SELECT label_id AS id FROM search_labels WHERE repo_id = ? AND name = 'racing'")
+        .bind(repo.id)
+        .first<{ id: number }>()
+    )?.id;
+    // Between the pass's first snapshot and its start: the label renamed (its event projected),
+    // then deleted (its event lost; the repair it asks for is already pending).
+    const racing = watched({ n: 0 }, async () => {
+      await call("PATCH", "/labels/racing", { new_name: "raced" });
+      const labels = (await stub().exportPage({
+        kind: "labels",
+        after: 0,
+        limit: 200,
+      })) as unknown as ExportPage;
+      const renamed = labels.entities.find((e) => e.id.endsWith(`/${id}`));
+      if (!renamed) throw new Error("no label");
+      await epochStatement(db, repo.id, labels.epochGen, 0).run();
+      await labelStatement(
+        db,
+        {
+          repoId: repo.id,
+          epochGen: labels.epochGen,
+          ownerGen: labels.ownerGen,
+          sourceSeq: labels.watermark,
+        },
+        renamed,
+      ).run();
+      await call("DELETE", "/labels/raced");
+      await repairStatement(db, repo.id, "lost", 2).run();
+    });
+    expect(await reconcileSource(racing, target(), { pages: 10 })).toBe("done");
+    expect(
+      await db
+        .prepare("SELECT deleted, name FROM search_labels WHERE repo_id = ? AND label_id = ?")
+        .bind(repo.id, id)
+        .first(),
+    ).toEqual({ deleted: 1, name: null });
+    expect(await repairStateOf(repo.id)).toEqual({ dirty: 1, covered: 1 });
+  });
+
+  it("reads no more exports a call than its pages", async () => {
+    await call("POST", "/issues", { title: "One" });
+    const calls = { n: 0 };
+    expect(await reconcileSource(watched(calls), target(), { pages: 4 })).toBe("more");
+    expect(calls.n).toBe(4);
+    expect(await reconcileSource(watched(calls), target(), { pages: 1 })).toBe("done");
+    expect(calls.n).toBe(5);
   });
 });

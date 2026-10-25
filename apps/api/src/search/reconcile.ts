@@ -9,6 +9,7 @@ import type {
 import { EXPORT_PAGE } from "../do/repo/export.js";
 import { readModelFor } from "../events/read-model.js";
 import { exportStatements } from "../events/rebuild.js";
+import { epochStatement } from "../queues/events-consumer.js";
 import { clock } from "../services.js";
 import {
   eligible,
@@ -28,9 +29,10 @@ import {
  * since everything it carries is in the export or superseded. The pass then
  * walks the export's kinds a page at a time beside the projection's rows of
  * the same keys: an exported entity newer than its row (or without one) is
- * written; a row the export lacks is marked deleted when it predates the
- * export (an older epoch, or not after the watermark), and kept when a
- * later event wrote it. Each pass has a generation: a superseded pass's
+ * written; a row the page lacks is marked deleted when it predates that
+ * page's reading (an older epoch, or not after its watermark), and kept
+ * when a later event wrote it. The repository's own row comes last, from a
+ * snapshot read then. Each pass has a generation: a superseded pass's
  * writes are refused. A page asked under another epoch or ownership than
  * the pass's starts a new pass. Deletions the cutoff covers are collected
  * once a pass ends.
@@ -65,6 +67,12 @@ const TABLES = {
 } as const;
 
 const NEXT_KIND = { subjects: "labels", labels: "milestones", milestones: "done" } as const;
+
+/**
+ * The key a pass is at once its walk is through: its last step, the
+ * repository's own row, is still to come (a budgeted step of its own).
+ */
+const FINISHING = -1;
 
 /** Past every key. */
 const NO_KEY = Number.MAX_SAFE_INTEGER;
@@ -106,42 +114,80 @@ export async function reconcileSource(
     }
     if (pages-- <= 0) return "more";
     const { kind, after } = pass;
-    const page = await exportPage({
-      kind,
-      after,
-      limit: EXPORT_PAGE.entities,
-      expected: { epochGen: pass.epochGen, ownerGen: pass.ownerGen },
-    });
+    const expected = { epochGen: pass.epochGen, ownerGen: pass.ownerGen };
+    const page = await exportPage(
+      after === FINISHING
+        ? { kind: "repo", after: 0, limit: 1, expected }
+        : { kind, after, limit: EXPORT_PAGE.entities, expected },
+    );
     if (page === null) return "done";
     if (page === "stale") {
       // The repository was restored or transferred meanwhile: another pass, from its new position.
       pass = undefined;
       continue;
     }
-    const { statements, upTo, ended } = await differences(db, repoId, pass, kind, page, metrics);
-    const next = ended ? NEXT_KIND[kind] : kind;
-    // The page is done only where its writes could be made: the same fences.
+    let statements: D1PreparedStatement[];
+    let next: Pass["kind"];
+    let nextAfter: number;
+    if (after === FINISHING) {
+      // The walk is through: the repository's own row, from a snapshot read now (after the
+      // revision this pass covers was taken, so a change asked for before it is in it).
+      const [entity] = page.entities;
+      statements = exportStatements(
+        db,
+        {
+          sourceId: repoId,
+          epochGen: page.epochGen,
+          ownerGen: page.ownerGen,
+          watermark: page.watermark,
+          entities: entity ? [{ ...entity, row: entity.row as RepoRow | null }] : [],
+        },
+        clock(),
+      );
+      next = "done";
+      nextAfter = 0;
+    } else {
+      const found = await differences(db, repoId, pass, kind, page, metrics);
+      statements = found.statements;
+      // Past the last kind, the pass finishes with the repository's own row.
+      next = !found.ended ? kind : kind === "milestones" ? "milestones" : NEXT_KIND[kind];
+      nextAfter = !found.ended ? found.upTo : kind === "milestones" ? FINISHING : 0;
+    }
+    // The step is done only where its writes could be made: the same fences.
     statements.push(
       db
         .prepare(
           `UPDATE search_reconciles SET kind = ?7, after = ?8
            WHERE repo_id = ?1 AND gen = ?4 AND kind = ?5 AND after = ?6 AND ${FENCES}`,
         )
-        .bind(repoId, pass.epochGen, pass.ownerGen, pass.gen, kind, after, next, ended ? 0 : upTo),
+        .bind(repoId, pass.epochGen, pass.ownerGen, pass.gen, kind, after, next, nextAfter),
     );
+    const checkpoint = statements.length - 1;
+    // Its last step: the repair revision it covered is covered.
+    if (next === "done")
+      statements.push(
+        db
+          .prepare(
+            `UPDATE search_repairs SET covered = active, active = NULL
+             WHERE repo_id = ?1 AND active IS NOT NULL
+               AND EXISTS (SELECT 1 FROM search_reconciles WHERE repo_id = ?1 AND gen = ?2
+                 AND kind = 'done')`,
+          )
+          .bind(repoId, pass.gen),
+      );
     metrics?.count("d1.query", { db: "org", op: "reconcile_page" });
     const results = await db.batch(statements);
-    if ((results.at(-1)?.meta.changes ?? 0) === 0) {
+    if ((results[checkpoint]?.meta.changes ?? 0) === 0) {
       const reloaded = await current(db, repoId, metrics);
       // The source's fences refuse this pass (a transfer or restore landing): tried again later,
       // when the repository answers under its new ownership or epoch and a pass starts there.
       if (reloaded?.gen === pass.gen && reloaded.kind === kind && reloaded.after === after)
         return "more";
-      // Another caller worked this page first (its writes stand, these were refused).
+      // Another caller worked this step first (its writes stand, these were refused).
       pass = reloaded;
       continue;
     }
-    pass = { ...pass, kind: next, after: ended ? 0 : upTo };
+    pass = { ...pass, kind: next, after: nextAfter };
     if (next === "done") {
       await collectTombstones(db, repoId, metrics);
       return "done";
@@ -182,9 +228,10 @@ async function current(
 
 /**
  * Starts a pass at the export's position, in one batch: the source's epoch,
- * the repository's own row, its cutoff (never lowered) and the pass (a new
- * generation), the last two only within the source's fences; undefined
- * when they refuse it.
+ * its cutoff (never lowered), the pass (a new generation) and the repair
+ * revision it covers, the last three only within the source's fences;
+ * undefined when they refuse it. (The repository's own row is written on
+ * the pass's last page, from a snapshot read then.)
  */
 async function start(
   db: D1Database,
@@ -193,20 +240,9 @@ async function start(
   metrics: Metrics | undefined,
 ): Promise<Pass | undefined> {
   const now = clock();
-  const [repo] = page.entities;
   metrics?.count("d1.query", { db: "org", op: "reconcile_start" });
   const results = await db.batch<{ gen: number }>([
-    ...exportStatements(
-      db,
-      {
-        sourceId: repoId,
-        epochGen: page.epochGen,
-        ownerGen: page.ownerGen,
-        watermark: page.watermark,
-        entities: repo ? [{ ...repo, row: repo.row as RepoRow | null }] : [],
-      },
-      now,
-    ),
+    epochStatement(db, repoId, page.epochGen, now),
     db
       .prepare(
         `INSERT INTO search_sources (repo_id, cutoff_epoch, cutoff_seq) SELECT ?1, ?2, ?4
@@ -229,8 +265,12 @@ async function start(
          RETURNING gen`,
       )
       .bind(repoId, page.epochGen, page.ownerGen, page.watermark, now),
+    // The repair revision asked for so far is the one this pass covers.
+    db
+      .prepare(`UPDATE search_repairs SET active = dirty WHERE repo_id = ?1 AND ${FENCES}`)
+      .bind(repoId, page.epochGen, page.ownerGen),
   ]);
-  const gen = results.at(-1)?.results[0]?.gen;
+  const gen = results.at(-2)?.results[0]?.gen;
   if (gen === undefined) return undefined;
   return {
     gen,
@@ -303,14 +343,15 @@ async function differences(
     const statement = searchStatement(db, position, entity, writer);
     if (statement) statements.push(statement);
   }
-  // Where the rows the export lacks were found gone: this page's reading.
+  // Where the rows the export lacks were found gone: this page's reading. A row this page
+  // lacks that an event up to it wrote is gone (deleted before the page was read, after the
+  // pass took its revision); one an event after it wrote is kept.
   const seen: SearchPosition = { ...position, epochGen: page.epochGen, sourceSeq: page.watermark };
   for (const row of rows) {
     if (exported.has(row.key) || row.deleted === 1) continue;
-    // Written by an event after the export began: kept.
     if (
-      row.epoch_gen > pass.epochGen ||
-      (row.epoch_gen === pass.epochGen && row.updated_seq > pass.watermark)
+      row.epoch_gen > seen.epochGen ||
+      (row.epoch_gen === seen.epochGen && row.updated_seq > seen.sourceSeq)
     )
       continue;
     statements.push(absentStatement(db, table, key, position, seen, row.key, writer));
@@ -352,8 +393,8 @@ const EMPTIED: Record<string, string> = {
 };
 
 /**
- * Marks a row the export lacks deleted, unless an event after the export
- * began wrote it meanwhile. Its deletion is placed where the page found it
+ * Marks a row the export lacks deleted, unless an event after the page was
+ * read wrote it meanwhile. Its deletion is placed where the page found it
  * gone (`seen`): the row's version stays, and nothing at or before that
  * place may change it again (an earlier change, delivered late); it is
  * collected once a later pass's cutoff covers that place.
@@ -372,7 +413,7 @@ function absentStatement(
       `UPDATE ${table} SET deleted = 1, ${EMPTIED[table]}, deleted_epoch = ?6,
          deleted_seq = ?7
        WHERE repo_id = ?1 AND ${key} = ?5 AND deleted = 0
-         AND (epoch_gen < ?2 OR (epoch_gen = ?2 AND updated_seq <= ?4))
+         AND (epoch_gen < ?6 OR (epoch_gen = ?6 AND updated_seq <= ?7))
          AND ${eligible(writer, 8)}`,
     )
     .bind(

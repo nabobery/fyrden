@@ -16,6 +16,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { epochStatement } from "../src/queues/events-consumer.js";
 import { CLEANUP_POLICY, REPO_CLEANUPS } from "../src/repos/cleanups.js";
+import { repairStatement } from "../src/search/repairs.js";
 import {
   docStatement,
   labelStatement,
@@ -406,13 +407,14 @@ describe("a deleted repository's search projections", () => {
         )
         .bind(repo)
         .run();
+      await repairStatement(db, repo, "backfill", 0).run();
     }
     const target = { repoId: doomed, shard: "default", gen: 1 };
     expect(await cleanup.page(env, target)).toBe("more");
-    expect(await rows(doomed)).toEqual([1, 0, 0, 0, 0]);
+    expect(await rows(doomed)).toEqual([1, 0, 0, 0, 0, 0]);
     expect(await cleanup.page(env, target)).toBe("done");
-    expect(await rows(doomed)).toEqual([0, 0, 0, 0, 0]);
-    expect(await rows(kept)).toEqual([CLEANUP_POLICY.searchPage + 1, 1, 1, 1, 1]);
+    expect(await rows(doomed)).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(await rows(kept)).toEqual([CLEANUP_POLICY.searchPage + 1, 1, 1, 1, 1, 1]);
   });
 });
 
@@ -424,6 +426,7 @@ async function rows(repoId: string): Promise<number[]> {
       "search_milestones",
       "search_sources",
       "search_reconciles",
+      "search_repairs",
     ].map((table) =>
       db.prepare(`SELECT count(*) AS n FROM ${table} WHERE repo_id = ?`).bind(repoId),
     ),

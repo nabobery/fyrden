@@ -125,6 +125,18 @@ CREATE TABLE search_reconciles (
   started_at INTEGER NOT NULL
 ) STRICT;
 
+-- table search_repairs
+CREATE TABLE search_repairs (
+  repo_id TEXT PRIMARY KEY,
+  dirty INTEGER NOT NULL,
+  active INTEGER,
+  covered INTEGER NOT NULL DEFAULT 0,
+  -- Why the newest revision was asked for, and since when one has been pending.
+  reason TEXT NOT NULL,
+  since INTEGER NOT NULL,
+  next_at INTEGER NOT NULL
+) STRICT;
+
 -- table search_sources
 CREATE TABLE search_sources (
   repo_id TEXT PRIMARY KEY,
@@ -238,6 +250,9 @@ CREATE INDEX search_labels_deleted ON search_labels (repo_id, deleted_epoch, del
 -- index search_milestones_deleted
 CREATE INDEX search_milestones_deleted ON search_milestones (repo_id, deleted_epoch, deleted_seq)
   WHERE deleted = 1 AND deleted_epoch IS NOT NULL;
+
+-- index search_repairs_due
+CREATE INDEX search_repairs_due ON search_repairs (next_at, repo_id) WHERE dirty > covered;
 
 -- index webhook_deliveries_disable
 CREATE INDEX webhook_deliveries_disable ON webhook_deliveries (disable_retry_at)
