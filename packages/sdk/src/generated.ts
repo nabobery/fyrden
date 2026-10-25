@@ -1831,7 +1831,7 @@ export type PullsListOutput = {
       hooray: number;
       rocket: number;
       eyes: number;
-      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
       viewer?: ({
         id: number;
         content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -1974,7 +1974,7 @@ export type PullsCreateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -2104,7 +2104,7 @@ export type PullsGetOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -2246,7 +2246,7 @@ export type PullsUpdateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -2517,7 +2517,7 @@ export type PullsCommentsListOutput = {
       hooray: number;
       rocket: number;
       eyes: number;
-      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
       viewer?: ({
         id: number;
         content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -2599,7 +2599,7 @@ export type PullsCommentsCreateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -2664,7 +2664,7 @@ export type PullsCommentsGetOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -2730,7 +2730,7 @@ export type PullsCommentsUpdateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -3214,7 +3214,7 @@ export type PullsRequestedReviewersAddOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -3352,7 +3352,7 @@ export type PullsRequestedReviewersRemoveOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -3522,7 +3522,7 @@ export type IssuesListOutput = {
       hooray: number;
       rocket: number;
       eyes: number;
-      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
       viewer?: ({
         id: number;
         content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -3640,7 +3640,7 @@ export type IssuesCreateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -3749,7 +3749,7 @@ export type IssuesGetOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -3874,7 +3874,7 @@ export type IssuesUpdateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -4347,7 +4347,7 @@ export type IssuesAssigneesAddOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -4460,7 +4460,7 @@ export type IssuesAssigneesRemoveOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -4744,7 +4744,7 @@ export type IssuesCommentsListOutput = {
       hooray: number;
       rocket: number;
       eyes: number;
-      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+      /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
       viewer?: ({
         id: number;
         content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -4795,7 +4795,7 @@ export type IssuesCommentsCreateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -4842,7 +4842,7 @@ export type IssuesCommentsGetOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
@@ -4892,7 +4892,7 @@ export type IssuesCommentsUpdateOutput = {
     hooray: number;
     rocket: number;
     eyes: number;
-    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere. */
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
     viewer?: ({
       id: number;
       content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";

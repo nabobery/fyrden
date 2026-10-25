@@ -233,7 +233,10 @@ export async function getPullOperation(
 ): Promise<Output<typeof getPull>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:read");
   ctx.metrics.count("do.request", { class: "RepoDO", method: "getPull" });
-  const pull = await ctx.env.REPO.getByName(entry.id).getPull(input.pull_number);
+  const pull = await ctx.env.REPO.getByName(entry.id).getPull(
+    input.pull_number,
+    ctx.auth.principalId,
+  );
   if (pull === null) throw repoNotFound(entry);
   if (!pull) throw pullNotFound(input.pull_number);
   return pullOutput(pull, readable(ctx, entry));

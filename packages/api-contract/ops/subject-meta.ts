@@ -79,7 +79,7 @@ export const ReactionRollup = z
       .array(z.object({ id: z.number().int(), content: z.enum(REACTION_CONTENTS) }))
       .optional()
       .describe(
-        "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`) and in a page of conversation comments; absent elsewhere.",
+        "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere.",
       ),
   })
   .describe("Its reactions counted by content, as they stand.");

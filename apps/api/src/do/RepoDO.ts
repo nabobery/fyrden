@@ -1285,12 +1285,24 @@ export class RepoDO extends MigratingDO {
   }
 
   /** One pull request; undefined when there is none with that number. */
-  getPull(number: number) {
+  /** With `viewer`, that principal's own reactions to it too (an earlier object leaves them out). */
+  getPull(number: number, viewer?: string) {
     return this.#measured("getPull", () => {
       if (this.#refusesReads()) return null;
       const pull = this.pulls.get(number);
       if (!pull) return undefined;
-      const viewed = this.#viewed(pull);
+      const shown = this.#viewed(pull);
+      const viewed =
+        viewer === undefined
+          ? shown
+          : {
+              ...shown,
+              meta: {
+                ...shown.meta,
+                viewerReactions:
+                  this.reactions.ownOf("subject", [number], viewer).get(number) ?? [],
+              },
+            };
       // Asked for and not known: worked out (a pull request from before results were kept).
       if (viewed.mergeable === null) this.mergeability.request(pull);
       return viewed;

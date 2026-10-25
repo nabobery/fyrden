@@ -11972,7 +11972,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "type": "integer",
                               },
                               "viewer": {
-                                "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                                "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                                 "items": {
                                   "additionalProperties": false,
                                   "properties": {
@@ -12601,7 +12601,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -12966,7 +12966,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -13224,7 +13224,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -14288,7 +14288,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -14954,7 +14954,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -15559,7 +15559,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -16153,7 +16153,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -16466,7 +16466,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "type": "integer",
                               },
                               "viewer": {
-                                "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                                "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                                 "items": {
                                   "additionalProperties": false,
                                   "properties": {
@@ -16734,7 +16734,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -20697,7 +20697,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "type": "integer",
                               },
                               "viewer": {
-                                "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                                "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                                 "items": {
                                   "additionalProperties": false,
                                   "properties": {
@@ -21376,7 +21376,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -21777,7 +21777,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -22123,7 +22123,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -23218,7 +23218,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -23903,7 +23903,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -24506,7 +24506,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "type": "integer",
                               },
                               "viewer": {
-                                "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                                "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                                 "items": {
                                   "additionalProperties": false,
                                   "properties": {
@@ -24913,7 +24913,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -26482,7 +26482,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
@@ -27269,7 +27269,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "integer",
                         },
                         "viewer": {
-                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
                           "items": {
                             "additionalProperties": false,
                             "properties": {
