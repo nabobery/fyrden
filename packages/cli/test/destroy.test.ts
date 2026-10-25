@@ -31,6 +31,7 @@ const EVERY_RESOURCE = [
   "consumer:fyrden-effects-references/fyrden-api",
   "consumer:fyrden-ci-dispatch/fyrden-api",
   "consumer:fyrden-indexing/fyrden-api",
+  "consumer:fyrden-events-dlq/fyrden-api",
   "worker:fyrden-web",
   "worker:fyrden-api",
   "queue:fyrden-events",

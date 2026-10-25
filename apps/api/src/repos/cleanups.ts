@@ -194,21 +194,22 @@ const webhookPayloads: RepoCleanup = {
 
 /**
  * Its search projections (issues and pull requests, labels, milestones) and
- * its search state (its cutoff, its reconciliation and repairs), a page of
- * each a call. None is written once its
+ * its search state (its cutoff, its reconciliation and repairs), and the
+ * envelopes of its events the consumer gave up on, a page of each a call. None is written once its
  * tombstone is in the read model (every projection statement checks it).
  */
 const searchProjections: RepoCleanup = {
   name: "search",
   async page(env, { repoId, shard }, metrics) {
     const db = readModelFor(env, shard);
-    const page = (table: string) =>
+    const page = (table: string, column = "repo_id") =>
       db
         .prepare(
-          `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE repo_id = ? LIMIT ?)`,
+          `DELETE FROM ${table} WHERE rowid IN
+             (SELECT rowid FROM ${table} WHERE ${column} = ? LIMIT ?)`,
         )
         .bind(repoId, CLEANUP_POLICY.searchPage);
-    metrics?.count("d1.query", { db: "org", op: "cleanup_search" }, 6);
+    metrics?.count("d1.query", { db: "org", op: "cleanup_search" }, 7);
     const removed = await db.batch([
       page("search_docs"),
       page("search_labels"),
@@ -216,6 +217,7 @@ const searchProjections: RepoCleanup = {
       page("search_sources"),
       page("search_reconciles"),
       page("search_repairs"),
+      page("events_failed", "source_id"),
     ]);
     const most = Math.max(...removed.map((r) => r.meta.changes));
     return pageOutcome(most, CLEANUP_POLICY.searchPage);

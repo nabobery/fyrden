@@ -1,5 +1,6 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { reapOAuth } from "../oauth/reaper.js";
+import { pruneFailedEvents } from "../queues/events-dlq.js";
 import { advanceDeletions } from "../repos/deletion.js";
 import { settleStaleGenerations } from "../repos/generate.js";
 import { advanceTransfers } from "../repos/transfer.js";
@@ -13,7 +14,8 @@ export const MAINTENANCE_OBJECT = "instance";
 /**
  * The five-minute maintenance: archives the directory's audit log, expires
  * repositories and settles abandoned generations (then advances deletions),
- * reaps idempotency keys and OAuth leftovers, and advances transfers. Each
+ * reaps idempotency keys, OAuth leftovers and failed envelopes kept their
+ * time, and advances transfers. Each
  * task on its own: one failing does not stop the others, and the run then
  * throws. Run by `MaintenanceDO`, where it has a Durable Object's CPU.
  */
@@ -39,6 +41,7 @@ export async function runMaintenance(env: Env, metrics: Metrics): Promise<void> 
     reapIdempotencyKeys(env, { now: Date.now(), metrics }),
     advanceTransfers(env, { metrics }),
     reapOAuth(env, { now: Date.now(), metrics }),
+    pruneFailedEvents(env, { now: Date.now(), metrics }),
   ]);
   const failed = results.filter((r) => r.status === "rejected");
   for (const failure of failed)

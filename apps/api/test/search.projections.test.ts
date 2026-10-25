@@ -408,13 +408,20 @@ describe("a deleted repository's search projections", () => {
         .bind(repo)
         .run();
       await repairStatement(db, repo, "backfill", 0).run();
+      await db
+        .prepare(
+          `INSERT INTO events_failed (id, source_id, kind, envelope, at, expires_at)
+           VALUES (?, ?, 'repository', '{}', 0, 1)`,
+        )
+        .bind(`msg-${repo}`, repo)
+        .run();
     }
     const target = { repoId: doomed, shard: "default", gen: 1 };
     expect(await cleanup.page(env, target)).toBe("more");
-    expect(await rows(doomed)).toEqual([1, 0, 0, 0, 0, 0]);
+    expect(await rows(doomed)).toEqual([1, 0, 0, 0, 0, 0, 0]);
     expect(await cleanup.page(env, target)).toBe("done");
-    expect(await rows(doomed)).toEqual([0, 0, 0, 0, 0, 0]);
-    expect(await rows(kept)).toEqual([CLEANUP_POLICY.searchPage + 1, 1, 1, 1, 1, 1]);
+    expect(await rows(doomed)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+    expect(await rows(kept)).toEqual([CLEANUP_POLICY.searchPage + 1, 1, 1, 1, 1, 1, 1]);
   });
 });
 
@@ -427,9 +434,13 @@ async function rows(repoId: string): Promise<number[]> {
       "search_sources",
       "search_reconciles",
       "search_repairs",
-    ].map((table) =>
-      db.prepare(`SELECT count(*) AS n FROM ${table} WHERE repo_id = ?`).bind(repoId),
-    ),
+    ]
+      .map((table) =>
+        db.prepare(`SELECT count(*) AS n FROM ${table} WHERE repo_id = ?`).bind(repoId),
+      )
+      .concat(
+        db.prepare("SELECT count(*) AS n FROM events_failed WHERE source_id = ?").bind(repoId),
+      ),
   );
   return counts.map((c) => c.results[0]?.n ?? -1);
 }

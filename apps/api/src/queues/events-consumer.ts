@@ -54,7 +54,7 @@ export interface WaitingMessage {
   readonly envelope: unknown;
 }
 
-function isWaiting(body: unknown): body is WaitingMessage {
+export function isWaiting(body: unknown): body is WaitingMessage {
   return (
     typeof body === "object" &&
     body !== null &&

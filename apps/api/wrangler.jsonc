@@ -77,6 +77,13 @@
       },
       // One delivery attempt per message, each acknowledged: the deliveries
       // table schedules retries (a new message each); the cron resends lost ones.
+      // What the events consumer gave up on: stored, each before it is acknowledged.
+      {
+        "queue": "fyrden-events-dlq",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 10
+      },
       { "queue": "fyrden-webhooks", "max_batch_size": 5, "max_batch_timeout": 1, "max_retries": 2 },
       // Effects: the journal decides and schedules (a retry is a new message), and the effects
       // cron sends a message again for an effect overdue, so no dead-letter queue. Batch sizes

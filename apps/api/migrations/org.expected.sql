@@ -23,6 +23,25 @@ CREATE TABLE effects (
   done_at INTEGER
 , source_id TEXT, epoch_gen INTEGER, owner_gen INTEGER, any_owner INTEGER NOT NULL DEFAULT 0 CHECK (any_owner IN (0, 1)), recover_at INTEGER NOT NULL DEFAULT 0) STRICT;
 
+-- table events_failed
+CREATE TABLE events_failed (
+  -- The dead letter's message id.
+  id TEXT PRIMARY KEY,
+  -- The source the envelope came from; null when it could not be read.
+  source_id TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('repository', 'account', 'malformed')),
+  -- Its events' positions and types (JSON), when it could be read.
+  epoch_gen INTEGER,
+  first_seq INTEGER,
+  last_seq INTEGER,
+  types TEXT CHECK (types IS NULL OR json_valid(types)),
+  -- The envelope as it arrived (JSON), until it expires.
+  envelope TEXT,
+  reason TEXT,
+  at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+) STRICT;
+
 -- table repos
 CREATE TABLE repos (
   repo_id TEXT PRIMARY KEY,
@@ -247,6 +266,12 @@ CREATE INDEX effects_failed_reportable ON effects (next_attempt_at)
 
 -- index effects_recover
 CREATE INDEX effects_recover ON effects (recover_at, effect_id) WHERE state = 'pending';
+
+-- index events_failed_expiry
+CREATE INDEX events_failed_expiry ON events_failed (expires_at) WHERE envelope IS NOT NULL;
+
+-- index events_failed_source
+CREATE INDEX events_failed_source ON events_failed (source_id) WHERE source_id IS NOT NULL;
 
 -- index repos_owner
 CREATE INDEX repos_owner ON repos (owner_id, name) WHERE deleted = 0;

@@ -5,6 +5,7 @@ import { runEffectsCron } from "./cron/effects.js";
 import { MAINTENANCE_OBJECT } from "./cron/maintenance.js";
 import { consumeEffects, sinkOfQueue } from "./queues/effects-consumer.js";
 import { consumeEvents, EVENTS_QUEUE } from "./queues/events-consumer.js";
+import { consumeFailedEvents, EVENTS_DLQ } from "./queues/events-dlq.js";
 import { consumeWebhooks, WEBHOOKS_QUEUE } from "./webhooks/deliver.js";
 import type { DeliveryMessage } from "./webhooks/sink.js";
 
@@ -29,6 +30,12 @@ export default {
       const metrics = createMetrics(env.METRICS);
       return measureInvocation(metrics, { where: "worker", op: "queue events" }, () =>
         consumeEvents(batch, env, { metrics }),
+      );
+    }
+    if (batch.queue === EVENTS_DLQ) {
+      const metrics = createMetrics(env.METRICS);
+      return measureInvocation(metrics, { where: "worker", op: "queue events dead letters" }, () =>
+        consumeFailedEvents(batch, env, { metrics }),
       );
     }
     if (batch.queue === WEBHOOKS_QUEUE) {

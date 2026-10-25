@@ -81,6 +81,9 @@ export const METRICS = {
   "effects.recovered": ["sink"],
   "effects.invalidated": ["sink"],
   "effects.failed": ["sink"],
+  // Envelopes the events consumer gave up on, stored from its dead-letter queue, by the
+  // source's kind = repository | account | malformed.
+  "events.failed": ["kind"],
   // Activity feeds (the value is the amount): recipients an event named
   // past what it carries, and joins a thread refused at its cap of
   // participants.
