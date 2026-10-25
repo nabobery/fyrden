@@ -27461,6 +27461,682 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers/teams": {
+      "post": {
+        "description": "Fyrden: as \`pulls.requested_reviewers.add\`, its teams named as \`team_owner\`'s (ignoring case): refused with 409 \`stale\` when the repository belongs to another account now (transferred), rather than ask the new owner's teams of those slugs. Checked with the teams it reads, so neither a cached owner nor a transfer meanwhile asks another account's teams. A path of its own: a deployment that does not know it answers 404 rather than ask the teams unchecked.",
+        "operationId": "pulls.requested_reviewers.add_teams",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "reviewers": {
+                    "description": "Handles of users and agents who can read the repository.",
+                    "items": {
+                      "maxLength": 39,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+                      "type": "string",
+                    },
+                    "maxItems": 15,
+                    "type": "array",
+                  },
+                  "team_owner": {
+                    "description": "The account whose teams \`team_reviewers\` names.",
+                    "maxLength": 39,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+                    "type": "string",
+                  },
+                  "team_reviewers": {
+                    "items": {
+                      "description": "The team's slug (lowercase letters, digits and inner hyphens).",
+                      "maxLength": 100,
+                      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                      "type": "string",
+                    },
+                    "maxItems": 15,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                },
+                "required": [
+                  "team_owner",
+                  "team_reviewers",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "active_lock_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "off-topic",
+                            "too heated",
+                            "resolved",
+                            "spam",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "assignee": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "id",
+                          ],
+                          "type": "object",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "The first of \`assignees\` (GitHub's older field); null for none.",
+                    },
+                    "assignees": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "base": {
+                      "additionalProperties": false,
+                      "description": "The branch the changes are for.",
+                      "properties": {
+                        "ref": {
+                          "description": "The branch, without refs/heads/.",
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "Its commit when last recorded.",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "ref",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                    "body": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "closed_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Unix time in milliseconds.",
+                    },
+                    "created_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "draft": {
+                      "type": "boolean",
+                    },
+                    "head": {
+                      "additionalProperties": false,
+                      "description": "The branch with the changes. \`refs/pull/{number}/head\` points at \`head.sha\` and can be fetched.",
+                      "properties": {
+                        "ref": {
+                          "description": "The branch, without refs/heads/.",
+                          "type": "string",
+                        },
+                        "sha": {
+                          "description": "Its commit when last recorded.",
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "ref",
+                        "sha",
+                      ],
+                      "type": "object",
+                    },
+                    "head_ref_deleted": {
+                      "description": "Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again.",
+                      "type": "boolean",
+                    },
+                    "head_repo_id": {
+                      "description": "Fyrden: the repository the head branch is in (a fork in the same network); null for this one.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "labels": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "color": {
+                            "type": "string",
+                          },
+                          "default": {
+                            "description": "Copied in from a default set.",
+                            "type": "boolean",
+                          },
+                          "description": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "id": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "version": {
+                            "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "color",
+                          "description",
+                          "default",
+                          "version",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "locked": {
+                      "description": "Its conversation is locked: only write access and above comment and review.",
+                      "type": "boolean",
+                    },
+                    "maintainer_can_modify": {
+                      "description": "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
+                      "type": "boolean",
+                    },
+                    "merge_commit_sha": {
+                      "description": "Once merged, the commit the base branch moved to.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "mergeable": {
+                      "description": "Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging.",
+                      "type": [
+                        "boolean",
+                        "null",
+                      ],
+                    },
+                    "mergeable_reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "pending",
+                            "too_expensive",
+                            "unreadable",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: why \`mergeable\` is null while open. \`pending\`: not worked out yet; \`too_expensive\`: past the budgets for working it out in the background (merging may still succeed); \`unreadable\`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed.",
+                    },
+                    "mergeable_state": {
+                      "description": "\`clean\`: no conflicts (rulesets are checked when merging); \`dirty\`: conflicts; \`draft\`; \`unknown\`: not known, for the reason \`mergeable_reason\` gives.",
+                      "enum": [
+                        "clean",
+                        "dirty",
+                        "draft",
+                        "unknown",
+                      ],
+                      "type": "string",
+                    },
+                    "merged": {
+                      "type": "boolean",
+                    },
+                    "merged_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Unix time in milliseconds.",
+                    },
+                    "merged_by": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "id",
+                          ],
+                          "type": "object",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Who merged it (the user, when agents acted for one).",
+                    },
+                    "milestone": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "closed_at": {
+                              "anyOf": [
+                                {
+                                  "maximum": 9007199254740991,
+                                  "minimum": -9007199254740991,
+                                  "type": "integer",
+                                },
+                                {
+                                  "type": "null",
+                                },
+                              ],
+                              "description": "Unix time in milliseconds.",
+                            },
+                            "closed_issues": {
+                              "description": "Closed issues, and closed or merged pull requests, of the kinds the caller reads.",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            "created_at": {
+                              "description": "Unix time in milliseconds.",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            "creator": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "id",
+                              ],
+                              "type": "object",
+                            },
+                            "description": {
+                              "type": [
+                                "string",
+                                "null",
+                              ],
+                            },
+                            "due_on": {
+                              "anyOf": [
+                                {
+                                  "maximum": 9007199254740991,
+                                  "minimum": -9007199254740991,
+                                  "type": "integer",
+                                },
+                                {
+                                  "type": "null",
+                                },
+                              ],
+                              "description": "Unix time in milliseconds.",
+                            },
+                            "id": {
+                              "description": "Fyrden: the number again (milestones have no separate id space).",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            "number": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            "open_issues": {
+                              "description": "Open issues and pull requests in it, of the kinds the caller reads.",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            "state": {
+                              "enum": [
+                                "open",
+                                "closed",
+                              ],
+                              "type": "string",
+                            },
+                            "title": {
+                              "type": "string",
+                            },
+                            "updated_at": {
+                              "description": "Unix time in milliseconds.",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            "version": {
+                              "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                          },
+                          "required": [
+                            "id",
+                            "number",
+                            "title",
+                            "description",
+                            "state",
+                            "open_issues",
+                            "closed_issues",
+                            "creator",
+                            "due_on",
+                            "created_at",
+                            "updated_at",
+                            "closed_at",
+                            "version",
+                          ],
+                          "type": "object",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "number": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "performed_via_agents": {
+                      "description": "Fyrden: the agents that opened it for \`user\`, the acting one first; empty if none.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "reactions": {
+                      "additionalProperties": false,
+                      "description": "Its reactions counted by content, as they stand.",
+                      "properties": {
+                        "+1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "-1": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "confused": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "eyes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "heart": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "hooray": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "laugh": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "rocket": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "total_count": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "viewer": {
+                          "description": "Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (\`issues.get\`, \`pulls.get\`) and in a page of conversation comments; absent elsewhere.",
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "enum": [
+                                  "+1",
+                                  "-1",
+                                  "laugh",
+                                  "confused",
+                                  "heart",
+                                  "hooray",
+                                  "rocket",
+                                  "eyes",
+                                ],
+                                "type": "string",
+                              },
+                              "id": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "content",
+                            ],
+                            "type": "object",
+                          },
+                          "type": "array",
+                        },
+                      },
+                      "required": [
+                        "total_count",
+                        "+1",
+                        "-1",
+                        "laugh",
+                        "confused",
+                        "heart",
+                        "hooray",
+                        "rocket",
+                        "eyes",
+                      ],
+                      "type": "object",
+                    },
+                    "state": {
+                      "enum": [
+                        "open",
+                        "closed",
+                      ],
+                      "type": "string",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "user": {
+                      "additionalProperties": false,
+                      "description": "Who opened it (the user, when agents acted for one).",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                    "version": {
+                      "description": "Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as \`expected_version\` applies only while it is still this (409 \`stale\` otherwise).",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "number",
+                    "state",
+                    "merged",
+                    "head_repo_id",
+                    "mergeable",
+                    "mergeable_state",
+                    "mergeable_reason",
+                    "draft",
+                    "maintainer_can_modify",
+                    "locked",
+                    "active_lock_reason",
+                    "title",
+                    "body",
+                    "user",
+                    "performed_via_agents",
+                    "head",
+                    "base",
+                    "head_ref_deleted",
+                    "created_at",
+                    "updated_at",
+                    "version",
+                    "closed_at",
+                    "merged_at",
+                    "merge_commit_sha",
+                    "merged_by",
+                    "labels",
+                    "assignee",
+                    "assignees",
+                    "milestone",
+                    "reactions",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Request reviews of an account's teams",
+        "x-fyrden-permission": "pull_requests:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}/pulls/{pull_number}/reviews": {
       "get": {
         "description": "A pull request's reviews, in the order submitted.",

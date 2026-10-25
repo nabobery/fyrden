@@ -3238,6 +3238,141 @@ export type PullsRequestedReviewersAddOutput = {
   };
 };
 
+/** Input of `pulls.requested_reviewers.add_teams`: Request reviews of an account's teams. */
+export type PullsRequestedReviewersAddTeamsInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+  /** The account whose teams `team_reviewers` names. */
+  team_owner: string;
+  team_reviewers: string[];
+  /** Handles of users and agents who can read the repository. */
+  reviewers?: string[];
+};
+
+/** Output of `pulls.requested_reviewers.add_teams`. */
+export type PullsRequestedReviewersAddTeamsOutput = {
+  number: number;
+  state: "open" | "closed";
+  merged: boolean;
+  /** Fyrden: the repository the head branch is in (a fork in the same network); null for this one. */
+  head_repo_id: string | null;
+  /** Whether the head merges into the base branch's tip without conflicts; null while it is worked out (in the background, after each change of either) and once closed. Rulesets are not part of it: they are checked when merging. */
+  mergeable: boolean | null;
+  /** `clean`: no conflicts (rulesets are checked when merging); `dirty`: conflicts; `draft`; `unknown`: not known, for the reason `mergeable_reason` gives. */
+  mergeable_state: "clean" | "dirty" | "draft" | "unknown";
+  /** Fyrden: why `mergeable` is null while open. `pending`: not worked out yet; `too_expensive`: past the budgets for working it out in the background (merging may still succeed); `unreadable`: an object it needs could not be read. The last two are worked out again after a delay (10 minutes, doubling to 6 hours), and at once when the base tip or head moves. Null once known, and once closed. */
+  mergeable_reason: "pending" | "too_expensive" | "unreadable" | null;
+  draft: boolean;
+  /** Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can. */
+  maintainer_can_modify: boolean;
+  /** Its conversation is locked: only write access and above comment and review. */
+  locked: boolean;
+  active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+  title: string;
+  body: string | null;
+  /** Who opened it (the user, when agents acted for one). */
+  user: {
+    id: string;
+  };
+  /** Fyrden: the agents that opened it for `user`, the acting one first; empty if none. */
+  performed_via_agents: string[];
+  /** The branch with the changes. `refs/pull/{number}/head` points at `head.sha` and can be fetched. */
+  head: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** The branch the changes are for. */
+  base: {
+    /** The branch, without refs/heads/. */
+    ref: string;
+    /** Its commit when last recorded. */
+    sha: string;
+  };
+  /** Fyrden: the head branch was deleted; the pull request stays at its last head commit and cannot be reopened until the branch exists again. */
+  head_ref_deleted: boolean;
+  /** Unix time in milliseconds. */
+  created_at: number;
+  /** Unix time in milliseconds. */
+  updated_at: number;
+  /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+  version: number;
+  /** Unix time in milliseconds. */
+  closed_at: number | null;
+  /** Unix time in milliseconds. */
+  merged_at: number | null;
+  /** Once merged, the commit the base branch moved to. */
+  merge_commit_sha: string | null;
+  /** Who merged it (the user, when agents acted for one). */
+  merged_by: {
+    id: string;
+  } | null;
+  labels: ({
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+    /** Copied in from a default set. */
+    default: boolean;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  })[];
+  /** The first of `assignees` (GitHub's older field); null for none. */
+  assignee: {
+    id: string;
+  } | null;
+  assignees: {
+    id: string;
+  }[];
+  milestone: {
+    /** Fyrden: the number again (milestones have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    description: string | null;
+    state: "open" | "closed";
+    /** Open issues and pull requests in it, of the kinds the caller reads. */
+    open_issues: number;
+    /** Closed issues, and closed or merged pull requests, of the kinds the caller reads. */
+    closed_issues: number;
+    creator: {
+      id: string;
+    };
+    /** Unix time in milliseconds. */
+    due_on: number | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Fyrden: the record's edit baseline, moved by every change of the record itself (not by reactions, counts or what it embeds); an update given it as `expected_version` applies only while it is still this (409 `stale` otherwise). */
+    version: number;
+  } | null;
+  /** Its reactions counted by content, as they stand. */
+  reactions: {
+    total_count: number;
+    "+1": number;
+    "-1": number;
+    laugh: number;
+    confused: number;
+    heart: number;
+    hooray: number;
+    rocket: number;
+    eyes: number;
+    /** Fyrden: the caller's own reactions to it (their ids, to take one back), in an issue or pull request read alone (`issues.get`, `pulls.get`) and in a page of conversation comments; absent elsewhere. */
+    viewer?: ({
+      id: number;
+      content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+    })[];
+  };
+};
+
 /** Input of `pulls.requested_reviewers.remove`: Remove requested reviewers. */
 export type PullsRequestedReviewersRemoveInput = {
   /** The owner's handle. */
@@ -6916,6 +7051,7 @@ export const OPERATIONS = {
   "pulls.reviews.dismiss": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals", pathParams: ["owner","repo","pull_number","review_id"], idempotent: true },
   "pulls.requested_reviewers.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: false },
   "pulls.requested_reviewers.add": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
+  "pulls.requested_reviewers.add_teams": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers/teams", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.requested_reviewers.remove": { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.code_owners.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/code-owners", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "rules" },
   "issues.list": { method: "GET", path: "/repos/{owner}/{repo}/issues", pathParams: ["owner","repo"], idempotent: false, items: "issues" },
@@ -7169,6 +7305,8 @@ export interface Operations {
   "pulls.requested_reviewers.list": { input: PullsRequestedReviewersListInput; output: PullsRequestedReviewersListOutput };
   /** Request reviewers. Requests a review of users or agents who can read the repository (not the author), and of teams of the repository's organization. A team asks each member it has now (the author aside), at most 2000, and keeps those members: one of them reviewing ends its request; someone who joins the team later does not. The author may request reviews; on someone else's pull request it needs triage access. At most 15 at once, a team counting as one, and 10000 members across a pull request's teams; a request ends when its reviewer submits a review. Past the limit, requests of users or agents being deleted give up their places first, with no event. */
   "pulls.requested_reviewers.add": { input: PullsRequestedReviewersAddInput; output: PullsRequestedReviewersAddOutput };
+  /** Request reviews of an account's teams. Fyrden: as `pulls.requested_reviewers.add`, its teams named as `team_owner`'s (ignoring case): refused with 409 `stale` when the repository belongs to another account now (transferred), rather than ask the new owner's teams of those slugs. Checked with the teams it reads, so neither a cached owner nor a transfer meanwhile asks another account's teams. A path of its own: a deployment that does not know it answers 404 rather than ask the teams unchecked. */
+  "pulls.requested_reviewers.add_teams": { input: PullsRequestedReviewersAddTeamsInput; output: PullsRequestedReviewersAddTeamsOutput };
   /** Remove requested reviewers. Withdraws review requests of users, agents and teams; ones not requested are ignored. Fyrden takes teams alone too (GitHub needs `reviewers`), and `reviewer_ids` and `team_ids` name them by id (a deleted user's handle names no one; two requests can carry one team slug, a team renamed and another named so since). */
   "pulls.requested_reviewers.remove": { input: PullsRequestedReviewersRemoveInput; output: PullsRequestedReviewersRemoveOutput };
   /** Get a pull request's code owners. Fyrden: who owns what an open pull request changes, under its base branch's CODEOWNERS (`.github/`, the root, `docs/`: the first location holding a regular file), for every path the three-dot diff changes (a rename as its two sides). Worked out in the background for the pull request's current base branch, base tip and head: `pending` until then (a draft's is worked out once asked for). Rules are those that decide at least one path, with how many and the first; an ownerless rule's paths need no owner. `errors` counts the file's invalid lines and `unmatchable_paths` the paths that are not UTF-8: either makes a merge needing code owners refuse. `too_large` is final for the pair, with why; `unreadable` is tried again at `retry_at`. Needs `contents:read` too. */

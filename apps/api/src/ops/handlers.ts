@@ -194,6 +194,7 @@ import {
   listReviewsOperation,
   removeRequestedReviewersOperation,
   requestReviewersOperation,
+  requestTeamReviewersOperation,
 } from "../repos/reviews.js";
 import {
   createRulesetOperation,
@@ -473,6 +474,7 @@ export const handlers: Handlers = {
   "pulls.reviews.dismiss": dismissReviewOperation,
   "pulls.requested_reviewers.list": listRequestedReviewersOperation,
   "pulls.requested_reviewers.add": requestReviewersOperation,
+  "pulls.requested_reviewers.add_teams": requestTeamReviewersOperation,
   "pulls.requested_reviewers.remove": removeRequestedReviewersOperation,
   "pulls.code_owners.get": getPullCodeOwnersOperation,
   // Issues; the listing, get, lock and comments serve pull requests too, each kind on its

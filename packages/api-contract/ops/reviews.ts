@@ -308,6 +308,38 @@ export const requestReviewers = defineOperation({
   },
 });
 
+export const requestTeamReviewers = defineOperation({
+  id: "pulls.requested_reviewers.add_teams",
+  method: "POST",
+  path: "/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers/teams",
+  summary: "Request reviews of an account's teams",
+  description: `Fyrden: as \`pulls.requested_reviewers.add\`, its teams named as \`team_owner\`'s (ignoring case): refused with 409 \`stale\` when the repository belongs to another account now (transferred), rather than ask the new owner's teams of those slugs. Checked with the teams it reads, so neither a cached owner nor a transfer meanwhile asks another account's teams. A path of its own: a deployment that does not know it answers 404 rather than ask the teams unchecked.`,
+  input: z
+    .object({
+      ...PullInput,
+      team_owner: z
+        .string()
+        .min(1)
+        .max(MAX_HANDLE_LENGTH)
+        .regex(HANDLE_SHAPE)
+        .describe("The account whose teams `team_reviewers` names."),
+      team_reviewers: z.array(TeamSlug).min(1).max(MAX_REQUESTED_REVIEWERS),
+      reviewers: Logins,
+    })
+    .refine(
+      (input) =>
+        (input.reviewers?.length ?? 0) + input.team_reviewers.length <= MAX_REQUESTED_REVIEWERS,
+      { message: `At most ${MAX_REQUESTED_REVIEWERS} reviewers and teams together.` },
+    ),
+  output: PullRequest,
+  permission: "pull_requests:write",
+  principals: ["user", "agent"],
+  rateLimit: "write",
+  idempotency: "key",
+  successStatus: 201,
+  mcp: false,
+});
+
 export const removeRequestedReviewers = defineOperation({
   id: "pulls.requested_reviewers.remove",
   method: "DELETE",

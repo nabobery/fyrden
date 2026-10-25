@@ -161,6 +161,7 @@ import {
   listReviews,
   removeRequestedReviewers,
   requestReviewers,
+  requestTeamReviewers,
 } from "../ops/reviews.js";
 import {
   createRuleset,
@@ -264,6 +265,7 @@ export const registry = defineRegistry([
   dismissReview,
   listRequestedReviewers,
   requestReviewers,
+  requestTeamReviewers,
   removeRequestedReviewers,
   getPullCodeOwners,
   listIssues,

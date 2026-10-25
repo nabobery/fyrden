@@ -11,7 +11,7 @@ import { env } from "cloudflare:workers";
 import { currentInvocation, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { type DomainEvent, eventKey, MAX_REQUESTED_REVIEWERS } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
-import { beforeAll, beforeEach, describe, expect, inject, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, inject, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
@@ -401,7 +401,14 @@ beforeAll(async () => {
   admin = await user(true);
 });
 
+// Many requests a test, from one test client: the request rate limits are another test's subject.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 beforeEach(async () => {
+  vi.spyOn(env.RATE_LIMIT_AUTH, "limit").mockResolvedValue({ success: true });
+  vi.spyOn(env.RATE_LIMIT_WRITE, "limit").mockResolvedValue({ success: true });
   owner = await user();
   [alice, bob, carol, dave] = [await user(), await user(), await user(), await user()];
   const login = uniqueId("org").slice(0, 39);
@@ -786,6 +793,84 @@ describe("asking code owners to review", () => {
     );
     expect(res.status).toBeGreaterThanOrEqual(500);
     expect((await requested()).teams).toEqual([core.id]);
+  });
+
+  it("asks teams only of the account the request names (team_owner), whatever its case", async () => {
+    await pullChanging({ "src/a.ts": "b\n" });
+    const teams = `${path}/pulls/1/requested_reviewers/teams`;
+    const wrong = await api("POST", teams, owner.token, {
+      team_reviewers: [core.slug],
+      team_owner: "someone-else",
+    });
+    expect(wrong.status).toBe(409);
+    expect((await wrong.json<{ code: string }>()).code).toBe("stale");
+    expect((await requested()).teams).toEqual([]);
+    await ok(
+      api("POST", teams, owner.token, {
+        team_reviewers: [core.slug],
+        team_owner: org.login.toUpperCase(),
+      }),
+    );
+    expect((await requested()).teams).toEqual([core.id]);
+  });
+
+  it("refuses, in the object, teams of an account other than the one the request resolved", async () => {
+    await pullChanging({ "src/a.ts": "b\n" });
+    // As a transfer between resolving the repository and changing it: the object's account is
+    // not the one expected, and nothing is asked.
+    const result = await stub().requestReviewersOwnedBy(
+      1,
+      [],
+      { principal: owner.principalId, via: "api" },
+      [core.slug],
+      "org_another",
+    );
+    expect(result).toMatchObject({ ok: false, code: "team_owner_changed" });
+    expect((await requested()).teams).toEqual([]);
+    const same = await stub().requestReviewersOwnedBy(
+      1,
+      [],
+      { principal: owner.principalId, via: "api" },
+      [core.slug],
+      org.id,
+    );
+    expect(same).toMatchObject({ ok: true });
+  });
+
+  it("fails, never asks unchecked, when an earlier object meets team_owner", async () => {
+    await pullChanging({ "src/a.ts": "b\n" });
+    const earlier = new Proxy(env.REPO, {
+      get(target, prop) {
+        if (prop === "getByName")
+          return (name: string) =>
+            new Proxy(target.getByName(name), {
+              get(inner, key) {
+                if (key === "requestReviewersOwnedBy") return undefined;
+                // The stub's own RPC methods, unbound (binding one loses its call).
+                return Reflect.get(inner, key);
+              },
+            });
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const res = await createApp().fetch(
+      new Request(`https://fyrden.test/api${path}/pulls/1/requested_reviewers/teams`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${owner.token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({ team_reviewers: [core.slug], team_owner: org.login }),
+      }),
+      new Proxy(env, {
+        get: (target, key) => (key === "REPO" ? earlier : Reflect.get(target, key)),
+      }),
+      createExecutionContext(),
+    );
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect((await requested()).teams).toEqual([]);
   });
 
   it("withdraws a principal's request by its id, whatever its handle says now", async () => {

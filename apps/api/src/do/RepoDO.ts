@@ -2287,6 +2287,22 @@ export class RepoDO extends MigratingDO {
     return this.#discussion.requestReviewers(number, reviewerIds, actor, teamSlugs);
   }
 
+  /**
+   * As `requestReviewers`, its teams only of `teamAccount` (the account the
+   * request resolved): when the repository belongs to another now, nothing
+   * is asked. A method of its own: an earlier object (while a deploy rolls
+   * out) refuses it rather than ask the teams unchecked.
+   */
+  requestReviewersOwnedBy(
+    number: number,
+    reviewerIds: readonly string[],
+    actor: RefActor,
+    teamSlugs: readonly string[],
+    teamAccount: string,
+  ) {
+    return this.#discussion.requestReviewers(number, reviewerIds, actor, teamSlugs, teamAccount);
+  }
+
   /** Withdraws review requests of principals and of teams (by the slugs they were asked by). */
   removeRequestedReviewers(
     number: number,

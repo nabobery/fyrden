@@ -174,7 +174,7 @@ export interface DiscussionDeps {
 }
 
 /** A review request's answer when its teams could not be read with the ACL it decides by. */
-export type AudienceRefusal = "team_audience_unavailable";
+export type AudienceRefusal = "team_audience_unavailable" | "team_owner_changed";
 
 export class PullDiscussion {
   constructor(private readonly deps: DiscussionDeps) {}
@@ -362,6 +362,8 @@ export class PullDiscussion {
     reviewerIds: readonly string[],
     actor: RefActor,
     teamSlugs: readonly string[] = [],
+    /** The account whose teams `teamSlugs` are meant to be: another's are never asked. */
+    teamAccount?: string,
   ) {
     const { authority } = this.deps;
     // Whether an attempt read the reviewers being deleted.
@@ -374,6 +376,16 @@ export class PullDiscussion {
           if (read === "unavailable")
             return { ok: false as const, code: "team_audience_unavailable" as const };
           const audience = read;
+          // Read of the repository's account as it is now (see `audienceFit`): the one meant, or
+          // nothing is asked (a transfer since the request named it). With no account (a user's
+          // repository) no team is found, and the request is refused for that as ever.
+          if (
+            teamAccount !== undefined &&
+            audience &&
+            audience.accountId !== "" &&
+            audience.accountId !== teamAccount
+          )
+            return { ok: false as const, code: "team_owner_changed" as const };
           const fit = audience && this.deps.audienceFit(audience);
           if (audience && fit !== "same")
             return { ok: false as const, code: "audience_stale" as const, audience, fit };

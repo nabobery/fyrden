@@ -57,6 +57,15 @@ const pullNotFound = (number: number) =>
  * 409 `stale`: a change made from a version (or a label's id) that moved on,
  * with the version it is at now when the refusal knows it.
  */
+/** Teams named as one account's, of a repository another owns now (transferred): 409 `stale`. */
+export function teamOwnerChanged(): OperationError {
+  return new OperationError(
+    409,
+    "stale",
+    "The repository belongs to another account than team_owner now: its teams are not the ones named. Read it again.",
+  );
+}
+
 export function staleError(currentVersion?: number): OperationError {
   return new OperationError(
     409,
@@ -189,6 +198,8 @@ export function failure(entry: RepoEntry, code: string, number?: number): Operat
         "team_audience_unavailable",
         "The teams' members could not be read just now; try again.",
       );
+    case "team_owner_changed":
+      return teamOwnerChanged();
     case "locked":
       return new OperationError(
         403,

@@ -9,6 +9,7 @@ import type {
   Output,
   removeRequestedReviewers,
   requestReviewers,
+  requestTeamReviewers,
 } from "@fyrden/api-contract";
 import { SHOWN_HANDLE } from "../accounts/handles.js";
 import { repoFor } from "../git/chunked/operations.js";
@@ -17,7 +18,7 @@ import { hasPermission, type OpContext, OperationError } from "../ops/execute.js
 import { pageOf } from "../ops/pages.js";
 import type { RepoEntry } from "./directory.js";
 import { authorize } from "./directory.js";
-import { actorOf, failure, readable } from "./pulls.js";
+import { actorOf, failure, readable, teamOwnerChanged } from "./pulls.js";
 import { pullOutput, reviewOutput } from "./shapes.js";
 
 const repo = (ctx: OpContext, entry: RepoEntry, method: string) => {
@@ -169,14 +170,45 @@ export async function requestReviewersOperation(
   ctx: OpContext,
   input: Input<typeof requestReviewers>,
 ): Promise<Output<typeof requestReviewers>> {
+  return requestReviewersOf(ctx, input);
+}
+
+/** The `pulls.requested_reviewers.add_teams` operation: its teams only `team_owner`'s. */
+export async function requestTeamReviewersOperation(
+  ctx: OpContext,
+  input: Input<typeof requestTeamReviewers>,
+): Promise<Output<typeof requestTeamReviewers>> {
+  return requestReviewersOf(ctx, input, input.team_owner);
+}
+
+/** Requests reviews; with `teamOwner`, of its teams only while it owns the repository. */
+async function requestReviewersOf(
+  ctx: OpContext,
+  input: Input<typeof requestReviewers>,
+  teamOwner?: string,
+): Promise<Output<typeof requestReviewers>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:write");
   const ids = await reviewersByLogin(ctx, input.reviewers ?? []);
-  const result = await repo(ctx, entry, "requestReviewers").requestReviewers(
-    input.pull_number,
-    ids,
-    actorOf(ctx),
-    input.team_reviewers ?? [],
-  );
+  const teams = input.team_reviewers ?? [];
+  // Teams named as one account's: another owning the repository now asks none of its own.
+  if (teamOwner !== undefined && teamOwner.toLowerCase() !== entry.ownerHandle.toLowerCase())
+    throw teamOwnerChanged();
+  const result =
+    teamOwner !== undefined
+      ? // The object checks its account too (an entry cached, or a transfer since it was read).
+        await repo(ctx, entry, "requestReviewersOwnedBy").requestReviewersOwnedBy(
+          input.pull_number,
+          ids,
+          actorOf(ctx),
+          teams,
+          entry.ownerId,
+        )
+      : await repo(ctx, entry, "requestReviewers").requestReviewers(
+          input.pull_number,
+          ids,
+          actorOf(ctx),
+          teams,
+        );
   if (!result.ok) throw failure(entry, result.code, input.pull_number);
   return pullOutput(result.pull, readable(ctx, entry));
 }

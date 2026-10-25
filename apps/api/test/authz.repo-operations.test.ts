@@ -165,6 +165,16 @@ const CASES: Record<
     },
     expected: { status: 404, code: "pull_not_found" },
   },
+  // Its teams named as the repository's owner's: the missing pull request is what answers.
+  "pulls.requested_reviewers.add_teams": {
+    input: {
+      get team_owner() {
+        return handle;
+      },
+      team_reviewers: ["core"],
+    },
+    expected: { status: 404, code: "pull_not_found" },
+  },
   // Serving issues and pull requests alike, these declare metadata:read and take each kind's own
   // permission in the handler (see BOTH_KINDS below): metadata:read alone gets no further.
   "issues.list": { input: {}, expected: MISSING_KIND },
