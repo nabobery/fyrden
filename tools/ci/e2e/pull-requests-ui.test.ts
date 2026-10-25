@@ -252,6 +252,12 @@ describe("pull requests in the web UI", () => {
     await see(page.getByRole("status")).toHaveText("Assigned.");
     await see(sidebar.getByRole("list", { name: "Its assignees" })).toContainText("you");
     await accessible(page, "pull request with an assignee");
+    // A comment's time is its permalink: the page starts with it, marked (reaching it from
+    // elsewhere scrolls: see the references test).
+    const first = page.locator(".timeline li[id^='comment-']").first();
+    await first.getByRole("link").first().click();
+    await see(page).toHaveURL(/\?comment=\d+#comment-\d+$/);
+    await see(first.locator("article.linked")).toHaveCount(1);
   });
 
   it("draws the files' changes, hostile names and lines as text", async () => {
@@ -666,6 +672,27 @@ describe("pull requests in the web UI", () => {
     await see(page.getByRole("heading", { name: "CODEOWNERS errors" })).toBeVisible();
     await see(page.getByText("Line 2", { exact: true })).toBeVisible();
     await accessible(page, "a CODEOWNERS file's errors");
+  });
+
+  it("reaches a pull request's comment from what refers to another, scrolled to", async () => {
+    // A long description: the comment starts well below the fold, so reaching it is scrolling.
+    await pushBranch("referring", { "referring.txt": "x\n" });
+    const number = await openPull("referring", "Referring", {
+      body: Array.from({ length: 120 }, (_, i) => `Paragraph ${i + 1}.`).join("\n\n"),
+    });
+    const comment = await rest<{ id: number }>(
+      "POST",
+      `/repos/${handle}/${name}/issues/${number}/comments`,
+      { body: "see #1" },
+    );
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/1/references`);
+    await page.getByRole("link", { name: `${handle}/${name}#${number}` }).click();
+    await see(page).toHaveURL(
+      new RegExp(`/pull/${number}\\?comment=${comment.id}#comment-${comment.id}$`),
+    );
+    const linked = page.locator(`#comment-${comment.id} article.linked`);
+    await see(linked).toContainText("see #1");
+    await see(linked.locator("header")).toBeInViewport();
   });
 
   // Last: every page the suite visited.

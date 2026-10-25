@@ -17,7 +17,7 @@ import {
   writeContinuation,
 } from "../lib/continuation.js";
 import { mergeRules, type RulesetsPage } from "../lib/merge.server.js";
-import { pageLinks } from "../lib/pages.js";
+import { type PageLinks, pageLinks, positiveId } from "../lib/pages.js";
 import {
   field,
   type IssueCommentsPage,
@@ -38,6 +38,7 @@ import {
 import { reactionCall } from "../lib/reactions.js";
 import { isMetaIntent, META_DONE } from "../lib/subject-meta.js";
 import { metaCall } from "../lib/subject-meta.server.js";
+import { pageUrl } from "../lib/target.js";
 import type { Repo } from "../lib/types.js";
 import type { Route } from "./+types/repo.pull";
 
@@ -62,6 +63,24 @@ const SOURCE_BUDGET = 256 * 1024;
 /** Bytes of a conversation form at most: a body of 65,536 characters, URL-encoded, and the rest. */
 const PULL_FORM_MAX_BYTES = 9 * 65_536 + 16 * 1024;
 
+/**
+ * `links` of the conversation's comments, from a permalink's page (`url`,
+ * null for none): its first page is the conversation's own start.
+ */
+function fromPermalink(links: PageLinks, url: URL | null): PageLinks {
+  if (url === null || links.first) return links;
+  const start = withoutPermalink(url);
+  start.searchParams.delete("comments");
+  return { ...links, first: `${start.pathname}${start.search}` };
+}
+
+/** `url` as the page's own, its permalink's `comment` off: pages of comments go on from there. */
+function withoutPermalink(url: URL): URL {
+  const page = pageUrl(url);
+  page.searchParams.delete("comment");
+  return page;
+}
+
 export async function loader({ request, context, params }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const { number, pull, viewer } = await loadPull(context, request, params);
@@ -69,6 +88,15 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   const repoApi = repoApiPath(params.owner, params.repo);
   const open = pull.state === "open";
   const commentsAt = readContinuation(url.searchParams.get("comments"));
+  // A comment's permalink (when no page of comments is named): the page that starts with it.
+  const named = commentsAt.cursor !== null || commentsAt.after !== null;
+  const linked = named ? null : positiveId(url.searchParams.get("comment"));
+  // Comments are in id order: a continuation without the API's cursor resumes after its last
+  // comment shown (a permalink's page, or one cut by its source, goes on from where it was).
+  const commentsQuery = new URLSearchParams({ per_page: String(CONVERSATION_PAGE) });
+  if (commentsAt.cursor) commentsQuery.set("cursor", commentsAt.cursor);
+  else if (commentsAt.after !== null) commentsQuery.set("after", String(commentsAt.after));
+  else if (linked !== null && linked > 1) commentsQuery.set("after", String(linked - 1));
   const reviewsAt = readContinuation(url.searchParams.get("reviews"));
   const page = (at: Continuation) => {
     const query = new URLSearchParams({ per_page: String(CONVERSATION_PAGE) });
@@ -80,7 +108,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       context,
       request,
       "GET",
-      `${repoApi}/issues/${number}/comments?${page(commentsAt)}`,
+      `${repoApi}/issues/${number}/comments?${commentsQuery}`,
     ),
     apiCall<ReviewsPage>(context, request, "GET", `${api}/reviews?${page(reviewsAt)}`),
     // The viewer's role (what the sidebar offers, whether a locked conversation takes their
@@ -152,11 +180,16 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     viewer,
     body: pull.body,
     timeline: inOrder(items),
-    commentPages: pageLinks(
-      url,
-      "comments",
-      shownComments.next && writeContinuation(shownComments.next),
+    commentPages: fromPermalink(
+      pageLinks(
+        withoutPermalink(url),
+        "comments",
+        shownComments.next && writeContinuation(shownComments.next),
+      ),
+      linked === null ? null : url,
     ),
+    // The comment a permalink named; `missing` when it is not this one's now (deleted, or another's).
+    linked: linked === null ? null : { id: linked, missing: shownComments.items[0]?.id !== linked },
     reviewPages: pageLinks(
       url,
       "reviews",
@@ -357,7 +390,18 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
 
       <section aria-labelledby="conversation">
         <h2 id="conversation">Conversation</h2>
-        <Timeline items={timeline} viewer={viewer} react={react} />
+        {loaderData.linked?.missing && (
+          <p className="muted" role="status">
+            The comment linked to is not on this pull request now (deleted, or another's): the
+            conversation is shown from where it was.
+          </p>
+        )}
+        <Timeline
+          items={timeline}
+          viewer={viewer}
+          react={react}
+          linked={loaderData.linked?.id ?? null}
+        />
         <Pager links={commentPages} label="Comment" />
         <Pager links={reviewPages} label="Review" />
       </section>

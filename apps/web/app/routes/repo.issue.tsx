@@ -33,6 +33,7 @@ import {
   issuePage,
   issueStatus,
 } from "../lib/issues.js";
+import { positiveId } from "../lib/pages.js";
 import {
   field,
   type IssueCommentsPage,
@@ -66,16 +67,15 @@ const COMMENTS_PAGE = 25;
  */
 const SOURCE_BUDGET = 256 * 1024;
 
-/** A positive id from a page's URL, else none. */
-const idParam = (value: string | null): number | null =>
-  value !== null && /^[1-9][0-9]{0,14}$/.test(value) ? Number(value) : null;
-
 export async function loader({ request, context, params }: Route.LoaderArgs) {
   // As the page's own (a navigation's data request's suffix off): its links go to it.
   const url = pageUrl(new URL(request.url));
   const number = pullNumber(params.number);
   const api = issueApiPath(params.owner, params.repo, number);
-  const after = idParam(url.searchParams.get("after"));
+  // A comment's permalink: the page of comments that starts with it (no comment given otherwise).
+  const linked = positiveId(url.searchParams.get("comment"));
+  const after =
+    linked !== null ? (linked > 1 ? linked - 1 : null) : positiveId(url.searchParams.get("after"));
   const [issue, comments, repo, session] = await Promise.all([
     apiCall<Issue>(context, request, "GET", api),
     apiCallBounded<IssueCommentsPage>(
@@ -101,6 +101,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   const last = shownComments.at(-1);
   const at = (id: number | null) => {
     const query = new URLSearchParams(url.search);
+    // A page of comments, no longer one comment's.
+    query.delete("comment");
     if (id === null) query.delete("after");
     else query.set("after", String(id));
     const search = query.toString();
@@ -114,8 +116,10 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     pages: {
       // Cut by its source, or with more in the API: the next page goes on after the last shown.
       next: (cut || page.next_cursor) && last ? at(last.id) : null,
-      first: after === null ? null : at(null),
+      first: after === null && linked === null ? null : at(null),
     },
+    // The comment a permalink named; `missing` when it is not this issue's now (deleted, or another's).
+    linked: linked === null ? null : { id: linked, missing: shownComments[0]?.id !== linked },
     permissions: repo.permissions ?? null,
     viewer: session.state === "signed-in" ? session.user.id : null,
     // A session check that failed says nothing of who is viewing: the page keeps the last known.
@@ -136,7 +140,7 @@ function draftOf(form: FormData): Written | undefined {
     case "edit":
       return { fields: { title: field(form, "title"), body: rawField(form, "body") } };
     case "edit-comment": {
-      const id = idParam(field(form, "comment_id"));
+      const id = positiveId(field(form, "comment_id"));
       return id === null ? undefined : { fields: { body: rawField(form, "body") }, target: id };
     }
     default:
@@ -196,7 +200,7 @@ export async function action({
       );
     }
     case "edit-comment": {
-      const id = idParam(field(form, "comment_id"));
+      const id = positiveId(field(form, "comment_id"));
       const body = rawField(form, "body");
       if (id === null || !body.trim()) return { error: "Write the comment first.", scope };
       if (!expected) return refuse(NO_VERSION, { fields: { body }, target: id });
@@ -210,7 +214,7 @@ export async function action({
       );
     }
     case "delete-comment": {
-      const id = idParam(field(form, "comment_id"));
+      const id = positiveId(field(form, "comment_id"));
       if (id === null) return { error: "No such comment.", scope };
       return send(
         "DELETE",
@@ -226,7 +230,7 @@ export async function action({
       const reason = field(form, "state_reason");
       if (!["completed", "not_planned", "duplicate"].includes(reason))
         return { error: "Choose why it is closed.", scope };
-      const duplicate = idParam(field(form, "duplicate_of"));
+      const duplicate = positiveId(field(form, "duplicate_of"));
       if (reason === "duplicate" && duplicate === null)
         return { error: "Name the issue or pull request it duplicates.", scope };
       return send(
@@ -436,7 +440,7 @@ export default function IssuePage({ loaderData }: Route.ComponentProps) {
   const result = useActionData<typeof action>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
-  const { owner, repo, issue, comments, pages, permissions } = loaderData;
+  const { owner, repo, issue, comments, pages, permissions, linked } = loaderData;
   // A failed session check keeps the viewer last known (its drafts with it); a confirmed one is taken.
   const known = useRef(loaderData.viewer);
   if (loaderData.viewerKnown) known.current = loaderData.viewer;
@@ -550,6 +554,12 @@ export default function IssuePage({ loaderData }: Route.ComponentProps) {
 
       <section aria-labelledby="conversation">
         <h2 id="conversation">Conversation</h2>
+        {linked?.missing && (
+          <p className="muted" role="status">
+            The comment linked to is not on this issue now (deleted, or another's): the conversation
+            is shown from where it was.
+          </p>
+        )}
         {comments.length === 0 ? (
           <p className="muted">{pages.first ? "No more comments." : "No comments yet."}</p>
         ) : (
@@ -559,14 +569,17 @@ export default function IssuePage({ loaderData }: Route.ComponentProps) {
               return (
                 <li key={comment.id} id={`comment-${comment.id}`}>
                   <article
-                    className="panel"
+                    className={linked?.id === comment.id ? "panel linked" : "panel"}
                     aria-label={`Comment by ${who(comment.user.id, viewer)}`}
                   >
                     <header className="muted">
                       <strong>{who(comment.user.id, viewer)}</strong> commented{" "}
-                      <time dateTime={new Date(comment.created_at).toISOString()}>
-                        {when(comment.created_at)}
-                      </time>
+                      {/* Its permalink: the page of comments that starts with it. */}
+                      <Link to={`?comment=${comment.id}#comment-${comment.id}`}>
+                        <time dateTime={new Date(comment.created_at).toISOString()}>
+                          {when(comment.created_at)}
+                        </time>
+                      </Link>
                       {comment.updated_at > comment.created_at && " (edited)"}
                     </header>
                     <Markdown source={comment.body} />

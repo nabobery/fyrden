@@ -150,6 +150,12 @@ export function SubjectSidebar({
           </p>
         )}
       </section>
+      <section aria-labelledby="sidebar-references">
+        <h3 id="sidebar-references">Referenced by</h3>
+        <p>
+          <Link to={`${picker}/references`}>What refers to it</Link>
+        </p>
+      </section>
       {viewer !== null && roles.push && (
         <section aria-labelledby="sidebar-lock">
           <h3 id="sidebar-lock">Lock</h3>

@@ -183,26 +183,38 @@ describe("issues in the web UI", () => {
     await see(page.getByRole("status")).toHaveText("Saved.");
   });
 
-  /** Holds this page's next form post to `at` until the returned `release` is called (then unroutes). */
-  async function holdNextPost(at = "issues/1", on: Page = page): Promise<() => Promise<void>> {
+  /**
+   * Holds this page's next form post to `at` until the returned `release` is
+   * called (then unroutes); `release.arrived` settles once that post is held.
+   */
+  async function holdNextPost(
+    at = "issues/1",
+    on: Page = page,
+  ): Promise<(() => Promise<void>) & { arrived: Promise<void> }> {
     const pattern = `**/${handle}/${name}/${at}*`;
     let release = () => {};
     const held = new Promise<void>((done) => {
       release = done;
     });
+    let arrive = () => {};
+    const arrived = new Promise<void>((done) => {
+      arrive = done;
+    });
     let taken = false;
     const handler = async (route: Route) => {
       if (taken || route.request().method() !== "POST") return route.fallback();
       taken = true;
+      arrive();
       await held;
       // Left while it was held, the browser may have given up on it.
       return route.continue().catch(() => undefined);
     };
     await on.route(pattern, handler);
-    return async () => {
+    const done = async () => {
       release();
       await on.unroute(pattern, handler);
     };
+    return Object.assign(done, { arrived });
   }
 
   it("keeps what is written while a save or a comment is answered", async () => {
@@ -423,6 +435,8 @@ describe("issues in the web UI", () => {
       let release = await holdNextPost("issues/1", theirs);
       await mine.getByRole("button", { name: "Save comment" }).click();
       await mine.getByLabel("Comment (Markdown)").fill("bo's edit, and more written meanwhile");
+      // Sent and held before the lock: it reaches the API locked.
+      await release.arrived;
       await rest("PUT", `/repos/${handle}/${name}/issues/1/lock`, {});
       await release();
       await see(theirs.getByRole("alert")).toBeVisible();
@@ -440,6 +454,7 @@ describe("issues in the web UI", () => {
       await theirs.locator("#comment-body").fill("bo's reply, refused");
       release = await holdNextPost("issues/1", theirs);
       await theirs.getByRole("button", { name: "Comment", exact: true }).click();
+      await release.arrived;
       await rest("PUT", `/repos/${handle}/${name}/issues/1/lock`, {});
       await release();
       await see(theirs.getByRole("alert")).toBeVisible();
@@ -523,6 +538,111 @@ describe("issues in the web UI", () => {
     await page.getByRole("button", { name: `Delete issue #${doomed.number}` }).click();
     await see(page).toHaveURL(`${stack.origin}/${handle}/${name}/issues`);
     await see(page.getByRole("link", { name: "To be deleted" })).toHaveCount(0);
+  });
+
+  it("lists what refers to an issue, and opens a comment past the first page by its permalink", async () => {
+    const path = `/repos/${handle}/${name}/issues`;
+    // A long description: its comments start well below the fold, so reaching one is scrolling.
+    const { number } = await rest<{ number: number }>("POST", path, {
+      title: "Long thread",
+      body: Array.from({ length: 120 }, (_, i) => `Paragraph ${i + 1}.`).join("\n\n"),
+    });
+    for (let i = 1; i <= 29; i++)
+      await rest("POST", `${path}/${number}/comments`, { body: `comment ${i}` });
+    const naming = await rest<{ id: number }>("POST", `${path}/${number}/comments`, {
+      body: "this is about #1",
+    });
+    // A reference within the repository is recorded with the comment naming it: listed at once.
+    const listed = await rest<{ references: { source: { comment_id: number | null } }[] }>(
+      "GET",
+      `${path}/1/references`,
+    );
+    expect(listed.references.some((r) => r.source.comment_id === naming.id)).toBe(true);
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/1`);
+    await page.getByRole("complementary").getByRole("link", { name: "What refers to it" }).click();
+    await see(page.getByRole("heading", { level: 1 })).toContainText("What refers to");
+    await accessible("references");
+    await page.getByRole("link", { name: `${handle}/${name}#${number}` }).click();
+    // Comment 30, past the first page of 25: the page that starts with it, marked, scrolled to
+    // (from another page: its header in view, below the long description).
+    await see(page).toHaveURL(new RegExp(`comment=${naming.id}#comment-${naming.id}$`));
+    const linked = page.locator(`#comment-${naming.id} article.linked`);
+    await see(linked).toContainText("this is about #1");
+    await see(linked.locator("header")).toBeInViewport();
+    await see(page.getByText("comment 1", { exact: true })).toHaveCount(0);
+    await page.getByRole("link", { name: "First page" }).click();
+    await see(page.getByText("comment 1", { exact: true }).first()).toBeVisible();
+    // Without scripts too: the server's page of comments 30 onward, the browser at the fragment.
+    const browser = page.context().browser();
+    if (!browser) throw new Error("no browser");
+    const plain = await (
+      await browser.newContext({
+        javaScriptEnabled: false,
+        storageState: await page.context().storageState(),
+      })
+    ).newPage();
+    try {
+      await plain.goto(
+        `${stack.origin}/${handle}/${name}/issues/${number}?comment=${naming.id}#comment-${naming.id}`,
+      );
+      const there = plain.locator(`#comment-${naming.id} article.linked`);
+      await see(there.locator("header")).toBeInViewport();
+      await see(plain.locator(".timeline > li")).toHaveCount(1);
+      await plain.getByRole("link", { name: "First page" }).click();
+      await see(plain.locator(".timeline > li")).toHaveCount(25);
+    } finally {
+      await plain.context().close();
+    }
+  });
+
+  it("opens a comment by its permalink without scripts, past the page's bytes, scrolled to", async () => {
+    const path = `/repos/${handle}/${name}/issues`;
+    // A long description: its comments start well below the fold, so reaching one is scrolling.
+    const { number } = await rest<{ number: number }>("POST", path, {
+      title: "Long comments",
+      body: Array.from({ length: 120 }, (_, i) => `Paragraph ${i + 1}.`).join("\n\n"),
+    });
+    // 192 KiB of Markdown each: one a page (the page shows up to 256 KiB).
+    const ids: number[] = [];
+    for (let i = 1; i <= 6; i++)
+      ids.push(
+        (
+          await rest<{ id: number }>("POST", `${path}/${number}/comments`, {
+            body: `long ${i} ${"€".repeat(65_520)}`,
+          })
+        ).id,
+      );
+    const target = ids[3] as number;
+    const browser = page.context().browser();
+    if (!browser) throw new Error("no browser");
+    // The same session, no scripts: what a server-rendered page and plain links do.
+    const plain = await (
+      await browser.newContext({
+        javaScriptEnabled: false,
+        storageState: await page.context().storageState(),
+      })
+    ).newPage();
+    try {
+      const at = `${stack.origin}/${handle}/${name}/issues/${number}`;
+      await plain.goto(`${at}?comment=${target}#comment-${target}`);
+      const linked = plain.locator(`#comment-${target} article.linked`);
+      await see(linked).toContainText("long 4");
+      await see(linked.locator("header")).toBeInViewport();
+      await see(plain.locator(`#comment-${ids[0]}`)).toHaveCount(0);
+      await plain.getByRole("link", { name: "Next page" }).click();
+      await see(plain.locator(`#comment-${ids[4]}`)).toBeVisible();
+      await see(plain).not.toHaveURL(/comment=/);
+      await plain.getByRole("link", { name: "First page" }).click();
+      await see(plain.locator(`#comment-${ids[0]}`)).toBeVisible();
+    } finally {
+      await plain.context().close();
+    }
+    // With scripts: a comment's time is its permalink (reaching it from elsewhere scrolls: see the
+    // references test).
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/${number}`);
+    await page.locator(`#comment-${ids[0]}`).getByRole("link").first().click();
+    await see(page).toHaveURL(new RegExp(`comment=${ids[0]}#comment-${ids[0]}$`));
+    await see(page.locator(`#comment-${ids[0]} article.linked`)).toHaveCount(1);
   });
 
   it("manages labels: creates one with a hostile name, edits it, keeps a stale edit, deletes it", async () => {

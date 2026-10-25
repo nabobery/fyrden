@@ -466,3 +466,70 @@ describe("reactions on a pull request", () => {
     ]);
   });
 });
+
+describe("a pull request comment's permalink", () => {
+  const comment = (id: number, body = `comment ${id}`) => ({
+    id,
+    user: { id: "usr_a" },
+    performed_via_agents: [],
+    body,
+    created_at: id,
+    updated_at: id,
+    reactions: NO_REACTIONS,
+  });
+  async function load(search: string, comments: unknown[] = [], next: string | null = null) {
+    const { context, calls } = api({
+      "GET /api/repos/ada/demo/pulls/7": () => json(pullRequest()),
+      "GET /api/repos/ada/demo/issues/7/comments": () => json({ comments, next_cursor: next }),
+      "GET /api/repos/ada/demo/pulls/7/reviews": () => json({ reviews: [], next_cursor: null }),
+      "GET /api/repos/ada/demo": () => json(repo),
+    });
+    const data = await pullLoader({
+      request: new Request(`${ORIGIN}/ada/demo/pull/7${search}`),
+      context,
+      params,
+    } as never);
+    return { data, listed: calls.map(pathOf).find((p) => p.includes("/comments")) };
+  }
+
+  it("loads the page that starts with it, and says when it is not there", async () => {
+    const found = await load("?comment=9", [comment(9), comment(10)]);
+    expect(found.listed).toBe("GET /api/repos/ada/demo/issues/7/comments?per_page=25&after=8");
+    expect(found.data).toMatchObject({
+      linked: { id: 9, missing: false },
+      commentPages: { first: "/ada/demo/pull/7" },
+    });
+    expect((await load("?comment=9", [comment(10)])).data).toMatchObject({
+      linked: { id: 9, missing: true },
+    });
+  });
+
+  it("gives way to a named page of comments, with a cursor or without", async () => {
+    for (const [search, asked] of [
+      ["?comment=9&comments=3%3AC2", "cursor=C2"],
+      ["?comment=30&comments=3%3A", "after=3"],
+    ] as const) {
+      const { data, listed } = await load(search);
+      expect(listed, search).toBe(`GET /api/repos/ada/demo/issues/7/comments?per_page=25&${asked}`);
+      expect(data).toMatchObject({ linked: null });
+    }
+  });
+
+  it("goes on from it, its next pages never the permalink again, their first the start", async () => {
+    // Cut by its source: three comments of 192 KiB, one a page.
+    const big = (id: number) => comment(id, "€".repeat(65_536));
+    const linked = await load("?comment=30", [big(30), big(31), big(32)]);
+    const next = linked.data.commentPages.next ?? "";
+    expect(next).toBe("/ada/demo/pull/7?comments=30%3A");
+    // That page asks the API after the last comment shown, and is a page of comments, not 30's.
+    const following = await load(next.replace("/ada/demo/pull/7", ""), [big(31), big(32)]);
+    expect(following.listed).toBe("GET /api/repos/ada/demo/issues/7/comments?per_page=25&after=30");
+    expect(following.data).toMatchObject({
+      linked: null,
+      commentPages: { first: "/ada/demo/pull/7" },
+    });
+    // An API page after it: its cursor, and back to the start.
+    const paged = await load("?comment=30", [comment(30)], "C2");
+    expect(paged.data.commentPages.next).toBe("/ada/demo/pull/7?comments=%3AC2");
+  });
+});

@@ -177,6 +177,10 @@ button.danger {
 .inline-form {
   display: inline;
 }
+/* The comment a permalink names. */
+.panel.linked {
+  border-color: var(--accent);
+}
 ul.label-list {
   list-style: none;
   padding: 0;

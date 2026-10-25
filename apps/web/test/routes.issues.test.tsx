@@ -709,3 +709,52 @@ describe("reactions", () => {
     }
   });
 });
+
+describe("a comment's permalink", () => {
+  async function load(search: string, first: number[]) {
+    const { context, calls } = api({
+      "GET /api/repos/ada/demo/issues/7": () => json(issue()),
+      "GET /api/repos/ada/demo/issues/7/comments": () =>
+        json({ comments: first.map((id) => comment(id)), next_cursor: null }),
+      "GET /api/repos/ada/demo": () => json({ ...repo, permissions: ALL }),
+    });
+    const data = await issueLoader({
+      request: new Request(`${ORIGIN}/ada/demo/issues/7${search}`),
+      context,
+      params,
+    } as never);
+    const listed = calls.map(pathOf).find((p) => p.includes("/comments"));
+    return { data, listed };
+  }
+
+  it("loads the page of comments that starts with it, with the conversation's start a link away", async () => {
+    const { data, listed } = await load("?comment=9", [9, 10]);
+    expect(listed).toBe("GET /api/repos/ada/demo/issues/7/comments?per_page=25&after=8");
+    expect(data).toMatchObject({
+      linked: { id: 9, missing: false },
+      pages: { first: "/ada/demo/issues/7" },
+    });
+    // The first comment: from the start, no `after`.
+    expect((await load("?comment=1", [1])).listed).toBe(
+      "GET /api/repos/ada/demo/issues/7/comments?per_page=25",
+    );
+  });
+
+  it("says so when the comment is not on this issue now, and marks the one it names", async () => {
+    const { data } = await load("?comment=9", [10]);
+    expect(data).toMatchObject({ linked: { id: 9, missing: true } });
+    const gone = renderPage(
+      IssuePage,
+      "/ada/demo/issues/7",
+      pageData({ linked: { id: 9, missing: true } }),
+    );
+    expect(gone).toContain("The comment linked to is not on this issue now");
+    const shown = renderPage(
+      IssuePage,
+      "/ada/demo/issues/7",
+      pageData({ comments: [comment(9)], linked: { id: 9, missing: false } }),
+    );
+    expect(shown).toContain('href="/ada/demo/issues/7?comment=9#comment-9"');
+    expect(shown).toMatch(/class="panel linked"/);
+  });
+});

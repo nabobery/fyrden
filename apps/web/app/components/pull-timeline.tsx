@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { when, who } from "../lib/pulls.js";
 import { Markdown } from "./markdown.js";
 import { Reactions, type Rollup } from "./reactions.js";
@@ -61,11 +62,14 @@ export function Timeline({
   items,
   viewer,
   react,
+  linked = null,
 }: {
   items: TimelineItem[];
   viewer: string | null;
   /** Whether the viewer may react to its comments, and whether a form is being sent. */
   react: { canReact: boolean; busy: boolean };
+  /** The comment a permalink names, marked. */
+  linked?: number | null;
 }) {
   if (items.length === 0) return <p className="muted">No comments or reviews yet.</p>;
   return (
@@ -74,10 +78,16 @@ export function Timeline({
         if (item.kind === "comment")
           return (
             <li key={`c${item.id}`} id={`comment-${item.id}`}>
-              <article className="panel" aria-label={`Comment by ${who(item.author, viewer)}`}>
+              <article
+                className={linked === item.id ? "panel linked" : "panel"}
+                aria-label={`Comment by ${who(item.author, viewer)}`}
+              >
                 <header className="muted">
                   <Byline author={item.author} agents={item.agents} viewer={viewer} /> commented{" "}
-                  <time dateTime={new Date(item.at).toISOString()}>{when(item.at)}</time>
+                  {/* Its permalink: the page of comments that starts with it. */}
+                  <Link to={`?comment=${item.id}#comment-${item.id}`}>
+                    <time dateTime={new Date(item.at).toISOString()}>{when(item.at)}</time>
+                  </Link>
                   {item.edited && " (edited)"}
                 </header>
                 <Markdown source={item.body} />
