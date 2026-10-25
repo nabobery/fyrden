@@ -37,16 +37,19 @@ export interface RepoEntry {
   readonly isTemplate: boolean;
   /** When it is deleted (Unix ms); null to keep it. */
   readonly expiresAt: number | null;
+  /** Whether a user or an organization owns it, as the directory read it (absent when built otherwise). */
+  readonly ownerType?: "user" | "org";
 }
 
 /** The columns of a repository entry (`repos r` joined with its owner, `principals p`). */
-export const REPO_COLUMNS = `r.id, r.owner_id, p.handle, r.name, r.network_id, r.visibility,
-  r.created_at, r.name_gen, r.parent_id, r.is_template, r.expires_at`;
+export const REPO_COLUMNS = `r.id, r.owner_id, p.handle, p.type AS owner_type, r.name,
+  r.network_id, r.visibility, r.created_at, r.name_gen, r.parent_id, r.is_template, r.expires_at`;
 
 export type RepoRow = {
   id: string;
   owner_id: string;
   handle: string;
+  owner_type: string;
   name: string;
   network_id: string;
   visibility: RepoEntry["visibility"];
@@ -136,6 +139,7 @@ export function entryOf(row: RepoRow): RepoEntry {
     id: row.id,
     ownerId: row.owner_id,
     ownerHandle: row.handle,
+    ...((row.owner_type === "user" || row.owner_type === "org") && { ownerType: row.owner_type }),
     name: row.name,
     networkId: row.network_id,
     visibility: row.visibility,

@@ -3750,6 +3750,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "description": "The owner's handle.",
                             "type": "string",
                           },
+                          "owner_type": {
+                            "description": "Fyrden (GitHub's \`owner.type\`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+                            "enum": [
+                              "User",
+                              "Organization",
+                            ],
+                            "type": "string",
+                          },
                           "parent_id": {
                             "description": "The id of the repository it was forked from.",
                             "type": [
@@ -3960,6 +3968,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     },
                     "owner": {
                       "description": "The owner's handle.",
+                      "type": "string",
+                    },
+                    "owner_type": {
+                      "description": "Fyrden (GitHub's \`owner.type\`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+                      "enum": [
+                        "User",
+                        "Organization",
+                      ],
                       "type": "string",
                     },
                     "parent_id": {
@@ -4852,6 +4868,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "description": "The owner's handle.",
                       "type": "string",
                     },
+                    "owner_type": {
+                      "description": "Fyrden (GitHub's \`owner.type\`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+                      "enum": [
+                        "User",
+                        "Organization",
+                      ],
+                      "type": "string",
+                    },
                     "parent_id": {
                       "description": "The id of the repository it was forked from.",
                       "type": [
@@ -5091,6 +5115,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     },
                     "owner": {
                       "description": "The owner's handle.",
+                      "type": "string",
+                    },
+                    "owner_type": {
+                      "description": "Fyrden (GitHub's \`owner.type\`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+                      "enum": [
+                        "User",
+                        "Organization",
+                      ],
                       "type": "string",
                     },
                     "parent_id": {
@@ -8854,6 +8886,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "description": "The owner's handle.",
                             "type": "string",
                           },
+                          "owner_type": {
+                            "description": "Fyrden (GitHub's \`owner.type\`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+                            "enum": [
+                              "User",
+                              "Organization",
+                            ],
+                            "type": "string",
+                          },
                           "parent_id": {
                             "description": "The id of the repository it was forked from.",
                             "type": [
@@ -9072,6 +9112,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     },
                     "owner": {
                       "description": "The owner's handle.",
+                      "type": "string",
+                    },
+                    "owner_type": {
+                      "description": "Fyrden (GitHub's \`owner.type\`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+                      "enum": [
+                        "User",
+                        "Organization",
+                      ],
                       "type": "string",
                     },
                     "parent_id": {
@@ -31696,6 +31744,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "description": "The owner's handle.",
                           "type": "string",
                         },
+                        "owner_type": {
+                          "description": "Fyrden (GitHub's \`owner.type\`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+                          "enum": [
+                            "User",
+                            "Organization",
+                          ],
+                          "type": "string",
+                        },
                         "parent_id": {
                           "description": "The id of the repository it was forked from.",
                           "type": [
@@ -32657,6 +32713,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "description": "The owner's handle.",
                       "type": "string",
                     },
+                    "owner_type": {
+                      "description": "Fyrden (GitHub's \`owner.type\`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+                      "enum": [
+                        "User",
+                        "Organization",
+                      ],
+                      "type": "string",
+                    },
                     "parent_id": {
                       "description": "The id of the repository it was forked from.",
                       "type": [
@@ -33171,6 +33235,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "description": "The owner's handle.",
                             "type": "string",
                           },
+                          "owner_type": {
+                            "description": "Fyrden (GitHub's \`owner.type\`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+                            "enum": [
+                              "User",
+                              "Organization",
+                            ],
+                            "type": "string",
+                          },
                           "parent_id": {
                             "description": "The id of the repository it was forked from.",
                             "type": [
@@ -33367,6 +33439,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     },
                     "owner": {
                       "description": "The owner's handle.",
+                      "type": "string",
+                    },
+                    "owner_type": {
+                      "description": "Fyrden (GitHub's \`owner.type\`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+                      "enum": [
+                        "User",
+                        "Organization",
+                      ],
                       "type": "string",
                     },
                     "parent_id": {
@@ -34028,6 +34108,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           },
                           "owner": {
                             "description": "The owner's handle.",
+                            "type": "string",
+                          },
+                          "owner_type": {
+                            "description": "Fyrden (GitHub's \`owner.type\`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+                            "enum": [
+                              "User",
+                              "Organization",
+                            ],
                             "type": "string",
                           },
                           "parent_id": {

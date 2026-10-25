@@ -26,6 +26,12 @@ const RepoName = z
 export const Repo = z.object({
   id: z.string().describe("Immutable repository id (rep_ prefix)."),
   owner: z.string().describe("The owner's handle."),
+  owner_type: z
+    .enum(["User", "Organization"])
+    .optional()
+    .describe(
+      "Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+    ),
   name: z.string(),
   full_name: z.string().describe("owner/name"),
   visibility: z.enum(["public", "internal", "private"]),

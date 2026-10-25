@@ -570,6 +570,7 @@ acting, the current one first, and audit rows carry it.
 |---|---|
 | An agent's rights | Its own (or the user's, under a grant), capped by its owner's: an organization's agent reaches only the organization's repositories |
 | A repository's `permissions` | `GET /repos/{owner}/{repo}` answers GitHub's `permissions` (`admin`, `maintain`, `push`, `triage`, `pull`) for the caller's role there, never above an acting agent's owner's; a public repository's `pull` holds for any reader. They say what the role allows: the token's scopes and repositories are decided by each operation, as GitHub's are |
+| A repository's `owner_type` | Fyrden's (GitHub's `owner.type`): `User` or `Organization`, on a repository read through the directory (`GET /repos/{owner}/{repo}` and listings); absent from one just created or forked. A transferred repository may be reported with its former owner's kind for as long as its former owner (30 s, an isolate's cache) |
 | A grant | Scopes (at least one), optionally repositories, an expiry of up to 365 days; never wider, nor longer-lived, than the token making it |
 | Passing down | An agent holding a user's grant may pass a narrower one (scopes, repositories, expiry) to another agent of its owner; one hop at most (depth 2) |
 | Delegated token | Type `oat`, up to 1 hour, and never past any grant of its chain or the agent's own token; scopes and repositories within the grant and the agent's token; for the REST API unless `resource` asks for the MCP server |

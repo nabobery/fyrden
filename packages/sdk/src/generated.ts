@@ -590,6 +590,8 @@ export type ReposCreateOutput = {
   id: string;
   /** The owner's handle. */
   owner: string;
+  /** Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked. */
+  owner_type?: "User" | "Organization";
   name: string;
   /** owner/name */
   full_name: string;
@@ -635,6 +637,8 @@ export type ReposListOutput = {
     id: string;
     /** The owner's handle. */
     owner: string;
+    /** Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked. */
+    owner_type?: "User" | "Organization";
     name: string;
     /** owner/name */
     full_name: string;
@@ -682,6 +686,8 @@ export type ReposGetOutput = {
   id: string;
   /** The owner's handle. */
   owner: string;
+  /** Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked. */
+  owner_type?: "User" | "Organization";
   name: string;
   /** owner/name */
   full_name: string;
@@ -736,6 +742,8 @@ export type ReposUpdateOutput = {
   id: string;
   /** The owner's handle. */
   owner: string;
+  /** Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked. */
+  owner_type?: "User" | "Organization";
   name: string;
   /** owner/name */
   full_name: string;
@@ -818,6 +826,8 @@ export type ReposTransferOutput = {
     id: string;
     /** The owner's handle. */
     owner: string;
+    /** Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked. */
+    owner_type?: "User" | "Organization";
     name: string;
     /** owner/name */
     full_name: string;
@@ -867,6 +877,8 @@ export type ReposForkOutput = {
   id: string;
   /** The owner's handle. */
   owner: string;
+  /** Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked. */
+  owner_type?: "User" | "Organization";
   name: string;
   /** owner/name */
   full_name: string;
@@ -916,6 +928,8 @@ export type ReposForksListOutput = {
     id: string;
     /** The owner's handle. */
     owner: string;
+    /** Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked. */
+    owner_type?: "User" | "Organization";
     name: string;
     /** owner/name */
     full_name: string;
@@ -969,6 +983,8 @@ export type ReposGenerateOutput = {
   id: string;
   /** The owner's handle. */
   owner: string;
+  /** Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked. */
+  owner_type?: "User" | "Organization";
   name: string;
   /** owner/name */
   full_name: string;
@@ -5192,6 +5208,8 @@ export type StarsListOutput = {
     id: string;
     /** The owner's handle. */
     owner: string;
+    /** Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked. */
+    owner_type?: "User" | "Organization";
     name: string;
     /** owner/name */
     full_name: string;
@@ -6351,6 +6369,8 @@ export type OrgsReposCreateOutput = {
   id: string;
   /** The owner's handle. */
   owner: string;
+  /** Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked. */
+  owner_type?: "User" | "Organization";
   name: string;
   /** owner/name */
   full_name: string;
@@ -6398,6 +6418,8 @@ export type OrgsReposListOutput = {
     id: string;
     /** The owner's handle. */
     owner: string;
+    /** Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked. */
+    owner_type?: "User" | "Organization";
     name: string;
     /** owner/name */
     full_name: string;

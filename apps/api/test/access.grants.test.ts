@@ -431,3 +431,16 @@ async function whoOwns(repoId: string): Promise<string | undefined> {
     .first<{ owner_id: string }>();
   return row?.owner_id;
 }
+
+describe("a repository's owner kind", () => {
+  it("is a user's or an organization's, as each repository read alone says", async () => {
+    const owner = await who();
+    const mine = await userRepo(owner);
+    const theirs = await org(owner);
+    const read = async (fullName: string) =>
+      (await (await api("GET", `/repos/${fullName}`, owner.token)).json<{ owner_type?: string }>())
+        .owner_type;
+    expect(await read(mine.full_name)).toBe("User");
+    expect(await read(`${theirs.login}/app`)).toBe("Organization");
+  });
+});
