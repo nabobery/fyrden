@@ -26,8 +26,12 @@ function counting() {
         const stub = env.MAINTENANCE.getByName(name);
         return {
           run: () => {
-            runs.push(name);
+            runs.push(`${name} run`);
             return stub.run();
+          },
+          repairSearch: () => {
+            runs.push(`${name} repairSearch`);
+            return stub.repairSearch();
           },
         };
       },
@@ -62,7 +66,8 @@ describe("the five-minute maintenance", () => {
     const left = await expiredKey();
     const { runs, traced } = counting();
     await cron(traced);
-    expect(runs).toEqual([MAINTENANCE_OBJECT]);
+    // The maintenance, and search repairs in a request of their own.
+    expect(runs).toEqual([`${MAINTENANCE_OBJECT} run`, `${MAINTENANCE_OBJECT} repairSearch`]);
     expect(await left()).toBe(0);
   });
 

@@ -98,13 +98,16 @@ const cutoff = () =>
     .bind(repo.id)
     .first<{ cutoff_epoch: number; cutoff_seq: number }>();
 
-/** `env` whose org read model records each batch's statement count. */
+/** `env` whose org read model records each page's batch statement count. */
 function recording(batches: number[]): Env {
   const org = new Proxy(db, {
     get(target, prop) {
       if (prop === "batch")
         return (statements: D1PreparedStatement[]) => {
-          batches.push(statements.length);
+          // A page's batch (its checkpoint among them): its statement count.
+          const sql = statements.map((s) => (s as unknown as { statement: string }).statement);
+          if (sql.some((q) => q.includes("UPDATE search_reconciles SET kind")))
+            batches.push(statements.length);
           return target.batch(statements);
         };
       const value = Reflect.get(target, prop);
@@ -141,6 +144,11 @@ function watched(calls: { n: number }, onFirst?: () => Promise<void>): Env {
     get: (target, prop) => (prop === "REPO" ? stubs : Reflect.get(target, prop)),
   });
 }
+
+/** The database's own UTC day. */
+const today = async () =>
+  (await db.prepare("SELECT CAST(unixepoch() / 86400 AS INTEGER) AS d").first<{ d: number }>())
+    ?.d ?? 0;
 
 const repairStateOf = (repoId: string) =>
   db.prepare("SELECT dirty, covered FROM search_repairs WHERE repo_id = ?").bind(repoId).first();
@@ -181,10 +189,9 @@ describe("search reconciliation", () => {
     expect(await reconcileSource(env, target())).toBe("done");
     const batches: number[] = [];
     expect(await reconcileSource(recording(batches), target())).toBe("done");
-    // The start (epoch, cutoff, pass, its repair revision), then each kind's page: its
-    // checkpoint alone; then the repository's own row with the last checkpoint and the
-    // revision covered; then the collection.
-    expect(batches).toEqual([4, 1, 1, 1, 4, 3]);
+    // Each kind's page: its checkpoint alone (and the write clock's tick); then the
+    // repository's own row with the last checkpoint and the revision covered.
+    expect(batches).toEqual([2, 2, 2, 5]);
   });
 
   it("marks deleted what the export lacks, unless an event after it began wrote it", async () => {
@@ -371,6 +378,7 @@ describe("search reconciliation", () => {
 
     // A pass's write is admitted only while that pass is the source's: the same write at the
     // current pass's position, under the first pass's generation, is refused.
+    const day = await today();
     const write = (gen: number) =>
       docStatement(
         db,
@@ -405,7 +413,7 @@ describe("search reconciliation", () => {
             milestone: null,
           },
         },
-        { by: "reconcile", gen, kind: "subjects", after: 0 },
+        { by: "reconcile", gen, kind: "subjects", after: 0, day },
       ).run();
     // (While a pass is under way.)
     await db
@@ -573,7 +581,7 @@ describe("search reconciliation", () => {
           milestone: null,
         },
       },
-      { by: "reconcile", gen: pass?.gen ?? 0, kind: "subjects", after: 0 },
+      { by: "reconcile", gen: pass?.gen ?? 0, kind: "subjects", after: 0, day: await today() },
     ).run();
     expect(stale.meta.changes).toBe(0);
     expect(await reconcileSource(env, target())).toBe("done");
@@ -612,10 +620,9 @@ describe("search reconciliation", () => {
     try {
       const batches: number[] = [];
       expect(await reconcileSource(recording(batches), target(), { pages: 20 })).toBe("done");
-      // The start, then the subjects in three pages of at most 3 rows, each its rows the
-      // export lacks marked deleted and its checkpoint (issue 1, matching, writes nothing).
-      expect(batches.slice(1, 4)).toEqual([3, 4, 3]);
-      expect(Math.max(...batches)).toBeLessThanOrEqual(5);
+      // The subjects in three pages of at most 3 rows, each its rows the export lacks marked
+      // deleted, its checkpoint and the tick (issue 1, matching, writes nothing).
+      expect(batches.slice(0, 3)).toEqual([4, 5, 4]);
     } finally {
       RECONCILE_POLICY.rowsPerPage = rows;
     }

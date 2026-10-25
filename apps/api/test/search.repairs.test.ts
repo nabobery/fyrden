@@ -87,6 +87,45 @@ function failingFor(failing: ReadonlySet<string>): Env {
   });
 }
 
+/** `env` whose D1 calls (org and directory, queries and batches) are counted in `seen`. */
+function countingCalls(seen: { calls: number }): Env {
+  const count = (d1: D1Database): D1Database =>
+    new Proxy(d1, {
+      get(target, prop) {
+        if (prop === "batch")
+          return (batch: D1PreparedStatement[]) => {
+            seen.calls++;
+            return target.batch(batch);
+          };
+        if (prop === "prepare")
+          return (sql: string) => {
+            const wrap = (statement: D1PreparedStatement): D1PreparedStatement =>
+              new Proxy(statement, {
+                get(t, p) {
+                  if (p === "bind") return (...v: unknown[]) => wrap(t.bind(...v));
+                  if (p === "run" || p === "all" || p === "first" || p === "raw")
+                    return (...a: unknown[]) => {
+                      seen.calls++;
+                      return (Reflect.get(t, p) as (...x: unknown[]) => unknown).apply(t, a);
+                    };
+                  const value = Reflect.get(t, p);
+                  return typeof value === "function" ? value.bind(t) : value;
+                },
+              });
+            return wrap(target.prepare(sql));
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  const org = count(env.ORG_READ);
+  const directory = count(env.DIRECTORY);
+  return new Proxy(env, {
+    get: (target, prop) =>
+      prop === "ORG_READ" ? org : prop === "DIRECTORY" ? directory : Reflect.get(target, prop),
+  });
+}
+
 afterEach(() => indexing(false));
 
 describe("search repair needs", () => {
@@ -186,7 +225,19 @@ describe("the search repair job", () => {
     // The four oldest fill the run, and fail; then the one waiting is next.
     await expect(runSearchRepairs(broken)).rejects.toThrow(/4 search repair/);
     expect(await repair(waiting)).toMatchObject({ covered: 0 });
-    await expect(runSearchRepairs(broken)).rejects.toThrow(/3 search repair/);
+    // (The others after it, as many as the run's calls allow.)
+    await expect(runSearchRepairs(broken)).rejects.toThrow(/search repair\(s\) failed/);
     expect(await repair(waiting)).toMatchObject({ dirty: 1, covered: 1 });
+  });
+
+  it("makes no more D1 calls a run than it is allowed", async () => {
+    await db.prepare("DELETE FROM search_repairs").run();
+    const sources = [await repository(), await repository(), await repository()];
+    for (const [i, id] of sources.entries()) await repairStatement(db, id, "backfill", i).run();
+    await indexing(true);
+    const seen = { calls: 0 };
+    await runSearchRepairs(countingCalls(seen));
+    expect(seen.calls).toBeGreaterThan(REPAIR_POLICY.callsPerRun / 2);
+    expect(seen.calls).toBeLessThanOrEqual(REPAIR_POLICY.callsPerRun);
   });
 });

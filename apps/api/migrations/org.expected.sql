@@ -41,6 +41,16 @@ CREATE TABLE repos (
   updated_at INTEGER NOT NULL
 , description TEXT) STRICT;
 
+-- table search_budget
+CREATE TABLE search_budget (
+  -- Days since the Unix epoch, UTC.
+  day INTEGER PRIMARY KEY,
+  -- Projection rows written (as D1 counts them).
+  rows INTEGER NOT NULL DEFAULT 0,
+  -- Rows reconciliations read.
+  reads INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
 -- table search_docs
 CREATE TABLE search_docs (
   doc_id INTEGER PRIMARY KEY,
@@ -123,7 +133,8 @@ CREATE TABLE search_reconciles (
   kind TEXT NOT NULL CHECK (kind IN ('subjects', 'labels', 'milestones', 'done')),
   after INTEGER NOT NULL DEFAULT 0,
   started_at INTEGER NOT NULL
-) STRICT;
+, partial INTEGER NOT NULL DEFAULT 0
+  CHECK (partial IN (0, 1))) STRICT;
 
 -- table search_repairs
 CREATE TABLE search_repairs (
@@ -137,11 +148,28 @@ CREATE TABLE search_repairs (
   next_at INTEGER NOT NULL
 ) STRICT;
 
+-- table search_size
+CREATE TABLE search_size (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  clock INTEGER NOT NULL,
+  observed INTEGER NOT NULL,
+  bytes INTEGER NOT NULL
+) STRICT;
+
 -- table search_sources
 CREATE TABLE search_sources (
   repo_id TEXT PRIMARY KEY,
   cutoff_epoch INTEGER NOT NULL,
   cutoff_seq INTEGER NOT NULL
+) STRICT;
+
+-- table search_sweep
+CREATE TABLE search_sweep (
+  name TEXT PRIMARY KEY,
+  repo_id TEXT NOT NULL,
+  deleted_epoch INTEGER NOT NULL,
+  deleted_seq INTEGER NOT NULL,
+  row INTEGER NOT NULL
 ) STRICT;
 
 -- table source_owner

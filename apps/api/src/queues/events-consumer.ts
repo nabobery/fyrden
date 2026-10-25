@@ -568,6 +568,7 @@ export function repoStatement(
   sourceId: string,
   event: Snapshot,
   now: number,
+  admit?: Admission,
 ): D1PreparedStatement {
   const { entity } = event;
   if (entity.id !== sourceId)
@@ -587,6 +588,7 @@ export function repoStatement(
        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
        WHERE ?9 >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?1)
          AND ?11 >= coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?1), 0)
+         ${admit ? `AND ${admit.where(16)}` : ""}
        -- An event's tombstone carries no row: the row's fields stay as they were.
        ON CONFLICT (repo_id) DO UPDATE SET
          owner_id = CASE WHEN ?15 = 1 THEN repos.owner_id ELSE excluded.owner_id END,
@@ -622,5 +624,15 @@ export function repoStatement(
       now,
       row?.description ?? null,
       entity.deleted && row === undefined ? 1 : 0,
+      ...(admit?.params ?? []),
     );
+}
+
+/**
+ * A further condition a writer puts on a read-model statement: SQL over
+ * parameters numbered from the one it is given, and their values.
+ */
+export interface Admission {
+  where(first: number): string;
+  readonly params: readonly (string | number | null)[];
 }

@@ -12,6 +12,18 @@ import { exportStatements } from "../events/rebuild.js";
 import { epochStatement } from "../queues/events-consumer.js";
 import { clock } from "../services.js";
 import {
+  type CallBudget,
+  counted,
+  type Reservation,
+  reserve,
+  SAME_DAY,
+  settleStatement,
+  sizeStatement,
+  spentStatement,
+  tickStatement,
+  usedBy,
+} from "./admission.js";
+import {
   eligible,
   FENCES,
   type SearchPosition,
@@ -87,32 +99,56 @@ export interface ReconcileTarget {
  * Works up to `pages` export pages of the source's reconciliation (resuming
  * the pass under way, or starting one): `done` once a pass has ended (or
  * the repository has no identity left), `more` otherwise (a pass that
- * could not start, its fences refusing it, is tried again later).
+ * could not start, its fences refusing it, is tried again later),
+ * `blocked` when search's allowance for the day (or the database's size)
+ * leaves no room for a step.
  */
 export async function reconcileSource(
   env: Env,
   target: ReconcileTarget,
-  options: { pages?: number; metrics?: Metrics } = {},
-): Promise<"done" | "more"> {
+  options: { pages?: number; calls?: CallBudget; metrics?: Metrics } = {},
+): Promise<"done" | "more" | "blocked"> {
   const { repoId } = target;
-  const { metrics } = options;
-  const db = readModelFor(env, target.shard);
+  const { metrics, calls } = options;
+  const org = readModelFor(env, target.shard);
+  const db = calls ? counted(org, calls) : org;
   const repo = env.REPO.getByName(repoId);
   const exportPage = async (request: ExportPageRequest) =>
     (await repo.exportPage(request)) as ExportPage | "stale" | null;
   let pages = options.pages ?? RECONCILE_POLICY.pagesPerCall;
-  let pass = await current(db, repoId, metrics);
+  // Reads of the pass's own row, charged with the next step's settling (or on their own).
+  const lookups = { reads: 0 };
+  const end = async <T>(outcome: T): Promise<T> => {
+    if (lookups.reads > 0) {
+      metrics?.count("d1.query", { db: "org", op: "search_spent" });
+      await spentStatement(db, { rows: 0, reads: lookups.reads }).run();
+      lookups.reads = 0;
+    }
+    return outcome;
+  };
+  let pass = await current(db, repoId, lookups, metrics);
   for (;;) {
+    // A step starts only when all it may call fits in what the invocation has left.
+    if (pages-- <= 0 || (calls && calls.left < STEP_CALLS)) return end("more");
+    const starting = pass === undefined || pass.kind === "done";
+    metrics?.count("d1.query", { db: "org", op: "search_reserve" });
+    const reservation = await reserve(db, starting ? SMALL_STEP : pageStep());
+    if (!reservation) {
+      // Removals are made whatever the allowance: they may be what makes room again.
+      if (pass !== undefined) await collectTombstones(db, repoId, metrics);
+      return end("blocked");
+    }
     if (pass === undefined || pass.kind === "done") {
-      if (pages-- <= 0) return "more";
       const page = await exportPage({ kind: "repo", after: 0, limit: 1 });
-      if (page === null || page === "stale") return "done";
-      pass = await start(db, repoId, page, metrics);
+      if (page === null || page === "stale") {
+        await account(db, reservation, [], 0, metrics, lookups);
+        return end("done");
+      }
+      pass = await start(db, repoId, page, reservation, metrics);
       // Refused (the read model's ownership is ahead of the object's): later.
-      if (pass === undefined) return "more";
+      if (pass === undefined) return end("more");
       continue;
     }
-    if (pages-- <= 0) return "more";
     const { kind, after } = pass;
     const expected = { epochGen: pass.epochGen, ownerGen: pass.ownerGen };
     const page = await exportPage(
@@ -120,8 +156,9 @@ export async function reconcileSource(
         ? { kind: "repo", after: 0, limit: 1, expected }
         : { kind, after, limit: EXPORT_PAGE.entities, expected },
     );
-    if (page === null) return "done";
-    if (page === "stale") {
+    if (page === null || page === "stale") {
+      await account(db, reservation, [], 0, metrics, lookups);
+      if (page === null) return end("done");
       // The repository was restored or transferred meanwhile: another pass, from its new position.
       pass = undefined;
       continue;
@@ -129,41 +166,76 @@ export async function reconcileSource(
     let statements: D1PreparedStatement[];
     let next: Pass["kind"];
     let nextAfter: number;
+    let read = 0;
+    // At the size threshold a step makes removals only, and leaves the pass partial (its
+    // repair revision not covered: a whole pass follows).
+    const removalsOnly = reservation.removalsOnly;
     if (after === FINISHING) {
       // The walk is through: the repository's own row, from a snapshot read now (after the
       // revision this pass covers was taken, so a change asked for before it is in it).
       const [entity] = page.entities;
-      statements = exportStatements(
-        db,
-        {
-          sourceId: repoId,
-          epochGen: page.epochGen,
-          ownerGen: page.ownerGen,
-          watermark: page.watermark,
-          entities: entity ? [{ ...entity, row: entity.row as RepoRow | null }] : [],
-        },
-        clock(),
-      );
+      statements = removalsOnly
+        ? []
+        : exportStatements(
+            db,
+            {
+              sourceId: repoId,
+              epochGen: page.epochGen,
+              ownerGen: page.ownerGen,
+              watermark: page.watermark,
+              entities: entity ? [{ ...entity, row: entity.row as RepoRow | null }] : [],
+            },
+            clock(),
+            // Within its reservation's day, as every other write of the step.
+            { where: SAME_DAY, params: [reservation.day] },
+          );
       next = "done";
       nextAfter = 0;
     } else {
-      const found = await differences(db, repoId, pass, kind, page, metrics);
+      const found = await differences(
+        db,
+        repoId,
+        pass,
+        kind,
+        page,
+        reservation.day,
+        removalsOnly,
+        metrics,
+      );
       statements = found.statements;
+      read = found.read;
       // Past the last kind, the pass finishes with the repository's own row.
       next = !found.ended ? kind : kind === "milestones" ? "milestones" : NEXT_KIND[kind];
       nextAfter = !found.ended ? found.upTo : kind === "milestones" ? FINISHING : 0;
     }
-    // The step is done only where its writes could be made: the same fences.
+    // The step is done only where its writes could be made: the same fences, and its day.
     statements.push(
       db
         .prepare(
           `UPDATE search_reconciles SET kind = ?7, after = ?8
-           WHERE repo_id = ?1 AND gen = ?4 AND kind = ?5 AND after = ?6 AND ${FENCES}`,
+           WHERE repo_id = ?1 AND gen = ?4 AND kind = ?5 AND after = ?6 AND ${FENCES}
+             AND ${SAME_DAY(9)}`,
         )
-        .bind(repoId, pass.epochGen, pass.ownerGen, pass.gen, kind, after, next, nextAfter),
+        .bind(
+          repoId,
+          pass.epochGen,
+          pass.ownerGen,
+          pass.gen,
+          kind,
+          after,
+          next,
+          nextAfter,
+          reservation.day,
+        ),
     );
     const checkpoint = statements.length - 1;
-    // Its last step: the repair revision it covered is covered.
+    if (removalsOnly)
+      statements.push(
+        db
+          .prepare("UPDATE search_reconciles SET partial = 1 WHERE repo_id = ? AND gen = ?")
+          .bind(repoId, pass.gen),
+      );
+    // Its last step: the repair revision it covered is covered (by a whole pass only).
     if (next === "done")
       statements.push(
         db
@@ -171,18 +243,21 @@ export async function reconcileSource(
             `UPDATE search_repairs SET covered = active, active = NULL
              WHERE repo_id = ?1 AND active IS NOT NULL
                AND EXISTS (SELECT 1 FROM search_reconciles WHERE repo_id = ?1 AND gen = ?2
-                 AND kind = 'done')`,
+                 AND kind = 'done' AND partial = 0)`,
           )
           .bind(repoId, pass.gen),
       );
+    statements.push(tickStatement(db));
     metrics?.count("d1.query", { db: "org", op: "reconcile_page" });
     const results = await db.batch(statements);
+    await account(db, reservation, results, read, metrics, lookups);
     if ((results[checkpoint]?.meta.changes ?? 0) === 0) {
-      const reloaded = await current(db, repoId, metrics);
-      // The source's fences refuse this pass (a transfer or restore landing): tried again later,
-      // when the repository answers under its new ownership or epoch and a pass starts there.
+      const reloaded = await current(db, repoId, lookups, metrics);
+      // The source's fences refuse this pass (a transfer or restore landing), or its day ended
+      // while it ran: tried again later (a new pass once the repository answers under its new
+      // ownership or epoch; the same step from the new day's allowance).
       if (reloaded?.gen === pass.gen && reloaded.kind === kind && reloaded.after === after)
-        return "more";
+        return end("more");
       // Another caller worked this step first (its writes stand, these were refused).
       pass = reloaded;
       continue;
@@ -190,24 +265,73 @@ export async function reconcileSource(
     pass = { ...pass, kind: next, after: nextAfter };
     if (next === "done") {
       await collectTombstones(db, repoId, metrics);
-      return "done";
+      return end("done");
     }
   }
+}
+
+/**
+ * D1 calls a step makes at most: its reservation (and a size check with a
+ * retry), the comparison read, its batch, the settling, a reload of the pass
+ * and the collection after the last one.
+ */
+export const STEP_CALLS = 10;
+
+/** What a step that writes a few rows reserves (a pass's start or last step). */
+const SMALL_STEP = { rows: 50, reads: 200 };
+
+/**
+ * What a page reserves: every exported entity and every projection row it
+ * compares written (6 rows each at most, an issue first projected), and
+ * read (the range, and each statement's checks).
+ */
+function pageStep(): { rows: number; reads: number } {
+  const statements = EXPORT_PAGE.entities + RECONCILE_POLICY.rowsPerPage;
+  return {
+    rows: statements * 6 + SMALL_STEP.rows,
+    reads: RECONCILE_POLICY.rowsPerPage + 1 + statements * 10 + SMALL_STEP.reads,
+  };
+}
+
+/**
+ * Settles a step's reservation to what its batch (and `read` rows read
+ * before it) used, and records the database's size the batch reported.
+ */
+async function account(
+  db: D1Database,
+  reservation: Reservation,
+  results: readonly D1Result[],
+  read: number,
+  metrics: Metrics | undefined,
+  lookups?: { reads: number },
+): Promise<void> {
+  const used = usedBy(results);
+  read += lookups?.reads ?? 0;
+  if (lookups) lookups.reads = 0;
+  const tick = (results.at(-1)?.results[0] as { clock?: number } | undefined)?.clock;
+  const statements = [
+    settleStatement(db, reservation, { rows: used.rows, reads: used.reads + read }),
+  ];
+  if (tick !== undefined && used.bytes !== undefined)
+    statements.push(sizeStatement(db, tick, used.bytes));
+  metrics?.count("d1.query", { db: "org", op: "search_settle" }, statements.length);
+  await db.batch(statements);
 }
 
 async function current(
   db: D1Database,
   repoId: string,
+  lookups: { reads: number },
   metrics: Metrics | undefined,
 ): Promise<Pass | undefined> {
   metrics?.count("d1.query", { db: "org", op: "reconcile_pass" });
-  const row = await db
+  const { results, meta } = await db
     .prepare(
       `SELECT gen, epoch_gen, owner_gen, watermark, kind, after FROM search_reconciles
        WHERE repo_id = ?`,
     )
     .bind(repoId)
-    .first<{
+    .all<{
       gen: number;
       epoch_gen: number;
       owner_gen: number;
@@ -215,6 +339,8 @@ async function current(
       kind: Pass["kind"];
       after: number;
     }>();
+  lookups.reads += meta.rows_read ?? 0;
+  const [row] = results;
   if (!row) return undefined;
   return {
     gen: row.gen,
@@ -237,6 +363,7 @@ async function start(
   db: D1Database,
   repoId: string,
   page: ExportPage,
+  reservation: Reservation,
   metrics: Metrics | undefined,
 ): Promise<Pass | undefined> {
   const now = clock();
@@ -246,31 +373,36 @@ async function start(
     db
       .prepare(
         `INSERT INTO search_sources (repo_id, cutoff_epoch, cutoff_seq) SELECT ?1, ?2, ?4
-         WHERE ${FENCES}
+         WHERE ${FENCES} AND ${SAME_DAY(5)}
          ON CONFLICT (repo_id) DO UPDATE SET cutoff_epoch = excluded.cutoff_epoch,
            cutoff_seq = excluded.cutoff_seq
          WHERE (excluded.cutoff_epoch, excluded.cutoff_seq)
            > (search_sources.cutoff_epoch, search_sources.cutoff_seq)`,
       )
-      .bind(repoId, page.epochGen, page.ownerGen, page.watermark),
+      .bind(repoId, page.epochGen, page.ownerGen, page.watermark, reservation.day),
     db
       .prepare(
         `INSERT INTO search_reconciles (repo_id, gen, epoch_gen, owner_gen, watermark, kind,
            after, started_at)
-         SELECT ?1, 1, ?2, ?3, ?4, 'subjects', 0, ?5 WHERE ${FENCES}
+         SELECT ?1, 1, ?2, ?3, ?4, 'subjects', 0, ?5 WHERE ${FENCES} AND ${SAME_DAY(6)}
          ON CONFLICT (repo_id) DO UPDATE SET gen = search_reconciles.gen + 1,
            epoch_gen = excluded.epoch_gen, owner_gen = excluded.owner_gen,
            watermark = excluded.watermark, kind = 'subjects', after = 0,
-           started_at = excluded.started_at
+           started_at = excluded.started_at, partial = 0
          RETURNING gen`,
       )
-      .bind(repoId, page.epochGen, page.ownerGen, page.watermark, now),
+      .bind(repoId, page.epochGen, page.ownerGen, page.watermark, now, reservation.day),
     // The repair revision asked for so far is the one this pass covers.
     db
-      .prepare(`UPDATE search_repairs SET active = dirty WHERE repo_id = ?1 AND ${FENCES}`)
-      .bind(repoId, page.epochGen, page.ownerGen),
+      .prepare(
+        `UPDATE search_repairs SET active = dirty
+         WHERE repo_id = ?1 AND ${FENCES} AND ${SAME_DAY(4)}`,
+      )
+      .bind(repoId, page.epochGen, page.ownerGen, reservation.day),
+    tickStatement(db),
   ]);
-  const gen = results.at(-2)?.results[0]?.gen;
+  await account(db, reservation, results, 0, metrics);
+  const gen = results.at(-3)?.results[0]?.gen;
   if (gen === undefined) return undefined;
   return {
     gen,
@@ -303,18 +435,22 @@ async function differences(
   pass: Pass,
   kind: WalkedKind,
   page: ExportPage,
+  day: number,
+  removalsOnly: boolean,
   metrics: Metrics | undefined,
-): Promise<{ statements: D1PreparedStatement[]; upTo: number; ended: boolean }> {
+): Promise<{ statements: D1PreparedStatement[]; upTo: number; ended: boolean; read: number }> {
   const { table, key } = TABLES[kind];
   const cap = RECONCILE_POLICY.rowsPerPage;
   let upTo = page.next ?? NO_KEY;
   metrics?.count("d1.query", { db: "org", op: "reconcile_rows" });
-  const { results } = await db
+  const { results, meta } = await db
     .prepare(
       `SELECT ${key} AS key, epoch_gen, owner_gen, version, deleted, updated_seq FROM ${table}
-       WHERE repo_id = ? AND ${key} > ? AND ${key} <= ? ORDER BY ${key} LIMIT ?`,
+       WHERE repo_id = ?1 AND ${key} > ?2 AND ${key} <= ?3 AND ${SAME_DAY(5)}
+       ORDER BY ${key} LIMIT ?4`,
     )
-    .bind(repoId, pass.after, upTo, cap + 1)
+    // Read within its reservation's day (past it, nothing: its writes are refused too).
+    .bind(repoId, pass.after, upTo, cap + 1, day)
     .all<ProjectedRow>();
   const rows = results.slice(0, cap);
   const cut = results.length > cap;
@@ -326,7 +462,7 @@ async function differences(
     ownerGen: pass.ownerGen,
     sourceSeq: pass.watermark,
   };
-  const writer: SearchWriter = { by: "reconcile", gen: pass.gen, kind, after: pass.after };
+  const writer: SearchWriter = { by: "reconcile", gen: pass.gen, kind, after: pass.after, day };
   const statements: D1PreparedStatement[] = [];
   const exported = new Set<number>();
   for (const entity of page.entities) {
@@ -340,6 +476,8 @@ async function differences(
     // any other: a newer deletion (after a restore, say) moves its place on.
     if (entity.deleted && !row && !after(entity.deletedAt, position)) continue;
     if (row && !newer(position, entity.version, row)) continue;
+    // Only removals while the database is at its size threshold.
+    if (removalsOnly && !entity.deleted) continue;
     const statement = searchStatement(db, position, entity, writer);
     if (statement) statements.push(statement);
   }
@@ -356,7 +494,7 @@ async function differences(
       continue;
     statements.push(absentStatement(db, table, key, position, seen, row.key, writer));
   }
-  return { statements, upTo, ended: !cut && page.next === null };
+  return { statements, upTo, ended: !cut && page.next === null, read: meta.rows_read ?? 0 };
 }
 
 /** Whether a deletion's position is after the pass's (unknown: before every recorded one). */
@@ -442,10 +580,16 @@ export async function collectTombstones(
   const collect = (table: string) =>
     db
       .prepare(
-        `DELETE FROM ${table} WHERE rowid IN (SELECT t.rowid FROM ${table} t
-           JOIN search_sources s ON s.repo_id = t.repo_id
-           WHERE t.repo_id = ?1 AND t.deleted = 1 AND t.deleted_epoch IS NOT NULL
-             AND (s.cutoff_epoch, s.cutoff_seq) >= (t.deleted_epoch, t.deleted_seq)
+        // Two ranges of the deletion index, each sought (never a scan of the deletions the
+        // cutoff does not cover yet): earlier epochs, and the cutoff's own up to its sequence.
+        `DELETE FROM ${table} WHERE rowid IN (
+           SELECT rowid FROM ${table} WHERE repo_id = ?1 AND deleted = 1
+             AND deleted_epoch IS NOT NULL
+             AND deleted_epoch < (SELECT cutoff_epoch FROM search_sources WHERE repo_id = ?1)
+           UNION ALL
+           SELECT rowid FROM ${table} WHERE repo_id = ?1 AND deleted = 1
+             AND deleted_epoch = (SELECT cutoff_epoch FROM search_sources WHERE repo_id = ?1)
+             AND deleted_seq <= (SELECT cutoff_seq FROM search_sources WHERE repo_id = ?1)
            LIMIT ?2)`,
       )
       .bind(repoId, RECONCILE_POLICY.collectPage);
@@ -455,5 +599,119 @@ export async function collectTombstones(
     collect("search_labels"),
     collect("search_milestones"),
   ]);
+  // Removals are made whatever the day's allowance (they shrink the database), and counted.
+  const used = usedBy(removed);
+  metrics?.count("d1.query", { db: "org", op: "search_spent" });
+  await spentStatement(db, { rows: used.rows, reads: used.reads }).run();
   return removed.reduce((sum, r) => sum + r.meta.changes, 0);
+}
+
+/** A deletion's place in its table's deletion index. */
+interface SweepKey {
+  readonly row: number;
+  readonly repo_id: string;
+  readonly deleted_epoch: number;
+  readonly deleted_seq: number;
+}
+
+/** The tables deletions are swept from, across sources. */
+const SWEPT = ["search_docs", "search_labels", "search_milestones"] as const;
+
+/**
+ * Removes covered deletions of any source, looking at the next
+ * `collectPage` deletions of each table (in its deletion index's order,
+ * after where the last sweep stopped) and starting over once through: a
+ * deletion its cutoff does not cover yet is passed over, so every source's
+ * are reached in turn, and a sweep reads a bounded number of rows. For runs
+ * that can do nothing else (search's allowance spent): removals shrink the
+ * database, and are made whatever the allowance.
+ */
+export async function sweepTombstones(db: D1Database, metrics?: Metrics): Promise<number> {
+  const page = RECONCILE_POLICY.collectPage;
+  metrics?.count("d1.query", { db: "org", op: "search_sweep_cursor" });
+  const { results: cursors, meta: cursorMeta } = await db
+    .prepare("SELECT name, repo_id, deleted_epoch, deleted_seq, row FROM search_sweep")
+    .all<{ name: string } & SweepKey>();
+  const cursorOf = new Map(cursors.map((c) => [c.name, c]));
+  // Each table's next deletions after its cursor: in index order, from ranges each sought
+  // (the same repository, epoch and sequence past the row; a later sequence; a later epoch;
+  // a later repository), each limited, merged here.
+  const columns = `rowid AS row, repo_id, deleted_epoch, deleted_seq,
+    coalesce((SELECT (s.cutoff_epoch, s.cutoff_seq) >= (t.deleted_epoch, t.deleted_seq)
+      FROM search_sources s WHERE s.repo_id = t.repo_id), 0) AS covered`;
+  const order = "ORDER BY repo_id, deleted_epoch, deleted_seq, rowid LIMIT ?";
+  const deleted = "t.deleted = 1 AND t.deleted_epoch IS NOT NULL";
+  const windows = SWEPT.map((table) => {
+    const at = cursorOf.get(table);
+    if (!at)
+      return [db.prepare(`SELECT ${columns} FROM ${table} t WHERE ${deleted} ${order}`).bind(page)];
+    const from = (where: string, ...values: (string | number)[]) =>
+      db
+        .prepare(`SELECT ${columns} FROM ${table} t WHERE ${deleted} AND ${where} ${order}`)
+        .bind(...values, page);
+    return [
+      from(
+        "t.repo_id = ? AND t.deleted_epoch = ? AND t.deleted_seq = ? AND t.rowid > ?",
+        at.repo_id,
+        at.deleted_epoch,
+        at.deleted_seq,
+        at.row,
+      ),
+      from(
+        "t.repo_id = ? AND t.deleted_epoch = ? AND t.deleted_seq > ?",
+        at.repo_id,
+        at.deleted_epoch,
+        at.deleted_seq,
+      ),
+      from("t.repo_id = ? AND t.deleted_epoch > ?", at.repo_id, at.deleted_epoch),
+      from("t.repo_id > ?", at.repo_id),
+    ];
+  });
+  metrics?.count("d1.query", { db: "org", op: "search_sweep_look" });
+  const answered = await db.batch<SweepKey & { covered: number }>(windows.flat());
+  let next = 0;
+  const looked = windows.map((parts) => {
+    // Disjoint and in order: their concatenation is the index's order; its first page.
+    const rows = parts.flatMap(() => answered[next++]?.results ?? []);
+    return rows.slice(0, page);
+  });
+  const statements: D1PreparedStatement[] = [];
+  // Which statements remove deletions (the others move the sweep's place).
+  const removals = new Set<number>();
+  for (const [i, table] of SWEPT.entries()) {
+    const rows = looked[i] ?? [];
+    const gone = rows.filter((r) => r.covered === 1).map((r) => r.row);
+    if (gone.length > 0) {
+      removals.add(statements.length);
+      statements.push(
+        db
+          .prepare(`DELETE FROM ${table} WHERE rowid IN (SELECT value FROM json_each(?))`)
+          .bind(JSON.stringify(gone)),
+      );
+    }
+    const last = rows.at(-1);
+    // Once through the table, the next sweep starts over.
+    statements.push(
+      rows.length < page || !last
+        ? db.prepare("DELETE FROM search_sweep WHERE name = ?").bind(table)
+        : db
+            .prepare(
+              `INSERT INTO search_sweep (name, repo_id, deleted_epoch, deleted_seq, row)
+               VALUES (?1, ?2, ?3, ?4, ?5)
+               ON CONFLICT (name) DO UPDATE SET repo_id = excluded.repo_id,
+                 deleted_epoch = excluded.deleted_epoch, deleted_seq = excluded.deleted_seq,
+                 row = excluded.row`,
+            )
+            .bind(table, last.repo_id, last.deleted_epoch, last.deleted_seq, last.row),
+    );
+  }
+  metrics?.count("d1.query", { db: "org", op: "search_sweep" });
+  const removed = await db.batch(statements);
+  const used = usedBy([...answered, ...removed]);
+  metrics?.count("d1.query", { db: "org", op: "search_spent" });
+  await spentStatement(db, {
+    rows: used.rows,
+    reads: used.reads + (cursorMeta.rows_read ?? 0),
+  }).run();
+  return removed.reduce((sum, r, i) => sum + (removals.has(i) ? r.meta.changes : 0), 0);
 }

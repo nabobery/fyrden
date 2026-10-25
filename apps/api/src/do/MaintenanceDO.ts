@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { runMaintenance } from "../cron/maintenance.js";
+import { runSearchRepairs } from "../search/repairs.js";
 
 /**
  * Runs the five-minute maintenance (`runMaintenance`) for the cron trigger,
@@ -10,6 +11,24 @@ import { runMaintenance } from "../cron/maintenance.js";
  */
 export class MaintenanceDO extends DurableObject<Env> {
   #running: Promise<void> | null = null;
+  #repairing: Promise<void> | null = null;
+
+  /**
+   * Reconciles the search projections that need it (`runSearchRepairs`), in
+   * a request of its own: its D1 calls have an invocation of their own.
+   */
+  repairSearch(): Promise<void> {
+    if (this.#repairing) return this.#repairing;
+    const metrics = createMetrics(this.env.METRICS);
+    this.#repairing = measureInvocation(
+      metrics,
+      { where: "do", op: "repairSearch", doClass: "MaintenanceDO" },
+      () => runSearchRepairs(this.env, { metrics }).then(() => {}),
+    ).finally(() => {
+      this.#repairing = null;
+    });
+    return this.#repairing;
+  }
 
   run(): Promise<void> {
     if (this.#running) return this.#running;

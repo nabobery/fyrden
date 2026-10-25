@@ -8,6 +8,7 @@ import {
   PULL_ENTITY,
   PullRequestRowSchema,
 } from "@fyrden/domain";
+import { SAME_DAY } from "./admission.js";
 
 /*
  * The one place search's projections are written from (the events
@@ -51,6 +52,8 @@ export type SearchWriter =
       readonly gen: number;
       readonly kind: string;
       readonly after: number;
+      /** The day its reservation was taken from (its writes stand only within it). */
+      readonly day: number;
     };
 export const EVENT_WRITER: SearchWriter = { by: "event" };
 
@@ -69,8 +72,9 @@ export const FENCES = `?2 >= (SELECT epoch_gen FROM consumer_epochs WHERE source
  * event, it is after the source's cutoff (what an export already carried);
  * for a reconciliation, its pass (`gen`, bound at `?<at>`, then its page's
  * kind and key) is still the source's, under that export's epoch and
- * ownership and at that page: another caller that worked the page first
- * leaves this one's writes refused.
+ * ownership and at that page (another caller that worked the page first
+ * leaves this one's writes refused), and still in the day its budget was
+ * reserved from.
  */
 export function eligible(writer: SearchWriter, at: number): string {
   return writer.by === "event"
@@ -78,12 +82,12 @@ export function eligible(writer: SearchWriter, at: number): string {
         WHERE repo_id = ?1 AND (cutoff_epoch, cutoff_seq) >= (?2, ?4))`
     : `${FENCES} AND EXISTS (SELECT 1 FROM search_reconciles WHERE repo_id = ?1
         AND gen = ?${at} AND kind = ?${at + 1} AND after = ?${at + 2}
-        AND epoch_gen = ?2 AND owner_gen = ?3)`;
+        AND epoch_gen = ?2 AND owner_gen = ?3) AND ${SAME_DAY(at + 3)}`;
 }
 
 /** The writer's own parameters, bound after a statement's others (see `eligible`). */
 export function writerParams(writer: SearchWriter): (string | number)[] {
-  return writer.by === "reconcile" ? [writer.gen, writer.kind, writer.after] : [];
+  return writer.by === "reconcile" ? [writer.gen, writer.kind, writer.after, writer.day] : [];
 }
 
 /** What `search_docs.kind` and `state` hold. */

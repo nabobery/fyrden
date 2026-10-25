@@ -1,6 +1,11 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { RepoExport } from "../do/repo/events.js";
-import { epochStatement, repoStatement, type Snapshot } from "../queues/events-consumer.js";
+import {
+  type Admission,
+  epochStatement,
+  repoStatement,
+  type Snapshot,
+} from "../queues/events-consumer.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "./read-model.js";
 
 /**
@@ -70,6 +75,7 @@ export function exportStatements(
   db: D1Database,
   exported: RepoExport,
   now: number,
+  admit?: Admission,
 ): D1PreparedStatement[] {
   const { sourceId } = exported;
   const snapshots: Snapshot[] = exported.entities.map((entity) => ({
@@ -89,7 +95,7 @@ export function exportStatements(
   }));
   return [
     epochStatement(db, sourceId, exported.epochGen, now),
-    ...snapshots.map((snapshot) => repoStatement(db, sourceId, snapshot, now)),
+    ...snapshots.map((snapshot) => repoStatement(db, sourceId, snapshot, now, admit)),
   ];
 }
 
