@@ -1,5 +1,6 @@
 import { data, type RouterContextProvider, redirect } from "react-router";
 import { cloudflareContext } from "./cloudflare.server.js";
+import { pageUrl } from "./target.js";
 
 /**
  * fyrden-api's REST API as the web UI's server calls it: through the
@@ -123,6 +124,52 @@ export async function apiCallJson<T>(
 ): Promise<ApiResult<T>> {
   const res = await apiFetch(context, request, method, path, json);
   const text = await res.text();
+  return { status: res.status, body: (text ? JSON.parse(text) : null) as T };
+}
+
+/**
+ * Bytes of a list's answer the server reads at most: the API ends its
+ * lists of large items at 1 MiB of JSON, so twice that bounds what a page
+ * parses (Free's 10 ms of CPU a request), whatever an item holds.
+ */
+export const LIST_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * `GET path` read only up to `maxBytes` (counted as the bytes arrive);
+ * a longer answer is refused (502) rather than parsed.
+ */
+export async function apiCallBounded<T>(
+  context: Readonly<RouterContextProvider>,
+  request: Request,
+  path: string,
+  maxBytes = LIST_MAX_BYTES,
+): Promise<ApiResult<T>> {
+  const res = await apiFetch(context, request, "GET", path);
+  const tooLarge = () => data("The API's answer is larger than this page reads.", { status: 502 });
+  if (Number(res.headers.get("Content-Length")) > maxBytes) {
+    await res.body?.cancel();
+    throw tooLarge();
+  }
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = res.body?.getReader();
+  for (;;) {
+    const next = await reader?.read();
+    if (!next || next.done) break;
+    size += next.value.length;
+    if (size > maxBytes) {
+      await reader?.cancel();
+      throw tooLarge();
+    }
+    chunks.push(next.value);
+  }
+  const body = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, at);
+    at += chunk.length;
+  }
+  const text = new TextDecoder().decode(body);
   return { status: res.status, body: (text ? JSON.parse(text) : null) as T };
 }
 
@@ -256,8 +303,8 @@ export async function readForm(request: Request, maxBytes = FORM_MAX_BYTES): Pro
   return new Response(body, { headers: { "Content-Type": type } }).formData();
 }
 
-/** Where to sign in and come back to `request`'s page. */
+/** Where to sign in and come back to `request`'s page (the page's, for a navigation's data request). */
 export function signInUrl(request: Request): string {
-  const url = new URL(request.url);
+  const url = pageUrl(new URL(request.url));
   return `/auth/sign-in?return_to=${encodeURIComponent(url.pathname + url.search)}`;
 }

@@ -25,7 +25,19 @@ export function refAndPath(request: Request): { ref: string; path: string } {
  * loader with its suffix still on.
  */
 function pagePath(request: Request): string {
-  const { pathname } = new URL(request.url);
-  if (pathname.endsWith("/_.data")) return pathname.slice(0, -"_.data".length);
-  return pathname.endsWith(".data") ? pathname.slice(0, -".data".length) : pathname;
+  return pageUrl(new URL(request.url)).pathname;
+}
+
+/**
+ * The page's URL, as React Router matched it: a data request's suffix off
+ * its path, and its `_routes` (which of the page's loaders to run) off its
+ * query. Links a loader builds from its request's URL are built from this.
+ */
+export function pageUrl(url: URL): URL {
+  const page = new URL(url);
+  const { pathname } = page;
+  if (pathname.endsWith("/_.data")) page.pathname = pathname.slice(0, -"_.data".length);
+  else if (pathname.endsWith(".data")) page.pathname = pathname.slice(0, -".data".length);
+  page.searchParams.delete("_routes");
+  return page;
 }

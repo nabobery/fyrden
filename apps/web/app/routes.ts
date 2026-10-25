@@ -13,6 +13,8 @@ export default [
   route(":owner/:repo/raw/:ref/*", "routes/repo.raw.ts"),
   route(":owner/:repo/archive/:format", "routes/repo.archive.ts"),
   route(":owner/:repo/commits", "routes/repo.commits.tsx"),
+  route(":owner/:repo/issues", "routes/repo.issues.tsx"),
+  route(":owner/:repo/issues/:number", "routes/repo.issue.tsx"),
   route(":owner/:repo/pulls", "routes/repo.pulls.tsx"),
   route(":owner/:repo/pull/:number", "routes/repo.pull.tsx"),
   route(":owner/:repo/pull/:number/files", "routes/repo.pull.files.tsx"),

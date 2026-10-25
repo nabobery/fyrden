@@ -160,6 +160,14 @@ button.danger {
   padding: 0 0.5rem;
   font-size: 12px;
 }
+/* A label by name only (its colour comes with the labels page, contrast checked). */
+.label-chip {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 0 0.5rem;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .badge.verified {
   color: var(--ok);
   border-color: var(--ok);

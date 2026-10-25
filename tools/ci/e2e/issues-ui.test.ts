@@ -1,0 +1,411 @@
+// Issues in a real browser (Chromium through Playwright) against both
+// Workers under one wrangler dev: a person opens an issue with a hostile
+// title and body (inert), comments, edits the description, filters the
+// list, closes it as not planned and reopens it; an edit made from a page
+// someone else changed since is refused with the text kept. Every page it
+// visits is checked with axe for WCAG 2.x A and AA. Needs `pnpm --filter
+// @fyrden/web build` first (turbo does it).
+import { type Page, type Route, expect as see } from "@playwright/test";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { accessible as axe, startWebStack, type WebStack } from "./web-stack.js";
+
+let stack: WebStack;
+let page: Page;
+const handle = "ada";
+const name = "issues";
+/** A title that is markup wherever it lands unescaped. */
+const HOSTILE = "<img src=x onerror=window.pwned=1> crash";
+
+const accessible = (what: string) => axe(page, what);
+
+async function rest<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${stack.origin}/api${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${stack.token}`,
+      ...(body !== undefined && {
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      }),
+    },
+    ...(body !== undefined && { body: JSON.stringify(body) }),
+  });
+  const text = await res.text();
+  expect(res.ok, `${method} ${path}: ${text}`).toBe(true);
+  return (text ? JSON.parse(text) : undefined) as T;
+}
+
+beforeAll(async () => {
+  stack = await startWebStack(handle);
+  page = stack.page;
+  await rest("POST", "/user/repos", { name });
+}, 180_000);
+
+afterAll(async () => {
+  await stack?.stop();
+});
+
+describe("issues in the web UI", () => {
+  it("opens an issue with a hostile title, inert, and shows it", async () => {
+    await page.goto(`${stack.origin}/${handle}/${name}/issues`);
+    await see(page.getByText("No open issues.")).toBeVisible();
+    await accessible("empty issue list");
+    await page.getByText("New issue").click();
+    await page.getByLabel("Title").fill(HOSTILE);
+    await page.getByLabel("Description (Markdown, optional)").fill(`**bold** ${HOSTILE}`);
+    await accessible("new issue form");
+    await page.getByRole("button", { name: "Open issue" }).click();
+    await see(page).toHaveURL(`${stack.origin}/${handle}/${name}/issues/1`);
+    await see(page.getByRole("heading", { name: /crash/ })).toBeVisible();
+    await see(page.locator(".markdown strong")).toHaveText("bold");
+    expect(await page.evaluate(() => (globalThis as { pwned?: unknown }).pwned)).toBeUndefined();
+    await accessible("issue page");
+  });
+
+  it("comments, edits the description, and keeps an edit refused as stale", async () => {
+    await page.getByLabel("Comment (Markdown)", { exact: true }).fill("First comment");
+    await page.getByRole("button", { name: "Comment", exact: true }).click();
+    await see(page.getByRole("status")).toHaveText("Comment added.");
+    await see(page.locator(".timeline .markdown").getByText("First comment")).toBeVisible();
+    // Someone else edits it after the page was shown; this page's edit is then refused.
+    await page.getByText("Edit title and description").click();
+    await rest("PATCH", `/repos/${handle}/${name}/issues/1`, { body: "changed elsewhere" });
+    await page.getByLabel("Description (Markdown)").fill("my edit");
+    // Another form sent meanwhile reads the page again: the editor keeps the version it opened at.
+    await page.locator("#comment-body").fill("Second comment");
+    await page.getByRole("button", { name: "Comment", exact: true }).click();
+    await see(page.getByRole("status")).toHaveText("Comment added.");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await see(page.getByRole("alert")).toContainText("Someone changed it");
+    await see(page.getByLabel("Description (Markdown)")).toHaveValue("my edit");
+    await accessible("stale edit");
+    // Read again, then saved.
+    await page.reload();
+    await see(page.locator(".markdown").getByText("changed elsewhere")).toBeVisible();
+    await page.getByText("Edit title and description").click();
+    await page.getByLabel("Description (Markdown)").fill("my edit");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await see(page.getByRole("status")).toHaveText("Saved.");
+    await see(page.locator(".markdown").first()).toHaveText("my edit");
+  });
+
+  it("keeps each comment's editor to the version it opened at when another comment is saved", async () => {
+    const [first, second] = await rest<{ id: number }[]>(
+      "GET",
+      `/repos/${handle}/${name}/issues/1/comments`,
+    ).then((page) => (page as unknown as { comments: { id: number }[] }).comments);
+    if (!first || !second) throw new Error("two comments expected");
+    // Second's editor opened and written in; then someone else edits the second comment.
+    const secondItem = page.locator(`#comment-${second.id}`);
+    await secondItem.getByText("Edit or delete").click();
+    await secondItem.locator("textarea").fill("my edit of the second");
+    await rest("PATCH", `/repos/${handle}/${name}/issues/comments/${second.id}`, {
+      body: "second, changed elsewhere",
+    });
+    // The first comment saved from this page: the page is read again.
+    const firstItem = page.locator(`#comment-${first.id}`);
+    await firstItem.getByText("Edit or delete").click();
+    await firstItem.locator("textarea").fill("first, edited here");
+    await firstItem.getByRole("button", { name: "Save comment" }).click();
+    await see(page.getByRole("status")).toHaveText("Comment saved.");
+    // The second's draft is still checked against what it was written from: refused.
+    await secondItem.getByRole("button", { name: "Save comment" }).click();
+    await see(page.getByRole("alert")).toContainText("Someone changed it");
+  });
+
+  it("clears the filter fields with the filters", async () => {
+    await page.goto(`${stack.origin}/${handle}/${name}/issues`);
+    await page.getByText("Filters").click();
+    await page.getByLabel(/^Labels/).fill("bug");
+    await page.getByRole("button", { name: "Filter" }).click();
+    await see(page).toHaveURL(/labels=bug/);
+    await page.getByRole("link", { name: "Clear filters" }).click();
+    await see(page).not.toHaveURL(/labels=/);
+    await page.getByText("Filters").click();
+    await see(page.getByLabel(/^Labels/)).toHaveValue("");
+    await page.goto(`${stack.origin}/${handle}/${name}/issues/1`);
+  });
+
+  it("closes it as not planned and reopens it; the list filters by state", async () => {
+    await page.getByLabel("Not planned").check();
+    await page.getByRole("button", { name: "Close issue" }).click();
+    await see(page.getByText("Closed as not planned")).toBeVisible();
+    await page.goto(`${stack.origin}/${handle}/${name}/issues`);
+    await see(page.getByText("No open issues.")).toBeVisible();
+    await page.getByRole("link", { name: "Closed", exact: true }).click();
+    await see(page.getByRole("link", { name: /crash/ })).toBeVisible();
+    await accessible("closed issues");
+    await page.getByRole("link", { name: /crash/ }).click();
+    await page.getByRole("button", { name: "Reopen issue" }).click();
+    await see(page.getByRole("status")).toHaveText("Reopened.");
+    // Reopening moved the issue's version: an edit started after it is made from the new one.
+    await page.getByText("Edit title and description").click();
+    await page.getByLabel("Description (Markdown)").fill("edited after reopening");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await see(page.getByRole("status")).toHaveText("Saved.");
+    expect(stack.refused).toEqual([]);
+  });
+
+  it("refuses an untouched editor sent twice against a changed issue, both times", async () => {
+    await page.goto(`${stack.origin}/${handle}/${name}/issues/1`);
+    await page.getByText("Edit title and description").click();
+    await rest("PATCH", `/repos/${handle}/${name}/issues/1`, { body: "changed elsewhere again" });
+    for (let i = 0; i < 2; i++) {
+      // Each send answered before the next (the alert of the first must not stand for the second).
+      await Promise.all([
+        page.waitForResponse(
+          (r) => r.request().method() === "POST" && r.url().includes("/issues/1"),
+        ),
+        page.getByRole("button", { name: "Save", exact: true }).click(),
+      ]);
+      await see(page.getByRole("alert")).toContainText("Someone changed it");
+    }
+    await page.reload();
+    await see(page.locator(".markdown").getByText("changed elsewhere again")).toBeVisible();
+  });
+
+  it("follows the page again after its own save: save, close, reopen, then edit", async () => {
+    await page.getByText("Edit title and description").click();
+    await page.getByLabel("Description (Markdown)").fill("saved here");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await see(page.getByRole("status")).toHaveText("Saved.");
+    await page.getByRole("button", { name: "Close issue" }).click();
+    await see(page.getByRole("status")).toHaveText("Closed.");
+    await page.getByRole("button", { name: "Reopen issue" }).click();
+    await see(page.getByRole("status")).toHaveText("Reopened.");
+    await page.getByLabel("Description (Markdown)").fill("edited after my own changes");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await see(page.getByRole("status")).toHaveText("Saved.");
+  });
+
+  /** Holds this page's next form post until the returned `release` is called (then unroutes). */
+  async function holdNextPost(number = 1, on: Page = page): Promise<() => Promise<void>> {
+    const pattern = `**/${handle}/${name}/issues/${number}*`;
+    let release = () => {};
+    const held = new Promise<void>((done) => {
+      release = done;
+    });
+    let taken = false;
+    const handler = async (route: Route) => {
+      if (taken || route.request().method() !== "POST") return route.fallback();
+      taken = true;
+      await held;
+      // Left while it was held, the browser may have given up on it.
+      return route.continue().catch(() => undefined);
+    };
+    await on.route(pattern, handler);
+    return async () => {
+      release();
+      await on.unroute(pattern, handler);
+    };
+  }
+
+  it("keeps what is written while a save or a comment is answered", async () => {
+    await page.goto(`${stack.origin}/${handle}/${name}/issues/1`);
+    // An edit answered while more is written: the more stays.
+    await page.getByText("Edit title and description").click();
+    await page.getByLabel("Description (Markdown)").fill("sent text");
+    let release = await holdNextPost();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByLabel("Description (Markdown)").fill("sent text, and more written meanwhile");
+    await release();
+    await see(page.getByRole("status")).toHaveText("Saved.");
+    await see(page.getByLabel("Description (Markdown)")).toHaveValue(
+      "sent text, and more written meanwhile",
+    );
+    // A comment added while the next is written: the next stays.
+    await page.locator("#comment-body").fill("a comment");
+    release = await holdNextPost();
+    await page.getByRole("button", { name: "Comment", exact: true }).click();
+    await page.locator("#comment-body").fill("the next comment, unsent");
+    await release();
+    await see(page.getByRole("status")).toHaveText("Comment added.");
+    await see(page.locator("#comment-body")).toHaveValue("the next comment, unsent");
+  });
+
+  it("keeps an edit whose comment leaves the page, and resumes it when it comes back", async () => {
+    const big = "€".repeat(65_536);
+    const { number } = await rest<{ number: number }>("POST", `/repos/${handle}/${name}/issues`, {
+      title: "Long conversation",
+    });
+    const path = `/repos/${handle}/${name}/issues`;
+    await rest("POST", `${path}/${number}/comments`, { body: big });
+    const second = await rest<{ id: number }>("POST", `${path}/${number}/comments`, {
+      body: "second",
+    });
+    await page.goto(`${stack.origin}/${handle}/${name}/issues/${number}`);
+    const item = page.locator(`#comment-${second.id}`);
+    await item.getByText("Edit or delete").click();
+    await item.getByLabel("Comment (Markdown)").fill("my unsent edit");
+    // It grows past the page's budget elsewhere; a comment sent here reads the page again.
+    await rest("PATCH", `${path}/comments/${second.id}`, { body: big });
+    const comment = async (text: string) => {
+      await page.locator("#comment-body").fill(text);
+      await page.getByRole("button", { name: "Comment", exact: true }).click();
+      await see(page.locator("#comment-body")).toHaveValue("");
+    };
+    await comment("a new comment");
+    await see(item).toHaveCount(0);
+    await see(page.getByLabel("Your edit of a comment", { exact: true })).toHaveValue(
+      "my unsent edit",
+    );
+    // Another answer comes; the edit stays.
+    await comment("another comment");
+    await see(page.getByLabel("Your edit of a comment", { exact: true })).toHaveValue(
+      "my unsent edit",
+    );
+    // Back on the page, its editor resumes from it and from the version it was written at.
+    await rest("PATCH", `${path}/comments/${second.id}`, { body: "short again" });
+    await comment("a third comment");
+    await see(page.getByLabel("Your edit of a comment", { exact: true })).toHaveCount(0);
+    await see(item.getByLabel("Comment (Markdown)")).toHaveValue("my unsent edit");
+    await item.getByRole("button", { name: "Save comment" }).click();
+    await see(page.getByRole("alert")).toContainText("Someone changed it");
+    await see(item.getByLabel("Comment (Markdown)")).toHaveValue("my unsent edit");
+  });
+
+  it("resumes text written during its own save from the version that save made", async () => {
+    const big = "€".repeat(65_536);
+    const path = `/repos/${handle}/${name}/issues`;
+    const { number } = await rest<{ number: number }>("POST", path, { title: "Saved meanwhile" });
+    await rest("POST", `${path}/${number}/comments`, { body: big });
+    const filler = await rest<{ id: number }>("POST", `${path}/${number}/comments`, {
+      body: "filler",
+    });
+    const mine = await rest<{ id: number }>("POST", `${path}/${number}/comments`, {
+      body: "mine",
+    });
+    await page.goto(`${stack.origin}/${handle}/${name}/issues/${number}`);
+    const item = page.locator(`#comment-${mine.id}`);
+    const editor = item.getByLabel("Comment (Markdown)");
+    await item.getByText("Edit or delete").click();
+    await editor.fill("saved");
+    const release = await holdNextPost(number);
+    await item.getByRole("button", { name: "Save comment" }).click();
+    await editor.fill("saved, and more written meanwhile");
+    await release();
+    await see(page.getByRole("status")).toHaveText("Comment saved.");
+    const comment = async (text: string) => {
+      await page.locator("#comment-body").fill(text);
+      await page.getByRole("button", { name: "Comment", exact: true }).click();
+      await see(page.locator("#comment-body")).toHaveValue("");
+    };
+    // An earlier comment grows past the page's budget and shrinks again: this one goes and
+    // comes back, from the version its own save made (not refused as stale).
+    await rest("PATCH", `${path}/comments/${filler.id}`, { body: big });
+    await comment("one");
+    await see(page.getByLabel("Your edit of a comment", { exact: true })).toHaveValue(
+      "saved, and more written meanwhile",
+    );
+    await rest("PATCH", `${path}/comments/${filler.id}`, { body: "filler" });
+    await comment("two");
+    await see(editor).toHaveValue("saved, and more written meanwhile");
+    await item.getByRole("button", { name: "Save comment" }).click();
+    await see(page.getByRole("status")).toHaveText("Comment saved.");
+    // An unsent edit of a comment deleted goes with it.
+    await editor.fill("never sent");
+    await item.getByRole("button", { name: "Delete comment" }).click();
+    await see(page.getByRole("status")).toHaveText("Comment deleted.");
+    await see(item).toHaveCount(0);
+    await see(page.getByRole("heading", { name: "Your unsent text" })).toHaveCount(0);
+  });
+
+  it("keeps what was sent when the page is left before its answer", async () => {
+    const big = "€".repeat(65_536);
+    const path = `/repos/${handle}/${name}/issues`;
+    const { number } = await rest<{ number: number }>("POST", path, { title: "Left meanwhile" });
+    await rest("POST", `${path}/${number}/comments`, { body: big });
+    const mine = await rest<{ id: number }>("POST", `${path}/${number}/comments`, {
+      body: "mine",
+    });
+    await rest("POST", `${path}/${number}/comments`, { body: big });
+    await page.goto(`${stack.origin}/${handle}/${name}/issues/${number}`);
+    const item = page.locator(`#comment-${mine.id}`);
+    await item.getByText("Edit or delete").click();
+    await item.getByLabel("Comment (Markdown)").fill("sent, then left");
+    const release = await holdNextPost(number);
+    await item.getByRole("button", { name: "Save comment" }).click();
+    // The next page, before the answer: the edit's answer is never taken.
+    await page.getByRole("link", { name: "Next page" }).click();
+    await see(page).toHaveURL(/after=/);
+    await release();
+    await see(page.getByLabel("Your edit of a comment", { exact: true })).toHaveValue(
+      "sent, then left",
+    );
+    await page.getByRole("link", { name: "First page" }).click();
+    await see(item.getByLabel("Comment (Markdown)")).toHaveValue("sent, then left");
+  });
+
+  it("keeps a reader's unsent text to copy once the conversation is locked", async () => {
+    const reader = await rest<{ id: string }>("POST", "/admin/users", { handle: "bo" });
+    const { token } = await rest<{ token: string }>("POST", `/admin/users/${reader.id}/tokens`, {
+      type: "pat",
+      scopes: [],
+      expires_in_days: 1,
+    });
+    await rest("PUT", `/repos/${handle}/${name}/collaborators/bo`, { permission: "pull" });
+    const browser = page.context().browser();
+    if (!browser) throw new Error("no browser");
+    const theirs = await (await browser.newContext()).newPage();
+    try {
+      await theirs.goto(`${stack.origin}/auth/sign-in?return_to=%2F`);
+      await theirs.getByLabel(/personal access token/i).fill(token);
+      await theirs.getByRole("button", { name: "Sign in with the token" }).click();
+      await theirs.getByRole("button", { name: "Not now" }).click();
+      const issuePage = `${stack.origin}/${handle}/${name}/issues/1`;
+      await theirs.goto(issuePage);
+      await theirs.locator("#comment-body").fill("bo's comment");
+      await theirs.getByRole("button", { name: "Comment", exact: true }).click();
+      await see(theirs.getByRole("status")).toHaveText("Comment added.");
+      const mine = theirs.locator(".timeline li", { hasText: "bo's comment" });
+      const unsent = (label: string) => theirs.getByLabel(label, { exact: true });
+      // A new comment written, unsent; an edit sent and held, more written meanwhile, while ada
+      // locks it: the edit is refused, and neither text is lost.
+      await theirs.locator("#comment-body").fill("bo's reply, unsent");
+      await mine.getByText("Edit or delete").click();
+      await mine.getByLabel("Comment (Markdown)").fill("bo's edit");
+      let release = await holdNextPost(1, theirs);
+      await mine.getByRole("button", { name: "Save comment" }).click();
+      await mine.getByLabel("Comment (Markdown)").fill("bo's edit, and more written meanwhile");
+      await rest("PUT", `/repos/${handle}/${name}/issues/1/lock`, {});
+      await release();
+      await see(theirs.getByRole("alert")).toBeVisible();
+      await see(theirs.getByRole("button", { name: "Comment", exact: true })).toHaveCount(0);
+      await see(unsent("New comment")).toHaveValue("bo's reply, unsent");
+      await see(unsent("Your edit of a comment")).toHaveValue(
+        "bo's edit, and more written meanwhile",
+      );
+      // Unlocked, read afresh: an edit written, unsent; a new comment sent and held while ada
+      // locks it again.
+      await rest("DELETE", `/repos/${handle}/${name}/issues/1/lock`);
+      await theirs.goto(issuePage);
+      await mine.getByText("Edit or delete").click();
+      await mine.getByLabel("Comment (Markdown)").fill("bo's edit, unsent");
+      await theirs.locator("#comment-body").fill("bo's reply, refused");
+      release = await holdNextPost(1, theirs);
+      await theirs.getByRole("button", { name: "Comment", exact: true }).click();
+      await rest("PUT", `/repos/${handle}/${name}/issues/1/lock`, {});
+      await release();
+      await see(theirs.getByRole("alert")).toBeVisible();
+      // Nothing left to send them with; both texts still there to copy.
+      await see(theirs.getByRole("button", { name: "Comment", exact: true })).toHaveCount(0);
+      await see(theirs.getByRole("button", { name: "Save comment" })).toHaveCount(0);
+      await see(theirs.getByLabel("New comment", { exact: true })).toHaveValue(
+        "bo's reply, refused",
+      );
+      await see(theirs.getByLabel("Your edit of a comment", { exact: true })).toHaveValue(
+        "bo's edit, unsent",
+      );
+      await axe(theirs, "unsent text after a lock");
+      // Discarded, one goes; the other stays.
+      await theirs.getByRole("button", { name: "Discard: New comment" }).click();
+      await see(theirs.getByLabel("New comment", { exact: true })).toHaveCount(0);
+      await see(theirs.getByLabel("Your edit of a comment", { exact: true })).toHaveValue(
+        "bo's edit, unsent",
+      );
+    } finally {
+      await theirs.context().close();
+      await rest("DELETE", `/repos/${handle}/${name}/issues/1/lock`);
+    }
+  });
+});
