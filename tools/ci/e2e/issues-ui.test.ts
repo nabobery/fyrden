@@ -7,7 +7,7 @@
 // @fyrden/web build` first (turbo does it).
 import { type Page, type Route, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { accessible as axe, startWebStack, type WebStack } from "./web-stack.js";
+import { accessible as axe, reload, startWebStack, visit, type WebStack } from "./web-stack.js";
 
 let stack: WebStack;
 let page: Page;
@@ -47,7 +47,7 @@ afterAll(async () => {
 
 describe("issues in the web UI", () => {
   it("opens an issue with a hostile title, inert, and shows it", async () => {
-    await page.goto(`${stack.origin}/${handle}/${name}/issues`);
+    await visit(page, `${stack.origin}/${handle}/${name}/issues`);
     await see(page.getByText("No open issues.")).toBeVisible();
     await accessible("empty issue list");
     await page.getByText("New issue").click();
@@ -80,7 +80,7 @@ describe("issues in the web UI", () => {
     await see(page.getByLabel("Description (Markdown)")).toHaveValue("my edit");
     await accessible("stale edit");
     // Read again, then saved.
-    await page.reload();
+    await reload(page);
     await see(page.locator(".markdown").getByText("changed elsewhere")).toBeVisible();
     await page.getByText("Edit title and description").click();
     await page.getByLabel("Description (Markdown)").fill("my edit");
@@ -114,7 +114,7 @@ describe("issues in the web UI", () => {
   });
 
   it("clears the filter fields with the filters", async () => {
-    await page.goto(`${stack.origin}/${handle}/${name}/issues`);
+    await visit(page, `${stack.origin}/${handle}/${name}/issues`);
     await page.getByText("Filters").click();
     await page.getByLabel(/^Labels/).fill("bug");
     await page.getByRole("button", { name: "Filter" }).click();
@@ -123,14 +123,14 @@ describe("issues in the web UI", () => {
     await see(page).not.toHaveURL(/labels=/);
     await page.getByText("Filters").click();
     await see(page.getByLabel(/^Labels/)).toHaveValue("");
-    await page.goto(`${stack.origin}/${handle}/${name}/issues/1`);
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/1`);
   });
 
   it("closes it as not planned and reopens it; the list filters by state", async () => {
     await page.getByLabel("Not planned").check();
     await page.getByRole("button", { name: "Close issue" }).click();
     await see(page.getByText("Closed as not planned")).toBeVisible();
-    await page.goto(`${stack.origin}/${handle}/${name}/issues`);
+    await visit(page, `${stack.origin}/${handle}/${name}/issues`);
     await see(page.getByText("No open issues.")).toBeVisible();
     await page.getByRole("link", { name: "Closed", exact: true }).click();
     await see(page.getByRole("link", { name: /crash/ })).toBeVisible();
@@ -149,7 +149,7 @@ describe("issues in the web UI", () => {
   });
 
   it("refuses an untouched editor sent twice against a changed issue, both times", async () => {
-    await page.goto(`${stack.origin}/${handle}/${name}/issues/1`);
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/1`);
     await page.getByText("Edit title and description").click();
     await rest("PATCH", `/repos/${handle}/${name}/issues/1`, { body: "changed elsewhere again" });
     for (let i = 0; i < 2; i++) {
@@ -162,7 +162,7 @@ describe("issues in the web UI", () => {
       ]);
       await see(page.getByRole("alert")).toContainText("Someone changed it");
     }
-    await page.reload();
+    await reload(page);
     await see(page.locator(".markdown").getByText("changed elsewhere again")).toBeVisible();
   });
 
@@ -206,7 +206,7 @@ describe("issues in the web UI", () => {
   }
 
   it("keeps what is written while a save or a comment is answered", async () => {
-    await page.goto(`${stack.origin}/${handle}/${name}/issues/1`);
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/1`);
     // An edit answered while more is written: the more stays.
     await page.getByText("Edit title and description").click();
     await page.getByLabel("Description (Markdown)").fill("sent text");
@@ -229,7 +229,7 @@ describe("issues in the web UI", () => {
   });
 
   it("reacts to the issue and a comment, and takes a reaction back", async () => {
-    await page.goto(`${stack.origin}/${handle}/${name}/issues/1`);
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/1`);
     const description = page.locator("section", {
       has: page.getByRole("heading", { name: "Description" }),
     });
@@ -261,7 +261,7 @@ describe("issues in the web UI", () => {
   });
 
   it("keeps focus on a reaction's toggle as it moves, from the keyboard", async () => {
-    await page.goto(`${stack.origin}/${handle}/${name}/issues/1`);
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/1`);
     const reactions = page
       .locator("section", { has: page.getByRole("heading", { name: "Description" }) })
       .getByRole("list", { name: "Reactions" });
@@ -289,7 +289,7 @@ describe("issues in the web UI", () => {
     const second = await rest<{ id: number }>("POST", `${path}/${number}/comments`, {
       body: "second",
     });
-    await page.goto(`${stack.origin}/${handle}/${name}/issues/${number}`);
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/${number}`);
     const item = page.locator(`#comment-${second.id}`);
     await item.getByText("Edit or delete").click();
     await item.getByLabel("Comment (Markdown)").fill("my unsent edit");
@@ -331,7 +331,7 @@ describe("issues in the web UI", () => {
     const mine = await rest<{ id: number }>("POST", `${path}/${number}/comments`, {
       body: "mine",
     });
-    await page.goto(`${stack.origin}/${handle}/${name}/issues/${number}`);
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/${number}`);
     const item = page.locator(`#comment-${mine.id}`);
     const editor = item.getByLabel("Comment (Markdown)");
     await item.getByText("Edit or delete").click();
@@ -375,7 +375,7 @@ describe("issues in the web UI", () => {
       body: "mine",
     });
     await rest("POST", `${path}/${number}/comments`, { body: big });
-    await page.goto(`${stack.origin}/${handle}/${name}/issues/${number}`);
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/${number}`);
     const item = page.locator(`#comment-${mine.id}`);
     await item.getByText("Edit or delete").click();
     await item.getByLabel("Comment (Markdown)").fill("sent, then left");
@@ -409,7 +409,7 @@ describe("issues in the web UI", () => {
       await theirs.getByRole("button", { name: "Sign in with the token" }).click();
       await theirs.getByRole("button", { name: "Not now" }).click();
       const issuePage = `${stack.origin}/${handle}/${name}/issues/1`;
-      await theirs.goto(issuePage);
+      await visit(theirs, issuePage);
       await theirs.locator("#comment-body").fill("bo's comment");
       await theirs.getByRole("button", { name: "Comment", exact: true }).click();
       await see(theirs.getByRole("status")).toHaveText("Comment added.");
@@ -434,7 +434,7 @@ describe("issues in the web UI", () => {
       // Unlocked, read afresh: an edit written, unsent; a new comment sent and held while ada
       // locks it again.
       await rest("DELETE", `/repos/${handle}/${name}/issues/1/lock`);
-      await theirs.goto(issuePage);
+      await visit(theirs, issuePage);
       await mine.getByText("Edit or delete").click();
       await mine.getByLabel("Comment (Markdown)").fill("bo's edit, unsent");
       await theirs.locator("#comment-body").fill("bo's reply, refused");
@@ -467,7 +467,7 @@ describe("issues in the web UI", () => {
 
   it("sets an issue's labels, assignee and milestone, locks it, and deletes another", async () => {
     const issue = `${stack.origin}/${handle}/${name}/issues/1`;
-    await page.goto(issue);
+    await visit(page, issue);
     const sidebar = page.getByRole("complementary");
     // A label, chosen on its own page by name.
     await sidebar.getByRole("link", { name: "Add labels" }).click();
@@ -518,7 +518,7 @@ describe("issues in the web UI", () => {
     const doomed = await rest<{ number: number }>("POST", `/repos/${handle}/${name}/issues`, {
       title: "To be deleted",
     });
-    await page.goto(`${stack.origin}/${handle}/${name}/issues/${doomed.number}`);
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/${doomed.number}`);
     await page.getByText("Delete issue", { exact: true }).click();
     await page.getByRole("button", { name: `Delete issue #${doomed.number}` }).click();
     await see(page).toHaveURL(`${stack.origin}/${handle}/${name}/issues`);
@@ -527,7 +527,7 @@ describe("issues in the web UI", () => {
 
   it("manages labels: creates one with a hostile name, edits it, keeps a stale edit, deletes it", async () => {
     const labels = `${stack.origin}/${handle}/${name}/labels`;
-    await page.goto(labels);
+    await visit(page, labels);
     // A new repository has the default labels.
     await see(page.locator(".label-chip", { hasText: /^bug$/ })).toBeVisible();
     await accessible("labels");
@@ -575,7 +575,7 @@ describe("issues in the web UI", () => {
     await item.getByRole("button", { name: "Save label" }).click();
     await see(page.getByRole("alert")).toContainText("Someone changed it");
     await see(item.getByLabel("Name")).toHaveValue("renamed here");
-    await page.reload();
+    await reload(page);
     const fresh = page.locator(".label-list li", {
       has: page.locator(".label-chip", { hasText: HOSTILE }),
     });
@@ -594,7 +594,7 @@ describe("issues in the web UI", () => {
 
   it("manages milestones: creates one, lists its items, keeps a stale edit, closes, reopens, deletes", async () => {
     const milestones = `${stack.origin}/${handle}/${name}/milestones`;
-    await page.goto(milestones);
+    await visit(page, milestones);
     await see(page.getByText("No open milestones.")).toBeVisible();
     await accessible("no milestones");
     await page.getByText("New milestone").click();
@@ -618,12 +618,12 @@ describe("issues in the web UI", () => {
       await rest<{ milestones: { number: number }[] }>("GET", `/repos/${handle}/${name}/milestones`)
     ).milestones[0] as { number: number };
     await rest("PATCH", `/repos/${handle}/${name}/issues/1`, { milestone: number });
-    await page.reload();
+    await reload(page);
     await see(item.getByText(/0% complete · 1 open · 0 closed/)).toBeVisible();
     await item.getByRole("link", { name: /^Issues and pull requests/ }).click();
     await see(page).toHaveURL(/kind=all/);
     await see(page.getByRole("list", { name: "Issues" }).getByRole("link")).toHaveCount(1);
-    await page.goto(milestones);
+    await visit(page, milestones);
     // An edit someone else's change overtook is refused, its text kept.
     await item.getByText("Edit", { exact: true }).click();
     await item.getByLabel("Title").fill("v1, mine");

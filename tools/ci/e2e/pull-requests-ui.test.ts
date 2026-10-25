@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { mentionsToken } from "@fyrden/domain";
 import { type Locator, type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { accessible, startWebStack, type WebStack } from "./web-stack.js";
+import { accessible, startWebStack, visit, type WebStack } from "./web-stack.js";
 
 let stack: WebStack;
 let page: Page;
@@ -149,14 +149,14 @@ async function headOf(number: number): Promise<string> {
 /** A pull request of a new topic branch, its conversation open in the page: its number. */
 async function visitTopicPull(title: string): Promise<number> {
   const number = await openPull(await pushTopic(), title);
-  await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}`);
+  await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}`);
   return number;
 }
 
 /** A pull request of a new topic branch, its files open in the page: its number and src/app.ts. */
 async function visitTopicFiles(title: string) {
   const number = await openPull(await pushTopic(), title);
-  await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}/files`);
+  await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}/files`);
   return { number, file: page.locator("section.file", { hasText: "src/app.ts" }) };
 }
 
@@ -198,11 +198,11 @@ describe("pull requests in the web UI", () => {
   it("opens a pull request from a branch, with a hostile title and description", async () => {
     // A repository of its own has none yet.
     await rest("POST", "/user/repos", { name: "no-pulls" });
-    await page.goto(`${stack.origin}/${handle}/no-pulls/pulls`);
+    await visit(page, `${stack.origin}/${handle}/no-pulls/pulls`);
     await see(page.getByText("No open pull requests.")).toBeVisible();
     await accessible(page, "empty pull request list");
     const branch = await pushTopic();
-    await page.goto(`${stack.origin}/${handle}/${name}/pulls`);
+    await visit(page, `${stack.origin}/${handle}/${name}/pulls`);
     await page.getByText("New pull request").click();
     await page.getByLabel("Head branch (with the changes)").fill(branch);
     await page.getByLabel("Title").fill("<img src=x onerror=window.pwned=4> Change");
@@ -315,7 +315,7 @@ describe("pull requests in the web UI", () => {
       message: "Add docs",
       content: Buffer.from("later\n").toString("base64"),
     });
-    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}`);
+    await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}`);
     const review = page.locator("section", { has: page.getByRole("heading", { name: "Review" }) });
     // Its author may only comment.
     await see(review.getByLabel("Approve")).toBeDisabled();
@@ -404,7 +404,7 @@ describe("pull requests in the web UI", () => {
       sha: readme.sha,
       content: Buffer.from("# Main\n").toString("base64"),
     });
-    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}/conflicts`);
+    await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}/conflicts`);
     await see(page.getByText("1 conflict left in this file.")).toBeVisible();
     await accessible(page, "conflicts");
     const editor = page.getByLabel(/^Resolved content of README\.md/);
@@ -462,7 +462,7 @@ describe("pull requests in the web UI", () => {
       "big.txt": `${Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`).join("\n")}\n`,
     });
     const number = await openPull("big", "Big");
-    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}/files`);
+    await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}/files`);
     const drawn = page.locator("section.file", { hasText: "big.txt" }).locator("diffs-container");
     await see(drawn.getByText("line 1", { exact: true })).toBeVisible({ timeout: 30_000 });
     const mounted = () =>
@@ -503,7 +503,7 @@ describe("pull requests in the web UI", () => {
     await pushBranch("verdict", { "verdict.txt": "first\n" });
     const number = await openPull("verdict", "Verdict", { token });
     const first = await headOf(number);
-    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}`);
+    await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}`);
     const review = page.locator("section", { has: page.getByRole("heading", { name: "Review" }) });
     await see(review.locator("legend")).toContainText(first.slice(0, 7));
     await review.getByLabel("Approve").check();
@@ -549,7 +549,7 @@ describe("pull requests in the web UI", () => {
     await comment(2, '```suggestion\nconst line2 = "two";\n```');
     await comment(6, "A plain remark.");
     // A comment being written survives a review joining the conversation.
-    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}`);
+    await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}`);
     await page.getByLabel("Comment (Markdown)").fill("An unsent comment.");
     const review = page.locator("section", { has: page.getByRole("heading", { name: "Review" }) });
     await review.getByLabel(/^Review comment/).fill("A review meanwhile.");
@@ -585,7 +585,7 @@ describe("pull requests in the web UI", () => {
   it("asks for the lines again when the head moves under an unfinished line comment", async () => {
     await pushBranch("relined", { "relined.txt": `${lines(8).join("\n")}\n` });
     const number = await openPull("relined", "Relined");
-    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}/files`);
+    await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}/files`);
     const file = page.locator("section.file", { hasText: "relined.txt" });
     const drawn = file.locator("diffs-container");
     await see(drawn.getByText("const line8 = 8;")).toBeVisible({ timeout: 30_000 });
@@ -623,7 +623,7 @@ describe("pull requests in the web UI", () => {
     const number = await openPull("diagrams", "Diagrams", {
       body: "```mermaid\ngraph TD\n  Start --> Stop\n```\n",
     });
-    await page.goto(`${stack.origin}/${handle}/${name}/pull/${number}`);
+    await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}`);
     const description = page.locator("section", { has: page.locator("#pull-description") });
     await see(description.locator("figure.mermaid img")).toHaveCount(1, { timeout: 30_000 });
     await page

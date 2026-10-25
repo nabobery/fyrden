@@ -42,10 +42,11 @@ export function Reactions({
   // The content last sent from here: its toggle moves (into the counted ones, or back into the
   // picker) when the page is read again, and focus goes with it rather than to the page.
   const sent = useRef<ReactionContent | undefined>(undefined);
-  // Run when the page is read again: a new rollup comes with each reading.
+  // Run when the page is read again (a new rollup comes with each reading) and once it is idle:
+  // a toggle is disabled while anything is sent, and a disabled one takes no focus.
   useEffect(() => {
     const content = sent.current;
-    if (content === undefined || !rollup) return;
+    if (content === undefined || busy || !rollup) return;
     sent.current = undefined;
     // Only when focus was lost with the old toggle: never taken from where someone moved it.
     if (document.activeElement && document.activeElement !== document.body) return;
@@ -55,7 +56,7 @@ export function Reactions({
     const picker = button?.closest("details");
     if (picker && !picker.open) picker.querySelector("summary")?.focus();
     else button?.focus();
-  }, [rollup]);
+  }, [rollup, busy]);
   const own = new Map((rollup.viewer ?? []).map((r) => [r.content, r.id]));
   const shown = REACTIONS.filter((r) => rollup[r.content] > 0);
   const others = REACTIONS.filter((r) => !(rollup[r.content] > 0));

@@ -144,6 +144,23 @@ export async function startWebStack(
   }
 }
 
+/**
+ * Opens `url` and waits until the page's scripts have taken it over
+ * (`html[data-hydrated]`, set once React has hydrated it): before that a
+ * form posts as a plain HTML form (a whole new page), and a test that
+ * acts at once on a slow machine would test that instead.
+ */
+export async function visit(page: Page, url: string): Promise<void> {
+  await page.goto(url);
+  await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+}
+
+/** Loads the page again, waiting as `visit` does. */
+export async function reload(page: Page): Promise<void> {
+  await page.reload();
+  await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+}
+
 /** `page` has no WCAG 2.x A or AA violation axe can find. */
 export async function accessible(page: Page, name: string): Promise<void> {
   const result = await new AxeBuilder({ page })

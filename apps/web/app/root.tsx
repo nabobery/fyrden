@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import {
   isRouteErrorResponse,
   Link,
@@ -86,6 +87,11 @@ function SiteHeader() {
 }
 
 export function Layout({ children }: { children: React.ReactNode }) {
+  // Marks the page once React has taken it over (its forms send through the app from then on):
+  // what a test waits for before it acts as a person with the page's scripts would.
+  useEffect(() => {
+    document.documentElement.dataset.hydrated = "";
+  }, []);
   return (
     <html lang="en">
       <head>
