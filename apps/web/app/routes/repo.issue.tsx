@@ -25,7 +25,7 @@ import {
 } from "../lib/api.server.js";
 import { utf8Length } from "../lib/continuation.js";
 import type { EditResult, Scope, Written } from "../lib/edits.js";
-import { editSender } from "../lib/edits.server.js";
+import { editSender, NO_VERSION } from "../lib/edits.server.js";
 import {
   ISSUE_FORM_MAX_BYTES,
   type Issue,
@@ -155,7 +155,7 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
     draftOf,
   );
   if (sender.refused) return sender.refused;
-  const { scope, expected, send } = sender;
+  const { scope, expected, send, refuse } = sender;
   const api = issueApiPath(params.owner, params.repo, number);
   const repoApi = repoApiPath(params.owner, params.repo);
   switch (field(form, "intent")) {
@@ -169,6 +169,7 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
     case "edit": {
       const title = field(form, "title");
       const body = rawField(form, "body");
+      if (!expected) return refuse(NO_VERSION, { fields: { title, body } });
       return send(
         "PATCH",
         api,
@@ -182,6 +183,7 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
       const id = idParam(field(form, "comment_id"));
       const body = rawField(form, "body");
       if (id === null || !body.trim()) return { error: "Write the comment first.", scope };
+      if (!expected) return refuse(NO_VERSION, { fields: { body }, target: id });
       return send(
         "PATCH",
         `${repoApi}/issues/comments/${id}`,

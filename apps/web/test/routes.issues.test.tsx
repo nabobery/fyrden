@@ -101,6 +101,34 @@ describe("the issue list", () => {
     expect(data.filters).toEqual({ labels: "bug", assignee: "none" });
   });
 
+  it("lists pull requests too when asked for both kinds, each linked to its own page", async () => {
+    const { context, calls } = api({
+      "GET /api/repos/ada/demo": () => json({ ...repo, permissions: ALL }),
+      "GET /api/repos/ada/demo/issues": () => json({ issues: [], next_cursor: null }),
+    });
+    const data = await issuesLoader({
+      request: new Request(`${ORIGIN}/ada/demo/issues?kind=all&milestone=3&state=all`),
+      context,
+      params: { owner: "ada", repo: "demo" },
+    } as never);
+    const listed = calls.map(pathOf).find((p) => p.startsWith("GET /api/repos/ada/demo/issues"));
+    expect(listed).not.toContain("type=");
+    expect(listed).toContain("milestone=3");
+    expect(data.kind).toBe("all");
+    const html = renderPage(Issues, "/ada/demo/issues", {
+      ...data,
+      issues: [
+        issue({ number: 7 }),
+        issue({ number: 8, title: "A change", state: "closed", pull_request: { merged_at: 5 } }),
+      ],
+    });
+    expect(html).toContain('href="/ada/demo/issues/7"');
+    expect(html).toContain('href="/ada/demo/pull/8"');
+    expect(html).toContain("Merged");
+    // The state links keep both kinds and the filters.
+    expect(html).toContain('href="/ada/demo/issues?kind=all&amp;milestone=3"');
+  });
+
   it("shows hostile titles and label names as text", () => {
     const html = renderPage(Issues, "/ada/demo/issues", {
       repo,
@@ -215,6 +243,15 @@ describe("an issue's page", () => {
       draft: { fields: { title: "New", body: "b" }, version: 3 },
     });
     expect((stale.outcome as { error: string }).error).toContain("Someone changed it");
+    // Never sent without the version it was opened at (it would overwrite a newer one).
+    for (const fields of [
+      { intent: "edit", title: "New", body: "b" },
+      { intent: "edit-comment", comment_id: "5", body: "c", version: "0" },
+    ]) {
+      const { sent, outcome } = await act(fields);
+      expect(sent, fields.intent).toBeUndefined();
+      expect(outcome).toMatchObject({ draft: { fields: expect.any(Object) } });
+    }
     const commentEdit = await act({
       intent: "edit-comment",
       comment_id: "5",

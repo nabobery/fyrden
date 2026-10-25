@@ -22,7 +22,7 @@ import {
   readForm,
 } from "../lib/api.server.js";
 import { type EditResult, type Scope, sameScope, type Written } from "../lib/edits.js";
-import { editSender } from "../lib/edits.server.js";
+import { editSender, NO_VERSION } from "../lib/edits.server.js";
 import {
   colorOf,
   LABEL_FORM_MAX_BYTES,
@@ -119,7 +119,7 @@ export async function action({
     );
   const id = labelId(form);
   // A change made by name holds only while the name names the label the form showed.
-  const shown = { ...(id !== null && { expected_id: id }), ...expected };
+  const shown = expected && id !== null ? { expected_id: id, ...expected } : undefined;
   switch (intent) {
     case "create": {
       const draft = draftOf(form);
@@ -142,6 +142,7 @@ export async function action({
       const name = field(form, "new_name");
       if (id === null) return { error: "No such label.", scope };
       if (!name || !color) return refuse("Give it a name and a colour.", draft);
+      if (!shown) return refuse(NO_VERSION, draft);
       const description = field(form, "description");
       return send(
         "PATCH",
@@ -154,6 +155,7 @@ export async function action({
     }
     case "delete":
       if (id === null) return { error: "No such label.", scope };
+      if (!shown) return refuse(NO_VERSION);
       return send(
         "DELETE",
         labelApiPath(base, field(form, "name")),
@@ -314,7 +316,7 @@ function LabelEditor({
           {identity}
           <p className="muted">Issues and pull requests carrying it will no longer.</p>
           <button type="submit" disabled={busy}>
-            Delete label {label.name}
+            {`Delete label ${label.name}`}
           </button>
         </Form>
       </details>
@@ -362,6 +364,7 @@ export default function Labels({ loaderData }: Route.ComponentProps) {
         <Link to={`/${repo.owner}/${repo.name}/labels`} aria-current="page">
           Labels
         </Link>
+        <Link to={`/${repo.owner}/${repo.name}/milestones`}>Milestones</Link>
       </nav>
       {!loaderData.viewerKnown && (
         <p className="muted" role="status">

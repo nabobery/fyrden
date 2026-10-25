@@ -3,6 +3,13 @@ import { apiCall, checkSession } from "./api.server.js";
 import type { Draft, EditResult, Scope, Written } from "./edits.js";
 import { field, problemCode, problemDetail } from "./pulls.js";
 
+/**
+ * Said for an edit whose form carries no version it was opened at (an edit
+ * is never sent without one: it would overwrite whatever changed since).
+ */
+export const NO_VERSION =
+  "This form does not say which version it was opened at: reload the page (your text is kept below).";
+
 /** Sends one change to the API and answers it in its scope (see `editSender`). */
 export type Send<S extends Scope> = (
   method: string,
@@ -35,7 +42,8 @@ export async function editSender<S extends Scope>(
       refused?: undefined;
       scope: S;
       version: number | undefined;
-      expected: { expected_version?: number };
+      /** The form's version as the API's precondition; undefined when the form carries none. */
+      expected: { expected_version: number } | undefined;
       send: Send<S>;
       /** Refused here, before anything is sent: its draft keeps the version it was written from. */
       refuse: (error: string, draft?: Written) => EditResult<S>;
@@ -91,7 +99,7 @@ export async function editSender<S extends Scope>(
   return {
     scope,
     version,
-    expected: version === undefined ? {} : { expected_version: version },
+    expected: version === undefined ? undefined : { expected_version: version },
     send,
     refuse: (error, draft) => ({ error, scope, ...drafted(draft) }),
   };

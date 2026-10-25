@@ -168,6 +168,11 @@ button.danger {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+/* Text shown as written: its line breaks kept, long words broken. */
+.pre-wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 ul.label-list {
   list-style: none;
   padding: 0;

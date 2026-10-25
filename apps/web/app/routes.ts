@@ -16,6 +16,7 @@ export default [
   route(":owner/:repo/issues", "routes/repo.issues.tsx"),
   route(":owner/:repo/issues/:number", "routes/repo.issue.tsx"),
   route(":owner/:repo/labels", "routes/repo.labels.tsx"),
+  route(":owner/:repo/milestones", "routes/repo.milestones.tsx"),
   route(":owner/:repo/pulls", "routes/repo.pulls.tsx"),
   route(":owner/:repo/pull/:number", "routes/repo.pull.tsx"),
   route(":owner/:repo/pull/:number/files", "routes/repo.pull.files.tsx"),

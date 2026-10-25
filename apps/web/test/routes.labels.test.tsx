@@ -246,6 +246,9 @@ describe("changing labels", () => {
       { intent: "create", name: "bug", color: "red" },
       { intent: "create", name: "", color: "#000000" },
       { intent: "edit", label_id: "x", name: "label 1", new_name: "a", color: "#000000" },
+      // Never without the version it was opened at (it would overwrite, or delete, a newer one).
+      { intent: "edit", label_id: "1", name: "label 1", new_name: "a", color: "#000000" },
+      { intent: "delete", label_id: "1", name: "label 1", version: "garbage" },
     ]) {
       const { sent, outcome } = await act(bad);
       expect(sent, JSON.stringify(bad)).toBeUndefined();

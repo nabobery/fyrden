@@ -526,4 +526,67 @@ describe("issues in the web UI", () => {
     await see(page.getByRole("status")).toHaveText("Label deleted.");
     await see(page.locator(".label-chip", { hasText: /^renamed here$/ })).toHaveCount(0);
   });
+
+  it("manages milestones: creates one, lists its items, keeps a stale edit, closes, reopens, deletes", async () => {
+    const milestones = `${stack.origin}/${handle}/${name}/milestones`;
+    await page.goto(milestones);
+    await see(page.getByText("No open milestones.")).toBeVisible();
+    await accessible("no milestones");
+    await page.getByText("New milestone").click();
+    const create = page.locator("form", {
+      has: page.getByRole("button", { name: "Create milestone" }),
+    });
+    await create.getByLabel("Title").fill(HOSTILE);
+    await create.getByLabel(/^Due date/).fill("2027-01-02");
+    await create.getByLabel(/^Description/).fill(`about ${HOSTILE}`);
+    await page.getByRole("button", { name: "Create milestone" }).click();
+    await see(page.getByRole("status")).toHaveText("Milestone created.");
+    await see(create.getByLabel("Title")).toHaveValue("");
+    const item = page.locator(".label-list li", {
+      has: page.getByRole("heading", { name: HOSTILE }),
+    });
+    await see(item.getByText(/Due 2027-01-02 · Nothing in it yet/)).toBeVisible();
+    expect(await page.evaluate(() => (globalThis as { pwned?: unknown }).pwned)).toBeUndefined();
+    await accessible("a milestone");
+    // Its items: an issue in it.
+    const { number } = (
+      await rest<{ milestones: { number: number }[] }>("GET", `/repos/${handle}/${name}/milestones`)
+    ).milestones[0] as { number: number };
+    await rest("PATCH", `/repos/${handle}/${name}/issues/1`, { milestone: number });
+    await page.reload();
+    await see(item.getByText(/0% complete · 1 open · 0 closed/)).toBeVisible();
+    await item.getByRole("link", { name: /^Issues and pull requests/ }).click();
+    await see(page).toHaveURL(/kind=all/);
+    await see(page.getByRole("list", { name: "Issues" }).getByRole("link")).toHaveCount(1);
+    await page.goto(milestones);
+    // An edit someone else's change overtook is refused, its text kept.
+    await item.getByText("Edit", { exact: true }).click();
+    await item.getByLabel("Title").fill("v1, mine");
+    await rest("PATCH", `/repos/${handle}/${name}/milestones/${number}`, {
+      description: "changed elsewhere",
+    });
+    await item.getByRole("button", { name: "Save milestone" }).click();
+    await see(page.getByRole("alert")).toContainText("Someone changed it");
+    await see(item.getByLabel("Title")).toHaveValue("v1, mine");
+    // Closed, it leaves the open list (its unsent edit kept to copy); reopened, it is back.
+    await item.getByRole("button", { name: "Close milestone" }).click();
+    await see(page.getByRole("status")).toHaveText("Milestone closed.");
+    await see(page.getByText("No open milestones.")).toBeVisible();
+    await see(page.getByLabel("Your edit of a milestone", { exact: true })).toHaveValue("v1, mine");
+    await page.getByRole("link", { name: "Closed", exact: true }).click();
+    const closed = page.locator(".label-list li", {
+      has: page.getByRole("heading", { name: HOSTILE }),
+    });
+    await closed.getByRole("button", { name: "Reopen milestone" }).click();
+    await see(page.getByRole("status")).toHaveText("Milestone reopened.");
+    // Back on the open list (within the page, its drafts kept), its editor resumes the edit.
+    await page.getByRole("link", { name: "Open", exact: true }).click();
+    await see(item.getByLabel("Title")).toHaveValue("v1, mine");
+    // Deleted, its unsent edit goes with it.
+    await item.getByText("Delete", { exact: true }).click();
+    await item.getByRole("button", { name: `Delete milestone ${HOSTILE}` }).click();
+    await see(page.getByRole("status")).toHaveText("Milestone deleted.");
+    await see(page.getByText("No open milestones.")).toBeVisible();
+    await see(page.getByRole("heading", { name: "Your unsent text" })).toHaveCount(0);
+  });
 });

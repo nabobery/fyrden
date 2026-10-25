@@ -23,7 +23,7 @@ import {
   listingOf,
 } from "../lib/issues.js";
 import { pageLinks, pageQuery } from "../lib/pages.js";
-import { field, problemDetail, rawField, repoApiPath, when, who } from "../lib/pulls.js";
+import { field, problemDetail, pullPage, rawField, repoApiPath, when, who } from "../lib/pulls.js";
 import type { Repo } from "../lib/types.js";
 import type { Route } from "./+types/repo.issues";
 
@@ -42,8 +42,12 @@ const FILTER_LABEL = {
 export async function loader({ request, context, params }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const base = repoApiPath(params.owner, params.repo);
-  const { state, filters } = listingOf(url);
-  const query = new URLSearchParams({ state, type: "issues", ...filters });
+  const { state, kind, filters } = listingOf(url);
+  const query = new URLSearchParams({
+    state,
+    ...(kind === "issues" && { type: "issues" }),
+    ...filters,
+  });
   const [repo, page, session] = await Promise.all([
     apiGet<Repo>(context, request, base),
     apiCallBounded<IssuesPage>(
@@ -58,6 +62,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     repo,
     origin: url.origin,
     state,
+    kind,
     filters,
     issues: listed.issues,
     pages: pageLinks(url, "cursor", listed.next_cursor),
@@ -110,7 +115,7 @@ export async function action({ request, context, params }: Route.ActionArgs) {
 export default function Issues({ loaderData }: Route.ComponentProps) {
   const failed = useActionData<typeof action>();
   const navigation = useNavigation();
-  const { repo, origin, state, filters, issues, pages, proposed } = loaderData;
+  const { repo, origin, state, kind, filters, issues, pages, proposed } = loaderData;
   // A failed session check keeps the viewer last known (its draft with it); a confirmed one is taken.
   const known = useRef(loaderData.viewer);
   if (loaderData.viewerKnown) known.current = loaderData.viewer;
@@ -119,11 +124,21 @@ export default function Issues({ loaderData }: Route.ComponentProps) {
   const draft = failed?.draft?.viewer === viewer ? failed?.draft : undefined;
   const base = `/${repo.owner}/${repo.name}`;
   const withState = (s: string) => {
-    const query = new URLSearchParams({ ...(s !== "open" && { state: s }), ...filters });
+    const query = new URLSearchParams({
+      ...(s !== "open" && { state: s }),
+      ...(kind === "all" && { kind }),
+      ...filters,
+    });
     const search = query.toString();
     return search ? `${base}/issues?${search}` : `${base}/issues`;
   };
   const filtered = Object.keys(filters).length > 0;
+  const kept = new URLSearchParams({
+    ...(state !== "open" && { state }),
+    ...(kind === "all" && { kind }),
+  }).toString();
+  // Clearing the filters keeps the state and kinds asked for.
+  const withoutFilters = kept ? `${base}/issues?${kept}` : `${base}/issues`;
   return (
     <main>
       <RepoHeader repo={repo} origin={origin} active="issues" />
@@ -132,6 +147,7 @@ export default function Issues({ loaderData }: Route.ComponentProps) {
           Issues
         </Link>
         <Link to={`${base}/labels`}>Labels</Link>
+        <Link to={`${base}/milestones`}>Milestones</Link>
       </nav>
       <nav aria-label="Filter issues by state" className="row">
         {ISSUE_STATES.map((s) => (
@@ -145,6 +161,7 @@ export default function Issues({ loaderData }: Route.ComponentProps) {
         {/* Keyed by the filters applied: its fields always show them (clearing clears them). */}
         <Form method="get" key={JSON.stringify(filters)}>
           {state !== "open" && <input type="hidden" name="state" value={state} />}
+          {kind === "all" && <input type="hidden" name="kind" value="all" />}
           {ISSUE_FILTERS.map((name) => (
             <p key={name}>
               <label htmlFor={`filter-${name}`}>{FILTER_LABEL[name]}</label>
@@ -153,11 +170,7 @@ export default function Issues({ loaderData }: Route.ComponentProps) {
           ))}
           <p className="row">
             <button type="submit">Filter</button>
-            {filtered && (
-              <Link to={state === "open" ? `${base}/issues` : `${base}/issues?state=${state}`}>
-                Clear filters
-              </Link>
-            )}
+            {filtered && <Link to={withoutFilters}>Clear filters</Link>}
           </p>
         </Form>
       </details>
@@ -178,7 +191,15 @@ export default function Issues({ loaderData }: Route.ComponentProps) {
             return (
               <li key={issue.number}>
                 <span className={`badge ${status.className}`}>{status.label}</span>{" "}
-                <Link to={issuePage(repo.owner, repo.name, issue.number)}>{issue.title}</Link>{" "}
+                <Link
+                  to={
+                    issue.pull_request
+                      ? pullPage(repo.owner, repo.name, issue.number)
+                      : issuePage(repo.owner, repo.name, issue.number)
+                  }
+                >
+                  {issue.title}
+                </Link>{" "}
                 {issue.labels.map((label) => (
                   <LabelChip key={label.id} label={label} />
                 ))}{" "}
