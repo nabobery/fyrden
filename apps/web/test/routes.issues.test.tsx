@@ -107,7 +107,7 @@ describe("the issue list", () => {
       origin: ORIGIN,
       state: "open",
       filters: { labels: HOSTILE },
-      issues: [issue({ title: HOSTILE, labels: [{ id: 1, name: HOSTILE }] })],
+      issues: [issue({ title: HOSTILE, labels: [{ id: 1, name: HOSTILE, color: "ededed" }] })],
       pages: { next: null, first: null },
       viewer: VIEWER,
       viewerKnown: true,
@@ -269,7 +269,11 @@ describe("an issue's page", () => {
       IssuePage,
       "/ada/demo/issues/7",
       pageData({
-        issue: issue({ title: HOSTILE, body: HOSTILE, labels: [{ id: 1, name: HOSTILE }] }),
+        issue: issue({
+          title: HOSTILE,
+          body: HOSTILE,
+          labels: [{ id: 1, name: HOSTILE, color: "ededed" }],
+        }),
         comments: [comment(1, { body: HOSTILE })],
       }),
     );

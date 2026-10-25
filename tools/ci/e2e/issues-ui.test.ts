@@ -178,9 +178,9 @@ describe("issues in the web UI", () => {
     await see(page.getByRole("status")).toHaveText("Saved.");
   });
 
-  /** Holds this page's next form post until the returned `release` is called (then unroutes). */
-  async function holdNextPost(number = 1, on: Page = page): Promise<() => Promise<void>> {
-    const pattern = `**/${handle}/${name}/issues/${number}*`;
+  /** Holds this page's next form post to `at` until the returned `release` is called (then unroutes). */
+  async function holdNextPost(at = "issues/1", on: Page = page): Promise<() => Promise<void>> {
+    const pattern = `**/${handle}/${name}/${at}*`;
     let release = () => {};
     const held = new Promise<void>((done) => {
       release = done;
@@ -331,7 +331,7 @@ describe("issues in the web UI", () => {
     const editor = item.getByLabel("Comment (Markdown)");
     await item.getByText("Edit or delete").click();
     await editor.fill("saved");
-    const release = await holdNextPost(number);
+    const release = await holdNextPost(`issues/${number}`);
     await item.getByRole("button", { name: "Save comment" }).click();
     await editor.fill("saved, and more written meanwhile");
     await release();
@@ -374,7 +374,7 @@ describe("issues in the web UI", () => {
     const item = page.locator(`#comment-${mine.id}`);
     await item.getByText("Edit or delete").click();
     await item.getByLabel("Comment (Markdown)").fill("sent, then left");
-    const release = await holdNextPost(number);
+    const release = await holdNextPost(`issues/${number}`);
     await item.getByRole("button", { name: "Save comment" }).click();
     // The next page, before the answer: the edit's answer is never taken.
     await page.getByRole("link", { name: "Next page" }).click();
@@ -415,7 +415,7 @@ describe("issues in the web UI", () => {
       await theirs.locator("#comment-body").fill("bo's reply, unsent");
       await mine.getByText("Edit or delete").click();
       await mine.getByLabel("Comment (Markdown)").fill("bo's edit");
-      let release = await holdNextPost(1, theirs);
+      let release = await holdNextPost("issues/1", theirs);
       await mine.getByRole("button", { name: "Save comment" }).click();
       await mine.getByLabel("Comment (Markdown)").fill("bo's edit, and more written meanwhile");
       await rest("PUT", `/repos/${handle}/${name}/issues/1/lock`, {});
@@ -433,7 +433,7 @@ describe("issues in the web UI", () => {
       await mine.getByText("Edit or delete").click();
       await mine.getByLabel("Comment (Markdown)").fill("bo's edit, unsent");
       await theirs.locator("#comment-body").fill("bo's reply, refused");
-      release = await holdNextPost(1, theirs);
+      release = await holdNextPost("issues/1", theirs);
       await theirs.getByRole("button", { name: "Comment", exact: true }).click();
       await rest("PUT", `/repos/${handle}/${name}/issues/1/lock`, {});
       await release();
@@ -458,5 +458,72 @@ describe("issues in the web UI", () => {
       await theirs.context().close();
       await rest("DELETE", `/repos/${handle}/${name}/issues/1/lock`);
     }
+  });
+
+  it("manages labels: creates one with a hostile name, edits it, keeps a stale edit, deletes it", async () => {
+    const labels = `${stack.origin}/${handle}/${name}/labels`;
+    await page.goto(labels);
+    // A new repository has the default labels.
+    await see(page.locator(".label-chip", { hasText: /^bug$/ })).toBeVisible();
+    await accessible("labels");
+    await page.getByText("New label").click();
+    const create = page.locator("form", {
+      has: page.getByRole("button", { name: "Create label" }),
+    });
+    await create.getByLabel("Name").fill(HOSTILE);
+    await create.getByLabel("Colour").fill("#fbca04");
+    await create.getByLabel("Description (optional)").fill(`about ${HOSTILE}`);
+    await page.getByRole("button", { name: "Create label" }).click();
+    await see(page.getByRole("status")).toHaveText("Label created.");
+    // The form is cleared for the next one.
+    await see(create.getByLabel("Name")).toHaveValue("");
+    await see(create.getByLabel("Description (optional)")).toHaveValue("");
+    // What is written while the next one is created stays.
+    await create.getByLabel("Name").fill("second");
+    const release = await holdNextPost("labels");
+    await page.getByRole("button", { name: "Create label" }).click();
+    await create.getByLabel("Name").fill("third, written meanwhile");
+    await release();
+    await see(page.locator(".label-chip", { hasText: /^second$/ })).toBeVisible();
+    await see(create.getByLabel("Name")).toHaveValue("third, written meanwhile");
+    const item = page.locator(".label-list li", {
+      has: page.locator(".label-chip", { hasText: HOSTILE }),
+    });
+    await see(item.locator(".label-chip")).toHaveCSS("color", "rgb(0, 0, 0)");
+    expect(await page.evaluate(() => (globalThis as { pwned?: unknown }).pwned)).toBeUndefined();
+    await accessible("labels with a new one");
+    // Its issues: one carries it.
+    await rest("POST", `/repos/${handle}/${name}/issues/1/labels`, { labels: [HOSTILE] });
+    await item.getByRole("link", { name: /^Issues/ }).click();
+    await see(page).toHaveURL(/\/issues\?labels=/);
+    await see(
+      page.getByRole("list", { name: "Issues" }).getByRole("link", { name: /crash/ }),
+    ).toHaveCount(1);
+    await page.goBack();
+    await see(page).toHaveURL(labels);
+    // An edit someone else's change overtook is refused, its text kept.
+    await item.getByText("Edit", { exact: true }).click();
+    await item.getByLabel("Name").fill("renamed here");
+    await rest("PATCH", `/repos/${handle}/${name}/labels/${encodeURIComponent(HOSTILE)}`, {
+      description: "changed elsewhere",
+    });
+    await item.getByRole("button", { name: "Save label" }).click();
+    await see(page.getByRole("alert")).toContainText("Someone changed it");
+    await see(item.getByLabel("Name")).toHaveValue("renamed here");
+    await page.reload();
+    const fresh = page.locator(".label-list li", {
+      has: page.locator(".label-chip", { hasText: HOSTILE }),
+    });
+    await fresh.getByText("Edit", { exact: true }).click();
+    await fresh.getByLabel("Name").fill("renamed here");
+    await fresh.getByRole("button", { name: "Save label" }).click();
+    await see(page.getByRole("status")).toHaveText("Label saved.");
+    const renamed = page.locator(".label-list li", {
+      has: page.locator(".label-chip", { hasText: /^renamed here$/ }),
+    });
+    await renamed.getByText("Delete", { exact: true }).click();
+    await renamed.getByRole("button", { name: "Delete label renamed here" }).click();
+    await see(page.getByRole("status")).toHaveText("Label deleted.");
+    await see(page.locator(".label-chip", { hasText: /^renamed here$/ })).toHaveCount(0);
   });
 });

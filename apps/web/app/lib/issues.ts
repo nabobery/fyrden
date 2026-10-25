@@ -27,7 +27,7 @@ export const ISSUE_STATES = ["open", "closed", "all"] as const;
 export type IssueStateFilter = (typeof ISSUE_STATES)[number];
 
 /** The listing's filters a page's URL may name, passed to the API as they are. */
-export const ISSUE_FILTERS = ["labels", "assignee", "milestone", "creator"] as const;
+export const ISSUE_FILTERS = ["labels", "label_ids", "assignee", "milestone", "creator"] as const;
 
 /** What the issue list's URL asks for: its state and filters (empty ones left out). */
 export function listingOf(url: URL): {

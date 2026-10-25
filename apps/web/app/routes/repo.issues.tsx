@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { Form, Link, redirect, useActionData, useNavigation } from "react-router";
+import { LabelChip } from "../components/label-chip.js";
 import { Pager } from "../components/pager.js";
 import { RepoHeader } from "../components/repo-header.js";
 import {
@@ -32,6 +33,7 @@ export function meta({ params }: Route.MetaArgs): Route.MetaDescriptors {
 
 const FILTER_LABEL = {
   labels: "Labels (names, comma-separated)",
+  label_ids: "Label ids (comma-separated, for names holding a comma)",
   assignee: "Assignee (a handle, none or *)",
   milestone: "Milestone (a number, none or *)",
   creator: "Author (a handle)",
@@ -125,6 +127,12 @@ export default function Issues({ loaderData }: Route.ComponentProps) {
   return (
     <main>
       <RepoHeader repo={repo} origin={origin} active="issues" />
+      <nav aria-label="Issues" className="row">
+        <Link to={`${base}/issues`} aria-current="page">
+          Issues
+        </Link>
+        <Link to={`${base}/labels`}>Labels</Link>
+      </nav>
       <nav aria-label="Filter issues by state" className="row">
         {ISSUE_STATES.map((s) => (
           <Link key={s} to={withState(s)} aria-current={state === s ? "page" : undefined}>
@@ -172,9 +180,7 @@ export default function Issues({ loaderData }: Route.ComponentProps) {
                 <span className={`badge ${status.className}`}>{status.label}</span>{" "}
                 <Link to={issuePage(repo.owner, repo.name, issue.number)}>{issue.title}</Link>{" "}
                 {issue.labels.map((label) => (
-                  <span key={label.id} className="label-chip">
-                    {label.name}
-                  </span>
+                  <LabelChip key={label.id} label={label} />
                 ))}{" "}
                 <span className="muted">
                   #{issue.number} · by {who(issue.user.id, viewer)} · opened{" "}

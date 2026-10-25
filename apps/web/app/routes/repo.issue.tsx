@@ -1,5 +1,16 @@
-import { type FormEvent, type ReactNode, useEffect, useReducer, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { Form, Link, redirect, useActionData, useNavigation } from "react-router";
+import {
+  DraftDetails,
+  type DraftEditors,
+  type Drafts,
+  fieldsOf,
+  type Outcome,
+  UnsentText,
+  useBaseline,
+  useDrafts,
+} from "../components/kept-drafts.js";
+import { LabelChip } from "../components/label-chip.js";
 import { Markdown } from "../components/markdown.js";
 import { Pager } from "../components/pager.js";
 import { Reactions } from "../components/reactions.js";
@@ -13,6 +24,8 @@ import {
   readForm,
 } from "../lib/api.server.js";
 import { utf8Length } from "../lib/continuation.js";
+import type { EditResult, Scope, Written } from "../lib/edits.js";
+import { editSender } from "../lib/edits.server.js";
 import {
   ISSUE_FORM_MAX_BYTES,
   type Issue,
@@ -23,8 +36,6 @@ import {
 import {
   field,
   type IssueCommentsPage,
-  problemCode,
-  problemDetail,
   pullNumber,
   pullPage,
   rawField,
@@ -110,36 +121,13 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   };
 }
 
-/** Whose and what an action's answer is about: a page shows it only in the same scope. */
-interface Scope {
-  readonly viewer: string;
-  readonly owner: string;
-  readonly repo: string;
-  readonly number: number;
-}
+/** An issue page's answer is about its viewer and issue. */
+type IssueScope = Scope & { owner: string; repo: string; number: number };
 
-/** What a refused edit wrote, the version it was written from, and the comment it was for. */
-interface Draft {
-  readonly fields: Readonly<Record<string, string>>;
-  readonly version?: number | undefined;
-  readonly target?: number | undefined;
-}
-
-type Result =
-  | {
-      ok: string;
-      /** The comment the change was of, if any. */
-      target?: number | undefined;
-      /** The version the change made (its record's, as the API answered). */
-      version?: number | undefined;
-      scope: Scope;
-      error?: undefined;
-      draft?: undefined;
-    }
-  | { error: string; scope?: Scope; draft?: Draft | undefined; ok?: undefined };
+type Result = EditResult<IssueScope>;
 
 /** What a form wrote, as its refused draft keeps it (none for one that writes nothing). */
-function draftOf(form: FormData): { fields: Record<string, string>; target?: number } | undefined {
+function draftOf(form: FormData): Written | undefined {
   switch (field(form, "intent")) {
     case "comment":
       return { fields: { comment: rawField(form, "body") } };
@@ -158,70 +146,18 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
   assertSameOrigin(request);
   const form = await readForm(request, ISSUE_FORM_MAX_BYTES);
   const number = pullNumber(params.number);
-  const sent = Number(field(form, "version"));
-  const version = Number.isSafeInteger(sent) && sent > 0 ? sent : undefined;
   // The form was made for one viewer: another signed in since (another tab) sends nothing.
-  const session = await checkSession(context, request);
-  if (session.state === "unknown") {
-    // Not known who is signed in: nothing is sent, and what was written comes back to the
-    // viewer the form was made for (shown only once that viewer is confirmed).
-    const scope: Scope = {
-      viewer: field(form, "viewer"),
-      owner: params.owner,
-      repo: params.repo,
-      number,
-    };
-    const draft = draftOf(form);
-    return {
-      error: "Your session could not be checked just now: nothing was sent; send it again.",
-      scope,
-      ...(draft && { draft: { ...draft, version } }),
-    };
-  }
-  if (session.state !== "signed-in" || session.user.id !== field(form, "viewer"))
-    return { error: "You are signed in as someone else now: reload the page." };
-  const scope: Scope = { viewer: session.user.id, owner: params.owner, repo: params.repo, number };
+  const sender = await editSender(
+    context,
+    request,
+    form,
+    (viewer): IssueScope => ({ viewer, owner: params.owner, repo: params.repo, number }),
+    draftOf,
+  );
+  if (sender.refused) return sender.refused;
+  const { scope, expected, send } = sender;
   const api = issueApiPath(params.owner, params.repo, number);
   const repoApi = repoApiPath(params.owner, params.repo);
-  const expected = version === undefined ? {} : { expected_version: version };
-  const send = async (
-    method: string,
-    path: string,
-    body: unknown,
-    intent: string,
-    fallback: string,
-    draft?: { fields: Record<string, string>; target?: number },
-    /** The comment a change without text is of (a deletion). */
-    target?: number,
-  ): Promise<Result> => {
-    let result: Awaited<ReturnType<typeof apiCall<unknown>>>;
-    try {
-      result = await apiCall<unknown>(context, request, method, path, body);
-    } catch {
-      // Not reached, or an answer that could not be read: it may or may not have been done.
-      return {
-        error:
-          "Fyrden could not be reached, or its answer read: it may or may not have been done. Reload to check before sending again (your text is kept below).",
-        scope,
-        ...(draft && { draft: { ...draft, version } }),
-      };
-    }
-    if (result.status >= 200 && result.status < 300) {
-      const made = (result.body as { version?: unknown } | null)?.version;
-      return {
-        ok: intent,
-        target: draft?.target ?? target,
-        version: typeof made === "number" ? made : undefined,
-        scope,
-      };
-    }
-    const error =
-      problemCode(result.body) === "stale"
-        ? "Someone changed it since you opened this form: reload to see what changed (your text is kept below)."
-        : problemDetail(result.body, fallback);
-    // The draft keeps the version it was written from: sent again, it is still checked against it.
-    return { error, scope, ...(draft && { draft: { ...draft, version } }) };
-  };
   switch (field(form, "intent")) {
     case "comment": {
       const body = rawField(form, "body");
@@ -321,188 +257,25 @@ const DONE: Record<string, string> = {
 
 type ActionData = Awaited<ReturnType<typeof action>> | undefined;
 
-/** What an editor's own last answer says: saved (and the version made), or refused (and the draft's). */
-type Outcome = { readonly saved: boolean; readonly version: number | undefined } | undefined;
-
-/**
- * The version an editor writes from. While nothing unsent is written in
- * it, the page's (the editor is drawn again with what it shows, so its
- * fields and version agree); once something is, the version it showed
- * then; when its own draft is refused, that draft's version, for as long
- * as the draft is there (sent again, it is refused again until read
- * anew); after its own save, the page's again (nothing unsent: what was
- * saved is what the page shows), unless something was written while it
- * was saving (then the version the save made). A draft is checked against
- * what it was written from, never against what the page shows now.
- */
-function useBaseline(
-  current: number,
-  outcome: Outcome,
-  /** The answer the outcome came from: a new one each time, even with the same values. */
-  answer: object | undefined,
-  /** The page's kept draft of this editor, when it is drawn: it starts from that. */
-  resumed: Draft | undefined,
-): { version: number; key: string; onInput: () => void; onSubmit: () => void } {
-  const start = outcome && !outcome.saved ? outcome : resumed;
-  const [frozen, setFrozen] = useState<number | undefined>(start?.version);
-  // The form's identity while it holds what it was written with: kept whatever its version
-  // becomes, so a save or refusal answered while someone types never draws it again.
-  const [kept, setKept] = useState<string | undefined>(start ? `kept ${start.version}` : undefined);
-  const writtenSinceSubmit = useRef(false);
-  const shownKey = kept ?? `version ${current}`;
-  const shown = useRef(shownKey);
-  shown.current = shownKey;
-  // Read when a new answer comes, not on every drawing (an outcome is a new object each time).
-  const latest = useRef(outcome);
-  latest.current = outcome;
-  useEffect(() => {
-    const now = latest.current;
-    if (!now || !answer) return;
-    if (!now.saved || writtenSinceSubmit.current) {
-      // Refused, or written in since it was sent: the version it is checked against moves, the
-      // form (and what is in it) stays.
-      setFrozen(now.version);
-      setKept((was) => was ?? shown.current);
-    } else {
-      // Saved with nothing unsent: it follows the page again.
-      setFrozen(undefined);
-      setKept(undefined);
-    }
-  }, [answer]);
-  return {
-    version: frozen ?? current,
-    // A pristine editor is drawn again for each version; one written in keeps its identity.
-    key: shownKey,
-    onInput: () => {
-      writtenSinceSubmit.current = true;
-      setFrozen((was) => was ?? current);
-      setKept((was) => was ?? shown.current);
-    },
-    onSubmit: () => {
-      writtenSinceSubmit.current = false;
-    },
-  };
-}
-
-/** Which editor a draft is of: the description's, the new comment's, or a comment's. */
-function editorOf(draft: Draft): string {
-  if (draft.target !== undefined) return `comment-${draft.target}`;
-  return "title" in draft.fields ? "issue" : "comment";
-}
-
-/** The named fields of the form an input event came from. */
-function fieldsOf(event: FormEvent<HTMLFormElement>, names: readonly string[]): Draft["fields"] {
-  const data = new FormData(event.currentTarget);
-  return Object.fromEntries(names.map((name) => [name, String(data.get(name) ?? "")]));
-}
-
-type Drafts = ReturnType<typeof useDrafts>;
-
-/**
- * The unsent drafts of one issue's page for one viewer, by editor: what an
- * editor holds (recorded as it is written, dropped when its send is
- * answered as done) and a refused draft (until sent again and done,
- * discarded, or its comment deleted).
- * Kept apart from what the page shows now and from the latest answer, so
- * an editor that goes (its comment on another page, the conversation
- * locked) leaves its text to copy, and one that comes back resumes from it.
- * Text written while an editor's send is answered is newer than what was
- * sent: a refusal does not replace it, and a save moves its version to the
- * one the save made.
- */
-function useDrafts(scope: string, own: ActionData) {
-  const all = useRef(new Map<string, ScopeDrafts>());
-  const taken = useRef<object | undefined>(undefined);
-  const [, redraw] = useReducer((n: number) => n + 1, 0);
-  let drafts = all.current.get(scope);
-  if (!drafts) {
-    drafts = { held: new Map(), sending: new Set(), since: new Set() };
-    all.current.set(scope, drafts);
-  }
-  const { held, sending, since } = drafts;
-  // Each answer taken once: drawn again, it changes nothing.
-  if (own && taken.current !== own) {
-    taken.current = own;
-    const done = own.ok !== undefined ? own : undefined;
-    const editor = own.draft ? editorOf(own.draft) : done && answeredEditor(done.ok, done.target);
-    if (editor !== undefined) {
-      const newer = since.has(editor) ? held.get(editor) : undefined;
-      if (done?.ok === "delete-comment") held.delete(editor);
-      else if (own.draft) {
-        if (!newer) held.set(editor, own.draft);
-      } else if (!newer) held.delete(editor);
-      else if (done?.version !== undefined) held.set(editor, { ...newer, version: done.version });
-      sending.delete(editor);
-      since.delete(editor);
-    }
-  }
-  return {
-    get: (editor: string) => held.get(editor),
-    entries: () => [...held.entries()],
-    write: (editor: string, draft: Draft) => {
-      held.set(editor, draft);
-      if (sending.has(editor)) since.add(editor);
-    },
-    // What was sent stays until its answer says it was done: an answer that never comes (the
-    // page left while it was sent) leaves it to copy, never sent again by itself.
-    sent: (editor: string) => {
-      sending.add(editor);
-      since.delete(editor);
-    },
-    discard: (editor: string) => {
-      held.delete(editor);
-      redraw();
-    },
-  };
-}
-
-interface ScopeDrafts {
-  readonly held: Map<string, Draft>;
-  /** Editors sent and not yet answered. */
-  readonly sending: Set<string>;
-  /** Of those, the ones written in since. */
-  readonly since: Set<string>;
-}
-
-/** The editor a successful answer is of. */
-function answeredEditor(ok: string, target: number | undefined): string | undefined {
-  if (ok === "edit") return "issue";
-  if (ok === "comment") return "comment";
-  if ((ok === "edit-comment" || ok === "delete-comment") && target !== undefined)
-    return `comment-${target}`;
-  return undefined;
-}
+/** The issue page's editors: the description's, the new comment's, and each comment's. */
+const EDITORS: DraftEditors = {
+  ofDraft: (draft) => {
+    if (draft.target !== undefined) return `comment-${draft.target}`;
+    return "title" in draft.fields ? "issue" : "comment";
+  },
+  ofAnswer: (ok, target) => {
+    if (ok === "edit") return { editor: "issue" };
+    if (ok === "comment") return { editor: "comment" };
+    if ((ok === "edit-comment" || ok === "delete-comment") && target !== undefined)
+      return { editor: `comment-${target}`, gone: ok === "delete-comment" };
+    return undefined;
+  },
+};
 
 /** What a kept draft's field is, as its recovery shows it. */
 function unsentLabel(editor: string, field: string): string {
   if (editor === "issue") return field === "title" ? "Title" : "Description";
   return editor === "comment" ? "New comment" : "Your edit of a comment";
-}
-
-/**
- * A disclosure opened when it holds a draft (drawn open, or opened when
- * one comes), never closed by the page: whoever opened it closes it.
- */
-function DraftDetails({
-  held,
-  summary,
-  children,
-}: {
-  held: boolean;
-  summary: string;
-  children: ReactNode;
-}) {
-  const [atFirst] = useState(held);
-  const details = useRef<HTMLDetailsElement>(null);
-  useEffect(() => {
-    if (held && details.current) details.current.open = true;
-  }, [held]);
-  return (
-    <details ref={details} open={atFirst}>
-      <summary>{summary}</summary>
-      {children}
-    </details>
-  );
 }
 
 /** The title and description editor (the author's, or write access's: a lock does not stop it). */
@@ -673,7 +446,11 @@ export default function IssuePage({ loaderData }: Route.ComponentProps) {
       result.scope.number === issue.number)
       ? result
       : undefined;
-  const drafts = useDrafts(`${owner}/${repo}#${issue.number}:${viewer ?? "anonymous"}`, own);
+  const drafts = useDrafts(
+    `${owner}/${repo}#${issue.number}:${viewer ?? "anonymous"}`,
+    own,
+    EDITORS,
+  );
   // A kept draft whose editor is not on this page now: shown to copy, never lost.
   const editorHere = (editor: string) =>
     editor === "issue"
@@ -712,9 +489,7 @@ export default function IssuePage({ loaderData }: Route.ComponentProps) {
         <p className="row">
           <span className="visually-hidden">Labels:</span>
           {issue.labels.map((label) => (
-            <span key={label.id} className="label-chip">
-              {label.name}
-            </span>
+            <LabelChip key={label.id} label={label} />
           ))}
         </p>
       )}
@@ -902,39 +677,12 @@ export default function IssuePage({ loaderData }: Route.ComponentProps) {
         issue.locked && <p className="muted">This conversation is locked.</p>
       )}
 
-      {unsent.length > 0 && (
-        <section className="panel" aria-labelledby="unsent-text">
-          <h2 id="unsent-text">Your unsent text</h2>
-          <p className="muted">
-            What it was for is not on this page now (another page of comments, or the conversation
-            was locked): copy it from here.
-          </p>
-          {unsent.map(([editor, draft]) => (
-            <div key={editor}>
-              {Object.entries(draft.fields).map(([name, text]) => (
-                <p key={name}>
-                  <label htmlFor={`unsent-${editor}-${name}`}>{unsentLabel(editor, name)}</label>
-                  <textarea
-                    id={`unsent-${editor}-${name}`}
-                    className="short"
-                    readOnly
-                    value={text}
-                  />
-                </p>
-              ))}
-              <p>
-                <button
-                  type="button"
-                  aria-label={`Discard: ${unsentLabel(editor, "body")}`}
-                  onClick={() => drafts.discard(editor)}
-                >
-                  Discard
-                </button>
-              </p>
-            </div>
-          ))}
-        </section>
-      )}
+      <UnsentText
+        unsent={unsent}
+        drafts={drafts}
+        why="another page of comments, or the conversation was locked"
+        label={unsentLabel}
+      />
       {own?.error && (
         <p className="error" role="alert">
           {own.error}

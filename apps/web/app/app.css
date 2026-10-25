@@ -168,6 +168,10 @@ button.danger {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+ul.label-list {
+  list-style: none;
+  padding: 0;
+}
 /* A subject's or comment's reactions: counts, and toggles for who may react. */
 ul.reactions {
   list-style: none;
