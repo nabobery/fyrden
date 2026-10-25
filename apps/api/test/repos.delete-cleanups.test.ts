@@ -1,7 +1,7 @@
 // Deleting a repository removes what it left outside its own storage (its
-// journaled effects, webhook deliveries, their attempts and bodies) before
-// its storage goes, each cleanup recorded once done, so an interrupted
-// deletion resumes where it stopped. Once its tombstone is in the read
+// journaled effects, webhook deliveries, their attempts and bodies, its search
+// projections) before its storage goes, each cleanup recorded once done, so an
+// interrupted deletion resumes where it stopped. Once its tombstone is in the read
 // model, nothing new of it gets in.
 import { env, exports } from "cloudflare:workers";
 import type { DomainEvent } from "@fyrden/domain";
@@ -99,6 +99,24 @@ async function leaveTraces(repoId: string, effects: number, deliveries: number):
     .bind(repoId)
     .run();
   for (let i = 1; i <= deliveries; i++) await env.ASSETS.put(`webhooks/${repoId}/${i}.json`, "{}");
+  // A search projection of each kind, and its search state.
+  await env.ORG_READ.batch([
+    env.ORG_READ.prepare(
+      `INSERT INTO search_docs (repo_id, number, kind, deleted, epoch_gen, owner_gen, version,
+         updated_seq) VALUES (?, 1, 1, 1, 1, 1, 1, 1)`,
+    ).bind(repoId),
+    env.ORG_READ.prepare(
+      `INSERT INTO search_labels (repo_id, label_id, deleted, epoch_gen, owner_gen, version,
+         updated_seq) VALUES (?, 1, 1, 1, 1, 1, 1)`,
+    ).bind(repoId),
+    env.ORG_READ.prepare(
+      `INSERT INTO search_milestones (repo_id, number, deleted, epoch_gen, owner_gen, version,
+         updated_seq) VALUES (?, 1, 1, 1, 1, 1, 1)`,
+    ).bind(repoId),
+    env.ORG_READ.prepare(
+      "INSERT INTO search_sources (repo_id, cutoff_epoch, cutoff_seq) VALUES (?, 1, 1)",
+    ).bind(repoId),
+  ]);
 }
 
 const count = async (sql: string, ...values: unknown[]) =>
@@ -128,10 +146,17 @@ async function traces(repoId: string) {
     ),
     payloads: await count("SELECT count(*) AS n FROM webhook_payloads WHERE repo_id = ?", repoId),
     bodies: bodies.objects.length,
+    search: await count(
+      `SELECT (SELECT count(*) FROM search_docs WHERE repo_id = ?1)
+         + (SELECT count(*) FROM search_labels WHERE repo_id = ?1)
+         + (SELECT count(*) FROM search_milestones WHERE repo_id = ?1)
+         + (SELECT count(*) FROM search_sources WHERE repo_id = ?1) AS n`,
+      repoId,
+    ),
   };
 }
 
-const NONE = { effects: 0, deliveries: 0, attempts: 0, payloads: 0, bodies: 0 };
+const NONE = { effects: 0, deliveries: 0, attempts: 0, payloads: 0, bodies: 0, search: 0 };
 
 function deletion(repoId: string) {
   return env.DIRECTORY.prepare(
@@ -187,7 +212,7 @@ function laterEvent(tombstone: RepoExport): DomainEvent {
 }
 
 describe("repository deletion cleanups", () => {
-  it("removes the repository's effects, webhook deliveries, attempts and bodies, and no other repository's", async () => {
+  it("removes the repository's effects, webhook deliveries, attempts, bodies and search projections, and no other repository's", async () => {
     const doomed = await createRepo();
     const kept = await createRepo();
     await leaveTraces(doomed.id, 3, 4);
@@ -202,6 +227,7 @@ describe("repository deletion cleanups", () => {
       attempts: 4,
       payloads: 4,
       bodies: 4,
+      search: 4,
     });
     expect(await cleanupsDone(doomed.id)).toEqual(REPO_CLEANUPS.map((c) => c.name).sort());
   });
@@ -228,9 +254,9 @@ describe("repository deletion cleanups", () => {
       if (await runCleanups(env, target, { pages: 1 })) break;
     }
     expect(await traces(repo.id)).toEqual(NONE);
-    // Settling: two pages; effects: two; deliveries: two; payloads: two; bodies: one listing of
-    // up to 1,000 keys.
-    expect(calls).toBe(9);
+    // Settling: two pages; effects: two; deliveries: two; payloads: two; search: one; bodies:
+    // one listing of up to 1,000 keys.
+    expect(calls).toBe(10);
     expect(await cleanupsDone(repo.id)).toEqual(REPO_CLEANUPS.map((c) => c.name).sort());
   });
 
@@ -253,6 +279,7 @@ describe("repository deletion cleanups", () => {
       attempts: 2,
       payloads: 2,
       bodies: 2,
+      search: 4,
     });
     expect(await cleanupsDone(repo.id)).toEqual([]);
 
@@ -289,6 +316,7 @@ describe("repository deletion cleanups", () => {
       attempts: 2,
       payloads: 2,
       bodies: 2,
+      search: 4,
     });
     // The claimed one is ended, as its next claim would end it.
     const ended = await env.ORG_READ.prepare(

@@ -543,12 +543,19 @@ describe("fyrden doctor", () => {
     // A deployment from before the checkout's latest org migration: as that migration found it.
     const applied = fake.state.d1Migrations.get("fyrden-org") ?? [];
     const latest = applied.at(-1) ?? "";
-    expect(latest).toBe("0008_webhook_payloads.sql");
+    expect(latest).toMatch(/^\d{4}_\w+\.sql$/);
     fake.state.d1Migrations.set("fyrden-org", applied.slice(0, -1));
+    // Without what that migration creates (the schema before it, for one that only adds).
+    const created = new Set(
+      [
+        ...(await readFile(join(realRoot, "apps/api/migrations/org", latest), "utf8")).matchAll(
+          /CREATE\s+(?:TABLE|(?:UNIQUE\s+)?INDEX|VIEW|TRIGGER)\s+(\w+)/gi,
+        ),
+      ].map((m) => m[1]),
+    );
+    expect(created.size).toBeGreaterThan(0);
     const org = fake.state.d1Schema.get("fyrden-org") ?? [];
-    fake.state.d1Schema.set("fyrden-org", [
-      ...org.filter((o) => !o.name.startsWith("webhook_payloads")),
-    ]);
+    fake.state.d1Schema.set("fyrden-org", [...org.filter((o) => !created.has(o.name))]);
     let { report, lines } = await doctorLines(fake);
     expect(report.schemaDrift).toEqual([]);
     expect(lines).toContain(
@@ -559,11 +566,11 @@ describe("fyrden doctor", () => {
     );
 
     // A deployment from a later checkout than this one.
-    fake.state.d1Migrations.set("fyrden-org", [...applied, "0009_later.sql"]);
+    fake.state.d1Migrations.set("fyrden-org", [...applied, "9999_later.sql"]);
     ({ report, lines } = await doctorLines(fake));
     expect(report.schemaDrift).toEqual([]);
     expect(lines).toContain(
-      "WARN fyrden-org schema not compared: applied but not in this checkout: 0009_later.sql (check out the commit it runs)",
+      "WARN fyrden-org schema not compared: applied but not in this checkout: 9999_later.sql (check out the commit it runs)",
     );
 
     // A database no migration has been applied to yet.

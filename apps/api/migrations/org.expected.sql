@@ -41,6 +41,85 @@ CREATE TABLE repos (
   updated_at INTEGER NOT NULL
 , description TEXT) STRICT;
 
+-- table search_docs
+CREATE TABLE search_docs (
+  doc_id INTEGER PRIMARY KEY,
+  repo_id TEXT NOT NULL,
+  number INTEGER NOT NULL CHECK (number >= 1),
+  -- 1 an issue, 2 a pull request.
+  kind INTEGER NOT NULL CHECK (kind IN (1, 2)),
+  -- 1 open, 2 closed, 3 merged; open_state folds merged into closed (as listings do).
+  state INTEGER CHECK (state IN (1, 2, 3)),
+  open_state INTEGER CHECK (open_state IN (1, 2)),
+  state_reason TEXT,
+  draft INTEGER NOT NULL DEFAULT 0 CHECK (draft IN (0, 1)),
+  locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+  lock_reason TEXT,
+  author_id TEXT,
+  author_root TEXT,
+  -- Principal ids and label ids, ascending, as the snapshot carries them.
+  assignees TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(assignees)),
+  labels TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(labels)),
+  milestone INTEGER,
+  title TEXT,
+  body TEXT,
+  created_at INTEGER,
+  updated_at INTEGER,
+  closed_at INTEGER,
+  merged_at INTEGER,
+  deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+  epoch_gen INTEGER NOT NULL,
+  owner_gen INTEGER NOT NULL,
+  version INTEGER NOT NULL,
+  -- The sequence of the event that wrote the row.
+  updated_seq INTEGER NOT NULL,
+  UNIQUE (repo_id, number),
+  CHECK (deleted = 1 OR (state IS NOT NULL AND open_state IS NOT NULL AND title IS NOT NULL
+    AND created_at IS NOT NULL AND updated_at IS NOT NULL))
+) STRICT;
+
+-- table search_labels
+CREATE TABLE search_labels (
+  repo_id TEXT NOT NULL,
+  label_id INTEGER NOT NULL CHECK (label_id >= 1),
+  name TEXT,
+  color TEXT,
+  description TEXT,
+  deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+  epoch_gen INTEGER NOT NULL,
+  owner_gen INTEGER NOT NULL,
+  version INTEGER NOT NULL,
+  updated_seq INTEGER NOT NULL,
+  PRIMARY KEY (repo_id, label_id),
+  CHECK (deleted = 1 OR (name IS NOT NULL AND color IS NOT NULL))
+) STRICT;
+
+-- table search_milestones
+CREATE TABLE search_milestones (
+  repo_id TEXT NOT NULL,
+  number INTEGER NOT NULL CHECK (number >= 1),
+  title TEXT,
+  -- 1 open, 2 closed.
+  state INTEGER CHECK (state IN (1, 2)),
+  description TEXT,
+  due_on INTEGER,
+  closed_at INTEGER,
+  deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+  epoch_gen INTEGER NOT NULL,
+  owner_gen INTEGER NOT NULL,
+  version INTEGER NOT NULL,
+  updated_seq INTEGER NOT NULL,
+  PRIMARY KEY (repo_id, number),
+  CHECK (deleted = 1 OR (title IS NOT NULL AND state IS NOT NULL))
+) STRICT;
+
+-- table search_sources
+CREATE TABLE search_sources (
+  repo_id TEXT PRIMARY KEY,
+  cutoff_epoch INTEGER NOT NULL,
+  cutoff_seq INTEGER NOT NULL
+) STRICT;
+
 -- table source_owner
 CREATE TABLE source_owner (
   source_id TEXT PRIMARY KEY,
@@ -119,6 +198,22 @@ CREATE INDEX effects_recover ON effects (recover_at, effect_id) WHERE state = 'p
 
 -- index repos_owner
 CREATE INDEX repos_owner ON repos (owner_id, name) WHERE deleted = 0;
+
+-- index search_docs_open_created
+CREATE INDEX search_docs_open_created ON search_docs (repo_id, open_state, created_at, doc_id)
+  WHERE deleted = 0;
+
+-- index search_docs_open_updated
+CREATE INDEX search_docs_open_updated ON search_docs (repo_id, open_state, updated_at, doc_id)
+  WHERE deleted = 0;
+
+-- index search_docs_state_created
+CREATE INDEX search_docs_state_created ON search_docs (repo_id, state, created_at, doc_id)
+  WHERE deleted = 0;
+
+-- index search_docs_state_updated
+CREATE INDEX search_docs_state_updated ON search_docs (repo_id, state, updated_at, doc_id)
+  WHERE deleted = 0;
 
 -- index webhook_deliveries_disable
 CREATE INDEX webhook_deliveries_disable ON webhook_deliveries (disable_retry_at)

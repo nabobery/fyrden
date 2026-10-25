@@ -27,15 +27,17 @@ export const CLEANUP_POLICY = {
   /**
    * Pages one deletion call works through: each takes up to three internal
    * calls (D1 or R2), plus one to read what is done and one to record each
-   * cleanup finished: at most 21 calls a deletion, 210 for the cron's ten,
+   * cleanup finished: at most 25 calls a deletion, 250 for the cron's ten,
    * of an invocation's 1,000. One page of each cleanup: a repository with
    * little to clean up is cleaned up in one call.
    */
-  pagesPerCall: 5,
+  pagesPerCall: 6,
   /** Journaled effects deleted a page. */
   effectsPage: 500,
   /** Webhook deliveries (and their attempts) deleted a page. */
   deliveriesPage: 200,
+  /** Search projection rows deleted a page, of each table. */
+  searchPage: 500,
   /** Webhook bodies deleted a page (one R2 delete takes up to 1,000 keys). */
   bodiesPage: 1_000,
   /**
@@ -190,6 +192,33 @@ const webhookPayloads: RepoCleanup = {
   },
 };
 
+/**
+ * Its search projections (issues and pull requests, labels, milestones) and
+ * its search state, a page of each a call. None is written once its
+ * tombstone is in the read model (every projection statement checks it).
+ */
+const searchProjections: RepoCleanup = {
+  name: "search",
+  async page(env, { repoId, shard }, metrics) {
+    const db = readModelFor(env, shard);
+    const page = (table: string) =>
+      db
+        .prepare(
+          `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE repo_id = ? LIMIT ?)`,
+        )
+        .bind(repoId, CLEANUP_POLICY.searchPage);
+    metrics?.count("d1.query", { db: "org", op: "cleanup_search" }, 4);
+    const removed = await db.batch([
+      page("search_docs"),
+      page("search_labels"),
+      page("search_milestones"),
+      page("search_sources"),
+    ]);
+    const most = Math.max(...removed.map((r) => r.meta.changes));
+    return pageOutcome(most, CLEANUP_POLICY.searchPage);
+  },
+};
+
 /** Its webhook bodies, all under `webhooks/<repo>/` (whether or not a row still names them). */
 const webhookBodies: RepoCleanup = {
   name: "webhook_bodies",
@@ -214,6 +243,7 @@ export const REPO_CLEANUPS: readonly RepoCleanup[] = [
   journaledEffects,
   webhookDeliveries,
   webhookPayloads,
+  searchProjections,
   webhookBodies,
 ];
 
