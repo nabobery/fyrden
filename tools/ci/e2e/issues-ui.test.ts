@@ -138,7 +138,9 @@ describe("issues in the web UI", () => {
     await page.getByRole("link", { name: /crash/ }).click();
     await page.getByRole("button", { name: "Reopen issue" }).click();
     await see(page.getByRole("status")).toHaveText("Reopened.");
-    // Reopening moved the issue's version: an edit started after it is made from the new one.
+    // Reopening moved the issue's version: an edit started once the reopened issue is shown is
+    // made from the new one.
+    await see(page.getByRole("button", { name: "Close issue" })).toBeVisible();
     await page.getByText("Edit title and description").click();
     await page.getByLabel("Description (Markdown)").fill("edited after reopening");
     await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -173,6 +175,9 @@ describe("issues in the web UI", () => {
     await see(page.getByRole("status")).toHaveText("Closed.");
     await page.getByRole("button", { name: "Reopen issue" }).click();
     await see(page.getByRole("status")).toHaveText("Reopened.");
+    // The answer can show while the page is still read again: written before the reopened issue
+    // is shown, an edit is from the closed one's version (and refused). Written once it is.
+    await see(page.getByRole("button", { name: "Close issue" })).toBeVisible();
     await page.getByLabel("Description (Markdown)").fill("edited after my own changes");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await see(page.getByRole("status")).toHaveText("Saved.");
