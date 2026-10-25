@@ -160,6 +160,73 @@ async function visitTopicFiles(title: string) {
   return { number, file: page.locator("section.file", { hasText: "src/app.ts" }) };
 }
 
+/** The session's highlighter `file` is drawn with, and whether it runs in workers. */
+async function drawnWith(
+  file: Locator,
+  highlighter: "highlights" | "shiki-js" | "plain",
+  pool: "workers" | "none",
+): Promise<Locator> {
+  const view = file.locator("[data-highlighter]");
+  await see(view).toHaveAttribute("data-highlighter", highlighter, { timeout: 30_000 });
+  await see(view).toHaveAttribute("data-pool", pool, { timeout: 30_000 });
+  return view;
+}
+
+/**
+ * `file` drawn with `highlighter`, its code in syntax colours: plain text is
+ * drawn in one colour (`const lineN = N;` takes at least three highlighted).
+ */
+async function highlightedWith(
+  file: Locator,
+  highlighter: "highlights" | "shiki-js",
+  pool: "workers" | "none",
+): Promise<void> {
+  const view = await drawnWith(file, highlighter, pool);
+  await expect
+    .poll(
+      () =>
+        view.locator("diffs-container").evaluate((el) => {
+          const colours = new Set<string>();
+          const tokens = el.shadowRoot?.querySelectorAll("[style*='--diffs-token-light']") ?? [];
+          for (const token of tokens) {
+            const colour = /--diffs-token-light:\s*([^;]+)/.exec(token.getAttribute("style") ?? "");
+            if (colour?.[1]) colours.add(colour[1].trim());
+          }
+          return colours.size;
+        }),
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThanOrEqual(3);
+}
+
+/** Holds the requests `pattern` matches until they are let through (`release`) or failed (`abort`). */
+async function hold(
+  target: Page,
+  pattern: RegExp,
+): Promise<{ release(): Promise<void>; abort(): Promise<void> }> {
+  let settle = (_: "continue" | "abort") => {};
+  const settled = new Promise<"continue" | "abort">((resolve) => {
+    settle = resolve;
+  });
+  await target.route(pattern, async (route) => {
+    const how = await settled;
+    await (how === "abort" ? route.abort() : route.continue()).catch(() => {});
+  });
+  const end = (how: "continue" | "abort") => async () => {
+    settle(how);
+    await target.unroute(pattern);
+  };
+  return { release: end("continue"), abort: end("abort") };
+}
+
+/** `page` passes axe in the light and the dark colour scheme. */
+async function accessibleInBoth(name: string): Promise<void> {
+  await accessible(page, `${name}, light`);
+  await page.emulateMedia({ colorScheme: "dark" });
+  await accessible(page, `${name}, dark`);
+  await page.emulateMedia({ colorScheme: "light" });
+}
+
 /** Opens the form for a comment on lines of `file`, from the keyboard. */
 async function openLineComment(file: Locator): Promise<void> {
   await file.getByText("Comment on lines").focus();
@@ -273,8 +340,277 @@ describe("pull requests in the web UI", () => {
     });
     await see(drawn.getByText("<svg onload=window.pwned=3>")).toBeVisible();
     await inert();
-    await accessible(page, "files");
+    // Highlights' lexers drew it, in the workers: its tokens (on the changed lines'
+    // additions, deletions and word changes too) pass axe's contrast in both schemes.
+    const file = page.locator("section.file", { hasText: "src/app.ts" });
+    await highlightedWith(file, "highlights", "workers");
+    await accessibleInBoth("files");
+    expect(stack.refused).toEqual([]);
   });
+
+  it("draws with Shiki where Highlights cannot load or WebAssembly cannot run", async () => {
+    const number = await openPull(await pushTopic(), "Drawn by Shiki");
+    const files = `${stack.origin}/${handle}/${name}/pull/${number}/files`;
+    const file = page.locator("section.file", { hasText: "src/app.ts" });
+    // The highlighter's module (its package's `default` entry) refused.
+    const blocked = /\/assets\/default-[^/]+\.js$/;
+    await page.route(blocked, (route) => route.abort());
+    try {
+      await visit(page, files);
+      await highlightedWith(file, "shiki-js", "workers");
+      await accessibleInBoth("files drawn by Shiki");
+    } finally {
+      await page.unroute(blocked);
+    }
+    // WebAssembly that does not compile on the page.
+    const other = await page.context().newPage();
+    try {
+      await other.addInitScript(() => {
+        // Compiling throws (an arrow function is no constructor either).
+        (globalThis as unknown as { WebAssembly: { Module: unknown } }).WebAssembly.Module = () => {
+          throw new Error("refused");
+        };
+      });
+      await visit(other, files);
+      await highlightedWith(
+        other.locator("section.file", { hasText: "src/app.ts" }),
+        "shiki-js",
+        "workers",
+      );
+    } finally {
+      await other.close();
+    }
+    // The highlighter's module that never arrives: Shiki once its 10 s are up.
+    const held = await hold(page, blocked);
+    try {
+      await visit(page, files);
+      await highlightedWith(file, "shiki-js", "workers");
+    } finally {
+      await held.release();
+    }
+  }, 120_000);
+
+  it("steps down to Shiki, then off the workers, as they fail, keeping threads and drafts", async () => {
+    const { file } = await visitTopicFiles("Workers failing");
+    await openLineComment(file);
+    await file.getByLabel("Line", { exact: true }).fill("3");
+    await file.getByLabel(/^Comment \(Markdown/).fill("Kept across highlighters.");
+    await file.getByRole("button", { name: "Add comment" }).click();
+    const thread = file.locator(".thread").first();
+    await see(thread.getByText("Kept across highlighters.")).toBeVisible();
+    await thread.getByLabel("Reply").fill("An unsent reply.");
+    await highlightedWith(file, "highlights", "workers");
+    const other = page.locator("section.file", { hasText: HOSTILE_FILE });
+    await see(other.locator("[data-highlighter]")).toHaveAttribute(
+      "data-highlighter",
+      "highlights",
+    );
+    // Each worker throws once it has started (each failure counts once).
+    const crash = async () => {
+      for (const worker of page.workers()) {
+        await worker
+          .evaluate(() => {
+            setTimeout(() => {
+              throw new Error("crashed");
+            }, 0);
+          })
+          .catch(() => {});
+      }
+    };
+    await crash();
+    await highlightedWith(file, "shiki-js", "workers");
+    await see(other.locator("[data-highlighter]")).toHaveAttribute("data-highlighter", "shiki-js");
+    await see(thread.getByText("Kept across highlighters.")).toBeVisible();
+    await see(thread.getByLabel("Reply")).toHaveValue("An unsent reply.");
+    await crash();
+    await highlightedWith(file, "shiki-js", "none");
+    await see(thread.getByLabel("Reply")).toHaveValue("An unsent reply.");
+    await accessibleInBoth("files drawn without workers");
+    // The session keeps it: the files drawn again on another page, the same way.
+    await page.getByRole("link", { name: "Split" }).click();
+    await see(page).toHaveURL(/[?&]style=split/);
+    await highlightedWith(file, "shiki-js", "none");
+  });
+
+  it("steps down when the workers answer requests with errors", async () => {
+    const number = await openPull(await pushTopic(), "Workers erring");
+    const workers = /\/assets\/worker-[^/]+\.js$/;
+    // Each worker starts, then answers every diff it is asked to draw with an error.
+    await page.route(workers, async (route) => {
+      const response = await route.fetch();
+      const erring = `const fyrdenPost = self.postMessage.bind(self);
+self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: "error", id: m.id, error: "tokenizer failed" } : m, t);
+`;
+      await route.fulfill({ response, body: erring + (await response.text()) });
+    });
+    try {
+      await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}/files`);
+      await highlightedWith(
+        page.locator("section.file", { hasText: "src/app.ts" }),
+        "shiki-js",
+        "none",
+      );
+    } finally {
+      await page.unroute(workers);
+    }
+  });
+
+  it("draws the changes as text, threads kept, when nothing highlights", async () => {
+    const number = await openPull(await pushTopic(), "Nothing highlights");
+    const files = `${stack.origin}/${handle}/${name}/pull/${number}/files`;
+    const file = page.locator("section.file", { hasText: "src/app.ts" });
+    // No workers, and Shiki's backend refused on the page itself.
+    const refused = /\/assets\/(worker|shiki)-[^/]+\.js$/;
+    await page.route(refused, (route) => route.abort());
+    try {
+      await visit(page, files);
+      const view = await drawnWith(file, "plain", "none");
+      await see(view.locator("pre.patch-text")).toContainText(
+        '+const html = "<script>window.pwned=2</script>";',
+      );
+      await inert();
+      await openLineComment(file);
+      await file.getByLabel("Line", { exact: true }).fill("3");
+      await file.getByLabel(/^Comment \(Markdown/).fill("Read as text.");
+      await file.getByRole("button", { name: "Add comment" }).click();
+      await see(view.locator(".thread").getByText("Read as text.")).toBeVisible();
+      await accessibleInBoth("files as text");
+    } finally {
+      await page.unroute(refused);
+    }
+    // A teardown that never ends (the page's Highlights backend held while its workers
+    // fail): plain once its 10 s are up, rather than drawing nothing.
+    const workers = /\/assets\/worker-[^/]+\.js$/;
+    await page.route(workers, (route) => route.abort());
+    const held = await hold(page, /\/assets\/highlights-[^/]+\.js$/);
+    try {
+      await visit(page, files);
+      await drawnWith(file, "plain", "none");
+    } finally {
+      await held.release();
+    }
+    // Shiki on the page that never loads: plain once its 10 s are up, rather than nothing.
+    const shiki = await hold(page, /\/assets\/shiki-[^/]+\.js$/);
+    try {
+      await visit(page, files);
+      await drawnWith(file, "plain", "none");
+    } finally {
+      await shiki.release();
+      await page.unroute(workers);
+    }
+  }, 120_000);
+
+  it("steps down when a pool does not start in time", async () => {
+    const number = await openPull(await pushTopic(), "Themes held");
+    const file = page.locator("section.file", { hasText: "src/app.ts" });
+    // The pool waits on its themes before it starts any worker.
+    const themes = await hold(page, /\/assets\/github-(light|dark)-high-contrast-[^/]+\.js$/);
+    try {
+      await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}/files`);
+      await drawnWith(file, "shiki-js", "workers");
+    } finally {
+      await themes.release();
+    }
+    await highlightedWith(file, "shiki-js", "workers");
+  }, 120_000);
+
+  it("keeps the session's highlighter when a file left behind fails to load", async () => {
+    const first = await openPull(await pushTopic(), "Left behind");
+    const branch = `script-${++topics}`;
+    await pushBranch(branch, { "lib/notes.js": `${lines(3).join("\n")}\n` });
+    await openPull(branch, "Only a script");
+    const workers = /\/assets\/worker-[^/]+\.js$/;
+    await page.route(workers, (route) => route.abort());
+    // The first page's TypeScript grammar, on the page's own thread, still loading.
+    const grammar = await hold(page, /\/assets\/typescript-[^/]+\.js$/);
+    try {
+      await visit(page, `${stack.origin}/${handle}/${name}/pull/${first}/files`);
+      await drawnWith(page.locator("section.file", { hasText: "src/app.ts" }), "shiki-js", "none");
+      // Another pull request's files, in the same session.
+      await page.getByRole("link", { name: "Pull requests" }).first().click();
+      await page.getByRole("link", { name: "Only a script" }).click();
+      await page.getByRole("link", { name: "Files changed" }).click();
+      const notes = page.locator("section.file", { hasText: "lib/notes.js" });
+      await highlightedWith(notes, "shiki-js", "none");
+      // The page left behind fails its load (the renderer logs it, and steps nothing down
+      // in the same turn): this one stays highlighted.
+      const logged = page.waitForEvent(
+        "console",
+        (m) => m.type() === "error" && /typescript-/.test(m.text()),
+      );
+      await grammar.abort();
+      await logged;
+      await see(notes.locator("[data-highlighter]")).toHaveAttribute(
+        "data-highlighter",
+        "shiki-js",
+      );
+      await highlightedWith(notes, "shiki-js", "none");
+    } finally {
+      await grammar.release();
+      await page.unroute(workers);
+    }
+  });
+
+  it("shows a file it fails to draw as text, its threads with it", async () => {
+    const number = await openPull(await pushTopic(), "Drawing fails");
+    const files = `${stack.origin}/${handle}/${name}/pull/${number}/files`;
+    const file = page.locator("section.file", { hasText: "src/app.ts" });
+    // Shiki on the page's own thread, which tokenizes as it draws.
+    const workers = /\/assets\/worker-[^/]+\.js$/;
+    await page.route(workers, (route) => route.abort());
+    try {
+      await visit(page, files);
+      await highlightedWith(file, "shiki-js", "none");
+      await openLineComment(file);
+      await file.getByLabel("Line", { exact: true }).fill("3");
+      await file.getByLabel(/^Comment \(Markdown/).fill("Still reachable.");
+      await file.getByRole("button", { name: "Add comment" }).click();
+      await see(file.locator(".thread").getByText("Still reachable.")).toBeVisible();
+      // From now on its tokenizer throws (its regular expressions carry match indices).
+      await page.evaluate(() => {
+        const exec = RegExp.prototype.exec;
+        RegExp.prototype.exec = function (this: RegExp, text: string) {
+          if (this.hasIndices) throw new Error("tokenizer broke");
+          return exec.call(this, text);
+        };
+      });
+      await page.getByRole("link", { name: "Conversation" }).click();
+      await see(page).toHaveURL(new RegExp(`/pull/${number}$`));
+      await page.getByRole("link", { name: "Files changed" }).click();
+      await see(page).toHaveURL(files);
+      const text = file.locator("[data-drawn='text']");
+      await see(text).toHaveAttribute("data-highlighter", "shiki-js", { timeout: 30_000 });
+      await see(text.locator("pre.patch-text")).toContainText("+const html");
+      await see(text.locator(".thread").getByText("Still reachable.")).toBeVisible();
+      await accessibleInBoth("a file drawn as text");
+    } finally {
+      await page.unroute(workers);
+    }
+  });
+
+  it("draws without workers where they cannot start or never answer", async () => {
+    const number = await openPull(await pushTopic(), "No workers");
+    const files = `${stack.origin}/${handle}/${name}/pull/${number}/files`;
+    const file = page.locator("section.file", { hasText: "src/app.ts" });
+    const workers = /\/assets\/worker-[^/]+\.js$/;
+    await page.route(workers, (route) => route.abort());
+    try {
+      await visit(page, files);
+      await highlightedWith(file, "shiki-js", "none");
+    } finally {
+      await page.unroute(workers);
+    }
+    // A worker that loads and never answers: each pool gives up on its start (10 s).
+    await page.route(workers, (route) =>
+      route.fulfill({ contentType: "text/javascript", body: "// silent\n" }),
+    );
+    try {
+      await visit(page, files);
+      await highlightedWith(file, "shiki-js", "none");
+    } finally {
+      await page.unroute(workers);
+    }
+  }, 120_000);
 
   it("comments on a line from the keyboard, replies and resolves", async () => {
     const { file } = await visitTopicFiles("Commented on a line");
