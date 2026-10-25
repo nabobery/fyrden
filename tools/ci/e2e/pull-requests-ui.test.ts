@@ -637,6 +637,38 @@ describe("pull requests in the web UI", () => {
     await see(timeline.locator("figure.mermaid img")).toHaveAttribute("src", /There/);
   });
 
+  it("requests a review and withdraws it, shows code owners, and a CODEOWNERS file's errors", async () => {
+    const reviewer = await rest<{ id: string }>("POST", "/admin/users", { handle: "cy" });
+    expect(reviewer.id).toBeTruthy();
+    await rest("PUT", `/repos/${handle}/${name}/collaborators/cy`, { permission: "pull" });
+    await visitTopicPull("Reviewed");
+    await page.getByRole("link", { name: "Reviewers", exact: true }).click();
+    await see(page.getByText("No review is requested.")).toBeVisible();
+    // A user's repository takes no team reviewers: only people are asked.
+    await see(page.getByLabel(/^Teams of/)).toHaveCount(0);
+    await page.getByLabel(/^Users or agents/).fill("@cy");
+    await page.getByRole("button", { name: "Request", exact: true }).click();
+    await see(page.getByRole("status")).toHaveText("Review requested.");
+    await see(page.getByRole("list", { name: "Requested reviewers" })).toContainText("cy");
+    await accessible(page, "requested reviewers");
+    await page.getByRole("button", { name: "Withdraw cy's request" }).click();
+    await see(page.getByRole("status")).toHaveText("Request withdrawn.");
+    await see(page.getByText("No review is requested.")).toBeVisible();
+    // Its code owners: worked out in the background, so pending or done (the base branch has no
+    // CODEOWNERS file); the page says which, and never refreshes itself.
+    await page.getByRole("link", { name: "Code owners", exact: true }).click();
+    await see(page.getByRole("heading", { name: "Code owners", level: 2 })).toBeVisible();
+    await see(page.getByText(/Being worked out|has no CODEOWNERS file/)).toBeVisible();
+    await accessible(page, "code owners");
+    // A CODEOWNERS file with an invalid line, viewed where it is in effect: its errors.
+    await pushBranch("owners", { ".github/CODEOWNERS": "* @ada\n*.md not-an-owner\n" });
+    await visit(page, `${stack.origin}/${handle}/${name}/blob/owners/.github/CODEOWNERS`);
+    await see(page.getByRole("heading", { name: "CODEOWNERS errors" })).toBeVisible();
+    await see(page.getByText("Line 2", { exact: true })).toBeVisible();
+    await accessible(page, "a CODEOWNERS file's errors");
+  });
+
+  // Last: every page the suite visited.
   it("never had a script, style or image refused by the policy on any page", () => {
     expect(stack.refused).toEqual([]);
   });
