@@ -173,6 +173,10 @@ button.danger {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* A form that is one button, inline with what it acts on. */
+.inline-form {
+  display: inline;
+}
 ul.label-list {
   list-style: none;
   padding: 0;

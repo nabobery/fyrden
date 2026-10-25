@@ -10,10 +10,10 @@ import {
   useBaseline,
   useDrafts,
 } from "../components/kept-drafts.js";
-import { LabelChip } from "../components/label-chip.js";
 import { Markdown } from "../components/markdown.js";
 import { Pager } from "../components/pager.js";
 import { Reactions } from "../components/reactions.js";
+import { SubjectSidebar } from "../components/subject-sidebar.js";
 import {
   apiCall,
   apiCallBounded,
@@ -44,6 +44,8 @@ import {
   who,
 } from "../lib/pulls.js";
 import { reactionCall } from "../lib/reactions.js";
+import { isMetaIntent, META_DONE } from "../lib/subject-meta.js";
+import { metaCall } from "../lib/subject-meta.server.js";
 import { pageUrl } from "../lib/target.js";
 import type { Repo } from "../lib/types.js";
 import type { Route } from "./+types/repo.issue";
@@ -142,7 +144,11 @@ function draftOf(form: FormData): Written | undefined {
   }
 }
 
-export async function action({ request, context, params }: Route.ActionArgs): Promise<Result> {
+export async function action({
+  request,
+  context,
+  params,
+}: Route.ActionArgs): Promise<Result | Response> {
   assertSameOrigin(request);
   const form = await readForm(request, ISSUE_FORM_MAX_BYTES);
   const number = pullNumber(params.number);
@@ -158,7 +164,17 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
   const { scope, expected, send, refuse } = sender;
   const api = issueApiPath(params.owner, params.repo, number);
   const repoApi = repoApiPath(params.owner, params.repo);
-  switch (field(form, "intent")) {
+  const intent = field(form, "intent");
+  if (isMetaIntent(intent)) {
+    const call = metaCall(intent, form, api);
+    if ("refused" in call) return { error: call.refused, scope };
+    const answer = await send(call.method, call.path, call.body, intent, "Nothing was changed.");
+    // Deleted: its page is gone; the list is where it was.
+    return answer.ok === "delete-issue"
+      ? redirect(`/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/issues`)
+      : answer;
+  }
+  switch (intent) {
     case "comment": {
       const body = rawField(form, "body");
       if (!body.trim()) return { error: "Write a comment first.", scope };
@@ -255,9 +271,10 @@ const DONE: Record<string, string> = {
   reopen: "Reopened.",
   react: "Reaction added.",
   unreact: "Reaction taken back.",
+  ...META_DONE,
 };
 
-type ActionData = Awaited<ReturnType<typeof action>> | undefined;
+type ActionData = Exclude<Awaited<ReturnType<typeof action>>, Response> | undefined;
 
 /** The issue page's editors: the description's, the new comment's, and each comment's. */
 const EDITORS: DraftEditors = {
@@ -487,14 +504,21 @@ export default function IssuePage({ loaderData }: Route.ComponentProps) {
           </span>
         )}
       </p>
-      {issue.labels.length > 0 && (
-        <p className="row">
-          <span className="visually-hidden">Labels:</span>
-          {issue.labels.map((label) => (
-            <LabelChip key={label.id} label={label} />
-          ))}
-        </p>
-      )}
+      <SubjectSidebar
+        owner={owner}
+        repo={repo}
+        number={issue.number}
+        kind="issue"
+        labels={issue.labels}
+        assignees={issue.assignees}
+        milestone={issue.milestone}
+        locked={issue.locked}
+        lockReason={issue.active_lock_reason}
+        roles={{ triage, push, admin: permissions?.admin === true }}
+        viewer={viewer}
+        busy={busy}
+        hidden={viewerField}
+      />
       {!loaderData.viewerKnown && (
         <p className="muted" role="status">
           Your session could not be checked just now; your drafts are kept.

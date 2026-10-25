@@ -41,6 +41,12 @@ export function pullRequest(overrides: Record<string, unknown> = {}) {
     merged_at: null,
     merge_commit_sha: null,
     merged_by: null,
+    locked: false,
+    active_lock_reason: null,
+    labels: [],
+    assignee: null,
+    assignees: [],
+    milestone: null,
     reactions: NO_REACTIONS,
     ...overrides,
   };

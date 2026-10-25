@@ -362,7 +362,7 @@ describe("reactions on a pull request", () => {
     commentPages: { next: null, first: null },
     reviewPages: { next: null, first: null },
     rules: null,
-    push: false,
+    permissions: null,
   };
   const comment = {
     kind: "comment",
@@ -402,7 +402,7 @@ describe("reactions on a pull request", () => {
         ...base,
         pull,
         viewer,
-        push,
+        permissions: { push },
         timeline: [comment],
       });
       expect(html).toContain('<span class="visually-hidden">Rocket</span> <!-- -->1');
@@ -412,7 +412,7 @@ describe("reactions on a pull request", () => {
       ...base,
       pull: { ...reacted, locked: true },
       viewer: VIEWER,
-      push: true,
+      permissions: { push: true },
       timeline: [],
     });
     expect(writer).toMatch(/value="react"/);

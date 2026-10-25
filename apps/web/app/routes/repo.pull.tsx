@@ -7,6 +7,7 @@ import { PullHeader } from "../components/pull-header.js";
 import { inOrder, Timeline, type TimelineItem } from "../components/pull-timeline.js";
 import { Reactions } from "../components/reactions.js";
 import { ReviewForm } from "../components/review-form.js";
+import { SubjectSidebar } from "../components/subject-sidebar.js";
 import { apiCall, assertSameOrigin, bodyOf, readForm } from "../lib/api.server.js";
 import {
   type Continuation,
@@ -35,6 +36,8 @@ import {
   submitReview,
 } from "../lib/pulls.server.js";
 import { reactionCall } from "../lib/reactions.js";
+import { isMetaIntent, META_DONE } from "../lib/subject-meta.js";
+import { metaCall } from "../lib/subject-meta.server.js";
 import type { Repo } from "../lib/types.js";
 import type { Route } from "./+types/repo.pull";
 
@@ -80,14 +83,14 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       `${repoApi}/issues/${number}/comments?${page(commentsAt)}`,
     ),
     apiCall<ReviewsPage>(context, request, "GET", `${api}/reviews?${page(reviewsAt)}`),
-    // For the merge box (its default branch), and for a locked conversation (whether the viewer
-    // has write access, which still reacts).
-    open || pull.locked ? apiCall<Repo>(context, request, "GET", repoApi) : null,
+    // The viewer's role (what the sidebar offers, whether a locked conversation takes their
+    // reactions) and, for the merge box, the default branch.
+    apiCall<Repo>(context, request, "GET", repoApi),
     // For the merge box only: what the base branch's rulesets ask of a merge.
     open ? apiCall<RulesetsPage>(context, request, "GET", `${repoApi}/rulesets`) : null,
   ]);
   const rules =
-    repo?.status === 200 && rulesets?.status === 200
+    repo.status === 200 && rulesets?.status === 200
       ? mergeRules(rulesets.body.rulesets, pull.base.ref, repo.body.default_branch)
       : null;
   const commentPage = bodyOf(comments, request);
@@ -160,8 +163,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       shownReviews.next && writeContinuation(shownReviews.next),
     ),
     rules,
-    // Write access reacts in a locked conversation (known only when the repository was read).
-    push: repo?.status === 200 && repo.body.permissions?.push === true,
+    // What the viewer's role allows (none when the repository could not be read).
+    permissions: (repo.status === 200 && repo.body.permissions) || null,
   };
 }
 
@@ -171,7 +174,26 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
   const api = pullApiOf(params);
   const patch = (body: Record<string, unknown>, intent: string, fallback: string) =>
     send(context, request, "PATCH", api, body, intent, fallback);
-  switch (field(form, "intent")) {
+  const intent = field(form, "intent");
+  // Labels, assignees, the milestone and the lock, through its number as an issue's are.
+  if (isMetaIntent(intent) && intent !== "delete-issue") {
+    const call = metaCall(
+      intent,
+      form,
+      `${repoApiPath(params.owner, params.repo)}/issues/${pullNumber(params.number)}`,
+    );
+    if ("refused" in call) return { error: call.refused };
+    return send(
+      context,
+      request,
+      call.method,
+      call.path,
+      call.body,
+      intent,
+      "Nothing was changed.",
+    );
+  }
+  switch (intent) {
     case "comment": {
       const body = rawField(form, "body");
       if (!body.trim()) return { error: "Write a comment first." };
@@ -257,14 +279,26 @@ const DONE: Record<string, string> = {
   maintainer: "Saved.",
   react: "Reaction added.",
   unreact: "Reaction taken back.",
+  ...META_DONE,
 };
 
 export default function Pull({ loaderData }: Route.ComponentProps) {
   const result = useActionData<typeof action>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
-  const { owner, repo, pull, viewer, body, timeline, commentPages, reviewPages, rules, push } =
-    loaderData;
+  const {
+    owner,
+    repo,
+    pull,
+    viewer,
+    body,
+    timeline,
+    commentPages,
+    reviewPages,
+    rules,
+    permissions,
+  } = loaderData;
+  const push = permissions?.push === true;
   // A locked conversation takes reactions from write access only (the API decides each).
   const react = { canReact: viewer !== null && (!pull.locked || push), busy };
   const isAuthor = viewer !== null && pull.user.id === viewer;
@@ -277,6 +311,20 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
   return (
     <main>
       <PullHeader owner={owner} repo={repo} pull={pull} viewer={viewer} active="conversation" />
+      <SubjectSidebar
+        owner={owner}
+        repo={repo}
+        number={pull.number}
+        kind="pull"
+        labels={pull.labels}
+        assignees={pull.assignees}
+        milestone={pull.milestone}
+        locked={pull.locked}
+        lockReason={pull.active_lock_reason}
+        roles={{ triage: permissions?.triage === true, push, admin: permissions?.admin === true }}
+        viewer={viewer}
+        busy={busy}
+      />
       <section className="panel" aria-labelledby="pull-description">
         <h2 id="pull-description" className="visually-hidden">
           Description

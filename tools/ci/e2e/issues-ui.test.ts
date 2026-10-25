@@ -460,6 +460,66 @@ describe("issues in the web UI", () => {
     }
   });
 
+  it("sets an issue's labels, assignee and milestone, locks it, and deletes another", async () => {
+    const issue = `${stack.origin}/${handle}/${name}/issues/1`;
+    await page.goto(issue);
+    const sidebar = page.getByRole("complementary");
+    // A label, chosen on its own page by name.
+    await sidebar.getByRole("link", { name: "Add labels" }).click();
+    await page.getByLabel("Labels named").fill("doc");
+    await page.getByRole("button", { name: "Search" }).click();
+    await see(page).toHaveURL(/q=doc/);
+    await page.getByRole("button", { name: "Add documentation" }).click();
+    await see(page.getByRole("status")).toHaveText("Label added.");
+    await see(page.getByRole("button", { name: "Remove documentation" })).toBeVisible();
+    await accessible("labels of an issue");
+    await page.getByRole("link", { name: /^Back to the issue/ }).click();
+    await see(sidebar.locator(".label-chip", { hasText: "documentation" })).toBeVisible();
+    await sidebar.getByRole("button", { name: "Remove the label documentation" }).click();
+    await see(page.getByRole("status")).toHaveText("Label removed.");
+    await see(sidebar.locator(".label-chip", { hasText: "documentation" })).toHaveCount(0);
+    // Assigned by handle, shown as "you"; taken off by id.
+    await sidebar.getByLabel("Assign (a handle)").fill(handle);
+    await sidebar.getByRole("button", { name: "Assign", exact: true }).click();
+    await see(page.getByRole("status")).toHaveText("Assigned.");
+    await see(sidebar.getByRole("list", { name: "Its assignees" })).toContainText("you");
+    await sidebar.getByRole("button", { name: "Remove you from its assignees" }).click();
+    await see(page.getByRole("status")).toHaveText("Unassigned.");
+    await see(sidebar.getByText("No one.")).toBeVisible();
+    // A milestone, chosen among the open ones.
+    const chosen = await rest<{ number: number }>("POST", `/repos/${handle}/${name}/milestones`, {
+      title: "Sidebar milestone",
+    });
+    await sidebar.getByRole("link", { name: "Choose a milestone" }).click();
+    await page.getByRole("button", { name: "Set Sidebar milestone" }).click();
+    await see(page.getByRole("status")).toHaveText("Milestone set.");
+    await see(page.getByText("(its milestone)")).toBeVisible();
+    await accessible("milestone of an issue");
+    await page.getByRole("link", { name: /^Back to the issue/ }).click();
+    await see(sidebar.getByText("Sidebar milestone")).toBeVisible();
+    await sidebar.getByRole("button", { name: "Clear the milestone" }).click();
+    await see(page.getByRole("status")).toHaveText("Milestone cleared.");
+    await see(sidebar.getByText("None.", { exact: true })).toBeVisible();
+    await rest("DELETE", `/repos/${handle}/${name}/milestones/${chosen.number}`);
+    // Locked with a reason, then unlocked.
+    await sidebar.getByLabel("Reason (optional)").selectOption("resolved");
+    await sidebar.getByRole("button", { name: "Lock conversation" }).click();
+    await see(page.getByRole("status")).toHaveText("Conversation locked.");
+    await see(sidebar.getByText(/Locked as Resolved/)).toBeVisible();
+    await accessible("a locked issue's sidebar");
+    await sidebar.getByRole("button", { name: "Unlock conversation" }).click();
+    await see(page.getByRole("status")).toHaveText("Conversation unlocked.");
+    // Another issue, deleted: the page goes back to the list.
+    const doomed = await rest<{ number: number }>("POST", `/repos/${handle}/${name}/issues`, {
+      title: "To be deleted",
+    });
+    await page.goto(`${stack.origin}/${handle}/${name}/issues/${doomed.number}`);
+    await page.getByText("Delete issue", { exact: true }).click();
+    await page.getByRole("button", { name: `Delete issue #${doomed.number}` }).click();
+    await see(page).toHaveURL(`${stack.origin}/${handle}/${name}/issues`);
+    await see(page.getByRole("link", { name: "To be deleted" })).toHaveCount(0);
+  });
+
   it("manages labels: creates one with a hostile name, edits it, keeps a stale edit, deletes it", async () => {
     const labels = `${stack.origin}/${handle}/${name}/labels`;
     await page.goto(labels);

@@ -245,6 +245,13 @@ describe("pull requests in the web UI", () => {
     await hooray.click();
     await see(page.getByRole("status")).toHaveText("Reaction taken back.");
     await see(reactions.getByRole("button", { name: /^Hooray \d/ })).toHaveCount(0);
+    // The sidebar changes it through its number, as an issue's.
+    const sidebar = page.getByRole("complementary");
+    await sidebar.getByLabel("Assign (a handle)").fill(handle);
+    await sidebar.getByRole("button", { name: "Assign", exact: true }).click();
+    await see(page.getByRole("status")).toHaveText("Assigned.");
+    await see(sidebar.getByRole("list", { name: "Its assignees" })).toContainText("you");
+    await accessible(page, "pull request with an assignee");
   });
 
   it("draws the files' changes, hostile names and lines as text", async () => {
