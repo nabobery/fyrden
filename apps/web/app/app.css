@@ -181,6 +181,15 @@ button.danger {
 .panel.linked {
   border-color: var(--accent);
 }
+/* Highlighted code: each token's colour for the scheme in use (lib/highlight-palette.ts). */
+pre.highlights span {
+  color: var(--hls-light, var(--fg));
+}
+@media (prefers-color-scheme: dark) {
+  pre.highlights span {
+    color: var(--hls-dark, var(--fg));
+  }
+}
 ul.label-list {
   list-style: none;
   padding: 0;

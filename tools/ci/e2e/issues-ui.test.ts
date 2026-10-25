@@ -645,6 +645,116 @@ describe("issues in the web UI", () => {
     await see(page.locator(`#comment-${ids[0]} article.linked`)).toHaveCount(1);
   });
 
+  it("highlights a known language's code, leaves others plain, and loads nothing for them", async () => {
+    const path = `/repos/${handle}/${name}/issues`;
+    const loaded: string[] = [];
+    page.on("request", (request) => loaded.push(request.url()));
+    // Unknown fences only: the highlighter is never asked for.
+    const plain = await rest<{ number: number }>("POST", path, {
+      title: "No known language",
+      body: "```nope\nconst a = 1;\n```\n\nText.",
+    });
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/${plain.number}`);
+    await see(page.locator(".markdown pre code.language-nope")).toBeVisible();
+    expect(loaded.filter((url) => /highlight\.client-/.test(url))).toEqual([]);
+    // A known one: its code as coloured spans, the same text; a hostile line stays text.
+    const code = "const answer = 42;\n// <img src=x onerror=window.pwned=2>";
+    const known = await rest<{ number: number }>("POST", path, {
+      title: "TypeScript",
+      body: `\`\`\`ts\n${code}\n\`\`\`\n\n\`\`\`nope\nplain = 1\n\`\`\``,
+    });
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/${known.number}`);
+    const highlighted = page.locator(".markdown pre.highlights code.language-ts");
+    await see(highlighted.locator("span").first()).toBeVisible();
+    // As the plain block had it: its lines, and the fence's last line break.
+    expect(await highlighted.textContent()).toBe(`${code}\n`);
+    await see(page.locator(".markdown pre code.language-nope span")).toHaveCount(0);
+    expect(await page.evaluate(() => (globalThis as { pwned?: unknown }).pwned)).toBeUndefined();
+    expect(loaded.filter((url) => /highlight\.client-/.test(url))).toHaveLength(1);
+    expect(stack.refused).toEqual([]);
+    await accessible("highlighted code, light");
+    await page.emulateMedia({ colorScheme: "dark" });
+    await accessible("highlighted code, dark");
+    await page.emulateMedia({ colorScheme: "light" });
+  });
+
+  it("highlights 200 blocks a page, each page shown its own budget, a return included", async () => {
+    const path = `/repos/${handle}/${name}/issues`;
+    const many = await rest<{ number: number }>("POST", path, {
+      title: "Many blocks",
+      body: Array.from({ length: 201 }, (_, i) => `\`\`\`ts\nconst n${i} = ${i};\n\`\`\``).join(
+        "\n\n",
+      ),
+    });
+    const issue = `${stack.origin}/${handle}/${name}/issues/${many.number}`;
+    await visit(page, issue);
+    const highlighted = page.locator(".markdown pre.highlights");
+    await see(highlighted).toHaveCount(200);
+    await see(page.locator(".markdown pre:not(.highlights) code.language-ts")).toHaveCount(1);
+    // Away (a page with no code) and back, within the app: the page has its budget again.
+    await page.getByRole("link", { name: "Issues", exact: true }).first().click();
+    await see(page).toHaveURL(new RegExp(`/${name}/issues$`));
+    await page.getByRole("link", { name: "Many blocks" }).click();
+    await see(page).toHaveURL(issue);
+    await see(highlighted).toHaveCount(200);
+    // A comment added on the page (a form sent to it) keeps its spent budget: its block is plain.
+    await page.locator("#comment-body").fill("```ts\nconst more = 1;\n```");
+    await page.getByRole("button", { name: "Comment", exact: true }).click();
+    await see(page.getByRole("status")).toHaveText("Comment added.");
+    await see(page.locator(".timeline code.language-ts")).toHaveCount(1);
+    await see(highlighted).toHaveCount(200);
+    // A page left while the highlighter loads spends nothing of the next one's budget.
+    const one = await rest<{ number: number }>("POST", path, {
+      title: "One block",
+      body: "```ts\nconst one = 1;\n```",
+    });
+    let release = () => {};
+    const held = new Promise<void>((done) => {
+      release = done;
+    });
+    let start = () => {};
+    const started = new Promise<void>((done) => {
+      start = done;
+    });
+    const chunk = "**/highlight.client-*.js";
+    await page.route(chunk, async (route) => {
+      start();
+      await held;
+      return route.continue();
+    });
+    try {
+      // A fresh document: the highlighter's module is fetched (and held) for this page.
+      await visit(page, issue);
+      await started;
+      await page.getByRole("link", { name: "Issues", exact: true }).first().click();
+      await page.getByRole("link", { name: "One block" }).click();
+      await see(page).toHaveURL(new RegExp(`/issues/${one.number}$`));
+      release();
+      await see(page.locator(".markdown pre.highlights")).toHaveCount(1);
+    } finally {
+      release();
+      await page.unroute(chunk);
+    }
+    // Comments paged under a description it keeps: the description's 200 still count.
+    const paged = await rest<{ number: number }>("POST", path, {
+      title: "Paged under blocks",
+      body: Array.from({ length: 200 }, (_, i) => `\`\`\`ts\nconst p${i} = ${i};\n\`\`\``).join(
+        "\n\n",
+      ),
+    });
+    for (let i = 1; i <= 25; i++)
+      await rest("POST", `${path}/${paged.number}/comments`, { body: `plain ${i}` });
+    await rest("POST", `${path}/${paged.number}/comments`, {
+      body: "```ts\nconst later = 1;\n```",
+    });
+    await visit(page, `${stack.origin}/${handle}/${name}/issues/${paged.number}`);
+    await see(highlighted).toHaveCount(200);
+    await page.getByRole("link", { name: "Next page" }).click();
+    await see(page.locator(".timeline code.language-ts")).toHaveCount(1);
+    await see(highlighted).toHaveCount(200);
+    await see(page.locator(".timeline pre.highlights")).toHaveCount(0);
+  });
+
   it("manages labels: creates one with a hostile name, edits it, keeps a stale edit, deletes it", async () => {
     const labels = `${stack.origin}/${handle}/${name}/labels`;
     await visit(page, labels);
