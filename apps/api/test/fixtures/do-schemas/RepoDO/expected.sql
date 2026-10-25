@@ -335,7 +335,7 @@ CREATE TABLE issue_tombstones (
         version INTEGER NOT NULL,
         deleted_at INTEGER NOT NULL,
         deleted_by TEXT
-      ) STRICT;
+      , deleted_epoch INTEGER, deleted_seq INTEGER) STRICT;
 CREATE TABLE issues (
         number INTEGER PRIMARY KEY,
         title TEXT NOT NULL,

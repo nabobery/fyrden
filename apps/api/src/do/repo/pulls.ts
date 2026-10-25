@@ -29,6 +29,7 @@ import { labelOutput, milestoneOutput, pullOutput } from "../../repos/shapes.js"
 import type { CaptureValue } from "../../webhooks/capture.js";
 import { ALL_KINDS, capturable, userOf } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
+import type { ExportedEntity } from "./export.js";
 import type { PullView } from "./mergeability.js";
 import type {
   MilestoneRecord,
@@ -199,6 +200,36 @@ export class RepoPulls {
   get(number: number): PullRecord | undefined {
     const row = this.#rows("SELECT * FROM pull_requests WHERE number = ?", number)[0];
     return row && record(row);
+  }
+
+  /** A pull request as its events carry it. */
+  exportOne(number: number): ExportedEntity {
+    const pull = this.get(number);
+    if (!pull) throw new Error(`no pull request ${number}`);
+    return {
+      type: PULL_ENTITY,
+      id: `${this.deps.repoId()}#${number}`,
+      version: pull.version,
+      deleted: false,
+      row: this.#snapshotRow(pull),
+    };
+  }
+
+  /** The pull request as its events carry it: with its labels, assignees and milestone. */
+  #snapshotRow(pull: PullRecord): Record<string, unknown> {
+    const {
+      authorAct: _act,
+      lastPusher: _pusher,
+      lastPusherGrant: _grant,
+      lastPushAt: _at,
+      headRefVersion: _headVersion,
+      version: _version,
+      ...fields
+    } = pull;
+    return {
+      ...fields,
+      ...(this.deps.snapshotMeta?.(pull.number) ?? { labels: [], assignees: [], milestone: null }),
+    };
   }
 
   /** Newest first, below `before` (a number) when given; `closed` includes merged ones, as GitHub's does. */
@@ -899,23 +930,15 @@ export class RepoPulls {
           "maintainer_can_modify" in (data.changes as Record<string, unknown>)))
     )
       this.deps.follow?.(pull);
-    const {
-      authorAct: _act,
-      lastPusher: _pusher,
-      lastPusherGrant: _grant,
-      lastPushAt: _at,
-      headRefVersion: _headVersion,
-      version,
-      ...fields
-    } = pull;
-    const row = {
-      ...fields,
-      ...(this.deps.snapshotMeta?.(pull.number) ?? { labels: [], assignees: [], milestone: null }),
-    };
     this.deps.events.emitEntity(
       `pull_request.${event}`,
       actor,
-      { type: PULL_ENTITY, id: `${this.deps.repoId()}#${pull.number}`, version, row },
+      {
+        type: PULL_ENTITY,
+        id: `${this.deps.repoId()}#${pull.number}`,
+        version: pull.version,
+        row: this.#snapshotRow(pull),
+      },
       data,
       false,
       () => ({

@@ -16,6 +16,7 @@ import { type Blob, CaptureCache, type CaptureValue, captureTree } from "../../w
 import { CAPTURE_DEADLINE_MS, CAPTURE_VERSION, userOf } from "../../webhooks/captures.js";
 import { webhookEventOf } from "../../webhooks/events.js";
 import type { NewEvent, Outbox } from "../base/outbox.js";
+import type { ExportPosition } from "./export.js";
 
 /** The webhooks an event goes to: each hook's id and configuration version. */
 export type HookRouter = (
@@ -412,6 +413,14 @@ export class RepoEvents {
    * sequence the export starts at; null without an identity.
    */
   exportSnapshot(): RepoExport | null {
+    const position = this.exportPosition();
+    if (!position) return null;
+    const { repo, ...at } = position;
+    return { ...at, entities: [{ ...repo, row: repo.row as RepoRow | null }] };
+  }
+
+  /** Where the repository's events stand, and its own entity, for an export; null without an identity. */
+  exportPosition(): ExportPosition | null {
     const meta = this.#meta();
     if (!meta) return null;
     const { source_seq: watermark } = this.#storage.sql
@@ -422,15 +431,13 @@ export class RepoEvents {
       epochGen: meta.epoch_gen,
       ownerGen: meta.owner_gen,
       watermark,
-      entities: [
-        {
-          type: REPO_ENTITY,
-          id: meta.repo_id,
-          version: meta.version,
-          deleted: meta.deleting_at !== null,
-          row: meta.deleting_at === null ? this.#row(meta) : null,
-        },
-      ],
+      repo: {
+        type: REPO_ENTITY,
+        id: meta.repo_id,
+        version: meta.version,
+        deleted: meta.deleting_at !== null,
+        row: meta.deleting_at === null ? { ...this.#row(meta) } : null,
+      },
     };
   }
 

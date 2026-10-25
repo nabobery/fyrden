@@ -15,6 +15,7 @@ import {
 import { labelOutput, milestoneOutput } from "../../repos/shapes.js";
 import { capturable } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
+import type { ExportEntry } from "./export.js";
 import type { PullCaller } from "./pulls.js";
 import { NO_REACTIONS, type OwnReaction, type ReactionCounts } from "./reactions.js";
 
@@ -410,6 +411,52 @@ export class RepoSubjectMeta {
       return desc ? -by : by;
     });
     return found.slice(0, query.limit).map(milestoneRecord);
+  }
+
+  /** The labels with ids after `after`, in id order (at most `limit`), as their events carry them. */
+  exportLabels(after: number, limit: number): ExportEntry[] {
+    return this.#exec<{ id: number }>(
+      "SELECT id FROM labels WHERE id > ? ORDER BY id LIMIT ?",
+      after,
+      limit,
+    ).map(({ id }) => ({
+      key: id,
+      load: () => {
+        const [row] = this.#exec<LabelRow>("SELECT * FROM labels WHERE id = ?", id);
+        if (!row) throw new Error(`no label ${id}`);
+        const { version, ...label } = labelRecord(row);
+        return {
+          type: LABEL_ENTITY,
+          id: `${this.deps.repoId()}#labels/${id}`,
+          version,
+          deleted: false,
+          row: label,
+        };
+      },
+    }));
+  }
+
+  /** The milestones numbered after `after`, in number order (at most `limit`), as their events carry them. */
+  exportMilestones(after: number, limit: number): ExportEntry[] {
+    return this.#exec<{ number: number }>(
+      "SELECT number FROM milestones WHERE number > ? ORDER BY number LIMIT ?",
+      after,
+      limit,
+    ).map(({ number }) => ({
+      key: number,
+      load: () => {
+        const found = this.milestone(number);
+        if (!found) throw new Error(`no milestone ${number}`);
+        const { version, ...milestone } = found;
+        return {
+          type: MILESTONE_ENTITY,
+          id: `${this.deps.repoId()}#milestones/${number}`,
+          version,
+          deleted: false,
+          row: milestone,
+        };
+      },
+    }));
   }
 
   milestone(number: number): MilestoneRecord | undefined {

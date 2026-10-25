@@ -1359,4 +1359,15 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 45,
+    // Where in the repository's events an issue was deleted: the epoch and
+    // sequence of its deletion's event, so a read model knows once an export
+    // has covered it. Tombstones from before carry none.
+    name: "issue_tombstone_positions",
+    sql: `
+      ALTER TABLE issue_tombstones ADD COLUMN deleted_epoch INTEGER;
+      ALTER TABLE issue_tombstones ADD COLUMN deleted_seq INTEGER;
+    `,
+  },
 ];

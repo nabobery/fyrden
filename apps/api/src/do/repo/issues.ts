@@ -18,6 +18,7 @@ import {
 import { issueOutput, labelOutput, milestoneOutput } from "../../repos/shapes.js";
 import { ALL_KINDS, capturable, userOf } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
+import type { ExportEntry, ExportedEntity } from "./export.js";
 import type { PullCaller, PullRecord, RepoPulls } from "./pulls.js";
 import type {
   MetaPlan,
@@ -176,6 +177,71 @@ export class RepoIssues {
   get(number: number): IssueRecord | undefined {
     const row = this.#rows("SELECT * FROM issues WHERE number = ?", number)[0];
     return row && this.#record(row);
+  }
+
+  /**
+   * The numbers after `after` of issues, pull requests and deleted issues
+   * (one sequence), in order, at most `limit`, each with what it is now.
+   */
+  exportKeys(after: number, limit: number): ExportEntry[] {
+    return this.#exec<{ number: number; kind: "issue" | "pull" | "deleted" }>(
+      `SELECT number, kind FROM (
+         SELECT * FROM (SELECT number, 'issue' AS kind FROM issues WHERE number > ?1
+           ORDER BY number LIMIT ?2)
+         UNION ALL SELECT * FROM (SELECT number, 'pull' FROM pull_requests WHERE number > ?1
+           ORDER BY number LIMIT ?2)
+         UNION ALL SELECT * FROM (SELECT number, 'deleted' FROM issue_tombstones
+           WHERE number > ?1 ORDER BY number LIMIT ?2))
+       ORDER BY number LIMIT ?2`,
+      after,
+      limit,
+    ).map(({ number, kind }) => ({
+      key: number,
+      load: () =>
+        kind === "pull"
+          ? this.deps.pulls.exportOne(number)
+          : kind === "issue"
+            ? this.#exportIssue(number)
+            : this.#exportTombstone(number),
+    }));
+  }
+
+  /** A live issue as its events carry it. */
+  #exportIssue(number: number): ExportedEntity {
+    const issue = this.get(number);
+    if (!issue) throw new Error(`no issue ${number}`);
+    return {
+      type: ISSUE_ENTITY,
+      id: `${this.deps.repoId()}#${number}`,
+      version: issue.version,
+      deleted: false,
+      row: this.#snapshotRow(issue),
+    };
+  }
+
+  /** A deleted issue's tombstone, with where its deletion is (when recorded). */
+  #exportTombstone(number: number): ExportedEntity {
+    const [tombstone] = this.#exec<{
+      version: number;
+      deleted_epoch: number | null;
+      deleted_seq: number | null;
+    }>("SELECT version, deleted_epoch, deleted_seq FROM issue_tombstones WHERE number = ?", number);
+    if (!tombstone) throw new Error(`no tombstone ${number}`);
+    const { version, deleted_epoch: epochGen, deleted_seq: sourceSeq } = tombstone;
+    return {
+      type: ISSUE_ENTITY,
+      id: `${this.deps.repoId()}#${number}`,
+      version,
+      deleted: true,
+      row: null,
+      deletedAt: epochGen === null || sourceSeq === null ? null : { epochGen, sourceSeq },
+    };
+  }
+
+  /** The issue as its events carry it: with its labels, assignees and milestone. */
+  #snapshotRow(issue: IssueRecord): Record<string, unknown> {
+    const { authorAct: _act, duplicateKind: _kind, version: _version, ...fields } = issue;
+    return { ...fields, ...this.deps.meta.snapshot(issue.number) };
   }
 
   /** Whether `number` is an issue or a pull request now; undefined for neither (never, or deleted). */
@@ -481,6 +547,13 @@ export class RepoIssues {
         true,
         { meta },
       );
+      // The position of the deletion's event, just appended.
+      this.#exec(
+        `UPDATE issue_tombstones SET (deleted_epoch, deleted_seq) =
+           (SELECT epoch_gen, source_seq FROM repo_meta WHERE id = 1)
+         WHERE number = ?`,
+        number,
+      );
       this.deps.events.auditChange(ISSUE_ACTION_RULES.delete.audit, caller.actor, { number });
     });
     return { ok: true };
@@ -703,7 +776,7 @@ export class RepoIssues {
     capture: { readonly meta?: SubjectMeta; readonly touched?: SubjectTouched } = {},
   ): void {
     const { authorAct: _act, duplicateKind: _kind, version, ...fields } = issue;
-    const row = deleted ? fields : { ...fields, ...this.deps.meta.snapshot(issue.number) };
+    const row = deleted ? fields : this.#snapshotRow(issue);
     const { touched } = capture;
     this.deps.events.emitEntity(
       `issue.${event}`,

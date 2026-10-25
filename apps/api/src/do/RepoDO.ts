@@ -160,6 +160,7 @@ import {
   type RepoIdentity,
   type RepoUpdate,
 } from "./repo/events.js";
+import { type ExportPage, type ExportPageRequest, readExportPage } from "./repo/export.js";
 import { type FeedPageAsk, type FeedPageRead, RepoFeed } from "./repo/feed.js";
 import { type FeedMember, type FeedViewAnswer, RepoFeedView } from "./repo/feed-view.js";
 import {
@@ -3449,6 +3450,29 @@ export class RepoDO extends MigratingDO {
   /** The repository's current snapshot for a read-model rebuild (null without an identity). */
   exportSnapshot(): RepoExport | null {
     return this.events.exportSnapshot();
+  }
+
+  /**
+   * A page of the repository's entities for a read model's reconciliation
+   * (`repo/export.ts`), read once the epoch is checked: null without an
+   * identity (or once erased), `stale` under another epoch or ownership
+   * than the export's.
+   */
+  async exportPage(request: ExportPageRequest): Promise<ExportPage | "stale" | null> {
+    if (this.#gone()) return null;
+    await this.checkEpoch();
+    return readExportPage(
+      {
+        position: () => this.events.exportPosition(),
+        entries: (kind, after, limit) =>
+          kind === "subjects"
+            ? this.issues.exportKeys(after, limit)
+            : kind === "labels"
+              ? this.subjectMeta.exportLabels(after, limit)
+              : this.subjectMeta.exportMilestones(after, limit),
+      },
+      request,
+    );
   }
 
   /** The tombstone the deletion puts into the read model (null without an identity). */
