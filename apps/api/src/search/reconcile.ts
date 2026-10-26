@@ -681,12 +681,25 @@ export async function sweepTombstones(db: D1Database, metrics?: Metrics): Promis
   const removals = new Set<number>();
   for (const [i, table] of SWEPT.entries()) {
     const rows = looked[i] ?? [];
-    const gone = rows.filter((r) => r.covered === 1).map((r) => r.row);
+    const gone = rows
+      .filter((r) => r.covered === 1)
+      .map((r) => [r.row, r.repo_id, r.deleted_epoch, r.deleted_seq]);
     if (gone.length > 0) {
       removals.add(statements.length);
+      // Only a row still the deletion looked at, and still covered: between the look and this,
+      // its repository's cleanup may have removed it and a live row taken its row id.
       statements.push(
         db
-          .prepare(`DELETE FROM ${table} WHERE rowid IN (SELECT value FROM json_each(?))`)
+          .prepare(
+            `DELETE FROM ${table} AS t
+             WHERE t.rowid IN (SELECT value ->> '$[0]' FROM json_each(?1))
+               AND t.deleted = 1
+               AND EXISTS (SELECT 1 FROM json_each(?1) g WHERE g.value ->> '$[0]' = t.rowid
+                 AND g.value ->> '$[1]' = t.repo_id AND g.value ->> '$[2]' = t.deleted_epoch
+                 AND g.value ->> '$[3]' = t.deleted_seq)
+               AND EXISTS (SELECT 1 FROM search_sources s WHERE s.repo_id = t.repo_id
+                 AND (s.cutoff_epoch, s.cutoff_seq) >= (t.deleted_epoch, t.deleted_seq))`,
+          )
           .bind(JSON.stringify(gone)),
       );
     }

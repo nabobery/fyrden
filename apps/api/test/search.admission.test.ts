@@ -544,6 +544,60 @@ describe("search's allowance", () => {
     }
   });
 
+  it("removes only what is still the deletion it saw, when its row id is reused meanwhile", async () => {
+    const [a, b] = [uniqueId("rep"), uniqueId("rep")];
+    const docId = 9_000_000 + Math.floor(Math.random() * 1_000_000);
+    await db.batch([
+      db
+        .prepare(
+          "INSERT INTO search_sources (repo_id, cutoff_epoch, cutoff_seq) VALUES (?, 1, 100)",
+        )
+        .bind(a),
+      db
+        .prepare(
+          `INSERT INTO search_docs (doc_id, repo_id, number, kind, deleted, deleted_epoch,
+             deleted_seq, epoch_gen, owner_gen, version, updated_seq)
+           VALUES (?, ?, 1, 1, 1, 1, 50, 1, 1, 1, 1)`,
+        )
+        .bind(docId, a),
+    ]);
+    let looked = false;
+    // Between the sweep's look and its removal: A's deletion goes (its repository's cleanup),
+    // and B's live document takes its row id.
+    const racing = new Proxy(db, {
+      get(target, prop) {
+        if (prop === "batch")
+          return async (batch: D1PreparedStatement[]) => {
+            const results = await target.batch(batch);
+            if (!looked) {
+              looked = true;
+              await target.batch([
+                target.prepare("DELETE FROM search_docs WHERE doc_id = ?").bind(docId),
+                target
+                  .prepare(
+                    `INSERT INTO search_docs (doc_id, repo_id, number, kind, deleted, state,
+                       open_state, title, created_at, updated_at, epoch_gen, owner_gen, version,
+                       updated_seq) VALUES (?, ?, 1, 1, 0, 1, 1, 'live', 0, 0, 1, 1, 1, 1)`,
+                  )
+                  .bind(docId, b),
+              ]);
+            }
+            return results;
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    await sweepTombstones(racing);
+    expect(looked).toBe(true);
+    expect(
+      await db
+        .prepare("SELECT repo_id, deleted FROM search_docs WHERE doc_id = ?")
+        .bind(docId)
+        .first(),
+    ).toEqual({ repo_id: b, deleted: 0 });
+  });
+
   it("reads only the deletions it removes, however many the cutoff does not cover yet", async () => {
     const repoId = uniqueId("rep");
     await db.batch([
