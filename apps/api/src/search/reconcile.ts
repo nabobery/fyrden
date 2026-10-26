@@ -17,6 +17,7 @@ import {
   type Reservation,
   reserve,
   SAME_DAY,
+  STATEMENT_ROWS,
   settleStatement,
   sizeStatement,
   spentStatement,
@@ -288,7 +289,7 @@ const SMALL_STEP = { rows: 50, reads: 200 };
 function pageStep(): { rows: number; reads: number } {
   const statements = EXPORT_PAGE.entities + RECONCILE_POLICY.rowsPerPage;
   return {
-    rows: statements * 6 + SMALL_STEP.rows,
+    rows: statements * STATEMENT_ROWS + SMALL_STEP.rows,
     reads: RECONCILE_POLICY.rowsPerPage + 1 + statements * 10 + SMALL_STEP.reads,
   };
 }

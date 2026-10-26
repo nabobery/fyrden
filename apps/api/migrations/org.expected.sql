@@ -68,7 +68,7 @@ CREATE TABLE search_budget (
   rows INTEGER NOT NULL DEFAULT 0,
   -- Rows reconciliations read.
   reads INTEGER NOT NULL DEFAULT 0
-) STRICT;
+, admitted TEXT) STRICT;
 
 -- table search_docs
 CREATE TABLE search_docs (

@@ -8,7 +8,7 @@ import {
   PULL_ENTITY,
   PullRequestRowSchema,
 } from "@fyrden/domain";
-import { SAME_DAY } from "./admission.js";
+import { ADMITTED, SAME_DAY } from "./admission.js";
 
 /*
  * The one place search's projections are written from (the events
@@ -40,13 +40,18 @@ export interface ProjectedEntity {
 }
 
 /**
- * Who writes: the events consumer (an event, after the source's cutoff) or
- * a reconciliation pass's page (`gen`, while it is the source's current
- * pass, under the export's epoch and ownership, and still at the page it
- * read: `kind` after `after`).
+ * Who writes: the events consumer (an event, after the source's cutoff;
+ * with `admission`, only when its batch's reservation, `token`, was the one
+ * admitted, though a `removal` may empty a row already there whatever the
+ * admission) or a reconciliation pass's page (`gen`, while it is the
+ * source's current pass, under the export's epoch and ownership, and still
+ * at the page it read: `kind` after `after`).
  */
 export type SearchWriter =
-  | { readonly by: "event" }
+  | {
+      readonly by: "event";
+      readonly admission?: { readonly token: string; readonly removal: boolean };
+    }
   | {
       readonly by: "reconcile";
       readonly gen: number;
@@ -87,7 +92,8 @@ export function eligible(writer: SearchWriter, at: number): string {
 
 /** The writer's own parameters, bound after a statement's others (see `eligible`). */
 export function writerParams(writer: SearchWriter): (string | number)[] {
-  return writer.by === "reconcile" ? [writer.gen, writer.kind, writer.after, writer.day] : [];
+  if (writer.by === "reconcile") return [writer.gen, writer.kind, writer.after, writer.day];
+  return writer.admission === undefined ? [] : [writer.admission.token];
 }
 
 /** What `search_docs.kind` and `state` hold. */
@@ -144,8 +150,16 @@ function upsert(
     ...fields,
   };
   const columns = Object.keys(values);
-  // ?1–?4 are the position's; the row's values follow, then the writer's.
+  // ?1–?4 are the position's; the row's values follow (the key first, ?5), then the writer's.
   const at = columns.length + 5;
+  // An admitted event's write, or a removal emptying a row already there.
+  const admission =
+    writer.by !== "event" || writer.admission === undefined
+      ? ""
+      : writer.admission.removal
+        ? ` AND (${ADMITTED(at)} OR EXISTS (SELECT 1 FROM ${table}
+            WHERE repo_id = ?1 AND ${key.column} = ?5))`
+        : ` AND ${ADMITTED(at)}`;
   const updated = [
     "epoch_gen",
     "owner_gen",
@@ -156,7 +170,7 @@ function upsert(
     .prepare(
       `INSERT INTO ${table} (repo_id, epoch_gen, owner_gen, updated_seq, ${columns.join(", ")})
        SELECT ?1, ?2, ?3, ?4, ${columns.map((_, i) => `?${i + 5}`).join(", ")}
-       WHERE ${eligible(writer, at)}
+       WHERE ${eligible(writer, at)}${admission}
        ON CONFLICT (repo_id, ${key.column}) DO UPDATE SET
          ${updated.map((c) => `${c} = excluded.${c}`).join(", ")}
        WHERE (excluded.epoch_gen, excluded.owner_gen, excluded.version)

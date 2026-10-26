@@ -43,13 +43,16 @@ export async function searchIndexing(env: Pick<Env, "DIRECTORY">): Promise<boole
 /**
  * The statement that asks for a source's reconciliation: the next
  * revision past the one covered (or past the pass under way), unless one
- * is already pending or the repository is deleted.
+ * is already pending or the repository is deleted. With `when`, only while
+ * its condition holds (SQL over `?1` the repository and `?4` its value),
+ * as the batch it is in finds it.
  */
 export function repairStatement(
   db: D1Database,
   repoId: string,
   reason: string,
   now: number,
+  when?: { readonly where: string; readonly value: string | number },
 ): D1PreparedStatement {
   return db
     .prepare(
@@ -57,6 +60,7 @@ export function repairStatement(
        SELECT ?1, 1, 0, ?2, ?3, ?3
        -- Never for a deleted repository (its projections are being purged).
        WHERE NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = ?1 AND deleted = 1)
+         ${when ? `AND ${when.where}` : ""}
        ON CONFLICT (repo_id) DO UPDATE SET
          dirty = coalesce(search_repairs.active, search_repairs.covered) + 1,
          reason = excluded.reason,
@@ -66,7 +70,7 @@ export function repairStatement(
            THEN search_repairs.next_at ELSE excluded.next_at END
        WHERE search_repairs.dirty <= coalesce(search_repairs.active, search_repairs.covered)`,
     )
-    .bind(repoId, reason, now);
+    .bind(repoId, reason, now, ...(when ? [when.value] : []));
 }
 
 /**

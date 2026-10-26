@@ -27,6 +27,13 @@ const TODAY = "CAST(unixepoch() / 86400 AS INTEGER)";
 /** SQL true while the database's day is still `?<n>` (a reservation's). */
 export const SAME_DAY = (n: number) => `${TODAY} = ?${n}`;
 
+/** SQL true when the batch whose token is `?<n>` was admitted today (see `admitStatements`). */
+export const ADMITTED = (n: number) =>
+  `EXISTS (SELECT 1 FROM search_budget WHERE day = ${TODAY} AND admitted = ?${n})`;
+
+/** Rows one projected entity's statement writes at most (a document's insert, its indexes included). */
+export const STATEMENT_ROWS = 6;
+
 export interface Reservation {
   readonly day: number;
   readonly rows: number;
@@ -142,6 +149,33 @@ export function spentStatement(
        ON CONFLICT (day) DO UPDATE SET rows = rows + excluded.rows, reads = reads + excluded.reads`,
     )
     .bind(used.rows + 1, used.reads + 1);
+}
+
+/**
+ * The statements a batch reserves `rows` of the day's allowance with, in
+ * the batch itself (no call of their own): today's row, then the
+ * reservation, made only when it fits and the size held is under the
+ * threshold, marking the row with the batch's `token` (`RETURNING day` when
+ * made). The batch's guarded writes check the token (`ADMITTED`): batches
+ * run one at a time, so the row carries this one's token only if this one's
+ * reservation was made.
+ */
+export function admitStatements(
+  db: D1Database,
+  token: string,
+  rows: number,
+): D1PreparedStatement[] {
+  return [
+    db.prepare(`INSERT INTO search_budget (day) VALUES (${TODAY}) ON CONFLICT (day) DO NOTHING`),
+    db
+      .prepare(
+        `UPDATE search_budget SET rows = rows + ?1, admitted = ?2
+         WHERE day = ${TODAY} AND rows + ?1 <= ?3
+           AND (SELECT bytes FROM search_size WHERE id = 1) < ?4
+         RETURNING day`,
+      )
+      .bind(rows, token, ADMISSION.dailyRows, ADMISSION.maxBytes),
+  ];
 }
 
 /** D1 calls an invocation may still make (Free allows 50 a Worker invocation, a batch one). */

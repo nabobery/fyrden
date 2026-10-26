@@ -4,7 +4,11 @@ import {
   type DomainEvent,
   type EntitySnapshot,
   eventKey,
+  ISSUE_ENTITY,
   isId,
+  LABEL_ENTITY,
+  MILESTONE_ENTITY,
+  PULL_ENTITY,
   parseEnvelope,
   parseRepoRow,
   REPO_ENTITY,
@@ -24,6 +28,7 @@ import { type Publish, publisher } from "../effects/queues.js";
 import { EFFECT_SINKS, effectQueues } from "../effects/sinks.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { feedSink } from "../feed/sink.js";
+import { liveSearch, Settling } from "../search/live.js";
 
 /** The queue repository outboxes send to. */
 export const EVENTS_QUEUE = "fyrden-events";
@@ -89,6 +94,8 @@ const CALLS_PER_MESSAGE = 4;
  * their own calls from what the messages leave.
  */
 const DISPATCH_CALLS = 6;
+/** Calls the invocation keeps for settling what its messages reserved of search's allowance. */
+const SETTLE_CALLS = 1;
 
 /** The calls applying a message's envelope costs, its deliveries aside. */
 function messageCalls(body: unknown): number {
@@ -119,6 +126,12 @@ export interface ConsumerOptions {
    */
   readonly dispatching?: Dispatching;
   /**
+   * Where the invocation's messages leave search's bookkeeping, applied
+   * all at once after the last one; without it, each message's right after
+   * its batch.
+   */
+  readonly settling?: Settling;
+  /**
    * Calls the invocation may still make, shared by its messages, how many
    * of them applying the messages after this one needs, and whether one was
    * applied (a message alone is applied whatever it costs).
@@ -144,7 +157,7 @@ export async function consumeEvents(
     ...options,
     inline: options.inline ?? { batched: INLINE_BATCH_EFFECTS, recipients: INLINE_RECIPIENTS },
     calls: options.calls ?? {
-      left: INVOCATION_CALLS - DISPATCH_CALLS,
+      left: INVOCATION_CALLS - DISPATCH_CALLS - SETTLE_CALLS,
       reserved: 0,
       applied: false,
     },
@@ -157,7 +170,8 @@ export async function consumeEvents(
   // Every message's effects together: one send per sink for the whole invocation (Queues bill
   // per message), then the inline deliveries.
   const dispatching = options.dispatching ?? new Dispatching();
-  options = { ...options, dispatching };
+  const settling = options.settling ?? new Settling();
+  options = { ...options, dispatching, settling };
   for (const [i, message] of batch.messages.entries()) {
     try {
       const waiting = isWaiting(message.body) ? message.body : undefined;
@@ -199,6 +213,7 @@ export async function consumeEvents(
       message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
     }
   }
+  await settling.apply(options.metrics);
   // After the acknowledgements: the effects are journaled, and what this fails to send or
   // deliver the effects cron sends once overdue.
   await dispatchEffects(env, dispatching, options);
@@ -332,20 +347,32 @@ export async function applyEnvelope(
 
   // An account's read model is the deployment's (one organization for now).
   let shard = DEFAULT_ORG_SHARD;
+  let indexing = false;
   if (!account) {
     options.metrics?.count("d1.query", { db: "directory", op: "events_route" });
-    const listed = await env.DIRECTORY.prepare("SELECT state, org_shard FROM repos WHERE id = ?")
+    const listed = await env.DIRECTORY.prepare(
+      `SELECT state, org_shard,
+         (SELECT value FROM deployment_settings WHERE name = 'search_indexing') AS search
+       FROM repos WHERE id = ?`,
+    )
       .bind(sourceId)
-      .first<{ state: string; org_shard: string }>();
+      .first<{ state: string; org_shard: string; search: string | null }>();
     if (!listed) return "unlisted";
     // Events of a repository being deleted are dropped (purging its rows
     // comes with deletion).
     if (listed.state !== "active") return "dropped";
     shard = listed.org_shard;
+    indexing = listed.search === "on";
   }
 
   const payloads = storedPayloads(env, sourceId);
-  const snapshots = account ? [] : await resolveStored(payloads, newestSnapshots(events));
+  const repos = account
+    ? { resolved: [], missing: false }
+    : await resolveStored(payloads, newestSnapshots(events, REPO_TYPES));
+  const snapshots = repos.resolved;
+  const searched = indexing
+    ? await resolveStored(payloads, newestSnapshots(events, SEARCHED_TYPES))
+    : undefined;
   const db = readModelFor(env, shard);
   // The newest epoch any event shows, projected or not: from then on, older
   // epochs are refused.
@@ -357,14 +384,38 @@ export async function applyEnvelope(
   const whole = sinks.length > 0 ? await hydrate(payloads, events) : events;
   const plan = planEffects(sinks, whole);
   const effects = journalStatements(db, sourceId, plan, now);
+  // Search's statements, while it indexes (a stored payload gone leaves the repository's own row
+  // behind too: its reconciliation covers both).
+  const live =
+    searched &&
+    liveSearch(db, sourceId, searched.resolved, {
+      epochGen,
+      now,
+      missing: repos.missing || searched.missing,
+    });
   const statements = [
+    ...(live?.before ?? []),
     epochStatement(db, sourceId, epochGen, now),
     ...snapshots.map((event) => repoStatement(db, sourceId, event, now)),
+    ...(live?.after ?? []),
     ...effects,
   ];
   calls.applied = true;
   options.metrics?.count("d1.query", { db: "org", op: "events_apply" }, statements.length);
   const results = await db.batch<{ effect_id: string; sink: string }>(statements);
+  if (live) {
+    const start = live.before.length + 1 + snapshots.length;
+    const settlement = live.settlement(
+      results.slice(0, live.before.length),
+      results.slice(start, start + live.after.length),
+      results.at(-1),
+    );
+    if (options.settling) options.settling.add(db, settlement);
+    else if (settlement.length > 0) {
+      options.metrics?.count("d1.query", { db: "org", op: "search_settle" });
+      await db.batch(settlement);
+    }
+  }
   const fresh = results
     .slice(statements.length - effects.length)
     .flatMap((result) => result.results);
@@ -471,12 +522,22 @@ export function epochStatement(
     .bind(sourceId, epochGen, now);
 }
 
-/** The newest snapshot of each entity in the envelope (activity events have no projection yet). */
-function newestSnapshots(events: readonly DomainEvent[]): Snapshot[] {
+/** What the repository's own row projects. */
+const REPO_TYPES: ReadonlySet<string> = new Set([REPO_ENTITY]);
+/** What search projects (`search/live.ts`). */
+const SEARCHED_TYPES: ReadonlySet<string> = new Set([
+  ISSUE_ENTITY,
+  PULL_ENTITY,
+  LABEL_ENTITY,
+  MILESTONE_ENTITY,
+]);
+
+/** The newest snapshot of each entity of `types` in the envelope. */
+function newestSnapshots(events: readonly DomainEvent[], types: ReadonlySet<string>): Snapshot[] {
   const newest = new Map<string, Snapshot>();
   for (const event of events) {
     const { entity } = event;
-    if (!entity || entity.type !== REPO_ENTITY) continue;
+    if (!entity || !types.has(entity.type)) continue;
     const key = `${entity.type}:${entity.id}`;
     const seen = newest.get(key);
     const position = (e: Snapshot) => ({ epochGen: e.id.epochGen, version: e.entity.version });
@@ -510,27 +571,31 @@ function storedPayloads(env: Env, sourceId: string): Payloads {
 /**
  * Fills in the rows of stored snapshots from the source. A payload already
  * gone (past its retention) leaves the entity to a later snapshot or a
- * rebuild; a payload that is there is used as it is, so a malformed one
- * fails the message.
+ * reconciliation (`missing`); a payload that is there is used as it is, so
+ * a malformed one fails the message.
  */
 async function resolveStored(
   payloads: Payloads,
   snapshots: readonly Snapshot[],
-): Promise<Snapshot[]> {
+): Promise<{ resolved: Snapshot[]; missing: boolean }> {
   const resolved: Snapshot[] = [];
+  let missing = false;
   for (const event of snapshots) {
     if (!event.stored || event.entity.deleted) {
       resolved.push(event);
       continue;
     }
     const payload = await payloads(event);
-    if (payload === null) continue;
+    if (payload === null) {
+      missing = true;
+      continue;
+    }
     resolved.push({
       ...event,
       entity: { ...event.entity, row: payload.row as Record<string, unknown> },
     });
   }
-  return resolved;
+  return { resolved, missing };
 }
 
 /**

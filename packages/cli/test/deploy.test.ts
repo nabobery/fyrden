@@ -545,11 +545,12 @@ describe("fyrden doctor", () => {
     const latest = applied.at(-1) ?? "";
     expect(latest).toMatch(/^\d{4}_\w+\.sql$/);
     fake.state.d1Migrations.set("fyrden-org", applied.slice(0, -1));
-    // Without what that migration creates (the schema before it, for one that only adds).
+    // Without what that migration creates or alters (a schema that differs from the expected one,
+    // as the one before it does).
     const created = new Set(
       [
         ...(await readFile(join(realRoot, "apps/api/migrations/org", latest), "utf8")).matchAll(
-          /CREATE\s+(?:TABLE|(?:UNIQUE\s+)?INDEX|VIEW|TRIGGER)\s+(\w+)/gi,
+          /(?:CREATE\s+(?:TABLE|(?:UNIQUE\s+)?INDEX|VIEW|TRIGGER)|ALTER\s+TABLE)\s+(\w+)/gi,
         ),
       ].map((m) => m[1]),
     );
