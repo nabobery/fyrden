@@ -8,6 +8,7 @@ import type { DomainEvent } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import { REFERENCE_POLICY } from "../src/do/repo/references.js";
 import type { Effect } from "../src/effects/journal.js";
 import { referenceSink } from "../src/references/sink.js";
 import { agentFor } from "./helpers/agents.js";
@@ -193,6 +194,73 @@ describe("references across repositories", () => {
     expect((await references(there, target)).body.references).toEqual([]);
     await deliver(first);
     expect((await references(there, target)).body.references).toEqual([]);
+  });
+});
+
+describe("references of a deleted issue, across repositories", () => {
+  it("go with it in one event however many comments named them, and stale sets change nothing", async () => {
+    const there = await newRepo(owner);
+    const target = await issue(there);
+    const name = `${owner.handle}/${there.name}#${target}`;
+    const source = await issue(here, `Body: ${name}`);
+    for (let i = 0; i < 5; i++)
+      await api("POST", `${here.path}/issues/${source}/comments`, owner.token, {
+        body: `Comment ${i}: ${name}`,
+      });
+    const made = await events(here, "reference.sync");
+    expect(made).toHaveLength(6);
+    await deliver(made);
+    expect((await references(there, target)).body.references).toHaveLength(6);
+    await api("DELETE", `${here.path}/issues/${source}`, owner.token);
+    // One event for the whole issue, not one per comment.
+    const gone = (await events(here, "reference.sync")).slice(made.length);
+    expect(gone).toHaveLength(1);
+    await deliver(gone);
+    expect((await references(there, target)).body.references).toEqual([]);
+    // The comments' earlier sets, delivered late, bring nothing back.
+    await deliver(made);
+    expect((await references(there, target)).body.references).toEqual([]);
+  });
+
+  it("leave what a restored source set since, when the deletion arrives late", async () => {
+    const there = await newRepo(owner);
+    const target = await issue(there);
+    const source = await issue(here, `Body: ${owner.handle}/${there.name}#${target}`);
+    const [set] = await events(here, "reference.sync");
+    if (!set) throw new Error("no event");
+    await api("DELETE", `${here.path}/issues/${source}`, owner.token);
+    const gone = (await events(here, "reference.sync")).slice(1);
+    // After a restore of the source repository (a newer generation), the same text names the
+    // target again; that set arrives first, the deletion from before the restore after it.
+    const restored = { ...set, id: { ...set.id, epochGen: set.id.epochGen + 1, sourceSeq: 1 } };
+    await deliver([restored]);
+    await deliver(gone);
+    expect(named((await references(there, target)).body)).toEqual([
+      [`${owner.handle}/${here.name}`, source, null],
+    ]);
+  });
+
+  it("name at most a page of repositories an event", async () => {
+    const was = REFERENCE_POLICY.forgetRepos;
+    REFERENCE_POLICY.forgetRepos = 1;
+    try {
+      const [a, b] = [await newRepo(owner), await newRepo(owner)];
+      const [ta, tb] = [await issue(a), await issue(b)];
+      const source = await issue(
+        here,
+        `${owner.handle}/${a.name}#${ta} and ${owner.handle}/${b.name}#${tb}`,
+      );
+      await deliver(await events(here, "reference.sync"));
+      const before = (await events(here, "reference.sync")).length;
+      await api("DELETE", `${here.path}/issues/${source}`, owner.token);
+      const gone = (await events(here, "reference.sync")).slice(before);
+      expect(gone.map((e) => (e.data as { repos: unknown[] }).repos.length)).toEqual([1, 1]);
+      await deliver(gone);
+      expect((await references(a, ta)).body.references).toEqual([]);
+      expect((await references(b, tb)).body.references).toEqual([]);
+    } finally {
+      REFERENCE_POLICY.forgetRepos = was;
+    }
   });
 });
 

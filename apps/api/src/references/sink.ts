@@ -19,6 +19,8 @@ const SyncSchema = z.object({
   source_number: z.number().int().positive(),
   source_comment: z.number().int().nonnegative(),
   source_kind: z.enum(["issue", "pull"]),
+  /** The source issue was deleted: everything it named in each repository goes. */
+  forget: z.literal(true).optional(),
   repos: z.array(
     z.object({ repo_id: z.string().min(1), numbers: z.array(z.number().int().positive()) }),
   ),
@@ -39,6 +41,7 @@ type Payload =
       readonly sourceComment: number;
       readonly sourceKind: "issue" | "pull";
       readonly numbers: readonly number[];
+      readonly forget?: true;
       readonly epochGen: number;
       readonly sourceSeq: number;
     }
@@ -71,6 +74,7 @@ export const referenceSink: EffectSink = {
           sourceComment: data.data.source_comment,
           sourceKind: data.data.source_kind,
           numbers: repo.numbers,
+          ...(data.data.forget && { forget: true as const }),
           epochGen: event.id.epochGen,
           sourceSeq: event.id.sourceSeq,
         } satisfies Payload,
@@ -108,6 +112,7 @@ export const referenceSink: EffectSink = {
             sourceComment: payload.sourceComment,
             sourceKind: payload.sourceKind,
             numbers: payload.numbers,
+            ...(payload.forget && { forget: true }),
             epochGen: payload.epochGen,
             sourceSeq: payload.sourceSeq,
           })

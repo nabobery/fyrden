@@ -26,12 +26,26 @@ export interface ReferenceSource {
 }
 
 /** A source's references into one repository, as another repository applies them. */
+/** `reference_sources`' text of a source issue's deletion (no comment has this id). */
+const FORGOTTEN = -1;
+
+export const REFERENCE_POLICY = {
+  /** Repositories one event of an issue's deletion names at most (its payload bounded). */
+  forgetRepos: 200,
+};
+
 export interface IncomingReferences {
   readonly sourceRepo: string;
   readonly sourceNumber: number;
   readonly sourceComment: number;
   readonly sourceKind: SubjectKind;
   readonly numbers: readonly number[];
+  /**
+   * The source issue is gone, with every comment of it: all it named here
+   * goes, and any set from an earlier event of it, for any of its texts,
+   * changes nothing after (`sourceComment` and `numbers` are not read).
+   */
+  readonly forget?: boolean;
   /** The source's event that sent them: a set from an earlier one changes nothing. */
   readonly epochGen: number;
   readonly sourceSeq: number;
@@ -225,49 +239,101 @@ export class RepoReferences {
   }
 
   /**
-   * In an issue's deletion: what it and its comments named goes (other
-   * repositories told), and so does what named it.
+   * In an issue's deletion: what it and its comments named goes, here in a
+   * few statements and in other repositories by events naming each of them
+   * once (`forget`, `REFERENCE_POLICY.forgetRepos` an event), however many
+   * comments named them; and what named it goes too.
    */
   forgetSubject(number: number, actor: RefActor | null): void {
-    for (const { source_comment } of this.#exec<{ source_comment: number }>(
-      "SELECT DISTINCT source_comment FROM outgoing_references WHERE source_number = ?",
+    const own = this.deps.repoId();
+    const repos = this.#exec<{ repo_id: string }>(
+      "SELECT DISTINCT repo_id FROM outgoing_references WHERE source_number = ? AND repo_id <> ?",
       number,
-    ))
-      this.sync({ kind: "issue", number, comment: source_comment }, null, actor);
+      own,
+    );
+    this.#exec("DELETE FROM outgoing_references WHERE source_number = ?", number);
+    this.#exec(
+      "DELETE FROM incoming_references WHERE source_repo = ? AND source_number = ?",
+      own,
+      number,
+    );
+    for (let i = 0; i < repos.length; i += REFERENCE_POLICY.forgetRepos)
+      this.deps.events.emitActivity("reference.sync", actor, {
+        source_number: number,
+        source_comment: 0,
+        source_kind: "issue",
+        forget: true,
+        repos: repos
+          .slice(i, i + REFERENCE_POLICY.forgetRepos)
+          .map(({ repo_id }) => ({ repo_id, numbers: [] })),
+      });
     this.#exec("DELETE FROM incoming_references WHERE target = ?", number);
   }
 
-  /** From another repository: a source's set of references here, unless an earlier event's. */
-  apply(input: IncomingReferences): void {
-    const [last] = this.#exec<{ epoch_gen: number; source_seq: number }>(
-      `SELECT epoch_gen, source_seq FROM reference_sources
-       WHERE source_repo = ? AND source_number = ? AND source_comment = ?`,
+  /** The event of `input`'s source that last set its text `comment` here. */
+  #recordSource(input: IncomingReferences, comment: number): void {
+    this.#exec(
+      `INSERT INTO reference_sources (source_repo, source_number, source_comment, epoch_gen, source_seq)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (source_repo, source_number, source_comment)
+       DO UPDATE SET epoch_gen = excluded.epoch_gen, source_seq = excluded.source_seq`,
       input.sourceRepo,
       input.sourceNumber,
-      input.sourceComment,
+      comment,
+      input.epochGen,
+      input.sourceSeq,
+    );
+  }
+
+  /**
+   * From another repository: a source's set of references here, unless an
+   * earlier event's (than the last set of that text, or the source issue's
+   * deletion); or, for a deleted issue (`forget`), the end of all it named.
+   */
+  apply(input: IncomingReferences): void {
+    const comment = input.forget ? FORGOTTEN : input.sourceComment;
+    const known = this.#exec<{ epoch_gen: number; source_seq: number }>(
+      `SELECT epoch_gen, source_seq FROM reference_sources
+       WHERE source_repo = ? AND source_number = ? AND source_comment IN (?, ?)`,
+      input.sourceRepo,
+      input.sourceNumber,
+      comment,
+      FORGOTTEN,
     );
     if (
-      last &&
-      (last.epoch_gen > input.epochGen ||
-        (last.epoch_gen === input.epochGen && last.source_seq >= input.sourceSeq))
+      known.some(
+        (last) =>
+          last.epoch_gen > input.epochGen ||
+          (last.epoch_gen === input.epochGen && last.source_seq >= input.sourceSeq),
+      )
     )
       return;
+    if (input.forget) {
+      this.deps.git.context.storage.transactionSync(() => {
+        this.#recordSource(input, FORGOTTEN);
+        // Each text's references as set at or before the deletion: a text set since (the source
+        // repository restored to before the deletion, in a newer generation) keeps its own.
+        this.#exec(
+          `DELETE FROM incoming_references AS i
+           WHERE i.source_repo = ?1 AND i.source_number = ?2
+             AND NOT EXISTS (SELECT 1 FROM reference_sources s
+               WHERE s.source_repo = i.source_repo AND s.source_number = i.source_number
+                 AND s.source_comment = i.source_comment
+                 AND (s.epoch_gen > ?3 OR (s.epoch_gen = ?3 AND s.source_seq > ?4)))`,
+          input.sourceRepo,
+          input.sourceNumber,
+          input.epochGen,
+          input.sourceSeq,
+        );
+      });
+      return;
+    }
     const now = this.deps.git.context.now();
     const targets = [...new Set(input.numbers)]
       .slice(0, MAX_REFERENCES)
       .filter((n) => this.deps.kindOf(n) !== undefined);
     this.deps.git.context.storage.transactionSync(() => {
-      this.#exec(
-        `INSERT INTO reference_sources (source_repo, source_number, source_comment, epoch_gen, source_seq)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (source_repo, source_number, source_comment)
-         DO UPDATE SET epoch_gen = excluded.epoch_gen, source_seq = excluded.source_seq`,
-        input.sourceRepo,
-        input.sourceNumber,
-        input.sourceComment,
-        input.epochGen,
-        input.sourceSeq,
-      );
+      this.#recordSource(input, input.sourceComment);
       this.#exec(
         `DELETE FROM incoming_references WHERE source_repo = ? AND source_number = ?
            AND source_comment = ? AND target NOT IN (SELECT value FROM json_each(?))`,
