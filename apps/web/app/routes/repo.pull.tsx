@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { Form, useActionData, useNavigation } from "react-router";
+import { type Outcome, useBaseline } from "../components/kept-drafts.js";
 import { Markdown } from "../components/markdown.js";
 import { MergeBox } from "../components/merge-box.js";
 import { Pager } from "../components/pager.js";
@@ -16,12 +17,15 @@ import {
   within,
   writeContinuation,
 } from "../lib/continuation.js";
-import { viewerRefusal } from "../lib/edits.server.js";
+import { NO_VERSION, viewerRefusal } from "../lib/edits.server.js";
 import { mergeRules, type RulesetsPage } from "../lib/merge.server.js";
 import { type PageLinks, pageLinks, positiveId } from "../lib/pages.js";
 import {
   field,
   type IssueCommentsPage,
+  type PullRequest,
+  problemCode,
+  problemDetail,
   pullNumber,
   pullPage,
   type ReviewsPage,
@@ -84,7 +88,7 @@ function withoutPermalink(url: URL): URL {
 
 export async function loader({ request, context, params }: Route.LoaderArgs) {
   const url = new URL(request.url);
-  const { number, pull, viewer } = await loadPull(context, request, params);
+  const { number, pull, viewer, viewerKnown } = await loadPull(context, request, params);
   const api = pullApiOf(params);
   const repoApi = repoApiPath(params.owner, params.repo);
   const open = pull.state === "open";
@@ -179,6 +183,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     repo: params.repo,
     pull,
     viewer,
+    viewerKnown,
     body: pull.body,
     timeline: inOrder(items),
     commentPages: fromPermalink(
@@ -246,12 +251,27 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
       );
     }
     case "edit": {
+      const title = field(form, "title");
       const body = rawField(form, "body");
-      return patch(
-        { title: field(form, "title"), body: body.trim() ? body : null },
-        "edit",
-        "The pull request was not changed.",
-      );
+      // At the version the form was written from only: never over a change made since.
+      const sent = Number(field(form, "version"));
+      const version = Number.isSafeInteger(sent) && sent > 0 ? sent : undefined;
+      const kept = { title, body, version, viewer: field(form, "viewer") };
+      if (version === undefined) return { error: NO_VERSION, kept };
+      const answer = await apiCall<unknown>(context, request, "PATCH", api, {
+        title,
+        body: body.trim() ? body : null,
+        expected_version: version,
+      });
+      if (answer.status >= 200 && answer.status < 300)
+        return { ok: "edit", version: (answer.body as { version?: number } | null)?.version };
+      return {
+        error:
+          problemCode(answer.body) === "stale"
+            ? "This pull request changed since you opened it: nothing was saved. Its new text is in the form; yours is below."
+            : problemDetail(answer.body, "The pull request was not changed."),
+        kept,
+      };
     }
     case "close":
       return patch({ state: "closed" }, "close", "The pull request was not closed.");
@@ -306,6 +326,76 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
   }
 }
 
+/**
+ * The title and description's editor, inside the page drawn for one
+ * viewer: its version and kept text are theirs, and an answer to another
+ * viewer's edit (signed in from another tab meanwhile) is not shown.
+ */
+function PullEditor({
+  pull,
+  viewer,
+  result,
+  busy,
+  viewerField,
+}: {
+  pull: PullRequest;
+  viewer: string | null;
+  result: MergeResult | undefined;
+  busy: boolean;
+  viewerField: ReactNode;
+}) {
+  // An edit's text the API refused, given back to the viewer who wrote it.
+  const refused = result && "kept" in result ? result.kept : undefined;
+  const kept = refused && refused.viewer === viewer ? refused : undefined;
+  const editOutcome: Outcome =
+    result?.ok === "edit"
+      ? { saved: true, version: "version" in result ? result.version : undefined }
+      : kept
+        ? { saved: false, version: kept.version }
+        : undefined;
+  const baseline = useBaseline(pull.version, editOutcome, editOutcome && result, undefined);
+  return (
+    <details open={kept !== undefined}>
+      <summary>Edit title and description</summary>
+      {kept && (
+        <div className="panel">
+          <p className="muted">Your text, not saved:</p>
+          <pre>{kept.title}</pre>
+          <pre>{kept.body}</pre>
+        </div>
+      )}
+      {/* Drawn again at each version while nothing is written in it; once something is,
+          kept, with the version it was written from. */}
+      <Form
+        method="post"
+        key={baseline.key}
+        onInput={baseline.onInput}
+        onSubmit={baseline.onSubmit}
+      >
+        <input type="hidden" name="intent" value="edit" />
+        <input type="hidden" name="version" value={baseline.version} />
+        {viewerField}
+        <label htmlFor="edit-title">Title</label>
+        <input
+          id="edit-title"
+          name="title"
+          required
+          maxLength={256}
+          size={60}
+          defaultValue={pull.title}
+        />
+        <label htmlFor="edit-body">Description (Markdown)</label>
+        <textarea id="edit-body" name="body" className="short" defaultValue={pull.body ?? ""} />
+        <p>
+          <button type="submit" className="primary" disabled={busy}>
+            Save
+          </button>
+        </p>
+      </Form>
+    </details>
+  );
+}
+
 const DONE: Record<string, string> = {
   comment: "Comment added.",
   edit: "Saved.",
@@ -323,24 +413,21 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
   const result = useActionData<typeof action>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
-  const {
-    owner,
-    repo,
-    pull,
-    viewer,
-    body,
-    timeline,
-    commentPages,
-    reviewPages,
-    rules,
-    permissions,
-  } = loaderData;
+  // The viewer as last known: a session that could not be checked keeps it (and the editors).
+  const known = useRef(loaderData.viewer);
+  if (loaderData.viewerKnown) known.current = loaderData.viewer;
+  const viewer = known.current;
+  const { owner, repo, pull, body, timeline, commentPages, reviewPages, rules, permissions } =
+    loaderData;
   const push = permissions?.push === true;
   // A locked conversation takes reactions from write access only (the API decides each).
   const react = { canReact: viewer !== null && (!pull.locked || push), busy };
   const isAuthor = viewer !== null && pull.user.id === viewer;
   const open = pull.state === "open";
   const viewerField = <input type="hidden" name="viewer" value={viewer ?? ""} />;
+  // Editors only for a viewer known to be signed in: one written before the viewer is known would
+  // be drawn anew (and lost) once it is.
+  const writable = viewer !== null;
   // A comment being written stays as the page is read again; only its own sending clears it.
   const commentForm = useRef<HTMLFormElement>(null);
   useEffect(() => {
@@ -351,6 +438,12 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
     // page's editors is never sent as another's.
     <main key={viewer ?? ""}>
       <PullHeader owner={owner} repo={repo} pull={pull} viewer={viewer} active="conversation" />
+      {!loaderData.viewerKnown && (
+        <p className="muted" role="status">
+          Your session could not be checked just now
+          {writable ? "; your drafts are kept." : ": reload the page to write here."}
+        </p>
+      )}
       <SubjectSidebar
         owner={owner}
         repo={repo}
@@ -372,29 +465,15 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
         </h2>
         {body ? <Markdown source={body} /> : <p className="muted">No description.</p>}
         <Reactions rollup={pull.reactions} target="issue" {...react} hidden={viewerField} />
-        <details>
-          <summary>Edit title and description</summary>
-          <Form method="post">
-            <input type="hidden" name="intent" value="edit" />
-            {viewerField}
-            <label htmlFor="edit-title">Title</label>
-            <input
-              id="edit-title"
-              name="title"
-              required
-              maxLength={256}
-              size={60}
-              defaultValue={pull.title}
-            />
-            <label htmlFor="edit-body">Description (Markdown)</label>
-            <textarea id="edit-body" name="body" className="short" defaultValue={pull.body ?? ""} />
-            <p>
-              <button type="submit" className="primary" disabled={busy}>
-                Save
-              </button>
-            </p>
-          </Form>
-        </details>
+        {writable && (
+          <PullEditor
+            pull={pull}
+            viewer={viewer}
+            result={result}
+            busy={busy}
+            viewerField={viewerField}
+          />
+        )}
       </section>
 
       <section aria-labelledby="conversation">
@@ -425,77 +504,82 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
           rules={rules}
           conflicts={`${pullPage(owner, repo, pull.number)}/conflicts`}
           hidden={viewerField}
+          canAct={writable}
         />
       )}
 
-      <section className="panel" aria-labelledby="pull-state">
-        <h2 id="pull-state">State</h2>
-        <Form method="post" className="row">
-          {viewerField}
-          {open ? (
-            <>
-              <button type="submit" name="intent" value="close" disabled={busy}>
-                Close pull request
-              </button>
-              {pull.draft ? (
-                <button type="submit" name="intent" value="ready" disabled={busy}>
-                  Ready for review
-                </button>
+      {writable && (
+        <>
+          <section className="panel" aria-labelledby="pull-state">
+            <h2 id="pull-state">State</h2>
+            <Form method="post" className="row">
+              {viewerField}
+              {open ? (
+                <>
+                  <button type="submit" name="intent" value="close" disabled={busy}>
+                    Close pull request
+                  </button>
+                  {pull.draft ? (
+                    <button type="submit" name="intent" value="ready" disabled={busy}>
+                      Ready for review
+                    </button>
+                  ) : (
+                    <button type="submit" name="intent" value="draft" disabled={busy}>
+                      Convert to draft
+                    </button>
+                  )}
+                </>
               ) : (
-                <button type="submit" name="intent" value="draft" disabled={busy}>
-                  Convert to draft
-                </button>
+                !pull.merged && (
+                  <button type="submit" name="intent" value="reopen" disabled={busy}>
+                    Reopen pull request
+                  </button>
+                )
               )}
-            </>
-          ) : (
-            !pull.merged && (
-              <button type="submit" name="intent" value="reopen" disabled={busy}>
-                Reopen pull request
-              </button>
-            )
-          )}
-        </Form>
-        {isAuthor && pull.head_repo_id !== null && (
-          <Form method="post">
-            <input type="hidden" name="intent" value="maintainer" />
-            {viewerField}
-            <p>
-              <input
-                id="maintainer"
-                name="maintainer_can_modify"
-                type="checkbox"
-                defaultChecked={pull.maintainer_can_modify}
-                aria-describedby="maintainer-help"
-              />{" "}
-              <label htmlFor="maintainer" className="inline">
-                Allow edits by maintainers
-              </label>{" "}
-              <button type="submit" disabled={busy}>
-                Save
-              </button>
-            </p>
-            <p id="maintainer-help" className="muted">
-              Those with write access here may update your fork's head branch, resolve its conflicts
-              and apply suggestions to it.
-            </p>
-          </Form>
-        )}
-      </section>
+            </Form>
+            {isAuthor && pull.head_repo_id !== null && (
+              <Form method="post">
+                <input type="hidden" name="intent" value="maintainer" />
+                {viewerField}
+                <p>
+                  <input
+                    id="maintainer"
+                    name="maintainer_can_modify"
+                    type="checkbox"
+                    defaultChecked={pull.maintainer_can_modify}
+                    aria-describedby="maintainer-help"
+                  />{" "}
+                  <label htmlFor="maintainer" className="inline">
+                    Allow edits by maintainers
+                  </label>{" "}
+                  <button type="submit" disabled={busy}>
+                    Save
+                  </button>
+                </p>
+                <p id="maintainer-help" className="muted">
+                  Those with write access here may update your fork's head branch, resolve its
+                  conflicts and apply suggestions to it.
+                </p>
+              </Form>
+            )}
+          </section>
 
-      <section className="panel" aria-labelledby="add-comment">
-        <h2 id="add-comment">Add a comment</h2>
-        <Form method="post" ref={commentForm}>
-          <input type="hidden" name="intent" value="comment" />
-          {viewerField}
-          <label htmlFor="comment-body">Comment (Markdown)</label>
-          <textarea id="comment-body" name="body" className="short" required />
-          <p>
-            <button type="submit" className="primary" disabled={busy}>
-              Comment
-            </button>
-          </p>
-        </Form>
-      </section>
+          <section className="panel" aria-labelledby="add-comment">
+            <h2 id="add-comment">Add a comment</h2>
+            <Form method="post" ref={commentForm}>
+              <input type="hidden" name="intent" value="comment" />
+              {viewerField}
+              <label htmlFor="comment-body">Comment (Markdown)</label>
+              <textarea id="comment-body" name="body" className="short" required />
+              <p>
+                <button type="submit" className="primary" disabled={busy}>
+                  Comment
+                </button>
+              </p>
+            </Form>
+          </section>
+        </>
+      )}
 
       {result?.error && (
         <p className="error" role="alert">

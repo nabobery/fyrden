@@ -57,7 +57,7 @@ export type FileEntry = Omit<PullFile, "patch"> & { hasPatch: boolean };
 
 export async function loader({ request, context, params }: Route.LoaderArgs) {
   const url = new URL(request.url);
-  const { pull, viewer } = await loadPull(context, request, params);
+  const { pull, viewer, viewerKnown } = await loadPull(context, request, params);
   const api = pullApiOf(params);
   const cursor = url.searchParams.get("cursor");
   const query = new URLSearchParams({ per_page: String(FILES_PER_PAGE) });
@@ -76,6 +76,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     repo: params.repo,
     pull,
     viewer,
+    viewerKnown,
     cursor,
     files: page.files.map(
       ({ patch, ...rest }): FileEntry => ({ ...rest, hasPatch: patch !== undefined }),
@@ -412,11 +413,14 @@ function FileSection({
 }
 
 export default function PullFiles({ loaderData }: Route.ComponentProps) {
+  // The viewer as last known: a session that could not be checked keeps it (and its drafts).
+  const known = useRef(loaderData.viewer);
+  if (loaderData.viewerKnown) known.current = loaderData.viewer;
+  const viewer = known.current;
   const {
     owner,
     repo,
     pull,
-    viewer,
     cursor,
     files,
     headSha,
@@ -495,7 +499,8 @@ export default function PullFiles({ loaderData }: Route.ComponentProps) {
               ))}
             </ol>
           </nav>
-          <Drafts viewer={viewer} page={page}>
+          {/* Drawn anew for another viewer: one account's unsent comments never go as another's. */}
+          <Drafts key={viewer ?? ""} viewer={viewer} page={page}>
             <WindowVirtualizer>
               {files.map((f, i) => (
                 <FileSection

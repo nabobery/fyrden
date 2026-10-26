@@ -165,13 +165,17 @@ describe("the conflicts page", () => {
     expect(closed.calls.some((c) => pathOf(c).includes("/conflicts"))).toBe(false);
   });
 
-  const page = (files: Record<string, unknown>[], pull: Record<string, unknown> = {}) =>
+  const page = (
+    files: Record<string, unknown>[],
+    pull: Record<string, unknown> = {},
+    viewer: { viewer: string | null; viewerKnown: boolean } = { viewer: VIEWER, viewerKnown: true },
+  ) =>
     renderPage(PullConflicts, "/ada/demo/pull/7/conflicts", {
       owner: "ada",
       repo: "demo",
       number: 7,
       pull: pullRequest({ mergeable: false, mergeable_state: "dirty", ...pull }),
-      viewer: VIEWER,
+      ...viewer,
       conflicts: {
         base_sha: "a".repeat(40),
         head_sha: "b".repeat(40),
@@ -180,6 +184,20 @@ describe("the conflicts page", () => {
       },
       failure: null,
     });
+
+  it("offers no editor until the viewer is known, so none is drawn anew once it is", () => {
+    const files = [{ path: "a.txt", kind: "content", editable: true, content: MARKED }];
+    const unknown = page(files, {}, { viewer: null, viewerKnown: false });
+    expect(unknown).toContain("reload the page to resolve the conflicts here");
+    expect(unknown).not.toContain(`value="${SNAPSHOT}"`);
+    // Which files conflict, and how, is still there to read.
+    expect(unknown).toContain("<code>a.txt</code>");
+    expect(unknown).toContain("&lt;&lt;&lt;&lt;&lt;&lt;&lt;");
+    expect(unknown).not.toContain("<textarea");
+    expect(page(files, {}, { viewer: null, viewerKnown: true })).toContain(
+      "Sign in to resolve the conflicts here.",
+    );
+  });
 
   it("edits the editable files, reading their markers only once in the browser", () => {
     const html = page([{ path: "a.txt", kind: "content", editable: true, content: MARKED }]);

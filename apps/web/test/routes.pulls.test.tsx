@@ -4,6 +4,7 @@
 // comments and branch names shown as text, never markup.
 
 import { describe, expect, it } from "vitest";
+import { NO_VERSION } from "../app/lib/edits.server.js";
 import {
   default as Pull,
   action as pullAction,
@@ -14,7 +15,7 @@ import {
   action as pullsAction,
   loader as pullsLoader,
 } from "../app/routes/repo.pulls.js";
-import { formPost, json, ORIGIN } from "./helpers/context.js";
+import { fakeApi, formPost, json, ORIGIN } from "./helpers/context.js";
 import { api, NO_REACTIONS, pathOf, pullRequest, repo, VIEWER } from "./helpers/pulls.js";
 import { ACTIVE_TAG, escaped, HOSTILE, renderPage } from "./helpers/render.js";
 
@@ -335,13 +336,13 @@ describe("changing a pull request", () => {
       maintainer_can_modify: true,
     });
     expect((await act({ intent: "maintainer" })).body).toEqual({ maintainer_can_modify: false });
-    expect((await act({ intent: "edit", title: " New ", body: "  code" })).body).toEqual({
-      title: "New",
-      body: "  code",
-    });
-    expect((await act({ intent: "edit", title: "New", body: "  " })).body).toEqual({
+    expect(
+      (await act({ intent: "edit", title: " New ", body: "  code", version: "3" })).body,
+    ).toEqual({ title: "New", body: "  code", expected_version: 3 });
+    expect((await act({ intent: "edit", title: "New", body: "  ", version: "3" })).body).toEqual({
       title: "New",
       body: null,
+      expected_version: 3,
     });
     expect(await act({ intent: "comment", body: "  indented" })).toMatchObject({
       outcome: { ok: "comment" },
@@ -357,6 +358,68 @@ describe("changing a pull request", () => {
       body: undefined,
     });
     expect((await act({ intent: "close" }, 403)).outcome).toEqual({ error: "Not yours." });
+  });
+
+  it("edits only at the version the form was opened at, keeping the text it refuses", async () => {
+    // A form that says no version sends nothing: it would overwrite whatever changed since.
+    expect(await act({ intent: "edit", title: "New", body: "mine" })).toEqual({
+      outcome: {
+        error: NO_VERSION,
+        kept: { title: "New", body: "mine", version: undefined, viewer: VIEWER },
+      },
+      call: undefined,
+      body: undefined,
+    });
+    const { context } = api({
+      "PATCH /api/repos/ada/demo/pulls/7": () =>
+        json({ code: "stale", detail: "It changed since the version given." }, 409),
+    });
+    const outcome = await pullAction({
+      request: formPost("/ada/demo/pull/7", {
+        viewer: VIEWER,
+        intent: "edit",
+        title: "New",
+        body: "mine",
+        version: "3",
+      }),
+      context,
+      params,
+    } as never);
+    expect(outcome).toEqual({
+      error: expect.stringContaining("changed since you opened it"),
+      kept: { title: "New", body: "mine", version: 3, viewer: VIEWER },
+    });
+  });
+
+  it("shows the text an edit could not save, kept at the version it was written from", () => {
+    const page = (viewer: string) =>
+      renderPage(
+        Pull,
+        "/ada/demo/pull/7",
+        {
+          owner: "ada",
+          repo: "demo",
+          pull: pullRequest({ version: 5 }),
+          viewer,
+          viewerKnown: true,
+          body: null,
+          timeline: [],
+          commentPages: { next: null, first: null },
+          reviewPages: { next: null, first: null },
+        },
+        {
+          error: "changed",
+          kept: { title: "Mine", body: "my <text>", version: 4, viewer: VIEWER },
+        },
+      );
+    // Another viewer (signed in from another tab while it was sent) never sees it.
+    const other = page("usr_other");
+    expect(other).not.toContain("my &lt;text&gt;");
+    expect(other).toContain('<input type="hidden" name="version" value="5"/>');
+    const html = page(VIEWER);
+    // Refused, its text is checked against the version it was written from until read anew.
+    expect(html).toContain('<input type="hidden" name="version" value="4"/>');
+    expect(html).toContain("my &lt;text&gt;");
   });
 });
 
@@ -541,5 +604,49 @@ describe("a pull request comment's permalink", () => {
     // An API page after it: its cursor, and back to the start.
     const paged = await load("?comment=30", [comment(30)], "C2");
     expect(paged.data.commentPages.next).toBe("/ada/demo/pull/7?comments=%3AC2");
+  });
+});
+
+describe("a pull request page whose session could not be checked", () => {
+  it("says so, rather than sign the viewer out (and draw its editors anew)", async () => {
+    const { context } = fakeApi((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/auth/session") return new Response("down", { status: 503 });
+      if (url.pathname.endsWith("/comments")) return json({ comments: [], next_cursor: null });
+      if (url.pathname.endsWith("/reviews")) return json({ reviews: [], next_cursor: null });
+      if (url.pathname.endsWith("/rulesets")) return json({ rulesets: [] });
+      if (url.pathname === "/api/repos/ada/demo") return json(repo);
+      return json(pullRequest());
+    });
+    const data = await pullLoader({
+      request: new Request(`${ORIGIN}/ada/demo/pull/7`, {
+        headers: { Cookie: "fyrden_session=s" },
+      }),
+      context,
+      params,
+    } as never);
+    expect(data).toMatchObject({ viewer: null, viewerKnown: false });
+  });
+
+  it("offers no editor until the viewer is known, so none is drawn anew once it is", () => {
+    const html = renderPage(Pull, "/ada/demo/pull/7", {
+      owner: "ada",
+      repo: "demo",
+      pull: pullRequest(),
+      viewer: null,
+      viewerKnown: false,
+      body: null,
+      timeline: [],
+      commentPages: { next: null, first: null },
+      reviewPages: { next: null, first: null },
+    });
+    expect(html).toContain("reload the page to write here");
+    expect(html).not.toContain("Edit title and description");
+    expect(html).not.toContain('name="intent" value="comment"');
+    expect(html).not.toContain("Close pull request");
+    // What stands in the way of a merge is shown; merging and updating the branch are not offered.
+    expect(html).toContain("Merging and updating the branch need you signed in");
+    expect(html).not.toContain('name="intent" value="merge"');
+    expect(html).not.toContain('name="intent" value="update-branch"');
   });
 });

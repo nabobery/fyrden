@@ -129,7 +129,9 @@ describe("the conversation's merge box", () => {
       "GET /api/repos/ada/demo": () => json(repo),
     });
     const data = await loader({
-      request: new Request(`${ORIGIN}/ada/demo/pull/7`),
+      request: new Request(`${ORIGIN}/ada/demo/pull/7`, {
+        headers: { Cookie: "fyrden_session=s" },
+      }),
       context,
       params,
     } as never);
