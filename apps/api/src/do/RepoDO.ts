@@ -741,6 +741,7 @@ export class RepoDO extends MigratingDO {
       refusesReads: () => this.#refusesReads(),
       isTransferring: () => this.events.isTransferring(),
       epoch: () => this.events.epochGen(),
+      account: () => this.events.account(),
     });
     this.#codeOwnerFacts = new CodeOwnerFacts({
       codeOwners: this.codeOwners,

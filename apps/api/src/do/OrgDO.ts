@@ -205,6 +205,29 @@ export interface CodeOwnerTeamFacts {
 /** Most principals one confirmation reads (a merge's reviewers, owners and their owners). Proposed. */
 export const MAX_CONFIRMED_PRINCIPALS = 1_024;
 
+/** Most repositories, and principals, one confirmation of feed readers reads. Proposed. */
+export const MAX_READER_REPOS = 100;
+export const MAX_READER_PRINCIPALS = 16;
+
+/** What `confirmReaders` answers: per repository, whether the account holds it, and the roles there. */
+export interface ReaderConfirmation {
+  /** The account's id as recorded; empty for an account never recorded (no roles but implicit ones). */
+  readonly accountId: string;
+  readonly epochGen: number;
+  readonly version: number;
+  readonly repos: Readonly<
+    Record<
+      string,
+      {
+        /** False for one it released (a transfer took it away): nothing reads it through this account. */
+        readonly held: boolean;
+        /** Principal id → role, null for none (empty when not held). */
+        readonly roles: Readonly<Record<string, RepoRole | null>>;
+      }
+    >
+  >;
+}
+
 /** Most teams one read of code owners' team facts names. Proposed. */
 export const MAX_TEAM_FACTS_SLUGS = 16;
 
@@ -433,6 +456,48 @@ export class OrgDO extends MigratingDO {
       epochGen: meta.epoch_gen,
       version: meta.acl_version,
       roles: Object.fromEntries(this.#rolesFor(repoId, meta)),
+    };
+  }
+
+  /**
+   * For activity feeds' readers: for each of `repoIds`, whether the account
+   * still holds it (not released to another by a transfer) and then each of
+   * `principals`' strongest role there now (null for none), as
+   * `snapshotFor` gives it (the account's implicit roles are the caller's to
+   * add), read after the epoch check with no await between them. An account
+   * never recorded holds what it is asked about, with no roles. At most
+   * `MAX_READER_REPOS` repositories and `MAX_READER_PRINCIPALS` principals.
+   */
+  async confirmReaders(
+    repoIds: readonly string[],
+    principals: readonly string[],
+  ): Promise<ReaderConfirmation> {
+    const repos = [...new Set(repoIds)];
+    const unique = [...new Set(principals)];
+    if (repos.length > MAX_READER_REPOS)
+      throw new Error(`more than ${MAX_READER_REPOS} repositories to confirm`);
+    if (unique.length > MAX_READER_PRINCIPALS)
+      throw new Error(`more than ${MAX_READER_PRINCIPALS} principals to confirm`);
+    await this.#checkEpoch();
+    const meta = this.#meta();
+    const sql = this.ctx.storage.sql;
+    const answer: Record<string, ReaderConfirmation["repos"][string]> = {};
+    for (const repoId of repos) {
+      const held =
+        sql.exec("SELECT 1 FROM released_repos WHERE repo_id = ?", repoId).toArray().length === 0;
+      answer[repoId] = {
+        held,
+        roles:
+          held && meta
+            ? Object.fromEntries(unique.map((p) => [p, this.#roleOn(repoId, p, meta)]))
+            : {},
+      };
+    }
+    return {
+      accountId: meta?.account_id ?? "",
+      epochGen: meta?.epoch_gen ?? 0,
+      version: meta?.acl_version ?? 0,
+      repos: answer,
     };
   }
 

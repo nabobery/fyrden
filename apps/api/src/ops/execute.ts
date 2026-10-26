@@ -98,6 +98,37 @@ export function hasPermission(permission: OperationDef["permission"], auth: Toke
 }
 
 /**
+ * The request's credential as the directory's primary has it now (the
+ * request's own record when it was verified there): what a write, or a
+ * read that must see revocation at once, goes on. A refusal says why, as a
+ * 401 answers it.
+ */
+export async function reverified(
+  ctx: Pick<OpContext, "auth" | "authState">,
+): Promise<
+  | { readonly ok: true; readonly record: TokenRecord }
+  | { readonly ok: false; readonly code: string; readonly detail: string }
+> {
+  if (ctx.authState.mode !== "read") return { ok: true, record: ctx.auth };
+  const fresh = await ctx.authState.verifyForWrite();
+  if (!fresh.ok)
+    return {
+      ok: false,
+      code: "invalid_token",
+      detail: "The token is invalid, expired or revoked.",
+    };
+  // An owner may have required DPoP since the cached answer (a bound token's proof was
+  // checked); a git token is exempt only where git uses it, never here.
+  if (fresh.record.requiresDpop && fresh.record.dpopJkt === null)
+    return {
+      ok: false,
+      code: "invalid_dpop_proof",
+      detail: "This token needs a valid DPoP proof (RFC 9449).",
+    };
+  return { ok: true, record: fresh.record };
+}
+
+/**
  * Runs one operation for any surface (REST or MCP), so they cannot drift:
  * rate limit, write re-verification, principal-type and permission checks,
  * input validation, handler, and output validation.
@@ -121,20 +152,13 @@ export async function executeOperation(
   // verified from the read cache (MCP verifies every call in read mode).
   // From here on, everything uses the record the primary returned.
   let auth = ctx.auth;
-  if (op.method !== "GET" && ctx.authState.mode === "read") {
-    const fresh = await ctx.authState.verifyForWrite();
-    if (!fresh.ok)
-      return fail(ctx, 401, "invalid_token", "The token is invalid, expired or revoked.");
-    // An owner may have required DPoP since the cached answer (a bound token's proof was
-    // checked); a git token is exempt only where git uses it, never here.
-    if (fresh.record.requiresDpop && fresh.record.dpopJkt === null)
-      return fail(
-        ctx,
-        401,
-        "invalid_dpop_proof",
-        "This token needs a valid DPoP proof (RFC 9449).",
-      );
+  let authState = ctx.authState;
+  if (op.method !== "GET") {
+    const fresh = await reverified(ctx);
+    if (!fresh.ok) return fail(ctx, 401, fresh.code, fresh.detail);
     auth = fresh.record;
+    // Verified on the primary: a handler's own `reverified` takes it as it is.
+    authState = { ...authState, record: auth, mode: "write" };
   }
 
   if (!op.principals.includes(auth.principalType)) {
@@ -182,10 +206,7 @@ export async function executeOperation(
   }
   let result: OpResult;
   try {
-    const output = await handler(
-      { ...ctx, auth, authState: { ...ctx.authState, record: auth } },
-      input.data,
-    );
+    const output = await handler({ ...ctx, auth, authState }, input.data);
     // A handler returning the wrong shape is a server bug, never sent as-is.
     result = { ok: true, output: op.output.parse(output) };
   } catch (error) {

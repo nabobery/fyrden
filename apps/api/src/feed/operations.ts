@@ -19,8 +19,9 @@ import {
   type SyncPosition,
 } from "../do/user/feed.js";
 import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/cursor.js";
-import { type OpContext, OperationError } from "../ops/execute.js";
+import { type OpContext, OperationError, reverified } from "../ops/execute.js";
 import { allowedWithRole, findReposById, type RepoEntry } from "../repos/directory.js";
+import { FreshAccess, type FreshDecision } from "./access.js";
 
 /*
  * The activity feed's operations. A feed belongs to a principal id: the
@@ -41,6 +42,15 @@ import { allowedWithRole, findReposById, type RepoEntry } from "../repos/directo
  * shows at once and a deletion leaves no excerpt. A check that
  * could not be made, or one past the answer's budget, ends the answer
  * there (the cursor never passes an item not checked).
+ *
+ * The checks are fresh: the caller's credential is verified again on the
+ * directory's primary before anything of the feed is read (a revocation,
+ * or a DPoP proof newly required, shows at once, whatever the feed holds),
+ * and each repository the repository's own (cached) check lets the caller
+ * read is confirmed by its account's object (`FreshAccess`), under the
+ * ownership the repository judged under; whatever its later answers say
+ * (excerpts, threads) is used only while judged under that same ownership.
+ * A fresh denial hides the items; it never makes the feed forget them.
  *
  * A check that finds the feed's owner itself cannot read a repository (it
  * is gone, or the owner's own access says so by an ACL snapshot the
@@ -152,6 +162,21 @@ export function decodeFeedCursor(
 
 type FeedItemOutput = Output<typeof getFeed>["items"][number];
 
+/**
+ * `ctx` with its credential as the directory's primary has it now, before
+ * anything of the feed is read (whether activity arrived never shows to a
+ * credential revoked meanwhile); a refusal answers 401.
+ */
+async function freshly(ctx: OpContext): Promise<OpContext> {
+  const fresh = await reverified(ctx);
+  if (!fresh.ok) throw new OperationError(401, fresh.code, fresh.detail);
+  return {
+    ...ctx,
+    auth: fresh.record,
+    authState: { ...ctx.authState, record: fresh.record, mode: "write" },
+  };
+}
+
 /** The caller's feed: its token's principal's object. */
 const feedOf = (ctx: OpContext) => ctx.env.USER.getByName(ctx.auth.principalId);
 
@@ -179,8 +204,17 @@ class Visibility {
   readonly #lost = new Map<string, Extract<FeedViewDenial, { kind: "lost" }>["loss"]>();
   #checks = 0;
   #threadChecks = 0;
+  /** The authoritative check, beside the repositories' own (see `decide`). */
+  readonly #fresh: FreshAccess;
+  /**
+   * The ownership each repository shown was decided under: every later
+   * answer of its (excerpts, threads) must be judged under it too.
+   */
+  readonly #pinned = new Map<string, { readonly accountId: string; readonly ownerGen: number }>();
 
-  constructor(private readonly ctx: OpContext) {}
+  constructor(private readonly ctx: OpContext) {
+    this.#fresh = new FreshAccess(ctx, ctx.auth);
+  }
 
   /**
    * Decides the repositories of `items` not decided yet, within the budget
@@ -227,6 +261,9 @@ class Visibility {
         checking.push(entry);
       }
     }
+    // The authoritative check of the same repositories, beside theirs (whose snapshots a lost
+    // invalidation may have left standing): an item shows only when both allow it.
+    const freshly = this.#fresh.decide(checking);
     await Promise.all(
       checking.map(async (entry) => {
         const asked = [...(threads.get(entry.id) ?? [])].slice(0, VIEW_MEMBERS);
@@ -235,20 +272,20 @@ class Visibility {
           [...(members.get(entry.id)?.values() ?? [])],
           asked,
         ).catch(() => undefined);
+        const fresh = (await freshly).get(entry.id) ?? "unknown";
         // A readable answer without its generation (an earlier object, while a deploy rolls out)
         // cannot place its gone threads against the items' generations: they stay unchecked.
         if (view?.readable && Number.isSafeInteger(view.epoch))
           this.#threadsChecked(entry.id, asked, view.gone, view.epoch);
-        this.#decided.set(
-          entry.id,
+        const decided =
           // No answer, or a denial the repository could not be sure of: not checked.
           view === undefined || view.denial?.kind === "unknown"
             ? "unknown"
-            : // A public repository is read without a role there (the token's limits still apply).
-              view.readable
-              ? { entry, role: view.role ?? "read" }
-              : "denied",
-        );
+            : view.readable
+              ? both(entry, view.account?.accountId, fresh)
+              : "denied";
+        this.#decided.set(entry.id, decided);
+        if (typeof decided === "object" && view?.account) this.#pinned.set(entry.id, view.account);
         // Lost to the owner itself; under a grant, its acting agents' owners' rights capped the
         // answer too, so it says nothing of the owner's own.
         if (view?.denial?.kind === "lost" && auth.grantId === null)
@@ -360,12 +397,18 @@ class Visibility {
   async #view(repoId: string, members: readonly FeedMember[], threads: readonly string[] = []) {
     const { env, auth, metrics } = this.ctx;
     metrics.count("do.request", { class: "RepoDO", method: "feedView" });
-    const view = await viewOf(env, repoId).feedView(
-      auth.principalId,
-      auth.grantId,
-      members,
-      threads,
-    );
+    let view = await viewOf(env, repoId).feedView(auth.principalId, auth.grantId, members, threads);
+    const pinned = this.#pinned.get(repoId);
+    if (
+      pinned &&
+      view.readable &&
+      (view.account?.accountId !== pinned.accountId || view.account.ownerGen !== pinned.ownerGen)
+    ) {
+      // Read under another ownership than the one decided (a transfer since): nothing of it is
+      // used, and the repository is not known any more (an answer stops at its items).
+      this.#decided.set(repoId, "unknown");
+      view = { ...view, readable: false, excerpts: {}, gone: [], denial: { kind: "unknown" } };
+    }
     for (const member of members) {
       const at = memberKey(member);
       this.#excerpts.set(key(repoId, at), view.excerpts[at] ?? null);
@@ -395,6 +438,15 @@ class Visibility {
       : "hidden";
   }
 
+  /**
+   * `shown` up to its first item whose repository is no longer known to be
+   * readable (reading its members found its ownership changed).
+   */
+  stillShown(shown: Scanned): Scanned {
+    const end = shown.findIndex(({ item }) => typeof this.#decided.get(item.repoId) !== "object");
+    return end === -1 ? shown : shown.slice(0, end);
+  }
+
   /** What the item's member says; null for none, or one that is gone. */
   excerpt(item: Displayed): string | null {
     return item.member === null
@@ -409,6 +461,26 @@ class Visibility {
 }
 
 const key = (repoId: string, member: string) => `${repoId}\n${member}`;
+
+/**
+ * A repository its own check let the reader read, as the authoritative one
+ * decides it: unknown when that one could not answer, or answered for
+ * another account than the repository judged under (a transfer between
+ * them, or an earlier object naming none); denied when that account let it
+ * go (a transfer), public or not; else read with the fresh role (a public
+ * repository without one, as `read`: the token's limits still apply), or
+ * denied (never forgotten for it: see `forgetLost`).
+ */
+function both(
+  entry: RepoEntry,
+  judgedUnder: string | undefined,
+  fresh: FreshDecision,
+): { entry: RepoEntry; role: RepoRole } | "denied" | "unknown" {
+  if (fresh === "unknown" || judgedUnder !== fresh.accountId) return "unknown";
+  if (!fresh.held) return "denied";
+  if (fresh.role !== null) return { entry, role: fresh.role };
+  return entry.visibility === "public" ? { entry, role: "read" } : "denied";
+}
 
 /** Items shown, in order, up to and past `limit` (one more tells that more follow). */
 type Scanned = { item: FeedItem; repo: RepoEntry }[];
@@ -486,6 +558,7 @@ export async function getFeedOperation(
   ctx: OpContext,
   input: Input<typeof getFeed>,
 ): Promise<Output<typeof getFeed>> {
+  ctx = await freshly(ctx);
   const feed = feedOf(ctx);
   const since = decodeFeedCursor(input.since);
   const start = since && { epoch: since.epoch, seq: since.seq };
@@ -511,7 +584,11 @@ export async function getFeedOperation(
     },
     (item) => ({ epoch: epoch as string, seq: item.seq }),
   );
-  const page = shown.slice(0, input.limit);
+  const read = shown.slice(0, input.limit);
+  await Promise.all([visibility.read(read.map(({ item }) => item)), visibility.forgetLost()]);
+  // Up to an item whose repository reading its members made unknown (its ownership changed).
+  const page = visibility.stillShown(read);
+  const cut = page.length < read.length;
   // An answer that shows nothing is one more quiet one in a row, whatever it did not show.
   const quiet = page.length > 0 ? 0 : Math.min((since?.quiet ?? 0) + 1, QUIET_MAX);
   // Positions of items shown only (where the caller started when none was), never below the
@@ -522,11 +599,11 @@ export async function getFeedOperation(
       { epoch: epoch as string, seq: Math.max(lowWatermark, item?.seq ?? since?.seq ?? 0) },
       quiet,
     );
-  await Promise.all([visibility.read(page.map(({ item }) => item)), visibility.forgetLost()]);
   return {
     items: page.map(({ item, repo }) => itemOutput(item, repo, visibility.excerpt(item))),
     next_cursor: at(page.at(-1)?.item),
-    head_cursor: at(shown.at(-1)?.item),
+    // Never past an item not shown for want of a check.
+    head_cursor: at((cut ? page : shown).at(-1)?.item),
     // Read on at once only after a full page: what the caller sees says so, never what it
     // does not (see the top).
     poll_after_ms: page.length === input.limit ? 0 : pollAfter(quiet),
@@ -535,11 +612,12 @@ export async function getFeedOperation(
 
 /** The `feed.sync` operation. */
 export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof syncFeed>> {
+  ctx = await freshly(ctx);
   const feed = feedOf(ctx);
   let epoch = "";
   let lowWatermark = 0;
   const visibility = new Visibility(ctx);
-  const { shown, more } = await scan(
+  const { shown, more: scanned } = await scan(
     visibility,
     FEED_POLICY.syncItems,
     async (after: SyncPosition | null) => {
@@ -554,8 +632,12 @@ export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof s
     },
     (item) => ({ open: item.priority === "P0" && item.state === "open", seq: item.seq }),
   );
-  const items = shown.slice(0, FEED_POLICY.syncItems);
-  await Promise.all([visibility.read(items.map(({ item }) => item)), visibility.forgetLost()]);
+  const read = shown.slice(0, FEED_POLICY.syncItems);
+  await Promise.all([visibility.read(read.map(({ item }) => item)), visibility.forgetLost()]);
+  // Up to an item whose repository reading its members made unknown (its ownership changed): an
+  // incomplete sync, as one its scan stopped.
+  const items = visibility.stillShown(read);
+  const more = scanned || items.length < read.length;
   // Following from the greatest item shown misses no change the caller may see; an incomplete
   // sync follows from the start. Never below the low watermark: what retention deleted is gone
   // for every reader, so such a cursor would only be refused.
@@ -587,6 +669,7 @@ export async function ackFeedItemOperation(
   ctx: OpContext,
   input: Input<typeof ackFeedItem>,
 ): Promise<Output<typeof ackFeedItem>> {
+  ctx = await freshly(ctx);
   const notFound = new OperationError(404, "feed_item_not_found", "The feed has no such item.");
   const id = parseItemKey(input.item_key);
   if (!id) throw notFound;

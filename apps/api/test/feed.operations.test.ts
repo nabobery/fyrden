@@ -39,6 +39,8 @@ const said = new Map<string, string | null>();
 const viewCalls = new Map<string, string[][]>();
 /** Repositories that exist only in the directory (no object behind them): readable as their owner's. */
 const directoryOnly = new Set<string>();
+/** Their owners, whose account the double answers it judged under. */
+const directoryOwner = new Map<string, string>();
 /** Of those, the ones whose check says the caller may not read them. */
 const unreadable = new Set<string>();
 /** Repositories whose checks of issue threads alone (no members) cannot say. */
@@ -48,6 +50,14 @@ const unsureThreads = new Set<string>();
  * generation in its answer, every thread asked gone.
  */
 const earlierObject = new Set<string>();
+/**
+ * Repositories transferred while an answer reads them: every `feedView`
+ * call after the given number answers as judged under another account,
+ * with text only that account's readers may see.
+ */
+const movedAfter = new Map<string, number>();
+/** As `movedAfter`, but transferred away and back: the same account, a later ownership generation. */
+const regeneratedAfter = new Map<string, number>();
 
 /**
  * `env` whose repository objects count their `feedView` calls and lay
@@ -101,6 +111,7 @@ function withFeedView(base: Env): Env {
               gone: [],
               epoch: 0,
               denial: null,
+              account: { accountId: directoryOwner.get(repoId) ?? "", ownerGen: 1 },
             };
       const real = await stub.feedView(principal, grantId, members, threads);
       if (!real.readable) return real;
@@ -109,6 +120,24 @@ function withFeedView(base: Env): Env {
         const known = said.get(`${repoId}:${memberKey(m)}`);
         if (known !== undefined) excerpts[memberKey(m)] = known;
       }
+      const calls = viewCalls.get(repoId)?.length ?? 0;
+      const moved = movedAfter.get(repoId);
+      const regenerated = regeneratedAfter.get(repoId);
+      if (
+        (moved !== undefined && calls > moved) ||
+        (regenerated !== undefined && calls > regenerated)
+      )
+        return {
+          ...real,
+          excerpts: Object.fromEntries(members.map((m) => [memberKey(m), "after the move"])),
+          account:
+            moved !== undefined
+              ? { accountId: "org_elsewhere", ownerGen: 99 }
+              : {
+                  accountId: real.account?.accountId ?? "",
+                  ownerGen: (real.account?.ownerGen ?? 0) + 1,
+                },
+        };
       return { ...real, excerpts };
     };
   const repos = new Proxy(base.REPO, {
@@ -201,16 +230,23 @@ async function repoOf(owner: Who): Promise<{ id: string; name: string; fullName:
   return { ...made.body, fullName: `${owner.handle}/${made.body.name}` };
 }
 
-/** `n` private repositories of `owner` in the directory only (see `directoryOnly`), in order. */
-async function directoryRepos(owner: Who, n: number): Promise<string[]> {
+/** `n` repositories of `owner` in the directory only (see `directoryOnly`), in order; private unless said. */
+async function directoryRepos(
+  owner: Who,
+  n: number,
+  visibility: "private" | "public" = "private",
+): Promise<string[]> {
   const repoIds = Array.from({ length: n }, () => uniqueId("rep_"));
-  for (const id of repoIds) directoryOnly.add(id);
+  for (const id of repoIds) {
+    directoryOnly.add(id);
+    directoryOwner.set(id, owner.principalId);
+  }
   await env.DIRECTORY.batch(
     repoIds.map((id) =>
       env.DIRECTORY.prepare(
         `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'default', 'private', 0, 0)`,
-      ).bind(id, owner.principalId, id.toLowerCase(), uniqueId("net")),
+         VALUES (?, ?, ?, ?, 'default', ?, 0, 0)`,
+      ).bind(id, owner.principalId, id.toLowerCase(), uniqueId("net"), visibility),
     ),
   );
   return repoIds;
@@ -599,9 +635,10 @@ describe("the feed operations", () => {
   });
 
   it("answer alike however much activity the caller may not see comes, past its budgets too", async () => {
-    // Two feeds with the same item the caller sees; one also gets activity it may not see.
+    // Two feeds with the same item the caller sees (of a public repository: both read it); one
+    // also gets activity it may not see.
     const [quiet, busy] = [await user(), await user()];
-    const [seen] = await directoryRepos(quiet, 1);
+    const [seen] = await directoryRepos(quiet, 1, "public");
     const at = Date.now();
     for (const who of [quiet, busy])
       await env.USER.getByName(who.principalId).applyFeed([
@@ -996,6 +1033,145 @@ describe("the feed operations", () => {
     const start = await json<FeedOut>(feedApi("GET", "/feed", limited));
     const next = await feedApi("GET", `/feed?since=${start.body.next_cursor}`, limited);
     expect(next.status).toBe(200);
+  });
+});
+
+/**
+ * `base` whose accounts' objects count their `confirmReaders` calls in
+ * `counted`, and fail them while `failing` says so.
+ */
+function withAccounts(base: Env, counted: { calls: number; failing?: boolean }): Env {
+  const orgs = new Proxy(base.ORG, {
+    get(target, prop) {
+      if (prop === "getByName")
+        // The feed's reads ask accounts' objects this alone.
+        return (name: string) => ({
+          confirmReaders: async (repoIds: readonly string[], principals: readonly string[]) => {
+            counted.calls++;
+            if (counted.failing) throw new Error("the account's object is unavailable");
+            return target.getByName(name).confirmReaders(repoIds, principals);
+          },
+        });
+      const value = Reflect.get(target, prop);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { ...base, ORG: orgs } as Env;
+}
+
+const listOn = (on: Env, token: string, path = "/feed") =>
+  json<FeedOut>(feedFetch(path, { Authorization: `Bearer ${token}` }, {}, on));
+
+describe("the feed operations' authoritative check", () => {
+  it("hides a public repository its account let go, though the repository still says it reads", async () => {
+    const [owner, someone] = [await user(), await user()];
+    const [repoId] = await directoryRepos(owner, 1, "public");
+    await deliverTo(someone.principalId, { repoId: repoId as string, version: 1 });
+    expect((await json<FeedOut>(feedApi("GET", "/feed", someone.token))).body.items).toHaveLength(
+      1,
+    );
+    await runInDurableObject(env.ORG.getByName(owner.principalId), (_: OrgDO, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO released_repos (repo_id, transfer_id, released_at) VALUES (?, 'tr_x', 0)",
+        repoId as string,
+      );
+    });
+    expect((await json<FeedOut>(feedApi("GET", "/feed", someone.token))).body.items).toEqual([]);
+  });
+
+  it("stops before a repository whose account cannot answer, forgetting nothing, and goes on once it can", async () => {
+    const someone = await user();
+    const [repoId] = await directoryRepos(someone, 1);
+    await deliverTo(someone.principalId, { repoId: repoId as string, version: 1 });
+    const counted = { calls: 0, failing: true };
+    const stopped = await listOn(withAccounts(withFeedView(env), counted), someone.token);
+    expect(counted.calls).toBe(1);
+    expect(stopped.body.items).toEqual([]);
+    expect(decodeFeedCursor(stopped.body.next_cursor)?.seq).toBe(0);
+    expect(decodeFeedCursor(stopped.body.head_cursor)?.seq).toBe(0);
+    expect(await stored(someone.principalId)).toHaveLength(1);
+    expect((await json<FeedOut>(feedApi("GET", "/feed", someone.token))).body.items).toHaveLength(
+      1,
+    );
+  });
+
+  it("asks each account on a page once, and nothing of a quiet poll", async () => {
+    const [a, b, someone] = [await user(), await user(), await user()];
+    const repos = [
+      ...(await directoryRepos(a, 2, "public")),
+      ...(await directoryRepos(b, 1, "public")),
+    ];
+    for (const [i, repoId] of repos.entries())
+      await deliverTo(someone.principalId, { repoId, version: i + 1 });
+    const counted = { calls: 0 };
+    const on = withAccounts(withFeedView(env), counted);
+    const page = await listOn(on, someone.token);
+    expect(page.body.items).toHaveLength(3);
+    expect(counted.calls).toBe(2);
+    counted.calls = 0;
+    const quiet = await listOn(on, someone.token, `/feed?since=${page.body.next_cursor}`);
+    expect(quiet.body.items).toEqual([]);
+    expect(counted.calls).toBe(0);
+  });
+});
+
+describe("the feed operations, a repository transferred while an answer reads it", () => {
+  it("use nothing read under the new account, and stop before its items", async () => {
+    const someone = await user();
+    const made = await repoOf(someone);
+    // More members than its check reads: the rest are read after it, by another call.
+    await env.USER.getByName(someone.principalId).applyFeed(
+      Array.from({ length: 105 }, (_, i) =>
+        entry({
+          repoId: made.id,
+          thread: 10 + i,
+          version: i + 1,
+          member: `comment/${1000 + i}`,
+          principal: someone.principalId,
+        }),
+      ),
+    );
+    viewCalls.delete(made.id);
+    movedAfter.set(made.id, 1);
+    // A sync reads them all (a list's page is within the first call's members).
+    const res = await json<{
+      items: { excerpt: string | null }[];
+      complete: boolean;
+      head_cursor: string;
+    }>(feedApi("GET", "/feed/sync", someone.token));
+    movedAfter.delete(made.id);
+    expect(res.status).toBe(200);
+    expect(viewCalls.get(made.id)?.length).toBeGreaterThan(1);
+    expect(res.body.items.some((i) => i.excerpt === "after the move")).toBe(false);
+    // Not known any more: the answer stops before its first item.
+    expect(res.body.items).toEqual([]);
+    expect(res.body.complete).toBe(false);
+    // An incomplete sync follows from the feed's start.
+    expect(decodeFeedCursor(res.body.head_cursor)?.seq).toBe(0);
+    // Away and back meanwhile: the same account, another ownership.
+    regeneratedAfter.set(made.id, 1);
+    viewCalls.delete(made.id);
+    const again = await json<{ items: { excerpt: string | null }[]; complete: boolean }>(
+      feedApi("GET", "/feed/sync", someone.token),
+    );
+    regeneratedAfter.delete(made.id);
+    expect(again.body.items).toEqual([]);
+    expect(again.body.complete).toBe(false);
+    // Moved before its first check: judged under another account than the one confirmed. The
+    // cursors stay where the caller started, and it polls as after a quiet answer.
+    movedAfter.set(made.id, 0);
+    viewCalls.delete(made.id);
+    const listed = await json<FeedOut>(feedApi("GET", "/feed", someone.token));
+    movedAfter.delete(made.id);
+    expect(listed.body.items).toEqual([]);
+    expect(decodeFeedCursor(listed.body.next_cursor)?.seq).toBe(0);
+    expect(decodeFeedCursor(listed.body.head_cursor)?.seq).toBe(0);
+    expect(listed.body.poll_after_ms).toBeGreaterThan(0);
+    // Once it answers under one ownership again, everything shows.
+    viewCalls.delete(made.id);
+    expect(
+      (await json<FeedOut>(feedApi("GET", "/feed?limit=100", someone.token))).body.items,
+    ).toHaveLength(100);
   });
 });
 

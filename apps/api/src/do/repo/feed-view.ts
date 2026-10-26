@@ -1,7 +1,7 @@
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import type { RepoRole } from "@fyrden/domain";
 import type { FeedPurge } from "../user/feed.js";
-import type { RepoAcl } from "./acl.js";
+import type { RepoAccount, RepoAcl } from "./acl.js";
 import type { RepoAuthority } from "./authority.js";
 import type { RepoComments } from "./comments.js";
 import { excerpt, type FeedPrincipal } from "./feed.js";
@@ -44,6 +44,12 @@ export interface FeedViewAnswer {
    */
   readonly epoch: number;
   readonly denial: FeedViewDenial | null;
+  /**
+   * The account the repository judged the reader under, and its ownership
+   * generation (null for an object without an identity): a reader checking
+   * the account itself must have asked this one.
+   */
+  readonly account: { readonly accountId: string; readonly ownerGen: number } | null;
 }
 
 /** What a feed item names of the repository, with the thread the item is on and when. */
@@ -77,6 +83,8 @@ export interface FeedViewDeps {
   readonly isTransferring: () => boolean;
   /** The repository's restore generation now (checked against the directory before any read). */
   readonly epoch: () => number;
+  /** The account the repository belongs to now (undefined for an object without an identity). */
+  readonly account: () => RepoAccount | undefined;
 }
 
 export class RepoFeedView {
@@ -108,6 +116,7 @@ export class RepoFeedView {
       excerpts: {},
       gone: [],
       epoch: 0,
+      account: null,
       denial: {
         kind: "lost" as const,
         loss: { accountId: "", epochGen: 0, aclVersion: 0, until: Date.now() },
@@ -119,6 +128,9 @@ export class RepoFeedView {
     if (this.deps.refusesReads()) return gone();
     const role = authority.roleNow(principal, ceilings);
     const readable = role !== null || this.deps.isPublic();
+    // Read with the role, no await between them.
+    const owner = this.deps.account();
+    const account = owner ? { accountId: owner.accountId, ownerGen: owner.ownerGen } : null;
     if (!readable) {
       // The snapshot the decision used: a denial without one (a pull failed) is no answer, nor
       // one while a transfer moves it (read after the pull: its collaborators may be between
@@ -138,7 +150,7 @@ export class RepoFeedView {
                   until: basis.pulledAt,
                 },
               };
-      return { readable, role, excerpts: {}, gone: [], epoch: this.deps.epoch(), denial };
+      return { readable, role, excerpts: {}, gone: [], epoch: this.deps.epoch(), denial, account };
     }
     const excerpts: Record<string, string | null> = {};
     const subjects = new Map<string, { kind: "issue" | "pull"; number: number } | null>();
@@ -197,6 +209,7 @@ export class RepoFeedView {
       gone: goneThreads,
       epoch: this.deps.epoch(),
       denial: null,
+      account,
     };
   }
 

@@ -1,5 +1,6 @@
 import { readGrantLinks } from "@fyrden/adapters-cloudflare/auth";
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { type MergeContext, principalTypeOf, REPO_ROLES, type RepoRole } from "@fyrden/domain";
 import {
   type BlockCache,
@@ -101,20 +102,8 @@ export class RepoAuthority {
    * grant's chain, or an agent's own owner; none for a user's own token.
    * From the directory's primary (a grant or an owner may change at any time).
    */
-  async ceilingsOf(principal: string, grantId: string | null): Promise<string[]> {
-    const db = this.deps.env().DIRECTORY.withSession("first-primary");
-    const metrics = this.deps.git.context.metrics;
-    if (grantId !== null) {
-      metrics.count("d1.query", { db: "directory", op: "token_grants" });
-      return [...new Set((await readGrantLinks(db, grantId)).map((l) => l.owner_id))];
-    }
-    if (principalTypeOf(principal) !== "agent") return [];
-    metrics.count("d1.query", { db: "directory", op: "agent_owner" });
-    const row = await db
-      .prepare("SELECT owner_id FROM principals WHERE id = ?")
-      .bind(principal)
-      .first<{ owner_id: string | null }>();
-    return row?.owner_id ? [row.owner_id] : [];
+  ceilingsOf(principal: string, grantId: string | null): Promise<string[]> {
+    return ceilingsOf(this.deps.env(), principal, grantId, this.deps.git.context.metrics);
   }
 
   /**
@@ -446,8 +435,34 @@ export class RepoAuthority {
   }
 }
 
+/**
+ * Owners whose roles cap `principal`'s: the agents' owners of its
+ * delegation grant's chain, or an agent's own owner; none for a user's own
+ * token. From the directory's primary (a grant or an owner may change at
+ * any time).
+ */
+export async function ceilingsOf(
+  env: Pick<Env, "DIRECTORY">,
+  principal: string,
+  grantId: string | null,
+  metrics: Metrics,
+): Promise<string[]> {
+  const db = env.DIRECTORY.withSession("first-primary");
+  if (grantId !== null) {
+    metrics.count("d1.query", { db: "directory", op: "token_grants" });
+    return [...new Set((await readGrantLinks(db, grantId)).map((l) => l.owner_id))];
+  }
+  if (principalTypeOf(principal) !== "agent") return [];
+  metrics.count("d1.query", { db: "directory", op: "agent_owner" });
+  const row = await db
+    .prepare("SELECT owner_id FROM principals WHERE id = ?")
+    .bind(principal)
+    .first<{ owner_id: string | null }>();
+  return row?.owner_id ? [row.owner_id] : [];
+}
+
 /** The weakest of `principal`'s strongest role and its `ceilings`', as `allows` answers them. */
-function effectiveRole(
+export function effectiveRole(
   allows: (principal: string, min: RepoRole) => boolean,
   principal: string,
   ceilings: readonly string[],
