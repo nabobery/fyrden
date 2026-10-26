@@ -101,6 +101,15 @@ type Answer =
 export type Drafts = ReturnType<typeof useDrafts>;
 
 /**
+ * Unsent drafts by scope (a page and a viewer) for this browser tab: they
+ * outlive the component of the page that holds them, so a page an error
+ * replaced on a failed reload comes back with them, and go with the tab.
+ */
+const tabDrafts = new Map<string, ScopeDrafts>();
+/** Scopes whose drafts a tab keeps at most. */
+const MAX_SCOPES = 32;
+
+/**
  * The unsent drafts of one page for one viewer (`scope`), by editor: what
  * an editor holds (recorded as it is written, dropped when its send is
  * answered as done) and a refused draft (until sent again and done,
@@ -112,13 +121,18 @@ export type Drafts = ReturnType<typeof useDrafts>;
  * replace it, and a save moves its version to the one the save made.
  */
 export function useDrafts(scope: string, own: Answer, editors: DraftEditors) {
-  const all = useRef(new Map<string, ScopeDrafts>());
+  const rendered = useRef(new Map<string, ScopeDrafts>());
   const taken = useRef<object | undefined>(undefined);
   const [, redraw] = useReducer((n: number) => n + 1, 0);
-  let drafts = all.current.get(scope);
+  // In the browser, the tab's: the page drawn again (after an error page replaced it, or back
+  // from elsewhere) finds them. On the server, this render's alone.
+  const all = typeof window === "undefined" ? rendered.current : tabDrafts;
+  let drafts = all.get(scope);
   if (!drafts) {
     drafts = { held: new Map(), sending: new Set(), since: new Set() };
-    all.current.set(scope, drafts);
+    // The oldest scope's go first past the bound.
+    if (all.size >= MAX_SCOPES) all.delete(all.keys().next().value as string);
+    all.set(scope, drafts);
   }
   const { held, sending, since } = drafts;
   // Each answer taken once: drawn again, it changes nothing.
