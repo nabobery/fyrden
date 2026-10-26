@@ -2,6 +2,7 @@ import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
   type DomainEvent,
   eventKey,
+  FEED_HORIZON_MS,
   type FeedBlock,
   FeedBlockSchema,
   type FeedEntry,
@@ -196,6 +197,8 @@ const PAGE_ID = /:feed:(page|res):\d+$/;
 
 export const feedSink: EffectSink = {
   name: "feed",
+  // An entry is never given up on while feeds would keep it: retried until then (see the journal).
+  horizonMs: FEED_HORIZON_MS,
   // Delivered in one batch, a call per recipient (100 at most each): within an invocation's calls.
   perMessage: 8,
   // A page of further recipients (up to 100 calls) alone, so an event's pages go side by side.

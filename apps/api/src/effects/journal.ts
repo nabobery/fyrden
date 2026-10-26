@@ -86,6 +86,12 @@ export interface EffectSink {
    */
   readonly acrossTransfers?: boolean;
   /**
+   * How long after it is journaled an effect of the sink is delivered:
+   * past `maxAttempts` it is retried at the longest back-off until then,
+   * and ends after it. Without one, an effect ends after its attempts.
+   */
+  readonly horizonMs?: number;
+  /**
    * Effects one queue message of the sink names at most (`PER_MESSAGE` when
    * not said): about what one invocation delivers in good time (see
    * `EffectPolicy.invocation`), so messages are delivered side by side.
@@ -126,7 +132,11 @@ export interface EffectPolicy {
   /** First retry delay; doubles per attempt up to `maxBackoffMs`. */
   readonly backoffMs: number;
   readonly maxBackoffMs: number;
-  /** Attempts before an effect is marked failed; a claim counts as one, so a run that dies does too. */
+  /**
+   * Attempts before an effect is marked failed, unless its sink has a
+   * horizon (`EffectSink.horizonMs`); a claim counts as one, so a run that
+   * dies does too.
+   */
   readonly maxAttempts: number;
   /** How long a delivery holds its claim; after that, a message naming the effect may take it over. */
   readonly leaseMs: number;
@@ -281,6 +291,8 @@ export interface JournalRow {
   readonly calls: number;
   /** The events consumer may deliver it itself (`EffectSink.inline`, `inlineable`). */
   readonly inline: boolean;
+  /** How long after it is journaled it is delivered (`EffectSink.horizonMs`), or null. */
+  readonly horizon: number | null;
 }
 
 /** The effects `events` require of `sinks`, each sink asked once per event. */
@@ -305,6 +317,7 @@ export function planEffects(
           anyOwner: sink.acrossTransfers === true || planned.acrossTransfers === true ? 1 : 0,
           calls: effectCalls(sink, planned),
           inline: sink.inline === true && sink.inlineable?.(planned) !== false,
+          horizon: sink.horizonMs ?? null,
         });
       }
   }
@@ -338,9 +351,10 @@ export function journalStatements(
       db
         .prepare(
           `INSERT OR IGNORE INTO effects (effect_id, sink, target, payload, next_attempt_at,
-             created_at, source_id, epoch_gen, owner_gen, any_owner, recover_at)
+             created_at, source_id, epoch_gen, owner_gen, any_owner, recover_at, deliver_until)
            SELECT e.value ->> 'id', e.value ->> 'sink', e.value ->> 'target', e.value ->> 'payload',
-             ?2, ?2, ?4, e.value ->> 'epoch', e.value ->> 'ownerGen', e.value ->> 'anyOwner', ?1
+             ?2, ?2, ?4, e.value ->> 'epoch', e.value ->> 'ownerGen', e.value ->> 'anyOwner', ?1,
+             ?2 + (e.value ->> 'horizon')
            FROM json_each(?3) e
            WHERE (e.value ->> 'epoch') >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?4)
              AND ((e.value ->> 'anyOwner') = 1 OR (e.value ->> 'ownerGen') >=

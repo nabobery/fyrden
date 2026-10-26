@@ -16,8 +16,9 @@ import type { Publish } from "./queues.js";
  * lease with a token, the attempt counted), so two messages naming one
  * effect never deliver it at once, and only the claim's holder records the
  * outcome. A delivered effect is marked done; a failed one backs off and a
- * message naming it is sent for when it is due, until `maxAttempts`, then
- * it is marked failed. A crash between the delivery and the mark leaves
+ * message naming it is sent for when it is due, until `maxAttempts` (or,
+ * for a sink with a horizon, until that has passed), then it is marked
+ * failed. A crash between the delivery and the mark leaves
  * the claim to expire; the effects cron then sends a message for it again,
  * and it is delivered again with the same id. A claim first checks where
  * the effect came from: one whose source was deleted, restored to an
@@ -80,9 +81,21 @@ const effectBytes = (payload: string) =>
   `(length(CAST(${payload} AS BLOB)) + max(0, coalesce(CASE json_type(${payload}, '$.externalBytes')
      WHEN 'integer' THEN json_extract(${payload}, '$.externalBytes') END, 0)))`;
 
-/** Where a pending effect stands when a claim passes it over. */
+/**
+ * Where a pending effect stands when a claim passes it over: within its
+ * attempts, or (its sink's having a horizon) before its horizon, whatever
+ * its attempts.
+ */
 const ELIGIBLE = `e.sink = ?2 AND e.state = 'pending' AND (e.lease_until IS NULL OR e.lease_until <= ?3)
-  AND e.attempts < ?4`;
+  AND ((e.deliver_until IS NULL AND e.attempts < ?4) OR e.deliver_until > ?3)`;
+
+/**
+ * The largest exponent the back-off's doubling is taken to: past it the
+ * delay is the longest anyway, and the shift never reaches 64 bits (where
+ * SQLite's `<<` wraps to zero: an effect's 64th attempt would be at once).
+ */
+const backoffExponent = (policy: EffectPolicy) =>
+  Math.min(62, Math.max(0, Math.ceil(Math.log2(policy.maxBackoffMs / policy.backoffMs))));
 
 /**
  * Delivers the effects of `sinkName` that `ids` names, as far as `budget`
@@ -202,8 +215,12 @@ async function claim(
       .bind(list, sink.name, now),
     deps.db
       .prepare(
-        `UPDATE effects SET lease_token = ?5, lease_until = ?6, recover_at = ?6,
-           attempts = attempts + 1
+        // An attempt past its effect's attempts (its sink's horizon not passed) is due again only
+        // at the longest back-off, so a claim that dies is not tried again as soon as it lapses;
+        // the cron looks at it then, or at its horizon if sooner (to end it), once the claim lapses.
+        `UPDATE effects SET lease_token = ?5, lease_until = ?6, attempts = attempts + 1,
+           recover_at = CASE WHEN attempts >= ?4 THEN max(?6, min(?3 + ?9, deliver_until)) ELSE ?6 END,
+           next_attempt_at = CASE WHEN attempts >= ?4 THEN ?3 + ?9 ELSE next_attempt_at END
          WHERE effect_id IN (
            SELECT effect_id FROM (
              SELECT e.effect_id, row_number() OVER listed AS n,
@@ -223,6 +240,7 @@ async function claim(
         now + policy.leaseMs,
         budget.bytes,
         budget.started ? 0 : 1,
+        Math.max(policy.maxBackoffMs, policy.leaseMs),
       ),
     deps.db
       .prepare(
@@ -244,6 +262,9 @@ async function claim(
   const rows = ((claimed?.results ?? []) as Row[]).sort(
     (a, b) => (order.get(a.effect_id) ?? 0) - (order.get(b.effect_id) ?? 0),
   );
+  // Attempts past their effects' attempts (only an effect with a horizon gets one).
+  const parked = rows.filter((row) => row.attempts > policy.maxAttempts).length;
+  if (parked > 0) deps.metrics?.count("effects.parked", { sink: sink.name }, parked);
   const due: string[] = [];
   const early = new Map<number, string[]>();
   for (const row of (passed?.results ?? []) as { effect_id: string; next_attempt_at: number }[]) {
@@ -281,11 +302,17 @@ async function release(
   deps.metrics?.count("d1.query", { db: "org", op: "effects_release" });
   await deps.db
     .prepare(
+      // Due as before the claim (an attempt past its effect's attempts moved it on).
       `UPDATE effects SET lease_token = NULL, lease_until = NULL, attempts = attempts - 1,
-         recover_at = ?3
+         recover_at = ?3, next_attempt_at = min(next_attempt_at, ?4)
        WHERE effect_id IN (SELECT value FROM json_each(?1)) AND lease_token = ?2`,
     )
-    .bind(JSON.stringify(rows.map((row) => row.effect_id)), token, deps.now() + policy.lateMs)
+    .bind(
+      JSON.stringify(rows.map((row) => row.effect_id)),
+      token,
+      deps.now() + policy.lateMs,
+      deps.now(),
+    )
     .run();
 }
 
@@ -457,7 +484,9 @@ async function publishOrRecover(
 
 /**
  * Backs failed effects off (from each one's own attempts, the claim's
- * included) in one query, or marks them failed after the last attempt.
+ * included, the delay doubling up to the longest) in one query, or marks
+ * them failed: after the last attempt, or for an effect with a horizon,
+ * once it has passed (until then it is retried at the longest delay).
  * Only this claim's holder writes. Returns the ones still pending, with
  * when they are due.
  */
@@ -475,13 +504,15 @@ async function markFailed(
       error,
     });
   deps.metrics?.count("d1.query", { db: "org", op: "effects_retry" });
-  const backoff = "min(?2 << (attempts - 1), ?3)";
+  const backoff = "min(?2 << min(attempts - 1, ?9), ?3)";
+  const over = "((deliver_until IS NULL AND attempts >= ?6) OR deliver_until <= ?1)";
   const { results } = await deps.db
     .prepare(
-      `UPDATE effects SET next_attempt_at = CASE WHEN attempts >= ?6 THEN ?1 ELSE ?1 + ${backoff} END,
-         recover_at = ?1 + ${backoff} + ?4,
-         last_error = ?5, lease_token = NULL, lease_until = NULL,
-         state = CASE WHEN attempts >= ?6 THEN 'failed' ELSE 'pending' END
+      `UPDATE effects SET next_attempt_at = CASE WHEN ${over} THEN ?1 ELSE ?1 + ${backoff} END,
+         recover_at = min(?1 + ${backoff} + ?4, coalesce(deliver_until, ?1 + ${backoff} + ?4)),
+         last_error = CASE WHEN deliver_until <= ?1 THEN 'past its delivery horizon' ELSE ?5 END,
+         lease_token = NULL, lease_until = NULL,
+         state = CASE WHEN ${over} THEN 'failed' ELSE 'pending' END
        WHERE effect_id IN (SELECT value FROM json_each(?7)) AND lease_token = ?8
        RETURNING effect_id, state, next_attempt_at`,
     )
@@ -494,6 +525,7 @@ async function markFailed(
       policy.maxAttempts,
       JSON.stringify(rows.map((row) => row.effect_id)),
       token,
+      backoffExponent(policy),
     )
     .all<{ effect_id: string; state: string; next_attempt_at: number }>();
   for (const row of results)
@@ -554,20 +586,23 @@ export interface Recovered {
  * Each is taken by moving its `recover_at` on, so two runs never send one
  * twice and a later run reaches the next ones; a send that fails makes its
  * effects overdue again for the next run. An effect whose attempts are
- * spent, or whose sink is gone, is failed instead.
+ * spent (one without a horizon), whose horizon has passed, or whose sink is
+ * gone, is failed instead.
  */
 export async function recoverEffects(deps: DispatchDeps): Promise<Recovered> {
   const policy = deps.policy ?? EFFECT_POLICY;
   const now = deps.now();
   const sinks = JSON.stringify(deps.sinks.map((sink) => sink.name));
-  const ending = "(attempts >= ?4 OR sink NOT IN (SELECT value FROM json_each(?5)))";
+  const ending = `((deliver_until IS NULL AND attempts >= ?4) OR deliver_until <= ?1
+    OR sink NOT IN (SELECT value FROM json_each(?5)))`;
   deps.metrics?.count("d1.query", { db: "org", op: "effects_recover" });
   const { results } = await deps.db
     .prepare(
       `UPDATE effects SET recover_at = ?1 + ?2,
          state = CASE WHEN ${ending} THEN 'failed' ELSE state END,
          next_attempt_at = CASE WHEN ${ending} THEN ?1 ELSE next_attempt_at END,
-         last_error = CASE WHEN attempts >= ?4 THEN 'attempts spent'
+         last_error = CASE WHEN deliver_until <= ?1 THEN 'past its delivery horizon'
+           WHEN deliver_until IS NULL AND attempts >= ?4 THEN 'attempts spent'
            WHEN sink NOT IN (SELECT value FROM json_each(?5)) THEN 'no sink named ' || sink
            ELSE last_error END,
          lease_token = CASE WHEN ${ending} THEN NULL ELSE lease_token END,

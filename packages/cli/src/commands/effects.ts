@@ -58,10 +58,12 @@ export function repairCountSql(sink: RepairableSink, since: number, now: number)
  * now and overdue for the cron, the failure kept in `last_error` after
  * `reopened: `. Their attempts count afresh from one, not zero: one ever
  * claimed stays claimed, as a repository's deletion goes by (an invocation
- * that claimed it may still be running, and the deletion waits for it).
+ * that claimed it may still be running, and the deletion waits for it). A
+ * reopened effect is retried for its attempts, whatever horizon it had.
  */
 export function repairSql(sink: RepairableSink, since: number, now: number): string {
-  return `UPDATE effects SET state = 'pending', attempts = min(attempts, 1), next_attempt_at = ${now},
+  return `UPDATE effects SET state = 'pending', attempts = min(attempts, 1), deliver_until = NULL,
+      next_attempt_at = ${now},
       recover_at = ${now}, lease_token = NULL, lease_until = NULL,
       last_error = 'reopened: ' || coalesce(last_error, '')
     WHERE effect_id IN (SELECT effect_id FROM effects WHERE ${repairable(sink, since, now)}

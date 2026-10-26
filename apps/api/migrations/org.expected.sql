@@ -21,7 +21,7 @@ CREATE TABLE effects (
   lease_until INTEGER,
   created_at INTEGER NOT NULL,
   done_at INTEGER
-, source_id TEXT, epoch_gen INTEGER, owner_gen INTEGER, any_owner INTEGER NOT NULL DEFAULT 0 CHECK (any_owner IN (0, 1)), recover_at INTEGER NOT NULL DEFAULT 0) STRICT;
+, source_id TEXT, epoch_gen INTEGER, owner_gen INTEGER, any_owner INTEGER NOT NULL DEFAULT 0 CHECK (any_owner IN (0, 1)), recover_at INTEGER NOT NULL DEFAULT 0, deliver_until INTEGER) STRICT;
 
 -- table events_failed
 CREATE TABLE events_failed (

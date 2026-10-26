@@ -121,7 +121,7 @@ async function effectRows(repoId: string) {
 async function effectRow(id: string) {
   return env.ORG_READ.prepare(
     `SELECT state, attempts, next_attempt_at, recover_at, lease_token, last_error, source_id,
-       epoch_gen, owner_gen, any_owner FROM effects WHERE effect_id = ?`,
+       epoch_gen, owner_gen, any_owner, deliver_until FROM effects WHERE effect_id = ?`,
   )
     .bind(id)
     .first<{
@@ -135,7 +135,17 @@ async function effectRow(id: string) {
       epoch_gen: number | null;
       owner_gen: number | null;
       any_owner: number;
+      deliver_until: number | null;
     }>();
+}
+
+/** Makes `id` an effect delivered until `until` (a horizon), its attempts `attempts` so far. */
+async function withHorizon(id: string, until: number, attempts: number): Promise<void> {
+  await env.ORG_READ.prepare(
+    "UPDATE effects SET deliver_until = ?, attempts = ? WHERE effect_id = ?",
+  )
+    .bind(until, attempts, id)
+    .run();
 }
 
 function depsOf(
@@ -790,6 +800,272 @@ describe("delivering effects a message names", () => {
     ).toBe(0);
     expect(other.calls).toEqual([]);
     expect(await effectRow(id)).toMatchObject({ state: "pending", attempts: 0 });
+  });
+});
+
+describe("an effect delivered until its horizon", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it("is journaled with its sink's horizon, an effect of a sink without one with none", async () => {
+    const repoId = await listedRepo();
+    const { sink } = recordingSink({ name: "test_hook" });
+    const { sink: lasting } = recordingSink({ name: "test_horizon", horizonMs: 3 * DAY });
+    const { publish } = recordingPublish();
+    await applyEnvelope(env, envelope(repoId, [pushEvent(repoId, 1)]), {
+      sinks: [sink, lasting],
+      publish,
+      now: () => T0,
+    });
+    const { results } = await env.ORG_READ.prepare(
+      "SELECT sink, deliver_until FROM effects WHERE source_id = ? ORDER BY sink",
+    )
+      .bind(repoId)
+      .all();
+    expect(results).toEqual([
+      { sink: "test_hook", deliver_until: null },
+      { sink: "test_horizon", deliver_until: T0 + 3 * DAY },
+    ]);
+    // Feed entries are kept 7 days: their effects are delivered for as long.
+    expect(feedSink.horizonMs).toBe(7 * DAY);
+  });
+
+  it("backs off at the longest delay once its attempts are spent, never wrapping round", async () => {
+    for (const attempts of [EFFECT_POLICY.maxAttempts, 50, 64, 168]) {
+      const repoId = await listedRepo();
+      const [id = ""] = await dueEffects(repoId, 1, T0);
+      await withHorizon(id, T0 + 7 * DAY, attempts - 1);
+      const { sink, failNext } = recordingSink();
+      const { publish, sent } = recordingPublish();
+      failNext(1);
+      await deliverEffects(depsOf([sink], T0, publish), "test_hook", [id], budget(T0));
+      expect(await effectRow(id), String(attempts)).toMatchObject({
+        state: "pending",
+        attempts,
+        next_attempt_at: T0 + EFFECT_POLICY.maxBackoffMs,
+        recover_at: T0 + EFFECT_POLICY.maxBackoffMs + EFFECT_POLICY.lateMs,
+      });
+      expect(sent).toEqual([
+        { sink: "test_hook", ids: [id], delaySeconds: EFFECT_POLICY.maxBackoffMs / 1000 },
+      ]);
+    }
+  });
+
+  it("backs an attempt-bounded effect off without wrapping round either", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    const policy = { ...EFFECT_POLICY, maxAttempts: 200 };
+    await env.ORG_READ.prepare("UPDATE effects SET attempts = 64 WHERE effect_id = ?")
+      .bind(id)
+      .run();
+    const { sink, failNext } = recordingSink();
+    const { publish } = recordingPublish();
+    failNext(1);
+    await deliverEffects(
+      depsOf([sink], T0, publish, policy),
+      "test_hook",
+      [id],
+      budget(T0, policy),
+    );
+    expect(await effectRow(id)).toMatchObject({
+      state: "pending",
+      attempts: 65,
+      next_attempt_at: T0 + EFFECT_POLICY.maxBackoffMs,
+    });
+  });
+
+  it("is sent again by the cron, its message lost, however many attempts it has made", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    await withHorizon(id, T0 + 7 * DAY, EFFECT_POLICY.maxAttempts + 5);
+    const { sink, received } = recordingSink();
+    const { publish, sent } = recordingPublish();
+    // Its message expired in the queue: the cron finds it overdue and sends it again.
+    const later = T0 + 2 * DAY;
+    await recoverEffects(depsOf([sink], later, publish, WHOLE_PAGE));
+    expect(sentOf(sent, repoId)).toEqual([id]);
+    expect(await effectRow(id)).toMatchObject({ state: "pending" });
+    await deliverEffects(depsOf([sink], later, publish), "test_hook", [id], budget(later));
+    expect(received.has(id)).toBe(true);
+    expect(await effectRow(id)).toMatchObject({
+      state: "done",
+      attempts: EFFECT_POLICY.maxAttempts + 6,
+    });
+  });
+
+  it("is tried again an hour after a claim past its attempts died, not when the claim lapses", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    await withHorizon(id, T0 + 7 * DAY, EFFECT_POLICY.maxAttempts);
+    const crash = new Error("the invocation died");
+    const dying: EffectSink = {
+      name: "test_hook",
+      plan: () => [],
+      deliver: async () => {
+        throw crash;
+      },
+    };
+    // A run that dies mid-delivery: its claim is never released.
+    const deadMark = new Proxy(env.ORG_READ, {
+      get(target, prop) {
+        if (prop === "prepare")
+          return (query: string) => {
+            if (query.includes("RETURNING effect_id, state, next_attempt_at")) throw crash;
+            return target.prepare(query);
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const parked: string[] = [];
+    const metrics = { count: (name: string) => parked.push(name) } as unknown as Metrics;
+    const { publish, sent } = recordingPublish();
+    await expect(
+      deliverEffects(
+        { ...depsOf([dying], T0, publish), db: deadMark, metrics },
+        "test_hook",
+        [id],
+        budget(T0),
+      ),
+    ).rejects.toThrow(crash);
+    expect(parked.filter((n) => n === "effects.parked")).toHaveLength(1);
+    expect(await effectRow(id)).toMatchObject({
+      attempts: EFFECT_POLICY.maxAttempts + 1,
+      next_attempt_at: T0 + EFFECT_POLICY.maxBackoffMs,
+      recover_at: T0 + EFFECT_POLICY.maxBackoffMs,
+    });
+    // Its claim lapses: not sent again yet, nor claimable.
+    const lapsed = T0 + EFFECT_POLICY.leaseMs;
+    await recoverEffects(depsOf([dying], lapsed, publish, WHOLE_PAGE));
+    expect(sentOf(sent, repoId)).toEqual([]);
+    const { sink, received } = recordingSink();
+    await deliverEffects(depsOf([sink], lapsed, publish), "test_hook", [id], budget(lapsed));
+    expect(received.size).toBe(0);
+    // An hour on: sent again, and delivered.
+    const hour = T0 + EFFECT_POLICY.maxBackoffMs;
+    await recoverEffects(depsOf([sink], hour, publish, WHOLE_PAGE));
+    expect(sentOf(sent, repoId)).toContain(id);
+    await deliverEffects(depsOf([sink], hour, publish), "test_hook", [id], budget(hour));
+    expect(received.has(id)).toBe(true);
+  });
+
+  it("is given back untried at once, however many attempts it has made", async () => {
+    const repoId = await listedRepo();
+    const ids = await dueEffects(repoId, 2, T0);
+    for (const id of ids) await withHorizon(id, T0 + 7 * DAY, EFFECT_POLICY.maxAttempts + 3);
+    let clock = T0;
+    const slow: EffectSink = {
+      name: "test_hook",
+      plan: () => [],
+      deliver: async () => {
+        clock += EFFECT_POLICY.invocation.deadlineMs;
+      },
+    };
+    const { publish } = recordingPublish();
+    await deliverEffects(
+      depsOf([slow], () => clock, publish),
+      "test_hook",
+      ids,
+      budget(T0),
+    );
+    // The second was claimed, then given back untried (when the deadline had passed): due then,
+    // not an hour on.
+    expect(await effectRow(ids[1] ?? "")).toMatchObject({
+      attempts: EFFECT_POLICY.maxAttempts + 3,
+      lease_token: null,
+      next_attempt_at: T0 + EFFECT_POLICY.invocation.deadlineMs,
+    });
+  });
+
+  it("records its horizon as why it failed when that passed during its last delivery", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    await withHorizon(id, T0 + 1_000, EFFECT_POLICY.maxAttempts + 3);
+    let clock = T0;
+    const late: EffectSink = {
+      name: "test_hook",
+      plan: () => [],
+      deliver: async () => {
+        clock = T0 + 2_000;
+        throw new Error("destination down");
+      },
+    };
+    const { publish } = recordingPublish();
+    await deliverEffects(
+      depsOf([late], () => clock, publish),
+      "test_hook",
+      [id],
+      budget(T0),
+    );
+    expect(await effectRow(id)).toMatchObject({
+      state: "failed",
+      last_error: "past its delivery horizon",
+    });
+  });
+
+  it("is ended at its horizon when that comes before its next attempt, failed or claimed", async () => {
+    const repoId = await listedRepo();
+    const [failing = "", dying = ""] = await dueEffects(repoId, 2, T0);
+    const horizon = T0 + 10 * 60_000;
+    await withHorizon(failing, horizon, EFFECT_POLICY.maxAttempts + 1);
+    await withHorizon(dying, horizon, EFFECT_POLICY.maxAttempts + 1);
+    const { sink, failNext } = recordingSink();
+    const { publish } = recordingPublish();
+    failNext(1);
+    await deliverEffects(depsOf([sink], T0, publish), "test_hook", [failing], budget(T0));
+    expect(await effectRow(failing)).toMatchObject({ state: "pending", recover_at: horizon });
+    // A claim that dies: its claim lapses before the horizon, which comes before the hour.
+    const crash = new Error("the invocation died");
+    const deadMark = new Proxy(env.ORG_READ, {
+      get(target, prop) {
+        if (prop === "prepare")
+          return (query: string) => {
+            if (query.includes("RETURNING effect_id, state, next_attempt_at")) throw crash;
+            return target.prepare(query);
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const thrower: EffectSink = {
+      name: "test_hook",
+      plan: () => [],
+      deliver: async () => {
+        throw crash;
+      },
+    };
+    await expect(
+      deliverEffects(
+        { ...depsOf([thrower], T0, publish), db: deadMark },
+        "test_hook",
+        [dying],
+        budget(T0),
+      ),
+    ).rejects.toThrow(crash);
+    expect(await effectRow(dying)).toMatchObject({ state: "pending", recover_at: horizon });
+    // The cron at the horizon ends both.
+    await recoverEffects(depsOf([sink], horizon, publish, WHOLE_PAGE));
+    for (const id of [failing, dying])
+      expect(await effectRow(id)).toMatchObject({
+        state: "failed",
+        last_error: "past its delivery horizon",
+      });
+  });
+
+  it("is not delivered past its horizon, and the cron ends it", async () => {
+    const repoId = await listedRepo();
+    const [id = ""] = await dueEffects(repoId, 1, T0);
+    await withHorizon(id, T0 + 7 * DAY, 3);
+    const { sink, received } = recordingSink();
+    const { publish, sent } = recordingPublish();
+    const past = T0 + 7 * DAY;
+    await deliverEffects(depsOf([sink], past, publish), "test_hook", [id], budget(past));
+    expect(received.size).toBe(0);
+    await recoverEffects(depsOf([sink], past, publish, WHOLE_PAGE));
+    expect(sentOf(sent, repoId)).toEqual([]);
+    expect(await effectRow(id)).toMatchObject({
+      state: "failed",
+      last_error: "past its delivery horizon",
+    });
   });
 });
 
