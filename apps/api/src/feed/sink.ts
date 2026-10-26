@@ -8,7 +8,9 @@ import {
   type FeedEntry,
 } from "@fyrden/domain";
 import { z } from "zod";
+import { PURGE_REPOS } from "../do/user/feed.js";
 import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effects/journal.js";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 
 /*
  * Activity feed entries from events. The repository decides, with the
@@ -24,7 +26,9 @@ import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effect
  *
  * An account's `access.revoked` (principals no longer read some of its
  * repositories, at most 100 an event) becomes effects too, of at most 100
- * principals each (a transfer can name thousands): delivering one purges
+ * principals and `PURGE_REPOS` repositories each (a transfer can name
+ * thousands of principals; an effect planned earlier naming more
+ * repositories is delivered as its children instead): delivering one purges
  * those repositories from each principal's feed, up to when access was
  * lost, as the account had them at its ACL version. The event names every
  * repository (a member's removal names those the account held then), and
@@ -115,6 +119,53 @@ interface PlannedPurge {
 }
 
 const isPurge = (effect: Effect) => "purge" in effect.payload;
+
+/** `repos` in chunks of `PURGE_REPOS` (one chunk, empty, for none). */
+const repoChunks = (repos: readonly string[]): string[][] =>
+  repos.length === 0
+    ? [[]]
+    : Array.from({ length: Math.ceil(repos.length / PURGE_REPOS) }, (_, n) =>
+        repos.slice(n * PURGE_REPOS, (n + 1) * PURGE_REPOS),
+      );
+
+/**
+ * Journals the children of purge effects planned before purges named at
+ * most `PURGE_REPOS` repositories: one each of `PURGE_REPOS` repositories,
+ * with the ids the planner now gives (`<parent>:r<n>`), copied from the
+ * parent's row (its source, generations, journaling time and delivery
+ * deadline), overdue for the effects cron to send. A child already there
+ * is kept (a retry, or the event delivered again under the new planner).
+ */
+async function journalChildren(
+  db: D1Database,
+  parents: readonly Effect[],
+  now: number,
+  metrics?: Metrics,
+): Promise<void> {
+  const statements = parents.flatMap((parent) => {
+    const { purge } = parent.payload as unknown as PlannedPurge;
+    return repoChunks(purge.repos).map((repos, n) =>
+      db
+        .prepare(
+          `INSERT OR IGNORE INTO effects (effect_id, sink, target, payload, next_attempt_at,
+             created_at, source_id, epoch_gen, owner_gen, any_owner, recover_at, deliver_until)
+           SELECT ?2, sink, ?3, ?4, ?5, created_at, source_id, epoch_gen, owner_gen, any_owner, ?5,
+             deliver_until
+           FROM effects WHERE effect_id = ?1`,
+        )
+        .bind(
+          parent.id,
+          `${parent.id}:r${n}`,
+          `${parent.target}:r${n}`,
+          JSON.stringify({ purge: { ...purge, repos } } satisfies PlannedPurge),
+          now,
+        ),
+    );
+  });
+  if (statements.length === 0) return;
+  metrics?.count("d1.query", { db: "org", op: "feed_purge_children" }, statements.length);
+  await db.batch(statements);
+}
 const isPage = (effect: Effect) => "page" in effect.payload;
 
 /** An effect's entries to apply: the event, its block, and the recipients it names. */
@@ -215,26 +266,28 @@ export const feedSink: EffectSink = {
       const revoked = RevokedSchema.safeParse(event.data);
       if (!revoked.success) return [];
       const data = revoked.data;
-      // A bounded number of feeds an effect: one delivery never makes more calls than that.
+      // A bounded number of feeds and repositories an effect: one delivery never makes more
+      // calls than that, nor any call more work.
       return Array.from(
         { length: Math.ceil(data.principals.length / PURGE_PRINCIPALS) },
-        (_, part) => ({
-          target: `purge:${part}`,
-          payload: {
-            purge: {
-              accountId: event.id.sourceId,
-              principals: data.principals.slice(
-                part * PURGE_PRINCIPALS,
-                (part + 1) * PURGE_PRINCIPALS,
-              ),
-              repos: data.repos,
-              until: event.at,
-              epochGen: event.id.epochGen,
-              aclVersion: data.acl_version,
-            },
-          } satisfies PlannedPurge,
-        }),
-      );
+        (_, part) =>
+          repoChunks(data.repos).map((repos, n) => ({
+            target: `purge:${part}:r${n}`,
+            payload: {
+              purge: {
+                accountId: event.id.sourceId,
+                principals: data.principals.slice(
+                  part * PURGE_PRINCIPALS,
+                  (part + 1) * PURGE_PRINCIPALS,
+                ),
+                repos,
+                until: event.at,
+                epochGen: event.id.epochGen,
+                aclVersion: data.acl_version,
+              },
+            } satisfies PlannedPurge,
+          })),
+      ).flat();
     }
     // A block's further pages (`pages`) are read and delivered by later versions; this one
     // delivers the recipients the event carries, so it is no version to go back to once
@@ -269,17 +322,22 @@ export const feedSink: EffectSink = {
   },
 
   async deliver(effect: Effect, env: Env): Promise<void> {
-    const { error, delivered, ended } = await deliverFeeds([effect], env, Date.now());
+    const { error, delivered, ended } = await deliverFeeds(
+      [effect],
+      env,
+      readModelFor(env, DEFAULT_ORG_SHARD),
+      Date.now(),
+    );
     if (delivered.length === 0) throw error ?? new Error(ended?.[0]?.reason ?? "not delivered");
   },
 
   deliverBatch: (
     effects: readonly Effect[],
     env: Env,
-    _db: D1Database,
+    db: D1Database,
     metrics?: Metrics,
     now = Date.now(),
-  ) => deliverFeeds(effects, env, now, metrics),
+  ) => deliverFeeds(effects, env, db, now, metrics),
 
   /**
    * One call per recipient of an event, or per principal a purge names; a
@@ -287,7 +345,9 @@ export const feedSink: EffectSink = {
    */
   calls(planned: PlannedEffect): number {
     const payload = planned.payload as unknown as PlannedFeed | PlannedPurge | PlannedPage;
-    if ("purge" in payload) return payload.purge.principals.length;
+    // An earlier planner's purge of more repositories: its children's journal write only.
+    if ("purge" in payload)
+      return payload.purge.repos.length > PURGE_REPOS ? 1 : payload.purge.principals.length;
     if ("page" in payload) return 1 + payload.page.count;
     return payload.feed.audience.length;
   },
@@ -328,6 +388,7 @@ function settlementsOf(event: DomainEvent): PlannedEffect[] {
 async function deliverFeeds(
   effects: readonly Effect[],
   env: Env,
+  db: D1Database,
   now: number,
   metrics?: Metrics,
 ): Promise<BatchDelivery> {
@@ -345,7 +406,20 @@ async function deliverFeeds(
     [...effects.filter((effect) => !isPurge(effect) && !isPage(effect)).map(entriesOf), ...pages],
     env,
   );
-  const purges = effects.filter(isPurge);
+  // A purge planned before purges named at most `PURGE_REPOS` repositories: delivered as its
+  // children, journaled now (each then bounded); the parent is done once they are.
+  const legacy = effects.filter(
+    (effect) =>
+      isPurge(effect) &&
+      (effect.payload as unknown as PlannedPurge).purge.repos.length > PURGE_REPOS,
+  );
+  try {
+    await journalChildren(db, legacy, now, metrics);
+  } catch (cause) {
+    error = cause;
+    for (const effect of legacy) failed.set(effect.id, cause);
+  }
+  const purges = effects.filter((effect) => isPurge(effect) && !legacy.includes(effect));
   try {
     calls.push(...(await purgeCalls(purges, env)));
   } catch (cause) {

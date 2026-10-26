@@ -15,6 +15,7 @@ import {
   feedEpochSource,
   type GoneThread,
   MAX_GONE_THREADS,
+  PURGE_REPOS,
   type SyncPosition,
   type ThreadVersion,
 } from "./user/feed.js";
@@ -35,6 +36,12 @@ type Kind = (typeof KINDS)[number];
 
 /** Hooks into the feed's directory read. For tests. */
 export const feedHooks: { beforeEpochRead?: () => Promise<void> } = {};
+
+/** Refuses a purge of more repositories than one call takes (see `PURGE_REPOS`). */
+function bounded(repos: number): void {
+  if (repos > PURGE_REPOS)
+    throw new RangeError(`at most ${PURGE_REPOS} repositories a call, not ${repos}`);
+}
 
 /** What a retired feed answers an entry: delivered, nothing changed. */
 const NOTHING_APPLIED: FeedApplied = { changed: 0, notified: 0 };
@@ -68,29 +75,51 @@ export class UserDO extends MigratingDO {
     return applied;
   }
 
-  /** Forgets repositories the principal no longer reads (see `Feed.purge`). */
+  /**
+   * Forgets repositories the principal no longer reads (see `Feed.purge`),
+   * each in a transaction of its own; at most `PURGE_REPOS` a call (an
+   * older caller's larger one is refused, and retried through its
+   * effect's children).
+   */
   async purge(purge: FeedPurge): Promise<{ deleted: number }> {
+    bounded(new Set(purge.repoIds).size);
     await this.#checkEpoch();
     if (this.#retired()) return { deleted: 0 };
     const feed = this.#feed();
-    const deleted = this.ctx.storage.transactionSync(() => feed.purge(purge));
-    await this.#scheduleRetention(feed);
+    let deleted = 0;
+    try {
+      for (const repoId of new Set(purge.repoIds))
+        deleted += this.ctx.storage.transactionSync(() =>
+          feed.purge({ ...purge, repoIds: [repoId] }),
+        );
+    } finally {
+      // Retention for what was committed, a later repository's failure notwithstanding.
+      await this.#scheduleRetention(feed);
+    }
     return { deleted };
   }
 
   /**
    * Forgets repositories a read found the principal cannot read, each as
-   * the purge of what that was decided by (see `Feed.purge`), in one
-   * transaction.
+   * the purge of what that was decided by (see `Feed.purge`), each in a
+   * transaction of its own; at most `PURGE_REPOS` a call.
    */
   async forgetRepos(losses: readonly FeedPurge[]): Promise<{ deleted: number }> {
+    bounded(new Set(losses.flatMap((loss) => loss.repoIds)).size);
     await this.#checkEpoch();
     if (this.#retired()) return { deleted: 0 };
     const feed = this.#feed();
-    const deleted = this.ctx.storage.transactionSync(() =>
-      losses.reduce((sum, loss) => sum + feed.purge(loss), 0),
-    );
-    await this.#scheduleRetention(feed);
+    let deleted = 0;
+    try {
+      for (const loss of losses)
+        for (const repoId of new Set(loss.repoIds))
+          deleted += this.ctx.storage.transactionSync(() =>
+            feed.purge({ ...loss, repoIds: [repoId] }),
+          );
+    } finally {
+      // Retention for what was committed, a later repository's failure notwithstanding.
+      await this.#scheduleRetention(feed);
+    }
     return { deleted };
   }
 

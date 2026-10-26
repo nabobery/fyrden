@@ -17,6 +17,7 @@ import {
   type FeedItemId,
   type FeedPosition,
   MAX_GONE_THREADS,
+  PURGE_REPOS,
   type SyncPosition,
 } from "../do/user/feed.js";
 import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/cursor.js";
@@ -364,11 +365,12 @@ class Visibility {
       // and a later read forgets them; never through the earlier method, which has no fence.
       await feed.forgetGoneThreads(gone.slice(i, i + MAX_GONE_THREADS)).catch(() => undefined);
     }
-    if (this.#lost.size === 0) return;
-    this.ctx.metrics.count("do.request", { class: "UserDO", method: "forgetRepos" });
-    await feed.forgetRepos(
-      [...this.#lost].map(([repoId, loss]) => ({ ...loss, repoIds: [repoId] })),
-    );
+    // In calls the feed takes (`PURGE_REPOS` repositories each).
+    const lost = [...this.#lost].map(([repoId, loss]) => ({ ...loss, repoIds: [repoId] }));
+    for (let i = 0; i < lost.length; i += PURGE_REPOS) {
+      this.ctx.metrics.count("do.request", { class: "UserDO", method: "forgetRepos" });
+      await feed.forgetRepos(lost.slice(i, i + PURGE_REPOS));
+    }
   }
 
   /** Reads what the members of `items` not read with their repository's check say. */

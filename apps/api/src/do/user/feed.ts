@@ -56,6 +56,13 @@ export const FEED_POLICY = {
 export const MAX_GONE_THREADS = 70;
 
 /**
+ * Repositories one purge call (`purge`, `forgetRepos`) takes at most, each
+ * purged in a transaction of its own, so a call's work is bounded; purge
+ * effects name at most this many.
+ */
+export const PURGE_REPOS = 2;
+
+/**
  * The key a feed's restore generation has in the directory's
  * `source_epochs`: a restore of the principal's object allocates the next
  * one there, as for a repository's.
