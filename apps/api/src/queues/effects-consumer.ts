@@ -1,6 +1,6 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { deliverEffects, invocationBudget } from "../effects/dispatcher.js";
-import { EFFECT_POLICY, type EffectPolicy, type EffectSink } from "../effects/journal.js";
+import { type EffectPolicy, type EffectSink, effectPolicy } from "../effects/journal.js";
 import { type EffectMessage, isEffectMessage, type Publish, publisher } from "../effects/queues.js";
 import { EFFECT_QUEUE_NAMES, EFFECT_SINKS, effectQueues } from "../effects/sinks.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
@@ -40,7 +40,7 @@ export async function consumeEffects(
   const now = options.now ?? Date.now;
   const sinks = options.sinks ?? EFFECT_SINKS;
   const sink = sinkOfQueue(batch.queue);
-  const policy = options.policy ?? EFFECT_POLICY;
+  const policy = options.policy ?? effectPolicy(env);
   const valid: Message<EffectMessage>[] = [];
   for (const message of batch.messages) {
     const body = message.body;

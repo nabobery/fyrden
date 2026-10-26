@@ -29,6 +29,7 @@ import {
 } from "@fyrden/git-core";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
 import { putChunks } from "../../git/put-chunks.js";
+import { FREE_INTERNAL_CALLS } from "../../invocation-calls.js";
 import { type Browsed, fail } from "./browse.js";
 
 /*
@@ -121,8 +122,7 @@ export const ARCHIVE_POLICY: ArchivePolicy = {
   leaseMs: 60 * 60 * 1000,
 };
 
-/** Calls to R2, D1 and Durable Objects one Free invocation allows, and room kept for a slice's own writes. */
-const INVOCATION_CALLS = 1_000;
+/** Room kept, of an invocation's calls, for a slice's own writes. */
 const CALLS_HEADROOM = 100;
 /** Fewest reads a slice starts with; fewer, and it waits for the next invocation. */
 const MIN_SLICE_READS = 20;
@@ -197,6 +197,8 @@ export interface ArchiveDeps {
   readonly memoryBlocks: BlockCache;
   /** Replaces limits of `ARCHIVE_POLICY` (tests). */
   readonly policy?: Partial<ArchivePolicy>;
+  /** Calls to R2, D1 and Durable Objects one invocation allows (default: Free's). */
+  readonly invocationCalls?: number;
 }
 
 const encoder = new TextEncoder();
@@ -359,7 +361,8 @@ export class RepoArchives {
     const { git } = this.deps;
     const policy = this.#policy;
     const spent = currentInvocation()?.tally.internal ?? 0;
-    const maxReads = Math.min(2 * policy.sliceReads, INVOCATION_CALLS - CALLS_HEADROOM - spent);
+    const limit = this.deps.invocationCalls ?? FREE_INTERNAL_CALLS;
+    const maxReads = Math.min(2 * policy.sliceReads, limit - CALLS_HEADROOM - spent);
     if (maxReads < MIN_SLICE_READS) return "wait";
     const counts = { reads: 0 };
     const reader = await openLiveReader(this.deps, {

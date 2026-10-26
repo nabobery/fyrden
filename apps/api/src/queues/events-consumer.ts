@@ -28,6 +28,7 @@ import { type Publish, publisher } from "../effects/queues.js";
 import { EFFECT_SINKS, effectQueues } from "../effects/sinks.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { feedSink } from "../feed/sink.js";
+import { consumerCalls } from "../invocation-calls.js";
 import { liveSearch, Settling } from "../search/live.js";
 
 /** The queue repository outboxes send to. */
@@ -77,11 +78,11 @@ export type ApplyOutcome = "applied" | "dropped" | "unlisted" | "deferred";
 
 /**
  * Calls to internal services (D1, Durable Objects, R2, queues) one
- * consumer invocation makes at most: Free allows 1,000 an invocation, D1
- * queries included (a batch counts once; measured, see
- * docs/operations/limits.md); some are left for the rest. Proposed.
+ * consumer invocation makes at most on Free (`consumerCalls`: the
+ * deployment's per-invocation limit less a margin; a Paid deployment may
+ * set more).
  */
-export const INVOCATION_CALLS = 900;
+export const INVOCATION_CALLS = consumerCalls({});
 /**
  * Calls applying a message costs besides reading its stored events: its
  * lookup, its batch, a send back, and a lookup of the effects a first try
@@ -157,7 +158,7 @@ export async function consumeEvents(
     ...options,
     inline: options.inline ?? { batched: INLINE_BATCH_EFFECTS, recipients: INLINE_RECIPIENTS },
     calls: options.calls ?? {
-      left: INVOCATION_CALLS - DISPATCH_CALLS - SETTLE_CALLS,
+      left: consumerCalls(env) - DISPATCH_CALLS - SETTLE_CALLS,
       reserved: 0,
       applied: false,
     },
@@ -339,7 +340,7 @@ export async function applyEnvelope(
   const now = options.now?.() ?? Date.now();
   const account = isId(sourceId, "org") || isId(sourceId, "usr");
   if (!account && !isId(sourceId, "rep")) return "dropped";
-  const calls = options.calls ?? { left: INVOCATION_CALLS, reserved: 0, applied: false };
+  const calls = options.calls ?? { left: consumerCalls(env), reserved: 0, applied: false };
   const applying = messageCalls(parsed.envelope);
   // Past what is left of the invocation's calls: a later invocation applies it (one alone always).
   if (calls.applied && applying > calls.left - calls.reserved) return "deferred";

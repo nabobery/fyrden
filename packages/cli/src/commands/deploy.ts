@@ -14,6 +14,14 @@ export type Plan = "free" | "paid";
 export interface DeployDeps {
   repoRoot: string;
   plan: Plan;
+  /**
+   * Paid only: calls to internal services (D1, R2, Durable Objects, Queues)
+   * one invocation may make, set as `FYRDEN_INTERNAL_CALLS` (1,000 when not
+   * given: each Paid deploy sets it, so leaving the flag out goes back to
+   * 1,000), and as `limits.subrequests` when past the Worker's subrequest
+   * limit (Paid's default 10,000, or the committed config's).
+   */
+  internalCalls?: number | undefined;
   runner: WranglerRunner;
   /** Builds fyrden-web (react-router build). */
   buildWeb: () => Promise<void>;
@@ -45,6 +53,12 @@ export interface DeployResult {
 
 /** The deploy config wrangler uses: the committed config plus this account's resource ids. */
 export const API_DEPLOY_CONFIG = "wrangler.deploy.jsonc";
+
+/** Internal calls an invocation makes without `--internal-calls` (Free's, measured). */
+const DEFAULT_INTERNAL_CALLS = 1_000;
+
+/** The subrequests a Paid invocation gets without `limits.subrequests` (platform default). */
+const PAID_DEFAULT_SUBREQUESTS = 10_000;
 
 /** Config keys for features the Free plan does not have (Tail Workers are Paid and Enterprise only). */
 const PAID_ONLY_KEYS = ["tail_consumers"] as const;
@@ -123,6 +137,7 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   const resources = await provision(runner, plan);
   for (const r of resources.created) log(`created ${r}`);
 
+  const internalCalls = deps.internalCalls ?? DEFAULT_INTERNAL_CALLS;
   const deployConfig: Record<string, unknown> = {
     ...config,
     account_id: account.id,
@@ -130,6 +145,7 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
       ...((config.vars as Record<string, string> | undefined) ?? {}),
       FYRDEN_PLAN: deps.plan,
       FYRDEN_COMMIT: commitLabel(deps.source),
+      ...(deps.plan === "paid" && { FYRDEN_INTERNAL_CALLS: String(internalCalls) }),
     },
     d1_databases: (config.d1_databases ?? []).map((d) => ({
       ...d,
@@ -141,6 +157,9 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
     })),
   };
   if (deps.plan === "free") for (const key of PAID_ONLY_KEYS) delete deployConfig[key];
+  const limits = (config.limits as { subrequests?: number } | undefined) ?? {};
+  if (deps.plan === "paid" && internalCalls > (limits.subrequests ?? PAID_DEFAULT_SUBREQUESTS))
+    deployConfig.limits = { ...limits, subrequests: internalCalls };
   await writeDeployConfig(apiDir, deployConfig);
 
   for (const db of plan.d1) {

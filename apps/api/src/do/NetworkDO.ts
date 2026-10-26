@@ -6,6 +6,7 @@ import {
 } from "@fyrden/adapters-cloudflare/git";
 import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
+import { jobPolicy } from "../invocation-calls.js";
 import { deletionHandler } from "../network/deletion.js";
 import { fenced, networkGcHandler, wakeGc } from "../network/gc.js";
 import { type GcState, type Member, NetworkRegistry } from "../network/registry.js";
@@ -61,9 +62,13 @@ export class NetworkDO extends MigratingDO {
       doClass: "NetworkDO",
     };
     this.registry = new NetworkRegistry(this.context);
-    this.jobs = new JobQueue(this.context, (at) => {
-      void ctx.storage.setAlarm(at);
-    });
+    this.jobs = new JobQueue(
+      this.context,
+      (at) => {
+        void ctx.storage.setAlarm(at);
+      },
+      jobPolicy(env),
+    );
   }
 
   get runtime(): NetworkRuntime {

@@ -47,10 +47,34 @@ describe("command line", () => {
   });
 
   it("accepts exactly the deploy plans", () => {
-    expect(parseDeployArgs([])).toBe("paid");
-    expect(parseDeployArgs(["--plan", "free"])).toBe("free");
-    expect(parseDeployArgs(["--plan", "paid"])).toBe("paid");
+    expect(parseDeployArgs([])).toEqual({ plan: "paid" });
+    expect(parseDeployArgs(["--plan", "free"])).toEqual({ plan: "free" });
+    expect(parseDeployArgs(["--plan", "paid"])).toEqual({ plan: "paid" });
     expect(parseDeployArgs(["--plan", "free", "--plan", "paid"])).toBeUndefined();
+    expect(parseDeployArgs(["--plan"])).toBeUndefined();
+  });
+
+  it("accepts a Paid deployment's internal calls, from 1,000 to 10,000,000", () => {
+    expect(parseDeployArgs(["--plan", "paid", "--internal-calls", "10000"])).toEqual({
+      plan: "paid",
+      internalCalls: 10_000,
+    });
+    expect(parseDeployArgs(["--internal-calls", "1000", "--plan", "paid"])).toEqual({
+      plan: "paid",
+      internalCalls: 1_000,
+    });
+    expect(parseDeployArgs(["--internal-calls", "10000000"])).toEqual({
+      plan: "paid",
+      internalCalls: 10_000_000,
+    });
+    // Free cannot raise its 1,000.
+    expect(parseDeployArgs(["--plan", "free", "--internal-calls", "5000"])).toBeUndefined();
+    for (const bad of ["999", "10000001", "5e3", "-5000", "1000.5", "lots", ""])
+      expect(parseDeployArgs(["--internal-calls", bad])).toBeUndefined();
+    expect(parseDeployArgs(["--internal-calls"])).toBeUndefined();
+    expect(
+      parseDeployArgs(["--internal-calls", "2000", "--internal-calls", "3000"]),
+    ).toBeUndefined();
   });
 });
 

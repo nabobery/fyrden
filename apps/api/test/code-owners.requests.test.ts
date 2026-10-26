@@ -16,8 +16,8 @@ import { createApp } from "../src/app.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { CODE_OWNER_REQUEST_POLICY, sliceQueries } from "../src/do/repo/code-owner-requests.js";
-import { D1_QUERIES_PER_INVOCATION } from "../src/do/repo/directory-budget.js";
 import { allocateEpoch } from "../src/events/epochs.js";
+import { FREE_INTERNAL_CALLS } from "../src/invocation-calls.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { countingD1 } from "./helpers/d1.js";
@@ -1457,11 +1457,32 @@ describe("a request job's bounds", () => {
           });
         }
       });
-    await alarmsAfter(
-      (r) => D1_QUERIES_PER_INVOCATION - sliceQueries(r.codeOwnerRequestPolicy) + 1,
-    );
+    await alarmsAfter((r) => FREE_INTERNAL_CALLS - sliceQueries(r.codeOwnerRequestPolicy) + 1);
     expect(await requested()).toEqual({ users: [], teams: [] });
-    await alarmsAfter((r) => D1_QUERIES_PER_INVOCATION - sliceQueries(r.codeOwnerRequestPolicy));
+    await alarmsAfter((r) => FREE_INTERNAL_CALLS - sliceQueries(r.codeOwnerRequestPolicy));
+    expect((await requested()).users).toEqual(ids(alice));
+  });
+
+  it("has the room of a Paid deployment's budget, past Free's", async () => {
+    await pullChanging({ "src/a.ts": "b\n" }, { settle: false });
+    await inRepo(stub(), async (r: RepoDO) => {
+      const self = r as unknown as { env: Env };
+      const real = self.env;
+      self.env = { ...real, FYRDEN_PLAN: "paid", FYRDEN_INTERNAL_CALLS: "5000" } as Env;
+      try {
+        for (let i = 0; i < 8; i++) {
+          dueNow(r);
+          await measureInvocation(r.git.context.metrics, { where: "do", op: "test" }, async () => {
+            const invocation = currentInvocation();
+            // No room on Free.
+            if (invocation) invocation.tally.d1 = FREE_INTERNAL_CALLS;
+            await r.alarm();
+          });
+        }
+      } finally {
+        self.env = real;
+      }
+    });
     expect((await requested()).users).toEqual(ids(alice));
   });
 
@@ -1480,11 +1501,11 @@ describe("a request job's bounds", () => {
         }
       });
     // Its code owners worked out, the request job left with no room.
-    await alarmsAfter(6, () => D1_QUERIES_PER_INVOCATION);
+    await alarmsAfter(6, () => FREE_INTERNAL_CALLS);
     expect(await requested()).toEqual({ users: [], teams: [] });
     // A new instance: its alarm checks its epoch in the directory first, which counts.
     await runInDurableObject(stub(), (_: RepoDO, state) => state.abort("cold")).catch(() => {});
-    await alarmsAfter(1, (r) => D1_QUERIES_PER_INVOCATION - sliceQueries(r.codeOwnerRequestPolicy));
+    await alarmsAfter(1, (r) => FREE_INTERNAL_CALLS - sliceQueries(r.codeOwnerRequestPolicy));
     expect(await requested()).toEqual({ users: [], teams: [] });
     await runJobs();
     expect((await requested()).users).toEqual(ids(alice));

@@ -13,7 +13,7 @@ import { uniqueId } from "@fyrden/testing";
 import { beforeAll, beforeEach, describe, expect, inject, it } from "vitest";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import { D1_QUERIES_PER_INVOCATION } from "../src/do/repo/directory-budget.js";
+import { FREE_INTERNAL_CALLS } from "../src/invocation-calls.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { countingD1 } from "./helpers/d1.js";
@@ -882,7 +882,7 @@ describe("a rebase's finish within an invocation's directory queries", () => {
             const invocation = currentInvocation();
             if (invocation)
               invocation.tally.d1 =
-                D1_QUERIES_PER_INVOCATION - need + (left === "one query less" ? 1 : 0);
+                FREE_INTERNAL_CALLS - need + (left === "one query less" ? 1 : 0);
             const self = r as unknown as { env: Env };
             const real = self.env;
             self.env = { ...real, DIRECTORY: countingD1(real.DIRECTORY, count) };

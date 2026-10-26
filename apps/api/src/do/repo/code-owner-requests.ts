@@ -105,6 +105,8 @@ export interface CodeOwnerRequestsDeps {
   readonly authority: RepoAuthority;
   readonly acl: () => RepoAcl;
   readonly account: () => RepoAccount | undefined;
+  /** Calls (D1 queries among them) one invocation may make: the deployment's. */
+  readonly invocationCalls: () => number;
   /** The organization's facts about the teams `slugs` (see `OrgDO.codeOwnerTeamFacts`). */
   readonly teamFacts: (
     accountId: string,
@@ -265,7 +267,7 @@ export class CodeOwnerRequests {
         )[0];
         if (!job) return this.#after();
         // Its directory queries, all of them, in this invocation, or it waits for the next.
-        if (!d1Room(sliceQueries(this.deps.policy())))
+        if (!d1Room(sliceQueries(this.deps.policy()), this.deps.invocationCalls()))
           return { done: false, cursor: null, runAfterMs: 0, endInvocation: true };
         this.#readDirectory = false;
         try {

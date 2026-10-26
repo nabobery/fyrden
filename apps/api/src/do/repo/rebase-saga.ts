@@ -73,6 +73,8 @@ export interface RebaseDeps {
   readonly reviewers: ReviewerConfirmations;
   /** Internal-service calls the invocation has made so far. */
   readonly internalCalls: () => number;
+  /** Calls (D1 queries among them) one invocation may make: the deployment's. */
+  readonly invocationCalls: () => number;
   /** The directory queries `standing` runs for the pull request at most, worked out before it runs. */
   readonly standingQueries: (
     number: number,
@@ -517,11 +519,12 @@ export class RebaseSagas {
       return this.#later(row, this.policy.waitMs);
     const pull = JSON.parse(row.pull_json) as PullRecord;
     // Every directory query left (its standing's, its token's, its feed's) in this invocation, or
-    // the finish waits for the next: D1's queries an invocation are few on Free.
+    // the finish waits for the next.
     const bound = this.deps.standingQueries(number, pull);
     const queries = bound.queries + FINISH_QUERIES;
     this.deps.hooks().beforeFinish?.(queries);
-    if (!d1Room(queries)) return { ...this.#later(row, 0), endInvocation: true };
+    if (!d1Room(queries, this.deps.invocationCalls()))
+      return { ...this.#later(row, 0), endInvocation: true };
     let finished: SliceResult;
     try {
       finished = await this.#finalize(

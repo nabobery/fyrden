@@ -64,6 +64,7 @@ import {
   type PushProgress,
   RepoPush,
 } from "../git/push/repo-push.js";
+import { internalCallLimit, jobPolicy } from "../invocation-calls.js";
 import { ClaimReleases } from "../network/claim-releases.js";
 import type { DetachHooks } from "../network/detach.js";
 import {
@@ -440,6 +441,7 @@ export class RepoDO extends MigratingDO {
         writeDataPoint: (point) => this.metricsDataset.writeDataPoint(point),
       }),
       setAlarm: (at) => this.#arm(at),
+      jobPolicy: jobPolicy(env),
     });
     this.retireOptions = {
       network: new ClaimReleases({
@@ -610,6 +612,7 @@ export class RepoDO extends MigratingDO {
         standing: (number, pull, method, upToDate, merger, budgeted) =>
           this.#discussion.standing(number, pull, method, upToDate, merger, budgeted),
         internalCalls: () => currentInvocation()?.tally.internal ?? 0,
+        invocationCalls: () => internalCallLimit(this.env),
         standingQueries: (number, pull) => this.#discussion.standingQueries(number, pull),
         committed: () => {
           this.#armOutbox();
@@ -783,6 +786,7 @@ export class RepoDO extends MigratingDO {
       authority: this.#authority,
       acl: () => this.acl,
       account: () => this.events.account(),
+      invocationCalls: () => internalCallLimit(this.env),
       teamFacts: (accountId, slugs, probe) =>
         this.env.ORG.getByName(accountId).codeOwnerTeamFacts(this.#repoId(), slugs, probe),
       teamAudience: (slugs) => this.#teamAudience(slugs),
@@ -2689,7 +2693,11 @@ export class RepoDO extends MigratingDO {
   #archiver: RepoArchives | undefined;
 
   #archives(): RepoArchives {
-    this.#archiver ??= new RepoArchives({ git: this.git, memoryBlocks: this.#memoryBlocks() });
+    this.#archiver ??= new RepoArchives({
+      git: this.git,
+      memoryBlocks: this.#memoryBlocks(),
+      invocationCalls: internalCallLimit(this.env),
+    });
     return this.#archiver;
   }
 

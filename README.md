@@ -22,7 +22,7 @@ enabled (each is switched on once in the dashboard) and `wrangler login`.
 ```sh
 pnpm install
 node packages/cli/src/index.ts doctor
-node packages/cli/src/index.ts deploy --plan free   # or --plan paid
+node packages/cli/src/index.ts deploy --plan free   # or --plan paid [--internal-calls N]
 ```
 
 `deploy` creates the D1 databases, R2 buckets, queues and KV namespace if they

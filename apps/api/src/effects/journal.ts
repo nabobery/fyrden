@@ -1,6 +1,7 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { DomainEvent } from "@fyrden/domain";
 import { eventKey } from "@fyrden/domain";
+import { consumerCalls } from "../invocation-calls.js";
 
 /**
  * The effects journal. A sink (webhooks, the activity feed) says what an
@@ -183,8 +184,8 @@ export const EFFECT_POLICY: EffectPolicy = {
   // run, far within the 1,000 an invocation has.
   recoverPage: 100,
   invocation: {
-    // Free allows 1,000 calls an invocation (measured, docs/operations/limits.md), less a margin.
-    calls: 900,
+    // Free's 1,000 calls an invocation less a margin (`effectPolicy` takes the deployment's).
+    calls: consumerCalls({}),
     // Queue consumers get 30 s of CPU on Free as on Paid (Free's 10 ms is for requests and cron
     // triggers: docs/operations/limits.md), so what bounds an invocation is its wall time, while
     // its claims hold, and how long the effects behind it wait: a cron run delivering 20 webhook
@@ -198,6 +199,14 @@ export const EFFECT_POLICY: EffectPolicy = {
     deadlineMs: 60_000,
   },
 };
+
+/** The policy for this deployment: its invocations' calls from its per-invocation limit. */
+export function effectPolicy(env: object): EffectPolicy {
+  return {
+    ...EFFECT_POLICY,
+    invocation: { ...EFFECT_POLICY.invocation, calls: consumerCalls(env) },
+  };
+}
 
 /**
  * Effects of sinks that deliver in batches and are delivered inline

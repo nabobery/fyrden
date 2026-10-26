@@ -14,7 +14,10 @@ import { readSource } from "./source.ts";
 import { nodeWranglerRunner } from "./wrangler.ts";
 
 const USAGE = `usage:
-  fyrden deploy [--plan free|paid]   create resources, migrate and deploy both Workers
+  fyrden deploy [--plan free|paid] [--internal-calls N]
+                                     create resources, migrate and deploy both Workers;
+                                     Paid: N calls to D1, R2 and Durable Objects an invocation
+                                     (1,000 to 10,000,000; default 1,000)
   fyrden doctor                      check login, resources and D1 schemas without changing anything
   fyrden destroy [--yes]             list what deploy created; with --yes delete it all (data loss)
   ${REPAIR_USAGE}
@@ -52,14 +55,28 @@ export function envDeployOptions(
 const HELP_FLAGS = new Set(["--help", "-h"]);
 
 /**
- * The deploy plan if `args` are exactly what `deploy` accepts; undefined
- * otherwise. Anything unknown (a typo, `--help`) must never start a deploy.
+ * The deploy's plan (Paid by default) and internal calls if `args` are
+ * exactly what `deploy` accepts; undefined otherwise. Anything unknown (a
+ * typo, `--help`, a flag twice, internal calls on Free, which cannot raise
+ * its 1,000) must never start a deploy.
  */
-export function parseDeployArgs(args: readonly string[]): Plan | undefined {
-  if (args.length === 0) return "paid";
-  if (args.length === 2 && args[0] === "--plan" && (args[1] === "free" || args[1] === "paid"))
-    return args[1];
-  return undefined;
+export function parseDeployArgs(
+  args: readonly string[],
+): { plan: Plan; internalCalls?: number } | undefined {
+  const given = new Map<string, string>();
+  for (let i = 0; i < args.length; i += 2) {
+    const [flag, value] = [args[i] as string, args[i + 1]];
+    if (value === undefined || given.has(flag)) return undefined;
+    if (flag !== "--plan" && flag !== "--internal-calls") return undefined;
+    given.set(flag, value);
+  }
+  const plan = given.get("--plan") ?? "paid";
+  if (plan !== "free" && plan !== "paid") return undefined;
+  const calls = given.get("--internal-calls");
+  if (calls === undefined) return { plan };
+  const internalCalls = /^\d+$/.test(calls) ? Number(calls) : Number.NaN;
+  if (plan !== "paid" || !(internalCalls >= 1_000 && internalCalls <= 10_000_000)) return undefined;
+  return { plan, internalCalls };
 }
 
 /**
@@ -139,10 +156,11 @@ export async function main(argv: string[]): Promise<number> {
     });
     return result.complete ? 0 : 1;
   }
-  const plan = parseDeployArgs(rest) as Plan;
+  const { plan, internalCalls } = parseDeployArgs(rest) as { plan: Plan; internalCalls?: number };
   const result = await deploy({
     repoRoot,
     plan,
+    internalCalls,
     runner,
     buildWeb: async () => {
       await promisify(execFile)("pnpm", ["--filter", "@fyrden/web", "build"], { cwd: repoRoot });

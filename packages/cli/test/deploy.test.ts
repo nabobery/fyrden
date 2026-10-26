@@ -223,12 +223,59 @@ describe("fyrden deploy", () => {
     expect(fake.state.secrets.get("BOOTSTRAP_SECRET")).toBe("s3cret-value");
   });
 
+  it("sets a Paid deployment's internal calls, raising its subrequest limit past the default", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    let generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_INTERNAL_CALLS: "1000" });
+    expect(generated).not.toHaveProperty("limits");
+    await deploy(deps(fake.runner, { internalCalls: 5_000 }).d);
+    generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_PLAN: "paid", FYRDEN_INTERNAL_CALLS: "5000" });
+    expect(generated).not.toHaveProperty("limits");
+    await deploy(deps(fake.runner, { internalCalls: 50_000 }).d);
+    generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_INTERNAL_CALLS: "50000" });
+    expect(generated.limits).toEqual({ subrequests: 50_000 });
+    // Left out again: back to 1,000, not whatever the last deploy set.
+    await deploy(deps(fake.runner).d);
+    generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_INTERNAL_CALLS: "1000" });
+    expect(generated).not.toHaveProperty("limits");
+  });
+
+  it("raises a committed subrequest limit below the internal calls asked, keeping its other limits", async () => {
+    const path = join(repoRoot, "apps/api/wrangler.jsonc");
+    const committed = parseJsonc<Record<string, unknown>>(await readFile(path, "utf8"));
+    await writeFile(
+      path,
+      JSON.stringify({ ...committed, limits: { cpu_ms: 60_000, subrequests: 2_000 } }),
+    );
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner, { internalCalls: 5_000 }).d);
+    expect((await generatedConfig()).limits).toEqual({ cpu_ms: 60_000, subrequests: 5_000 });
+    await deploy(deps(fake.runner, { internalCalls: 1_500 }).d);
+    expect((await generatedConfig()).limits).toEqual({ cpu_ms: 60_000, subrequests: 2_000 });
+  });
+
+  it("raises a committed subrequest limit below the default 1,000 internal calls", async () => {
+    const path = join(repoRoot, "apps/api/wrangler.jsonc");
+    const committed = parseJsonc<Record<string, unknown>>(await readFile(path, "utf8"));
+    await writeFile(path, JSON.stringify({ ...committed, limits: { subrequests: 500 } }));
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    const generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_INTERNAL_CALLS: "1000" });
+    expect(generated.limits).toEqual({ subrequests: 1_000 });
+  });
+
   it("drops Paid-only features (Tail Workers) in Free mode", async () => {
     const fake = fakeWrangler();
     await deploy(deps(fake.runner, { plan: "free" }).d);
     expect(fake.state.deployed).toEqual(["fyrden-api", "fyrden-web"]);
     const generated = await generatedConfig();
     expect(generated.vars).toMatchObject({ FYRDEN_PLAN: "free" });
+    expect(generated.vars).not.toHaveProperty("FYRDEN_INTERNAL_CALLS");
     expect(generated).not.toHaveProperty("tail_consumers");
   });
 

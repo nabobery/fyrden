@@ -95,9 +95,10 @@ export class SubrequestTally {
   internal = 0;
   external = 0;
   /**
-   * D1 statements run (each of a batch too), counted at the binding (see
-   * `countedD1`): D1 allows a Free invocation 50 queries besides its
-   * share of the internal calls (https://developers.cloudflare.com/d1/platform/limits/).
+   * D1 statements run (each of a batch too, though the platform counts a
+   * batch as one call), counted at the binding (see `countedD1`): work that
+   * runs many directory queries checks its room by them. The platform's
+   * limit is the internal calls' (D1 queries among them).
    */
   d1 = 0;
 }

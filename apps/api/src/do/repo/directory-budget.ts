@@ -1,19 +1,17 @@
 import { d1StatementsRun } from "@fyrden/adapters-cloudflare/obs";
 
 /*
- * D1 allows a Workers Free invocation 50 queries (Paid: 1,000), counted
- * apart from its internal calls (https://developers.cloudflare.com/d1/platform/limits/).
  * Work that may run many directory queries starts only when the invocation
  * has room for all of them, by the tally of every statement it ran
- * (`countedD1`), and ends its invocation once done. Measured on Free
- * (2026-10-17), D1 refused only past the shared 1,000 internal calls, not
- * at 50; Fyrden keeps to the documented 50.
+ * (`countedD1`; a batch's statements each, though the platform counts a
+ * batch once), and ends its invocation once done. The room is the
+ * deployment's per-invocation budget (`internalCallLimit`): D1 queries
+ * share it with R2 and Durable Object calls (measured on Workers Free,
+ * 2026-10-10 to 2026-10-26; D1's limits page says 50 on Free, which did
+ * not hold).
  */
 
-/** D1 queries one invocation may run (Free's). */
-export const D1_QUERIES_PER_INVOCATION = 50;
-
-/** Whether the invocation the caller runs in has room for `need` more D1 queries. */
-export function d1Room(need: number): boolean {
-  return d1StatementsRun() + need <= D1_QUERIES_PER_INVOCATION;
+/** Whether the invocation the caller runs in has room for `need` more D1 queries of `limit`. */
+export function d1Room(need: number, limit: number): boolean {
+  return d1StatementsRun() + need <= limit;
 }
