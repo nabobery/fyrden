@@ -406,11 +406,12 @@ const EXPIRED: DeliverOutcome = { ended: "expired: its body was not made within 
  * The body an event's capture makes, stored once before any of its
  * deliveries, or why none is (`ended`). In order, a round trip each:
  * the event's payload row (an established one is the body, whatever the
- * time: its object is read back, its deliveries `dropped` if it is gone);
- * past the deadline, the row closed unless established, and none made;
- * the intent (none once the repository's
- * tombstone is in); the blobs, from the repository object while the event
- * is still its own; the logins; the object, stored only if there is none
+ * time, once the repository object says the event is still its own: its
+ * object is read back, its deliveries `dropped` if it is gone); past the
+ * deadline, the row closed unless established, and none made; the intent
+ * (none once the repository's tombstone is in); the blobs, from the
+ * repository object while the event is still its own (the call made even
+ * with none to read, for that check); the logins; the object, stored only if there is none
  * (a run that lost uses the winner's bytes); the establishment, which
  * sets until when the body and its deliveries are kept (refused once the
  * row was closed: the object is then deleted).
@@ -431,7 +432,32 @@ async function establish(
     expiresAt,
     store: false,
   });
-  const established = async (expiresAt: number) => {
+  // The event still its repository's (not restored past, not transferred since), with the texts
+  // its body names: the one check of its generations, made whatever path the body takes.
+  const texts = async (hashes: string[]): Promise<Map<string, string> | DeliverOutcome> => {
+    metrics?.count("do.request", { class: "RepoDO", method: "webhookBlobs" });
+    const read = await stages.time(
+      "blobs",
+      async (): Promise<WebhookBlobsRead> =>
+        await env.REPO.getByName(planned.repoId).webhookBlobs({
+          hashes,
+          epochGen: planned.epochGen,
+          ownerGen: planned.ownerGen,
+        }),
+    );
+    if ("missing" in read)
+      return {
+        ended:
+          read.missing === "absent"
+            ? "payload_missing: a text its body names is no longer kept"
+            : `invalidated: its source was ${read.missing}`,
+      };
+    return new Map(Object.entries(read.texts));
+  };
+  const established = async (expiresAt: number): Promise<Body | DeliverOutcome> => {
+    // A body made before a transfer or restore is not delivered after it.
+    const fence = await texts([]);
+    if (!(fence instanceof Map)) return fence;
     metrics?.count("r2.class_b", { bucket: "fyrden-assets", op: "webhook_body_get" });
     const object = await stages.time("body_read", () => env.ASSETS.get(key));
     return owned(object ? new Uint8Array(await object.arrayBuffer()) : null, expiresAt);
@@ -494,32 +520,13 @@ async function establish(
     if (row.state === "expired") return EXPIRED;
   }
   const { capture } = planned;
-  const hashes = blobsOf(capture.tree);
-  let texts = new Map<string, string>();
-  if (hashes.length > 0) {
-    metrics?.count("do.request", { class: "RepoDO", method: "webhookBlobs" });
-    const read = await stages.time(
-      "blobs",
-      async (): Promise<WebhookBlobsRead> =>
-        await env.REPO.getByName(planned.repoId).webhookBlobs({
-          hashes,
-          epochGen: planned.epochGen,
-          ownerGen: planned.ownerGen,
-        }),
-    );
-    if ("missing" in read)
-      return {
-        ended:
-          read.missing === "absent"
-            ? "payload_missing: a text its body names is no longer kept"
-            : `invalidated: its source was ${read.missing}`,
-      };
-    texts = new Map(Object.entries(read.texts));
-  }
+  // Even with no texts to read: the call checks the event is still its repository's.
+  const read = await texts(blobsOf(capture.tree));
+  if (!(read instanceof Map)) return read;
   const logins = await stages.time("logins", () => loginsOf(env, usersOf(capture.tree), metrics));
   let composed: Uint8Array;
   try {
-    composed = encoder.encode(JSON.stringify(composeBody(capture, texts, logins)));
+    composed = encoder.encode(JSON.stringify(composeBody(capture, read, logins)));
   } catch (error) {
     return { ended: `payload_invalid: ${error instanceof Error ? error.message : String(error)}` };
   }

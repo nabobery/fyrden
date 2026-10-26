@@ -530,6 +530,59 @@ describe("full webhook bodies", () => {
     expect(await storedBodies(t.repo.id, [opened])).toEqual([undefined]);
   });
 
+  it("are not made once the repository changed owners, for a body with no texts kept apart", async () => {
+    await t.createHook({ events: ["issues"] });
+    await ok(api("POST", `${t.path}/issues`, t.owner.token, { title: "Short", body: "tiny" }));
+    const [opened] = await t.routed();
+    if (!opened) throw new Error("no event");
+    const sink = createWebhookSink({ resolver: () => async () => ["93.184.216.34"] });
+    const [planned] = sink.plan(opened);
+    if (!planned) throw new Error("no effect");
+    const effect = { id: "e", sink: "webhooks", ...planned, attempts: 1, claimedAt: Date.now() };
+    // Claimed, then the repository's ownership moves on.
+    await runInDurableObject(env.REPO.getByName(t.repo.id), (_, state) => {
+      state.storage.sql.exec("UPDATE repo_meta SET owner_gen = owner_gen + 1");
+    });
+    expect(await sink.deliver(effect, t.testEnv(), env.ORG_READ)).toEqual({
+      ended: "invalidated: its source was transferred",
+    });
+    expect(await t.deliveries()).toEqual([]);
+  });
+
+  it("are not made from a body already established, once the repository changed owners", async () => {
+    await t.createHook({ events: ["issues"] });
+    await ok(api("POST", `${t.path}/issues`, t.owner.token, { title: "Kept", body: "tiny" }));
+    const [opened] = await t.routed();
+    if (!opened) throw new Error("no event");
+    const sink = createWebhookSink({ resolver: () => async () => ["93.184.216.34"] });
+    const [planned] = sink.plan(opened);
+    if (!planned) throw new Error("no effect");
+    const effect = { id: "e", sink: "webhooks", ...planned, attempts: 1, claimedAt: Date.now() };
+    // A first run establishes the body, then stops before its deliveries are written.
+    const stopping = new Proxy(env.ORG_READ, {
+      get(target, prop) {
+        if (prop === "batch")
+          return async (batch: D1PreparedStatement[]) => {
+            const sql = batch.map((s) => (s as unknown as { statement: string }).statement);
+            if (sql.some((q) => q.includes("INSERT INTO webhook_deliveries")))
+              throw new Error("stopped");
+            return target.batch(batch);
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    await expect(sink.deliver(effect, t.testEnv(), stopping)).rejects.toThrow("stopped");
+    expect(await t.deliveries()).toEqual([]);
+    await runInDurableObject(env.REPO.getByName(t.repo.id), (_, state) => {
+      state.storage.sql.exec("UPDATE repo_meta SET owner_gen = owner_gen + 1");
+    });
+    expect(await sink.deliver(effect, t.testEnv(), env.ORG_READ)).toEqual({
+      ended: "invalidated: its source was transferred",
+    });
+    expect(await t.deliveries()).toEqual([]);
+  });
+
   it("make an event's deliveries within the calls it reserves, fresh, losing the put and recovered", async () => {
     for (let i = 0; i < 3; i++) await t.createHook({ events: ["issues"] });
     await ok(
@@ -600,8 +653,8 @@ describe("full webhook bodies", () => {
     // Which run claims the first attempts depends on scheduling (measured: 11 and 19, or 8 and
     // 20): each within the reservation, each composing run reading its texts in one call.
     expect(runs.map((r) => r.blobReads)).toEqual([1, 1]);
-    // The recovery, alone: 9 calls of the 27 reserved (measured).
-    expect(recovered.n).toBe(9);
+    // The recovery, alone: 10 calls of the 27 reserved (measured), its generations' check one.
+    expect(recovered.n).toBe(10);
     expect(reserved).toBe(27);
   });
 
