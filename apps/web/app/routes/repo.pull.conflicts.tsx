@@ -140,6 +140,11 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
   if (session.state === "unknown")
     return { error: "Your session could not be checked, so nothing was sent: try again." };
   const form = await readForm(request, CONFLICTS_FORM_MAX_BYTES);
+  // Made for one viewer: another signed in since (another tab) commits nothing as them.
+  if (session.state === "signed-in" && session.user.id !== field(form, "viewer"))
+    return {
+      error: "You are signed in as someone else now, so nothing was sent: reload the page.",
+    };
   const snapshot = field(form, "conflict_snapshot");
   if (!/^[0-9a-f]{80}$/.test(snapshot)) return { error: "Read the conflicts again.", stale: true };
   const count = Number(field(form, "count"));
@@ -409,7 +414,8 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
               // Multipart: content goes as its bytes, not URL-encoded (three times the size).
               encType="multipart/form-data"
               ref={form}
-              key={`${editing.conflicts.conflict_snapshot}:${editing.generation}`}
+              // Drawn anew for another viewer: one account's resolution is never sent as another's.
+              key={`${editing.conflicts.conflict_snapshot}:${editing.generation}:${viewer ?? ""}`}
             >
               <input
                 type="hidden"
@@ -417,6 +423,7 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
                 value={editing.conflicts.conflict_snapshot}
               />
               <input type="hidden" name="count" value={editable.length} />
+              <input type="hidden" name="viewer" value={viewer ?? ""} />
               {editable.map((f, i) => (
                 <div key={f.path}>
                   <input type="hidden" name={`eol:${i}`} value={f.ending} />

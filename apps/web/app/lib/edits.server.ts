@@ -23,6 +23,24 @@ export type Send<S extends Scope> = (
 ) => Promise<EditResult<S>>;
 
 /**
+ * Why `form` must not be sent, or undefined: a form made for one viewer
+ * sends nothing once another has signed in (another tab), or while the
+ * session cannot be checked. For forms without drafts (see `editSender`).
+ */
+export async function viewerRefusal(
+  context: Readonly<RouterContextProvider>,
+  request: Request,
+  form: FormData,
+): Promise<string | undefined> {
+  const session = await checkSession(context, request);
+  if (session.state === "unknown")
+    return "Your session could not be checked just now: nothing was sent; send it again.";
+  if (session.state !== "signed-in" || session.user.id !== field(form, "viewer"))
+    return "You are signed in as someone else now: reload the page.";
+  return undefined;
+}
+
+/**
  * Checks who sends `form` before anything is: a form made for one viewer
  * sends nothing once another has signed in (another tab), and nothing
  * while the session cannot be checked (what was written comes back to

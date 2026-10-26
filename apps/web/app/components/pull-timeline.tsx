@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { when, who } from "../lib/pulls.js";
 import { Markdown } from "./markdown.js";
@@ -63,9 +64,12 @@ export function Timeline({
   viewer,
   react,
   linked = null,
+  hidden,
 }: {
   items: TimelineItem[];
   viewer: string | null;
+  /** Fields every form sends (the viewer it was made for). */
+  hidden?: ReactNode;
   /** Whether the viewer may react to its comments, and whether a form is being sent. */
   react: { canReact: boolean; busy: boolean };
   /** The comment a permalink names, marked. */
@@ -96,6 +100,7 @@ export function Timeline({
                   target={item.id}
                   canReact={react.canReact}
                   busy={react.busy}
+                  hidden={hidden}
                 />
               </article>
             </li>

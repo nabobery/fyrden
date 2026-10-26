@@ -366,7 +366,7 @@ describe("diff comments", () => {
       "POST /api/repos/ada/demo/pulls/7/suggestions/apply": () => json({}, 201),
     });
     const outcome = await action({
-      request: formPost("/ada/demo/pull/7/files", fields),
+      request: formPost("/ada/demo/pull/7/files", { viewer: VIEWER, ...fields }),
       context,
       params,
     } as never);
@@ -447,5 +447,53 @@ describe("diff comments", () => {
       body: { comment_ids: [9] },
     });
     expect((await act({ intent: "resolve", thread_id: "../x" })).call).toBeUndefined();
+  });
+});
+
+describe("the files page's forms", () => {
+  it("send nothing from a page made for another viewer", async () => {
+    const { context, calls } = api({});
+    for (const fields of [
+      { intent: "comment", body: "hi", line: "1", commit_id: "a".repeat(40), path: "a.ts" },
+      { intent: "reply", body: "hi", comment_id: "3" },
+      { intent: "resolve", thread_id: "3" },
+      { intent: "review", event: "APPROVE", commit_id: "a".repeat(40) },
+    ]) {
+      const outcome = await action({
+        request: formPost("/ada/demo/pull/7/files", { viewer: "usr_other", ...fields }),
+        context,
+        params,
+      } as never);
+      expect(outcome).toMatchObject({ error: expect.stringContaining("someone else") });
+    }
+    expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
+  });
+
+  it("each carry the viewer they were made for", () => {
+    const threads = threadsOf(
+      [comment({ id: 1, thread_id: 1, path: "a.ts", body: "first" })],
+      pullRequest() as never,
+      new Map([["a.ts", "a.ts"]]),
+    );
+    const thread = renderPage(PullFiles, "/ada/demo/pull/7/files", {
+      owner: "ada",
+      repo: "demo",
+      pull: pullRequest(),
+      viewer: VIEWER,
+      cursor: null,
+      files: [{ ...file("a.ts"), patch: undefined, hasPatch: true }],
+      headSha: HEAD,
+      mergeBaseSha: BASE,
+      truncated: false,
+      pages: { next: null, first: null },
+      threads,
+      threadPages: { next: null, first: null },
+      diffStyle: "unified",
+    });
+    expect(thread).toContain("first");
+    const forms = thread.match(/<form[\s\S]*?<\/form>/g) ?? [];
+    expect(forms.length).toBeGreaterThan(0);
+    for (const form of forms)
+      expect(form).toContain(`<input type="hidden" name="viewer" value="${VIEWER}"/>`);
   });
 });

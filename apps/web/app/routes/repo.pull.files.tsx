@@ -24,6 +24,7 @@ import { Pager } from "../components/pager.js";
 import { PullHeader } from "../components/pull-header.js";
 import { ReviewForm } from "../components/review-form.js";
 import { apiGet, assertSameOrigin, readForm } from "../lib/api.server.js";
+import { viewerRefusal } from "../lib/edits.server.js";
 import { pageLinks } from "../lib/pages.js";
 import {
   field,
@@ -103,6 +104,9 @@ export async function action({
 }: Route.ActionArgs): Promise<ActionResult> {
   assertSameOrigin(request);
   const form = await readForm(request, FILES_FORM_MAX_BYTES);
+  // The form was made for one viewer: another signed in since (another tab) sends nothing.
+  const refused = await viewerRefusal(context, request, form);
+  if (refused) return { error: refused };
   const api = pullApiOf(params);
   const post = (path: string, body: unknown, intent: string, fallback: string) =>
     send(context, request, "POST", `${api}${path}`, body, intent, fallback);
@@ -515,7 +519,13 @@ export default function PullFiles({ loaderData }: Route.ComponentProps) {
       {pull.state === "open" && viewer !== null && (
         // The review is of the head these changes are of, which may be older than the
         // pull request's (a later page keeps the comparison it started with).
-        <ReviewForm headSha={headSha} isAuthor={pull.user.id === viewer} />
+        <ReviewForm
+          // Drawn anew for another viewer: one account's review is never sent as another's.
+          key={viewer}
+          headSha={headSha}
+          isAuthor={pull.user.id === viewer}
+          hidden={<input type="hidden" name="viewer" value={viewer} />}
+        />
       )}
     </main>
   );

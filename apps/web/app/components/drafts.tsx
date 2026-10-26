@@ -35,7 +35,11 @@ export class DraftStore {
   };
 }
 
-const DraftsContext = createContext<{ scope: string; store: DraftStore } | null>(null);
+const DraftsContext = createContext<{
+  scope: string;
+  store: DraftStore;
+  viewer: string | null;
+} | null>(null);
 
 /** The drafts written by `viewer`. */
 export interface ViewerDrafts {
@@ -71,8 +75,17 @@ export function Drafts({
   const { store } = drafts;
   // The viewer is in the keys too: the fetchers sending drafts are the router's, not these.
   const scope = `${page}#${viewer ?? ""}`;
-  const value = useMemo(() => ({ scope, store }), [scope, store]);
+  const value = useMemo(() => ({ scope, store, viewer }), [scope, store, viewer]);
   return <DraftsContext.Provider value={value}>{children}</DraftsContext.Provider>;
+}
+
+/**
+ * The viewer the forms under `Drafts` were made for, sent with each: the
+ * action sends nothing once another account has signed in (another tab).
+ */
+export function ViewerField() {
+  const drafts = useContext(DraftsContext);
+  return <input type="hidden" name="viewer" value={drafts?.viewer ?? ""} />;
 }
 
 function useDrafts(): { scope: string; store: DraftStore } {

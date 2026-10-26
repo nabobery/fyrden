@@ -16,6 +16,7 @@ import {
   within,
   writeContinuation,
 } from "../lib/continuation.js";
+import { viewerRefusal } from "../lib/edits.server.js";
 import { mergeRules, type RulesetsPage } from "../lib/merge.server.js";
 import { type PageLinks, pageLinks, positiveId } from "../lib/pages.js";
 import {
@@ -204,6 +205,9 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
 export async function action({ request, context, params }: Route.ActionArgs): Promise<MergeResult> {
   assertSameOrigin(request);
   const form = await readForm(request, PULL_FORM_MAX_BYTES);
+  // The form was made for one viewer: another signed in since (another tab) sends nothing.
+  const refused = await viewerRefusal(context, request, form);
+  if (refused) return { error: refused };
   const api = pullApiOf(params);
   const patch = (body: Record<string, unknown>, intent: string, fallback: string) =>
     send(context, request, "PATCH", api, body, intent, fallback);
@@ -336,13 +340,16 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
   const react = { canReact: viewer !== null && (!pull.locked || push), busy };
   const isAuthor = viewer !== null && pull.user.id === viewer;
   const open = pull.state === "open";
+  const viewerField = <input type="hidden" name="viewer" value={viewer ?? ""} />;
   // A comment being written stays as the page is read again; only its own sending clears it.
   const commentForm = useRef<HTMLFormElement>(null);
   useEffect(() => {
     if (result?.ok === "comment") commentForm.current?.reset();
   }, [result]);
   return (
-    <main>
+    // Drawn anew for another viewer (signed in from another tab): what one account wrote in the
+    // page's editors is never sent as another's.
+    <main key={viewer ?? ""}>
       <PullHeader owner={owner} repo={repo} pull={pull} viewer={viewer} active="conversation" />
       <SubjectSidebar
         owner={owner}
@@ -357,17 +364,19 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
         roles={{ triage: permissions?.triage === true, push, admin: permissions?.admin === true }}
         viewer={viewer}
         busy={busy}
+        hidden={viewerField}
       />
       <section className="panel" aria-labelledby="pull-description">
         <h2 id="pull-description" className="visually-hidden">
           Description
         </h2>
         {body ? <Markdown source={body} /> : <p className="muted">No description.</p>}
-        <Reactions rollup={pull.reactions} target="issue" {...react} />
+        <Reactions rollup={pull.reactions} target="issue" {...react} hidden={viewerField} />
         <details>
           <summary>Edit title and description</summary>
           <Form method="post">
             <input type="hidden" name="intent" value="edit" />
+            {viewerField}
             <label htmlFor="edit-title">Title</label>
             <input
               id="edit-title"
@@ -401,23 +410,28 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
           viewer={viewer}
           react={react}
           linked={loaderData.linked?.id ?? null}
+          hidden={viewerField}
         />
         <Pager links={commentPages} label="Comment" />
         <Pager links={reviewPages} label="Review" />
       </section>
 
-      {open && viewer !== null && <ReviewForm headSha={pull.head.sha} isAuthor={isAuthor} />}
+      {open && viewer !== null && (
+        <ReviewForm headSha={pull.head.sha} isAuthor={isAuthor} hidden={viewerField} />
+      )}
       {open && (
         <MergeBox
           pull={pull}
           rules={rules}
           conflicts={`${pullPage(owner, repo, pull.number)}/conflicts`}
+          hidden={viewerField}
         />
       )}
 
       <section className="panel" aria-labelledby="pull-state">
         <h2 id="pull-state">State</h2>
         <Form method="post" className="row">
+          {viewerField}
           {open ? (
             <>
               <button type="submit" name="intent" value="close" disabled={busy}>
@@ -444,6 +458,7 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
         {isAuthor && pull.head_repo_id !== null && (
           <Form method="post">
             <input type="hidden" name="intent" value="maintainer" />
+            {viewerField}
             <p>
               <input
                 id="maintainer"
@@ -471,6 +486,7 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
         <h2 id="add-comment">Add a comment</h2>
         <Form method="post" ref={commentForm}>
           <input type="hidden" name="intent" value="comment" />
+          {viewerField}
           <label htmlFor="comment-body">Comment (Markdown)</label>
           <textarea id="comment-body" name="body" className="short" required />
           <p>

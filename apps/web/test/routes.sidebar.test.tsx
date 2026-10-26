@@ -196,10 +196,35 @@ describe("the pull request page's sidebar", () => {
       [`POST ${API}/assignees`]: () => json(issue()),
     });
     const send = (fields: Record<string, string>) =>
-      pullAction({ request: formPost("/ada/demo/pull/7", fields), context, params } as never);
+      pullAction({
+        request: formPost("/ada/demo/pull/7", { viewer: VIEWER, ...fields }),
+        context,
+        params,
+      } as never);
     expect(await send({ intent: "assign", handle: "bo" })).toMatchObject({ ok: "assign" });
     expect(await send({ intent: "delete-issue" })).toMatchObject({ error: "Unknown action." });
     expect(calls.filter((c) => c.method !== "GET").map(pathOf)).toEqual([`POST ${API}/assignees`]);
+  });
+
+  it("sends nothing from any of its forms made for another viewer", async () => {
+    const { context, calls } = api({});
+    for (const fields of [
+      { intent: "assign", handle: "bo" },
+      { intent: "lock", lock_reason: "" },
+      { intent: "react", target: "issue", content: "rocket" },
+      { intent: "comment", body: "hi" },
+      { intent: "edit", title: "t", body: "b" },
+      { intent: "close" },
+      { intent: "merge", sha: "a".repeat(40), merge_method: "merge" },
+    ]) {
+      const outcome = await pullAction({
+        request: formPost("/ada/demo/pull/7", { viewer: "usr_other", ...fields }),
+        context,
+        params,
+      } as never);
+      expect(outcome).toMatchObject({ error: expect.stringContaining("someone else") });
+    }
+    expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
   });
 });
 

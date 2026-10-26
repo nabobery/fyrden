@@ -239,7 +239,7 @@ describe("reviewing, merging and updating the branch", () => {
       "PUT /api/repos/ada/demo/pulls/7/update-branch": reply,
     });
     const outcome = await action({
-      request: formPost("/ada/demo/pull/7", fields),
+      request: formPost("/ada/demo/pull/7", { viewer: VIEWER, ...fields }),
       context,
       params,
     } as never);

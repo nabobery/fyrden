@@ -295,6 +295,12 @@ describe("a pull request's conversation", () => {
     expect(page({}, VIEWER)).toContain("Convert to draft");
     expect(page({ state: "closed" }, VIEWER)).toContain("Reopen pull request");
     expect(page({ state: "closed", merged: true }, VIEWER)).not.toContain("Reopen pull request");
+    // Every form names the viewer it was made for, so another's session sends none of them.
+    const html = page({ head_repo_id: "rep_fork", user: { id: VIEWER, login: "ada" } }, VIEWER);
+    const forms = html.match(/<form[\s\S]*?<\/form>/g) ?? [];
+    expect(forms.length).toBeGreaterThan(5);
+    for (const form of forms)
+      expect(form).toContain(`<input type="hidden" name="viewer" value="${VIEWER}"/>`);
   });
 });
 
@@ -308,7 +314,7 @@ describe("changing a pull request", () => {
       "POST /api/repos/ada/demo/issues/7/comments": () => json({ id: 1 }, 201),
     });
     const outcome = await pullAction({
-      request: formPost("/ada/demo/pull/7", fields),
+      request: formPost("/ada/demo/pull/7", { viewer: VIEWER, ...fields }),
       context,
       params,
     } as never);
@@ -450,7 +456,11 @@ describe("reactions on a pull request", () => {
         json({ id: 8, state: "deleted" }),
     });
     const send = (fields: Record<string, string>) =>
-      pullAction({ request: formPost("/ada/demo/pull/7", fields), context, params } as never);
+      pullAction({
+        request: formPost("/ada/demo/pull/7", { viewer: VIEWER, ...fields }),
+        context,
+        params,
+      } as never);
     expect(await send({ intent: "react", target: "issue", content: "rocket" })).toMatchObject({
       ok: "react",
     });
