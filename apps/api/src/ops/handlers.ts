@@ -207,6 +207,7 @@ import {
 import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "../repos/stars.js";
 import { transferRepoOperation } from "../repos/transfer.js";
 import { updateRepoOperation } from "../repos/update.js";
+import { backfillSearchOperation } from "../search/backfill.js";
 import { clock, newId } from "../services.js";
 import { platformKeys } from "../signing/platform-key.js";
 import { type Handlers, OperationError } from "./execute.js";
@@ -536,6 +537,9 @@ export const handlers: Handlers = {
   "quotas.user.get": getUserQuotaOperation,
   "quotas.org.get": getOrgQuotaOperation,
   "admin.quotas.set": setQuotaOperation,
+
+  // Search's projections, populated by reconciliation (search/backfill).
+  "admin.search.backfill": backfillSearchOperation,
 
   // Branches, tags, commits and comparisons (repos/browse).
   "repos.branches.list": listBranchesOperation,

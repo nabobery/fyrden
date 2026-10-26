@@ -40,6 +40,9 @@ export async function searchIndexing(env: Pick<Env, "DIRECTORY">): Promise<boole
   return row?.value === "on";
 }
 
+/** Rows one request for a reconciliation writes at most (its row and its index entries). */
+export const REQUEST_ROWS = 3;
+
 /**
  * The statement that asks for a source's reconciliation: the next
  * revision past the one covered (or past the pass under way), unless one

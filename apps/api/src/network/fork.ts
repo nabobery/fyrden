@@ -15,6 +15,7 @@ import {
   publishHooks,
   type RepoEntry,
 } from "../repos/directory.js";
+import { afterPublication } from "../search/published.js";
 import { clock, newId } from "../services.js";
 import type { ForkExport, NetworkFailure, ViewPack } from "./types.js";
 import { chooseBaseCompaction, VIEW_CAP } from "./view-cap.js";
@@ -259,6 +260,11 @@ export async function forkRepository(
   }
   // The name may have redirected to another repository here.
   forgetResolved(request.ownerHandle, request.name);
+  await afterPublication(
+    env,
+    { id: forkId, shard: DEFAULT_ORG_SHARD, storageAt: started },
+    request.metrics,
+  );
   const publishMs = clock() - started;
   log.info("fork published", { forkId, publishMs, commitsCopied, packsCompacted });
   return {

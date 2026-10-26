@@ -6,6 +6,7 @@ import { accountLimits } from "../accounts/quotas.js";
 import { allocateEpoch } from "../events/epochs.js";
 import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { afterPublication } from "../search/published.js";
 import { clock, newId } from "../services.js";
 import { agentRepoLimits } from "./agent-limits.js";
 import {
@@ -70,6 +71,7 @@ export async function createRepository(
   const id = newId("rep");
   const networkId = newId("net");
   const epochGen = await allocateEpoch(env.DIRECTORY, id, metrics);
+  const storageAt = clock();
   metrics.count("do.request", { class: "RepoDO", method: "initGitStorage" });
   const init = await env.REPO.getByName(id).initGitStorage(
     networkId,
@@ -130,6 +132,7 @@ export async function createRepository(
   if (refused) throw repoQuotaError(owner.handle, maxRepos);
   // The name may have redirected to another repository here.
   forgetResolved(owner.handle, name);
+  await afterPublication(env, { id, shard: DEFAULT_ORG_SHARD, storageAt }, metrics);
   return repoOutput(
     {
       id,

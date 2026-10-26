@@ -1721,6 +1721,17 @@ export type AdminWebhooksResealOutput = {
   next_cursor: string | null;
 };
 
+/** Input of `admin.search.backfill`: Ask search to reconcile every repository. */
+export type AdminSearchBackfillInput = {
+  cursor?: string;
+};
+
+/** Output of `admin.search.backfill`. */
+export type AdminSearchBackfillOutput = {
+  requested: number;
+  next_cursor: string | null;
+};
+
 /** Input of `pulls.list`: List pull requests. */
 export type PullsListInput = {
   /** The owner's handle. */
@@ -7026,6 +7037,7 @@ export const OPERATIONS = {
   "repos.hooks.deliveries.get": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: false, items: "attempts_made" },
   "repos.hooks.deliveries.redeliver": { method: "POST", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: true },
   "admin.webhooks.reseal": { method: "POST", path: "/admin/webhooks/reseal", pathParams: [], idempotent: true },
+  "admin.search.backfill": { method: "POST", path: "/admin/search/backfill", pathParams: [], idempotent: true },
   "pulls.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: false, items: "pull_requests" },
   "pulls.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: true },
   "pulls.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: false },
@@ -7255,6 +7267,8 @@ export interface Operations {
   "repos.hooks.deliveries.redeliver": { input: ReposHooksDeliveriesRedeliverInput; output: ReposHooksDeliveriesRedeliverOutput };
   /** Seal webhook secrets with the current key. Fyrden: seals again, with `WEBHOOKS_KEY`, webhook secrets sealed with a retired key, a batch of repositories at a time (call again with `cursor` until `next_cursor` is null and `remaining` is 0); `unreadable` counts secrets whose key is gone (rotate those hooks' secrets). Instance administrators only. */
   "admin.webhooks.reseal": { input: AdminWebhooksResealInput; output: AdminWebhooksResealOutput };
+  /** Ask search to reconcile every repository. Fyrden: asks for a reconciliation of every active repository's search projections, a page of repositories at a time (call again with `cursor` until `next_cursor` is null); `requested` counts the repositories newly asked (one already waiting is not asked again). The reconciliations run in the five-minute maintenance within search's daily allowance. Refused (409) while search indexing is off: run it once indexing is on, after which repositories made meanwhile are projected from their events (or reconciled, when published late). Instance administrators only. */
+  "admin.search.backfill": { input: AdminSearchBackfillInput; output: AdminSearchBackfillOutput };
   /** List pull requests. The repository's pull requests, newest first. */
   "pulls.list": { input: PullsListInput; output: PullsListOutput };
   /** Create a pull request. Proposes merging one branch of the repository into another. Anyone who can read the repository may open one. Refused when the head has no commits the base lacks, or when a pull request between the two branches is already open. While open, `refs/pull/{number}/head` follows the head branch. The head may be a branch of a fork in the same network (`owner:branch`): its revision is imported first, and later pushes to it reach the pull request shortly after. */

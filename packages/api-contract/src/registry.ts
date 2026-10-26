@@ -171,6 +171,7 @@ import {
   listRulesets,
   updateRuleset,
 } from "../ops/rulesets.js";
+import { backfillSearch } from "../ops/search.js";
 import {
   createSshSigningKey,
   deleteSshSigningKey,
@@ -240,6 +241,7 @@ export const registry = defineRegistry([
   getHookDelivery,
   redeliverHookDelivery,
   resealHookSecrets,
+  backfillSearch,
   listPulls,
   createPull,
   getPull,
