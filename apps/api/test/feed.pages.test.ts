@@ -3,6 +3,7 @@
 // a manifest; the feed sink delivers each page as an effect of its own,
 // read from the repository only while the event is still its, before the
 // deadline, and as the manifest says; pages go a day after the deadline.
+
 import {
   createExecutionContext,
   createMessageBatch,
@@ -31,6 +32,7 @@ import { consumeEffects } from "../src/queues/effects-consumer.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { recordingPublish } from "./helpers/effects.js";
+import { FROM_START } from "./helpers/feed.js";
 import { inRepo } from "./helpers/repo-git.js";
 
 let owner: Who;
@@ -140,7 +142,7 @@ const effects = async () =>
   ).results;
 
 const items = async (principal: string) => {
-  const page = await env.USER.getByName(principal).listFeed(null, 100, {});
+  const page = await env.USER.getByName(principal).listStreams(FROM_START, 100, {});
   if (page.expired) throw new Error("expired");
   return page.items.filter((i) => i.repoId === repo.id).map((i) => i.threadKey);
 };

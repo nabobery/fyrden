@@ -1,17 +1,28 @@
+CREATE INDEX feed_cursors_age ON feed_cursors (created_at);
+CREATE INDEX feed_cursors_credential ON feed_cursors (credential, hash, created_at);
 CREATE INDEX feed_evictions_at ON feed_evictions (event_at);
-CREATE INDEX feed_items_seq_at ON feed_items (seq_at, feed_seq);
-CREATE INDEX feed_items_subject
-        ON feed_items (substr(thread_key, 1, instr(thread_key, '/') - 1), feed_seq)
+CREATE INDEX feed_evictions_stream ON feed_evictions (repo_id, subject, event_at);
+CREATE INDEX feed_items_age ON feed_items (order_at);
+CREATE INDEX feed_items_stream ON feed_items (repo_id, subject, feed_seq)
         WHERE feed_seq IS NOT NULL;
-CREATE INDEX feed_tombstones ON feed_items (seq_at) WHERE feed_seq IS NULL;
+CREATE INDEX feed_streams_live ON feed_streams (repo_id, subject) WHERE items > 0;
+CREATE INDEX feed_tombstones_stream ON feed_items (repo_id, subject, order_at)
+        WHERE feed_seq IS NULL;
 CREATE INDEX purge_marks_until ON purge_marks (until_at);
+CREATE TABLE feed_cursors (
+        id TEXT PRIMARY KEY,
+        credential TEXT NOT NULL,
+        hash INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE feed_evictions (
         repo_id TEXT NOT NULL,
         thread_key TEXT NOT NULL,
         kind TEXT NOT NULL,
         thread_epoch INTEGER NOT NULL,
         version INTEGER NOT NULL,
-        event_at INTEGER NOT NULL,
+        event_at INTEGER NOT NULL, subject TEXT NOT NULL DEFAULT '',
         PRIMARY KEY (repo_id, thread_key, kind)
       ) STRICT, WITHOUT ROWID;
 CREATE TABLE feed_items (
@@ -37,7 +48,7 @@ CREATE TABLE feed_items (
         acked_epoch INTEGER NOT NULL DEFAULT 0,
         acked_version INTEGER NOT NULL DEFAULT 0,
         feed_seq INTEGER UNIQUE,
-        seq_at INTEGER NOT NULL,
+        seq_at INTEGER NOT NULL, subject TEXT NOT NULL DEFAULT '', order_at INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (repo_id, thread_key, kind)
       ) STRICT, WITHOUT ROWID;
 CREATE TABLE feed_meta (
@@ -47,11 +58,19 @@ CREATE TABLE feed_meta (
         head_seq INTEGER NOT NULL,
         low_watermark INTEGER NOT NULL,
         items INTEGER NOT NULL
-      ) STRICT;
+      , legacy_head INTEGER NOT NULL DEFAULT 0) STRICT;
 CREATE TABLE feed_retired (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         at INTEGER NOT NULL
       ) STRICT;
+CREATE TABLE feed_streams (
+        repo_id TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        low_watermark INTEGER NOT NULL,
+        items INTEGER NOT NULL,
+        tombstones INTEGER NOT NULL,
+        PRIMARY KEY (repo_id, subject)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE purge_marks (
         repo_id TEXT PRIMARY KEY,
         until_at INTEGER NOT NULL,

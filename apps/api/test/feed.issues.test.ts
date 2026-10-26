@@ -8,7 +8,7 @@ import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { api, json, user, type Who } from "./helpers/api.js";
-import { type EntryInit, entry } from "./helpers/feed.js";
+import { type EntryInit, entry, FROM_START } from "./helpers/feed.js";
 import { scopedToken } from "./helpers/principals.js";
 import { inRepo } from "./helpers/repo-git.js";
 
@@ -38,7 +38,7 @@ async function deliver(principal: string, init: EntryInit) {
 
 /** What the principal's feed holds, by thread, whoever may read it. */
 async function stored(principal: string): Promise<string[]> {
-  const page = await env.USER.getByName(principal).listFeed(null, 5_000, {});
+  const page = await env.USER.getByName(principal).listStreams(FROM_START, 5_000, {});
   if (page.expired) throw new Error("expired");
   return page.items.map((i) => i.threadKey).sort();
 }

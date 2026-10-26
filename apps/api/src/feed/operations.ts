@@ -11,14 +11,16 @@ import {
 } from "@fyrden/domain";
 import { type FeedMember, type FeedViewDenial, memberKey } from "../do/repo/feed-view.js";
 import {
+  type CursorRef,
   FEED_POLICY,
   type FeedFilter,
   type FeedItem,
   type FeedItemId,
-  type FeedPosition,
   MAX_GONE_THREADS,
   PURGE_REPOS,
-  type SyncPosition,
+  type SnapshotState,
+  type StreamKey,
+  type StreamPosition,
 } from "../do/user/feed.js";
 import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError, reverified } from "../ops/execute.js";
@@ -44,6 +46,18 @@ import { FreshAccess, type FreshDecision } from "./access.js";
  * shows at once and a deletion leaves no excerpt. A check that
  * could not be made, or one past the answer's budget, ends the answer
  * there (the cursor never passes an item not checked).
+ *
+ * A cursor names a snapshot the feed keeps for the credential: its
+ * positions in the streams (a repository's issue threads, or its pull
+ * requests') it was given items of, each moved only by what an answer
+ * gave. So nothing the caller may not read moves, expires or evicts
+ * anything of its cursor, and an answer that gives nothing names the same
+ * snapshot (its ETag stays). A cursor whose position in a stream the
+ * caller may read is behind what retention or the stream's cap deleted
+ * is expired; one behind only in streams it may not read is not.
+ * Hidden items are read again by every answer until they go (an answer
+ * checks 100 repositories at most): many of them ahead of the caller's
+ * can delay those, a residual left for the inbox.
  *
  * The checks are fresh: the caller's credential is verified again on the
  * directory's primary before anything of the feed is read (a revocation,
@@ -116,21 +130,23 @@ const VIEW_MEMBERS = 100;
 const viewOf = (env: Env, repoId: string) => env.REPO.getByName(repoId);
 
 /**
- * A feed cursor: `base64url({v:1,e,s,q})`, an epoch and a sequence number,
- * and how many answers in a row before it showed nothing (`q`, left out
- * for none), opaque to clients. The count makes the wait between polls
- * grow without anything stored per poll; it stops at its ceiling, so a
- * quiet feed's answer then stays the same, and its ETag with it.
+ * A feed cursor: `base64url({v:2,e,i,q})`, the feed's epoch and its
+ * snapshot's id, and how many answers in a row before it showed nothing
+ * (`q`, left out for none), opaque to clients. The count makes the wait
+ * between polls grow without anything stored per poll; it stops at its
+ * ceiling, so a quiet feed's answer then stays the same, and its ETag with
+ * it. A cursor of before streams, `{v:1,e,s,q}`, named a sequence number
+ * of the whole feed: still read, as every stream at it.
  */
-export function encodeFeedCursor(position: FeedPosition, quiet = 0): string {
-  const cursor = { v: 1, e: position.epoch, s: position.seq, ...(quiet > 0 && { q: quiet }) };
+export function encodeFeedCursor(epoch: string, id: string, quiet = 0): string {
+  const cursor = { v: 2, e: epoch, i: id, ...(quiet > 0 && { q: quiet }) };
   return encodeBytesCursor(new TextEncoder().encode(JSON.stringify(cursor)));
 }
 
 /** What a feed cursor names (null without one); any other cursor is refused. */
 export function decodeFeedCursor(
   cursor: string | undefined,
-): (FeedPosition & { readonly quiet: number }) | null {
+): (CursorRef & { readonly quiet: number }) | null {
   if (cursor === undefined) return null;
   const bytes = decodeBytesCursor(cursor);
   let value: unknown;
@@ -143,23 +159,24 @@ export function decodeFeedCursor(
   const {
     v,
     e,
+    i,
     s,
     q = 0,
-  } = (value ?? {}) as { v?: unknown; e?: unknown; s?: unknown; q?: unknown };
+  } = (value ?? {}) as { v?: unknown; e?: unknown; i?: unknown; s?: unknown; q?: unknown };
   if (
-    v !== 1 ||
     typeof e !== "string" ||
     e.length > 64 ||
-    typeof s !== "number" ||
-    !Number.isSafeInteger(s) ||
-    s < 0 ||
     typeof q !== "number" ||
     !Number.isSafeInteger(q) ||
     q < 0 ||
     q > QUIET_MAX
   )
     throw invalidCursor();
-  return { epoch: e, seq: s, quiet: q };
+  if (v === 2 && typeof i === "string" && /^[0-9a-f]{32}$/.test(i))
+    return { epoch: e, id: i, quiet: q };
+  if (v === 1 && typeof s === "number" && Number.isSafeInteger(s) && s >= 0)
+    return { epoch: e, base: s, quiet: q };
+  throw invalidCursor();
 }
 
 type FeedItemOutput = Output<typeof getFeed>["items"][number];
@@ -440,6 +457,29 @@ class Visibility {
   }
 
   /**
+   * Whether the caller may read the stream (its repository, and its
+   * threads' kind there): undefined when that is not known (not checked).
+   */
+  readable({ repoId, subject }: StreamKey): boolean | undefined {
+    const decided = this.#decided.get(repoId);
+    if (decided === undefined || decided === "unknown") return undefined;
+    if (decided === "denied" || !Object.hasOwn(READ, subject)) return false;
+    return allowedWithRole(
+      this.ctx.auth,
+      decided.entry,
+      READ[subject as FeedSubjectKind],
+      decided.role,
+    );
+  }
+
+  /** Decides the repositories of `streams` not decided yet, within the budget of checks. */
+  decideStreams(streams: readonly StreamKey[]): Promise<void> {
+    return this.decide(
+      streams.map(({ repoId }) => ({ repoId, threadKey: "", member: null, epoch: 0 })),
+    );
+  }
+
+  /**
    * `shown` up to its first item whose repository is no longer known to be
    * readable (reading its members found its ownership changed).
    */
@@ -489,6 +529,7 @@ type Scanned = { item: FeedItem; repo: RepoEntry }[];
 /**
  * Reads items with `read` until `limit` and one more are shown, the feed
  * ends, or the answer's budget does; stops at an item it could not check.
+ * An item `admits` refuses is left out, as one hidden is.
  * `more`: the feed may have more the caller can see.
  */
 async function scan<P>(
@@ -496,6 +537,7 @@ async function scan<P>(
   limit: number,
   read: (after: P | null) => Promise<{ items: readonly FeedItem[]; more: boolean }>,
   position: (item: FeedItem) => P,
+  admits: (item: FeedItem) => boolean = () => true,
 ): Promise<{ shown: Scanned; more: boolean }> {
   const shown: Scanned = [];
   let after: P | null = null;
@@ -505,7 +547,7 @@ async function scan<P>(
     for (const item of page.items) {
       const repo = visibility.of(item);
       if (repo === undefined) return { shown, more: true };
-      if (repo !== "hidden") shown.push({ item, repo });
+      if (repo !== "hidden" && admits(item)) shown.push({ item, repo });
       if (shown.length > limit) return { shown, more: true };
     }
     const last = page.items.at(-1);
@@ -554,6 +596,41 @@ const expired = () =>
     RESYNC,
   );
 
+/** A snapshot as a read found it. */
+type ReadSnapshot = SnapshotState & { readonly id: string | null; readonly createdAt: number };
+
+/** A stream's key in a snapshot's positions. */
+const streamKey = (repoId: string, subject: string) => `${repoId}\n${subject}`;
+
+/** Positions as a snapshot keeps them, sorted by stream. */
+function positionsOf(map: ReadonlyMap<string, number>): StreamPosition[] {
+  return [...map]
+    .map(([key, seq]) => {
+      const [repoId, subject] = key.split("\n") as [string, string];
+      return [repoId, subject, seq] as const;
+    })
+    .sort(([ra, sa], [rb, sb]) => (ra < rb ? -1 : ra > rb ? 1 : sa < sb ? -1 : sa > sb ? 1 : 0));
+}
+
+/**
+ * The cursor of a snapshot: the one read when an answer changed nothing of
+ * it and it is not past half its lifetime (no write), else one the feed
+ * keeps now (an equal live one when it has it).
+ */
+async function cursorOf(
+  ctx: OpContext,
+  epoch: string,
+  state: SnapshotState,
+  read: { id: string | null; createdAt: number; unchanged: boolean },
+  quiet: number,
+): Promise<string> {
+  const fresh = Date.now() - read.createdAt < FEED_POLICY.cursorTtlMs / 2;
+  if (read.id !== null && read.unchanged && fresh) return encodeFeedCursor(epoch, read.id, quiet);
+  counted(ctx, "saveCursor");
+  const { id } = await feedOf(ctx).saveCursor(ctx.auth.id, state);
+  return encodeFeedCursor(epoch, id, quiet);
+}
+
 /** The `feed.list` operation. */
 export async function getFeedOperation(
   ctx: OpContext,
@@ -562,52 +639,125 @@ export async function getFeedOperation(
   ctx = await freshly(ctx);
   const feed = feedOf(ctx);
   const since = decodeFeedCursor(input.since);
-  const start = since && { epoch: since.epoch, seq: since.seq };
+  const cursor: CursorRef | null =
+    since &&
+    ("id" in since
+      ? { epoch: since.epoch, id: since.id }
+      : { epoch: since.epoch, base: since.base });
   const filter: FeedFilter = {
     priority: input.priority,
     kind: input.kind,
     repoIds: ctx.auth.repoIds,
     subjects: readableSubjects(ctx),
   };
-  let epoch = since?.epoch;
-  let lowWatermark = 0;
+  let epoch = "";
+  let cutoff = 0;
+  let snapshot: ReadSnapshot | undefined;
+  /** Positions by stream: the snapshot's, then each moved by what the answer gives. */
+  const positions = new Map<string, number>();
+  /** The greatest sequence number the answer's pages read in each stream. */
+  const read = new Map<string, number>();
+  /** Streams without a position an answer may still give items of (its coverage's room). */
+  const joining = new Set<string>();
+  let partial = false;
+  /** A stream behind what was deleted could not be checked: the answer ends there. */
+  let unsure = false;
   const visibility = new Visibility(ctx);
   const { shown } = await scan(
     visibility,
     input.limit,
-    async (after: FeedPosition | null) => {
-      counted(ctx, "listFeed");
-      const page = await feed.listFeed(after ?? start, SCAN.page, filter);
+    async (after: number | null) => {
+      if (unsure) return { items: [], more: false };
+      counted(ctx, "listStreams");
+      const page = await feed.listStreams(
+        { credential: ctx.auth.id, cursor, after: after === null ? null : { seq: after, cutoff } },
+        SCAN.page,
+        filter,
+      );
       if (page.expired) throw expired();
-      epoch = page.head.epoch;
-      lowWatermark = page.lowWatermark;
+      if (snapshot === undefined) {
+        epoch = page.epoch;
+        cutoff = page.cutoff;
+        // Tuples, as the feed sent them (RPC types widen them).
+        const first = page.snapshot as ReadSnapshot;
+        snapshot = first;
+        for (const [repoId, subject, seq] of first.positions)
+          positions.set(streamKey(repoId, subject), seq);
+      }
+      // Behind what was deleted in a stream: where the snapshot is (the first page says), or past
+      // where the answer read in it (deleted between its pages; never passed silently).
+      const behind = new Map(page.expiredStreams.map((s) => [streamKey(s.repoId, s.subject), s]));
+      for (const [repoId, subject, watermark] of page.watermarks as readonly StreamPosition[]) {
+        const key = streamKey(repoId, subject);
+        // Only a stream the answer follows: one with a position or a base, or one it admitted
+        // (a stream refused for want of room gives nothing, so passes nothing).
+        const follows = positions.has(key) || joining.has(key) || snapshot.base !== null;
+        const at = read.get(key) ?? positions.get(key) ?? snapshot.base ?? 0;
+        if (follows && watermark > at) behind.set(key, { repoId, subject });
+      }
+      // Expired when the caller may read such a stream, nothing when not (never moved by what it
+      // may not read); not known, the answer ends before this page.
+      if (behind.size > 0) {
+        const streams = [...behind.values()];
+        await visibility.decideStreams(streams);
+        const judged = streams.map((stream) => visibility.readable(stream));
+        if (judged.includes(true)) throw expired();
+        if (judged.includes(undefined)) {
+          unsure = true;
+          return { items: [], more: false };
+        }
+      }
+      for (const item of page.items) {
+        const key = streamKey(item.repoId, item.subject);
+        read.set(key, Math.max(read.get(key) ?? 0, item.seq));
+      }
       return page;
     },
-    (item) => ({ epoch: epoch as string, seq: item.seq }),
+    (item) => item.seq,
+    (item) => {
+      // A stream joins the snapshot only while it has room for it: past that, its items are
+      // left out (the same ones each answer), and the answer says its coverage is partial.
+      const key = streamKey(item.repoId, item.subject);
+      if (positions.has(key) || joining.has(key)) return true;
+      if (positions.size + joining.size >= FEED_POLICY.coverage) {
+        partial = true;
+        return false;
+      }
+      joining.add(key);
+      return true;
+    },
   );
-  const read = shown.slice(0, input.limit);
-  await Promise.all([visibility.read(read.map(({ item }) => item)), visibility.forgetLost()]);
+  const page = shown.slice(0, input.limit);
+  await Promise.all([visibility.read(page.map(({ item }) => item)), visibility.forgetLost()]);
   // Up to an item whose repository reading its members made unknown (its ownership changed).
-  const page = visibility.stillShown(read);
-  const cut = page.length < read.length;
+  const given = visibility.stillShown(page);
+  // Positions move by what the answer gives only: never by what it read and did not give.
+  for (const { item } of given) {
+    const key = streamKey(item.repoId, item.subject);
+    positions.set(key, Math.max(positions.get(key) ?? 0, item.seq));
+  }
+  const state = { positions: positionsOf(positions), base: snapshot?.base ?? null };
   // An answer that shows nothing is one more quiet one in a row, whatever it did not show.
-  const quiet = page.length > 0 ? 0 : Math.min((since?.quiet ?? 0) + 1, QUIET_MAX);
-  // Positions of items shown only (where the caller started when none was), never below the
-  // low watermark: what retention deleted is gone for every reader, and such a cursor would
-  // only be refused.
-  const at = (item: FeedItem | undefined) =>
-    encodeFeedCursor(
-      { epoch: epoch as string, seq: Math.max(lowWatermark, item?.seq ?? since?.seq ?? 0) },
-      quiet,
-    );
+  const quiet = given.length > 0 ? 0 : Math.min((since?.quiet ?? 0) + 1, QUIET_MAX);
+  const next = await cursorOf(
+    ctx,
+    epoch,
+    state,
+    {
+      id: snapshot?.id ?? null,
+      createdAt: snapshot?.createdAt ?? 0,
+      unchanged: given.length === 0,
+    },
+    quiet,
+  );
   return {
-    items: page.map(({ item, repo }) => itemOutput(item, repo, visibility.excerpt(item))),
-    next_cursor: at(page.at(-1)?.item),
-    // Never past an item not shown for want of a check.
-    head_cursor: at((cut ? page : shown).at(-1)?.item),
+    items: given.map(({ item, repo }) => itemOutput(item, repo, visibility.excerpt(item))),
+    next_cursor: next,
+    head_cursor: next,
+    coverage: partial || state.positions.length >= FEED_POLICY.coverage ? "partial" : "full",
     // Read on at once only after a full page: what the caller sees says so, never what it
     // does not (see the top).
-    poll_after_ms: page.length === input.limit ? 0 : pollAfter(quiet),
+    poll_after_ms: given.length === input.limit ? 0 : pollAfter(quiet),
   };
 }
 
@@ -616,37 +766,52 @@ export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof s
   ctx = await freshly(ctx);
   const feed = feedOf(ctx);
   let epoch = "";
-  let lowWatermark = 0;
+  let bound = 0;
+  /** More than its one page could hold. */
+  let truncated = false;
   const visibility = new Visibility(ctx);
   const { shown, more: scanned } = await scan(
     visibility,
     FEED_POLICY.syncItems,
-    async (after: SyncPosition | null) => {
-      counted(ctx, "syncFeed");
-      const page = await feed.syncFeed(after, SCAN.page, {
+    // One page (one sort of the feed, as a sync orders it): past it, the sync is incomplete.
+    async () => {
+      counted(ctx, "syncStreams");
+      const page = await feed.syncStreams(null, FEED_POLICY.syncItems + 1, {
         repoIds: ctx.auth.repoIds,
         subjects: readableSubjects(ctx),
       });
       epoch = page.epoch;
-      lowWatermark = page.lowWatermark;
-      return page;
+      bound = page.bound;
+      truncated = page.more;
+      return { items: page.items, more: false };
     },
-    (item) => ({ open: item.priority === "P0" && item.state === "open", seq: item.seq }),
+    (item) => item.seq,
   );
   const read = shown.slice(0, FEED_POLICY.syncItems);
   await Promise.all([visibility.read(read.map(({ item }) => item)), visibility.forgetLost()]);
   // Up to an item whose repository reading its members made unknown (its ownership changed): an
   // incomplete sync, as one its scan stopped.
   const items = visibility.stillShown(read);
-  const more = scanned || items.length < read.length;
-  // Following from the greatest item shown misses no change the caller may see; an incomplete
-  // sync follows from the start. Never below the low watermark: what retention deleted is gone
-  // for every reader, so such a cursor would only be refused.
-  const seq = Math.max(lowWatermark, more ? 0 : Math.max(0, ...items.map(({ item }) => item.seq)));
+  const more = scanned || truncated || items.length < read.length;
+  // A complete sync gave everything of each stream it gave items of that it would show now: the
+  // snapshot has those streams at their heads as of its start (only what it gave decides which,
+  // so nothing hidden does). An incomplete one has none: `GET /feed` reads each stream from what
+  // the feed keeps of it.
+  const streams = new Map(
+    items.map(({ item }) => [
+      streamKey(item.repoId, item.subject),
+      { repoId: item.repoId, subject: item.subject },
+    ]),
+  );
+  counted(ctx, more ? "saveCursor" : "syncCursor");
+  const { id } = more
+    ? await feed.saveCursor(ctx.auth.id, { positions: [], base: null })
+    : await feed.syncCursor(ctx.auth.id, [...streams.values()], bound);
   return {
     items: items.map(({ item, repo }) => itemOutput(item, repo, visibility.excerpt(item))),
     complete: !more,
-    head_cursor: encodeFeedCursor({ epoch, seq }),
+    head_cursor: encodeFeedCursor(epoch, id),
+    coverage: "full",
     poll_after_ms: FEED_POLL.baseMs,
   };
 }

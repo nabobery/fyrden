@@ -16,13 +16,14 @@ import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { ACL_POLICY } from "../src/do/repo/acl.js";
 import { type FeedMember, memberKey } from "../src/do/repo/feed-view.js";
+import type { UserDO } from "../src/do/UserDO.js";
 import { FEED_POLICY } from "../src/do/user/feed.js";
 import { decodeFeedCursor, encodeFeedCursor, FEED_POLL } from "../src/feed/operations.js";
 import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
-import { DAY, type EntryInit, entry } from "./helpers/feed.js";
+import { DAY, type EntryInit, entry, FROM_START } from "./helpers/feed.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
@@ -161,6 +162,43 @@ function withFeedView(base: Env): Env {
 }
 
 /** A request to the API, its repositories' objects with the `feedView` double. */
+/** Items the feed operations read a page at a time. */
+const SCAN_PAGE = 200;
+
+/** `on` whose feed objects run `before(n)` ahead of their `n`th `method` call (from 0). */
+function beforeCalls(
+  on: Env,
+  method: "listStreams" | "syncStreams",
+  before: (n: number) => Promise<void>,
+): Env {
+  const users = new Proxy(on.USER, {
+    get(target, prop) {
+      if (prop === "getByName")
+        return (name: string) => {
+          const stub = target.getByName(name);
+          let calls = 0;
+          return new Proxy(stub, {
+            get(inner, name) {
+              if (name === method)
+                return async (...args: unknown[]) => {
+                  await before(calls++);
+                  return Reflect.apply(Reflect.get(inner, name), inner, args);
+                };
+              // Called through the stub: an RPC method's `bind` would be a call of its own.
+              const value = Reflect.get(inner, name);
+              return typeof value === "function"
+                ? (...args: unknown[]) => Reflect.apply(value, inner, args)
+                : value;
+            },
+          });
+        };
+      const value = Reflect.get(target, prop);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { ...on, USER: users } as Env;
+}
+
 function feedFetch(
   path: string,
   headers: Record<string, string>,
@@ -254,10 +292,38 @@ async function directoryRepos(
 
 /** What the principal's feed holds, by item key, whoever may read it. */
 async function stored(principal: string): Promise<string[]> {
-  const page = await env.USER.getByName(principal).listFeed(null, 5_000, {});
+  const page = await env.USER.getByName(principal).listStreams(FROM_START, 5_000, {});
   if (page.expired) throw new Error("expired");
   return page.items.map((i) => `${i.repoId}:${i.threadKey}:${i.kind}`);
 }
+
+/** What a feed cursor names: its snapshot's positions and base, and its count of quiet answers. */
+async function snapshotOf(
+  principal: string,
+  cursor: string,
+): Promise<{ positions: [string, string, number][]; base: number | null; quiet: number }> {
+  const ref = decodeFeedCursor(cursor);
+  if (!ref || !("id" in ref)) throw new Error("not a snapshot's cursor");
+  const state = await runInDurableObject(
+    env.USER.getByName(principal),
+    (_: UserDO, s) =>
+      s.storage.sql
+        .exec<{ state: string }>("SELECT state FROM feed_cursors WHERE id = ?", ref.id)
+        .toArray()[0]?.state,
+  );
+  if (state === undefined) throw new Error("no such snapshot");
+  return {
+    ...(JSON.parse(state) as { positions: [string, string, number][]; base: null }),
+    quiet: ref.quiet,
+  };
+}
+
+/** A cursor of before streams: `{v:1,e,s,q}`. */
+const legacyCursor = (epoch: string, seq: number) =>
+  btoa(JSON.stringify({ v: 1, e: epoch, s: seq }))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
 
 type FeedOut = {
   items: {
@@ -473,23 +539,27 @@ describe("the feed operations", () => {
     ).toBe(FEED_POLL.baseMs);
   });
 
-  it("refuse a cursor below the low watermark or of another epoch with 410 and where to resync", async () => {
+  it("refuse a cursor of another epoch or credential, or whose snapshot is gone, with 410 and where to resync", async () => {
     const head = await json<FeedOut>(feedApi("GET", "/feed", owner.token));
-    const { e } = JSON.parse(
-      atob(head.body.head_cursor.replaceAll("-", "+").replaceAll("_", "/")),
-    ) as { e: string };
-    for (const since of [
-      encodeFeedCursor({ epoch: "another", seq: 1 }),
-      encodeFeedCursor({ epoch: e, seq: 1_000_000 }),
-    ]) {
-      const res = await json<FeedOut>(feedApi("GET", `/feed?since=${since}`, owner.token));
+    const named = decodeFeedCursor(head.body.head_cursor);
+    if (!named || !("id" in named)) throw new Error("not a snapshot's cursor");
+    // Another credential of the same principal: the snapshot is the token's own.
+    const other = await scopedToken(owner.principalId, ["pull_requests:read", "issues:read"]);
+    for (const [since, token] of [
+      [encodeFeedCursor("another", named.id), owner.token],
+      [encodeFeedCursor(named.epoch, "0".repeat(32)), owner.token],
+      [head.body.next_cursor, other],
+      // Of before streams: past the feed's head then.
+      [legacyCursor(named.epoch, 1_000_000), owner.token],
+    ] as const) {
+      const res = await json<FeedOut>(feedApi("GET", `/feed?since=${since}`, token));
       expect(res).toMatchObject({
         status: 410,
         body: { code: "cursor_expired", resync: "/api/feed/sync" },
       });
     }
     // Not a cursor, or one counting more quiet answers than any the feed hands out.
-    for (const since of ["not-a-cursor", encodeFeedCursor({ epoch: e, seq: 1 }, 7)])
+    for (const since of ["not-a-cursor", encodeFeedCursor(named.epoch, named.id, 7)])
       expect(
         await json<FeedOut>(feedApi("GET", `/feed?since=${since}`, owner.token)),
       ).toMatchObject({
@@ -501,9 +571,190 @@ describe("the feed operations", () => {
       feedApi("GET", `/feed?since=${head.body.next_cursor}`, owner.token),
     );
     expect(next.body.items).toEqual([]);
-    // Sync gives the cursor to follow from.
+    // Sync gives the cursor to follow from: the same snapshot.
     const synced = await json<FeedOut>(feedApi("GET", "/feed/sync", owner.token));
     expect(synced.body.head_cursor).toBe(head.body.head_cursor);
+    // A cursor of before streams at the start reads on, answered with a snapshot's.
+    const legacy = await json<FeedOut>(
+      feedApi("GET", `/feed?since=${legacyCursor(named.epoch, 0)}`, owner.token),
+    );
+    expect(legacy.status).toBe(200);
+    expect(legacy.body.items.length).toBeGreaterThan(0);
+    expect(await snapshotOf(owner.principalId, legacy.body.next_cursor)).toMatchObject({
+      base: 0,
+    });
+  });
+
+  it("expire a cursor behind what a stream it may read lost, never one behind a stream it may not", async () => {
+    const someone = await user();
+    const [shown, hidden] = [await repoOf(someone), await repoOf(someone)];
+    for (const repoId of [shown.id, hidden.id])
+      await deliverTo(someone.principalId, { repoId, version: 1 });
+    // A token limited to one of them: the other is hidden from it, never forgotten.
+    const limited = await scopedToken(someone.principalId, [], "pat", [shown.id]);
+    const first = await json<FeedOut>(feedApi("GET", "/feed", limited));
+    expect(feedNames(first.body)).toEqual([shown.fullName]);
+    const named = decodeFeedCursor(first.body.next_cursor);
+    if (!named || !("id" in named)) throw new Error("not a snapshot's cursor");
+    const feed = env.USER.getByName(someone.principalId);
+    // Both streams lost their first items (as retention or a cap would), and the snapshot is
+    // behind in one of them.
+    const behindIn = (repoId: string) =>
+      runInDurableObject(feed, (_: UserDO, state) => {
+        state.storage.sql.exec("UPDATE feed_streams SET low_watermark = 5");
+        state.storage.sql.exec(
+          "UPDATE feed_cursors SET state = ?, hash = 0 WHERE id = ?",
+          JSON.stringify({ positions: [[repoId, "pull", 1]], base: null }),
+          named.id,
+        );
+      });
+    await behindIn(hidden.id);
+    const read = () =>
+      json<FeedOut>(feedApi("GET", `/feed?since=${first.body.next_cursor}`, limited));
+    expect((await read()).status).toBe(200);
+    await behindIn(shown.id);
+    expect(await read()).toMatchObject({ status: 410, body: { code: "cursor_expired" } });
+    // A cursor of before streams at the start is behind both: expired for the one it reads.
+    const legacy = legacyCursor(named.epoch, 0);
+    expect((await json<FeedOut>(feedApi("GET", `/feed?since=${legacy}`, limited))).status).toBe(
+      410,
+    );
+    await runInDurableObject(feed, (_: UserDO, state) => {
+      state.storage.sql.exec(
+        "UPDATE feed_streams SET low_watermark = 0 WHERE repo_id = ?",
+        shown.id,
+      );
+    });
+    expect((await json<FeedOut>(feedApi("GET", `/feed?since=${legacy}`, limited))).status).toBe(
+      200,
+    );
+  });
+
+  it("expire a cursor when what it had not read of a stream is deleted between an answer's pages", async () => {
+    const someone = await user();
+    const [early, late] = await directoryRepos(someone, 2);
+    // A page and more of a repository the caller may not read first, then the other's: the
+    // answer reads on to a second page, which holds the later repository's.
+    unreadable.add(early as string);
+    const feed = env.USER.getByName(someone.principalId);
+    await feed.applyFeed(
+      Array.from({ length: SCAN_PAGE + 5 }, (_, i) =>
+        entry({
+          repoId: early as string,
+          thread: i + 1,
+          version: 1,
+          principal: someone.principalId,
+        }),
+      ),
+    );
+    await feed.applyFeed(
+      [1, 2, 3].map((thread) =>
+        entry({ repoId: late as string, thread, version: 1, principal: someone.principalId }),
+      ),
+    );
+    const { epoch } = await feed.syncStreams(null, 1, {});
+    // A cursor of before streams at the start: every stream at 0.
+    const since = legacyCursor(epoch, 0);
+    // Between the pages, the later repository's first item is deleted, as a cap would (its
+    // stream's low watermark raised past it).
+    const deleted = beforeCalls(withFeedView(env), "listStreams", async (n) => {
+      if (n !== 1) return;
+      await runInDurableObject(feed, (_: UserDO, state) => {
+        const { feed_seq: seq } = state.storage.sql
+          .exec<{ feed_seq: number }>(
+            "DELETE FROM feed_items WHERE repo_id = ? AND thread_key = 'pull/1' RETURNING feed_seq",
+            late as string,
+          )
+          .one();
+        state.storage.sql.exec(
+          "UPDATE feed_streams SET low_watermark = ?, items = items - 1 WHERE repo_id = ?",
+          seq,
+          late as string,
+        );
+      });
+    });
+    const res = await listOn(deleted, someone.token, `/feed?limit=100&since=${since}`);
+    expect(res).toMatchObject({ status: 410, body: { code: "cursor_expired" } });
+  });
+
+  it("follow 1,000 streams at most, and expire nothing for a stream left out", async () => {
+    const someone = await user();
+    const [joined, left] = await directoryRepos(someone, 2);
+    const feed = env.USER.getByName(someone.principalId);
+    await feed.applyFeed([
+      entry({ repoId: joined as string, version: 1, principal: someone.principalId }),
+    ]);
+    // More than a page of the other's: the answer reads on to a second page.
+    await feed.applyFeed(
+      Array.from({ length: SCAN_PAGE + 50 }, (_, i) =>
+        entry({
+          repoId: left as string,
+          thread: i + 1,
+          version: 1,
+          principal: someone.principalId,
+        }),
+      ),
+    );
+    // A cursor with positions in 999 other streams: room for one more.
+    const start = await json<FeedOut>(feedApi("GET", "/feed?limit=1", someone.token));
+    const named = decodeFeedCursor(start.body.next_cursor);
+    if (!named || !("id" in named)) throw new Error("not a snapshot's cursor");
+    const positions = Array.from(
+      { length: FEED_POLICY.coverage - 1 },
+      (_, i) => [`rep_elsewhere${String(i).padStart(4, "0")}`, "pull", 0] as const,
+    );
+    await runInDurableObject(feed, (_: UserDO, state) => {
+      state.storage.sql.exec(
+        "UPDATE feed_cursors SET state = ? WHERE id = ?",
+        JSON.stringify({ positions, base: null }),
+        named.id,
+      );
+    });
+    // Between the pages, the left-out stream loses items it had not given (as its cap would).
+    const evicted = beforeCalls(withFeedView(env), "listStreams", async (n) => {
+      if (n !== 1) return;
+      await runInDurableObject(feed, (_: UserDO, state) => {
+        state.storage.sql.exec(
+          "UPDATE feed_streams SET low_watermark = (SELECT head_seq FROM feed_meta) WHERE repo_id = ?",
+          left as string,
+        );
+      });
+    });
+    const res = await listOn(evicted, someone.token, `/feed?since=${start.body.next_cursor}`);
+    expect(res.status).toBe(200);
+    // The first stream took the last place; the other's items are left out, and said so.
+    expect(res.body.items.map((i) => i.item_key)).toEqual([`${joined}:pull/1:activity`]);
+    expect(res.body).toMatchObject({ coverage: "partial" });
+  });
+
+  it("sync in one read of the feed, incomplete when more is left than it holds", async () => {
+    const someone = await user();
+    const [shown] = await directoryRepos(someone, 1);
+    const hidden = await directoryRepos(someone, 2);
+    for (const id of hidden) unreadable.add(id);
+    const feed = env.USER.getByName(someone.principalId);
+    await feed.applyFeed([
+      entry({ repoId: shown as string, version: 1, principal: someone.principalId }),
+    ]);
+    // Newer than it: more of what the caller may not read than a sync reads at once.
+    vi.setSystemTime(Date.now() + 1_000);
+    await feed.applyFeed(
+      Array.from({ length: FEED_POLICY.syncItems + 2 }, (_, i) =>
+        entry({
+          repoId: hidden[i % 2] as string,
+          thread: i + 1,
+          version: 1,
+          principal: someone.principalId,
+        }),
+      ),
+    );
+    let calls = 0;
+    const counting = beforeCalls(withFeedView(env), "syncStreams", async () => {
+      calls++;
+    });
+    const res = await listOn(counting, someone.token, "/feed/sync");
+    expect(calls).toBe(1);
+    expect(res.body).toMatchObject({ items: [], complete: false });
   });
 
   it("show a token limited to some repositories nothing of the others: no item, cursor or ETag changes", async () => {
@@ -588,10 +839,14 @@ describe("the feed operations", () => {
     for (const id of hidden) unreadable.add(id);
     const shown = await directoryRepos(someone, 3);
     const keys = shown.map((id) => `${id}:pull/1:activity`);
-    await env.USER.getByName(someone.principalId).applyFeed(
-      [...hidden, ...shown].map((repoId) =>
-        entry({ repoId, version: 1, principal: someone.principalId }),
-      ),
+    const feed = env.USER.getByName(someone.principalId);
+    await feed.applyFeed(
+      hidden.map((repoId) => entry({ repoId, version: 1, principal: someone.principalId })),
+    );
+    // Changed later: after the hidden ones in the feed's order.
+    vi.setSystemTime(Date.now() + 1_000);
+    await feed.applyFeed(
+      shown.map((repoId) => entry({ repoId, version: 1, principal: someone.principalId })),
     );
     const read = (cursor?: string) =>
       json<FeedOut>(
@@ -614,13 +869,20 @@ describe("the feed operations", () => {
     const someone = await user();
     const shown = await directoryRepos(someone, 1);
     const feed = env.USER.getByName(someone.principalId);
-    // A repository gone from the directory: its items are left out without a check.
-    const gone = uniqueId("rep_");
+    // Repositories gone from the directory: their items are left out without a check (two of
+    // them, each within its stream's cap).
+    const gone = [uniqueId("rep_"), uniqueId("rep_")];
     await feed.applyFeed(
       Array.from({ length: 1_000 }, (_, i) =>
-        entry({ repoId: gone, thread: i + 1, version: 1, principal: someone.principalId }),
+        entry({
+          repoId: gone[i % 2] as string,
+          thread: i + 1,
+          version: 1,
+          principal: someone.principalId,
+        }),
       ),
     );
+    vi.setSystemTime(Date.now() + 1_000);
     await feed.applyFeed(
       shown.map((repoId) => entry({ repoId, version: 1, principal: someone.principalId })),
     );
@@ -653,17 +915,22 @@ describe("the feed operations", () => {
         );
       },
       async () => {
-        const gone = uniqueId("rep_");
+        const gone = [uniqueId("rep_"), uniqueId("rep_"), uniqueId("rep_")];
         await env.USER.getByName(busy.principalId).applyFeed(
           Array.from({ length: 1_100 }, (_, i) =>
-            entry({ repoId: gone, thread: i + 1, version: 1, principal: busy.principalId }),
+            entry({
+              repoId: gone[i % 3] as string,
+              thread: i + 1,
+              version: 1,
+              principal: busy.principalId,
+            }),
           ),
         );
       },
       async () => {},
       async () => {},
     ];
-    // Each feed's answers along its cursors, the feed's own epoch aside.
+    // Each feed's answers along its cursors, as what they name (a snapshot's id is random).
     const answers = async (who: Who, between?: (step: number) => Promise<void>) => {
       const out: unknown[] = [];
       let cursor: string | undefined;
@@ -672,9 +939,18 @@ describe("the feed operations", () => {
         const res = await json<FeedOut>(
           feedApi("GET", cursor === undefined ? "/feed" : `/feed?since=${cursor}`, who.token),
         );
-        const { epoch: _, ...next } = decodeFeedCursor(res.body.next_cursor) ?? {};
-        const { epoch: __, ...head } = decodeFeedCursor(res.body.head_cursor) ?? {};
-        out.push({ ...res.body, next_cursor: next, head_cursor: head });
+        const { head_cursor, next_cursor, ...body } = res.body;
+        const id = (c: string | undefined) => {
+          const named = decodeFeedCursor(c);
+          return named && "id" in named ? named.id : null;
+        };
+        out.push({
+          ...body,
+          next_cursor: await snapshotOf(who.principalId, next_cursor),
+          same: head_cursor === next_cursor,
+          // The same snapshot as the request's: nothing written.
+          kept: id(next_cursor) === id(cursor),
+        });
         cursor = res.body.next_cursor;
       }
       return out;
@@ -921,7 +1197,7 @@ describe("the feed operations", () => {
       expect(shown, read).not.toContain("pull/1 activity");
     }
     // Only the gone generation's item was forgotten.
-    const left = await feed.listFeed(null, 100, {});
+    const left = await feed.listStreams(FROM_START, 100, {});
     if (left.expired) throw new Error("expired");
     expect(left.items.map((i) => `${i.threadKey} ${i.kind} ${i.epoch}`).sort()).toEqual(
       [`issue/${issue.body.number} mention ${epoch + 1}`, `pull/1 activity ${epoch}`].sort(),
@@ -981,7 +1257,7 @@ describe("the feed operations", () => {
       ).toEqual([]);
     }
     // Nothing forgotten on its word.
-    const left = await feed.listFeed(null, 100, {});
+    const left = await feed.listStreams(FROM_START, 100, {});
     if (left.expired) throw new Error("expired");
     expect(left.items).toHaveLength(2);
     earlierObject.delete(made.id);
@@ -1087,8 +1363,9 @@ describe("the feed operations' authoritative check", () => {
     const stopped = await listOn(withAccounts(withFeedView(env), counted), someone.token);
     expect(counted.calls).toBe(1);
     expect(stopped.body.items).toEqual([]);
-    expect(decodeFeedCursor(stopped.body.next_cursor)?.seq).toBe(0);
-    expect(decodeFeedCursor(stopped.body.head_cursor)?.seq).toBe(0);
+    expect(await snapshotOf(someone.principalId, stopped.body.next_cursor)).toMatchObject({
+      positions: [],
+    });
     expect(await stored(someone.principalId)).toHaveLength(1);
     expect((await json<FeedOut>(feedApi("GET", "/feed", someone.token))).body.items).toHaveLength(
       1,
@@ -1147,7 +1424,9 @@ describe("the feed operations, a repository transferred while an answer reads it
     expect(res.body.items).toEqual([]);
     expect(res.body.complete).toBe(false);
     // An incomplete sync follows from the feed's start.
-    expect(decodeFeedCursor(res.body.head_cursor)?.seq).toBe(0);
+    expect(await snapshotOf(someone.principalId, res.body.head_cursor)).toMatchObject({
+      positions: [],
+    });
     // Away and back meanwhile: the same account, another ownership.
     regeneratedAfter.set(made.id, 1);
     viewCalls.delete(made.id);
@@ -1164,8 +1443,9 @@ describe("the feed operations, a repository transferred while an answer reads it
     const listed = await json<FeedOut>(feedApi("GET", "/feed", someone.token));
     movedAfter.delete(made.id);
     expect(listed.body.items).toEqual([]);
-    expect(decodeFeedCursor(listed.body.next_cursor)?.seq).toBe(0);
-    expect(decodeFeedCursor(listed.body.head_cursor)?.seq).toBe(0);
+    expect(await snapshotOf(someone.principalId, listed.body.next_cursor)).toMatchObject({
+      positions: [],
+    });
     expect(listed.body.poll_after_ms).toBeGreaterThan(0);
     // Once it answers under one ownership again, everything shows.
     viewCalls.delete(made.id);

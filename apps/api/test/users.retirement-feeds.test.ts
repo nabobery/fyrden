@@ -11,7 +11,7 @@ import { feedHooks, type UserDO } from "../src/do/UserDO.js";
 import type { Effect } from "../src/effects/journal.js";
 import { feedSink } from "../src/feed/sink.js";
 import { user } from "./helpers/api.js";
-import { feedIn } from "./helpers/feed.js";
+import { FROM_START, feedIn, shownCount } from "./helpers/feed.js";
 
 function entry(principal: string, version: number): FeedEntry {
   const repoId = "rep_feedretire";
@@ -57,7 +57,7 @@ const state = (stub: DurableObjectStub<UserDO>) =>
       items: n("feed_items"),
       marks: n("purge_marks"),
       evictions: n("feed_evictions"),
-      counted: storage.storage.sql.exec<{ n: number }>("SELECT items AS n FROM feed_meta").one().n,
+      counted: shownCount(storage.storage),
       retired: n("feed_retired"),
       retiredAt:
         storage.storage.sql.exec<{ at: number }>("SELECT at FROM feed_retired").toArray()[0]?.at ??
@@ -107,7 +107,7 @@ describe("a retired feed", () => {
     await stub.retire();
     // Retired at once: it reads as empty and takes nothing; its rows go from its alarm.
     expect(await state(stub)).toMatchObject({ retired: 1, alarm: true });
-    const empty = await stub.listFeed(null, 10, {});
+    const empty = await stub.listStreams(FROM_START, 10, {});
     expect(empty.expired ? [] : empty.items).toEqual([]);
     expect(await cleaned(stub)).toBeGreaterThan(0);
     const retiredAt = await state(stub);
@@ -129,7 +129,7 @@ describe("a retired feed", () => {
     expect(await stub.forgetRepos([purge("rep_other")])).toEqual({ deleted: 0 });
     expect(await rows(stub)).toEqual({ items: 0, marks: 0, retired: 1 });
     // Its reads show nothing.
-    const page = await stub.listFeed(null, 10, {});
+    const page = await stub.listStreams(FROM_START, 10, {});
     expect(page.expired ? [] : page.items).toEqual([]);
   });
 
@@ -158,7 +158,7 @@ describe("a retired feed", () => {
           { repoId: "rep_feedretire", threadKey: "pull/1", kind: "activity" },
           { epoch: 1, version: 1 },
         ),
-      (feed: DurableObjectStub<UserDO>) => feed.listFeed(null, 10, {}),
+      (feed: DurableObjectStub<UserDO>) => feed.listStreams(FROM_START, 10, {}),
     ]) {
       const who = await user();
       const stub = env.USER.getByName(who.principalId);
@@ -225,12 +225,14 @@ describe("a retired feed", () => {
   it("is emptied over several alarms, gated all along, its cleanup surviving eviction and a second retire", async () => {
     const who = await user();
     const stub = env.USER.getByName(who.principalId);
-    // 2,600 items: more than one alarm's four steps of 500.
+    // 2,600 items: more than one alarm's four steps of 500 (in six repositories, within each
+    // one's cap).
     await runInDurableObject(stub, (_: UserDO, state) => {
       const { apply } = feedIn(state.storage);
       apply(
         Array.from({ length: 2_600 }, (_, i) => ({
           ...entry(who.principalId, 1),
+          repoId: `rep_feedretire${i % 6}`,
           eventKey: `rep_feedretire:${i}:1`,
           feed: { ...entry(who.principalId, 1).feed, threadKey: `pull/${i + 1}` },
         })),
@@ -242,9 +244,9 @@ describe("a retired feed", () => {
         changed: 0,
         notified: 0,
       });
-      const page = await feed.listFeed(null, 10, {});
+      const page = await feed.listStreams(FROM_START, 10, {});
       expect(page.expired ? [] : page.items).toEqual([]);
-      expect((await feed.syncFeed(null, 10, {})).items).toEqual([]);
+      expect((await feed.syncStreams(null, 10, {})).items).toEqual([]);
       expect(
         await feed.ackFeed(
           { repoId: "rep_feedretire", threadKey: "pull/1", kind: "activity" },

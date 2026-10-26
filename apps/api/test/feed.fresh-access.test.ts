@@ -242,7 +242,7 @@ describe("a feed read by a credential changed since it was cached", () => {
       expect((await sync(await revokedAfterRead(news))).status, `sync ${news}`).toBe(401);
     }
     // A cursor of another epoch (expired for any feed).
-    const expired = encodeFeedCursor({ epoch: "gone", seq: 1 });
+    const expired = encodeFeedCursor("gone", "0".repeat(32));
     const someone = await revokedAfterRead(false);
     expect((await json(api("GET", `/feed?since=${expired}`, someone.token))).status).toBe(401);
   });
@@ -255,7 +255,7 @@ describe("a feed read by a credential changed since it was cached", () => {
           `${tool} ${news}`,
         ).toContain("invalid_token");
     // An expired cursor too.
-    const expired = encodeFeedCursor({ epoch: "gone", seq: 1 });
+    const expired = encodeFeedCursor("gone", "0".repeat(32));
     expect(
       await callTool((await revokedAfterRead(false)).token, "get_feed", { since: expired }),
     ).toContain("invalid_token");

@@ -37,6 +37,7 @@ import {
   INVOCATION_CALLS,
 } from "../src/queues/events-consumer.js";
 import { recordingPublish } from "./helpers/effects.js";
+import { FROM_START } from "./helpers/feed.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H8";
@@ -284,10 +285,9 @@ describe("the feed sink", () => {
       sinks: [feedSink],
       publish,
     });
-    const page = await env.USER.getByName(reader).listFeed(null, 50, {});
+    const page = await env.USER.getByName(reader).listStreams(FROM_START, 50, {});
     expect(page).toMatchObject({
       expired: false,
-      head: { seq: 1 },
       items: [{ repoId, threadKey: "pull/1", kind: "activity", members: ["comment/1"] }],
     });
   });

@@ -3,20 +3,23 @@ import type { FeedEntry } from "@fyrden/domain";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { userSchema } from "./schema/user.js";
 import {
+  FEED_POLICY,
   Feed,
   type FeedAck,
   type FeedApplied,
   type FeedFilter,
-  type FeedItem,
   type FeedItemId,
-  type FeedPage,
-  type FeedPosition,
   type FeedPurge,
   feedEpochSource,
   type GoneThread,
   MAX_GONE_THREADS,
   PURGE_REPOS,
-  type SyncPosition,
+  type SnapshotState,
+  type StreamKey,
+  type StreamPage,
+  type StreamRead,
+  type SyncKey,
+  type SyncPage,
   type ThreadVersion,
 } from "./user/feed.js";
 
@@ -28,10 +31,11 @@ const ALARM_STEPS = 4;
 
 /**
  * Deferred work, by kind, in the order an alarm runs what is due: a
- * retired feed's cleanup, then retention. Each step is bounded (see
- * `FEED_POLICY.sliceRows`) and answers when it is due again.
+ * retired feed's cleanup, retention, then expired cursor snapshots. Each
+ * step is bounded (see `FEED_POLICY.sliceRows`) and answers when it is due
+ * again.
  */
-const KINDS = ["retire", "retain"] as const;
+const KINDS = ["retire", "retain", "cursors"] as const;
 type Kind = (typeof KINDS)[number];
 
 /** Hooks into the feed's directory read. For tests. */
@@ -146,20 +150,66 @@ export class UserDO extends MigratingDO {
     return this.forgetGoneThreads(threads);
   }
 
-  async listFeed(since: FeedPosition | null, limit: number, filter: FeedFilter): Promise<FeedPage> {
+  /**
+   * The reads of before streams, refused: a Worker of the earlier version
+   * (while a deploy rolls out) would make cursors of one sequence from
+   * the streams' numbers. Its feed reads fail until it is replaced.
+   */
+  async listFeed(): Promise<never> {
+    throw new Error("the feed is read by streams: listStreams");
+  }
+
+  async syncFeed(): Promise<never> {
+    throw new Error("the feed is read by streams: syncStreams");
+  }
+
+  /** A page of the feed after a cursor's snapshot (see `Feed.read`). */
+  async listStreams(read: StreamRead, limit: number, filter: FeedFilter): Promise<StreamPage> {
     await this.#checkEpoch();
     // Retired: empty while its cleanup runs, its cursors judged as before.
     const shown = this.#retired() ? { ...filter, subjects: [] } : filter;
-    return this.#feed().list(since, limit, shown);
+    return this.#feed().read(read, limit, shown);
   }
 
-  async syncFeed(
-    after: SyncPosition | null,
+  /** A page of what needs the owner now, with the feed's head as of its first (see `Feed.sync`). */
+  async syncStreams(
+    after: SyncKey | null,
     limit: number,
     filter: Pick<FeedFilter, "repoIds" | "subjects">,
-  ): Promise<{ epoch: string; lowWatermark: number; items: FeedItem[]; more: boolean }> {
+  ): Promise<SyncPage> {
     await this.#checkEpoch();
     return this.#feed().sync(after, limit, this.#retired() ? { subjects: [] } : filter);
+  }
+
+  /**
+   * Keeps a credential's snapshot and answers its id (see
+   * `Feed.saveCursor`); a retired feed keeps none (its cursors expire).
+   */
+  async saveCursor(credential: string, state: SnapshotState): Promise<{ id: string }> {
+    return this.#keep((feed) => feed.saveCursor(credential, state));
+  }
+
+  /** Keeps the snapshot a complete sync leaves, and answers its id (see `Feed.syncCursor`). */
+  async syncCursor(
+    credential: string,
+    streams: readonly StreamKey[],
+    bound: number,
+  ): Promise<{ id: string }> {
+    return this.#keep((feed) => feed.syncCursor(credential, streams, bound));
+  }
+
+  /** A snapshot kept, its expiry scheduled; a retired feed keeps none (its cursors expire). */
+  async #keep(save: (feed: Feed) => { id: string; created: boolean }): Promise<{ id: string }> {
+    await this.#checkEpoch();
+    const feed = this.#feed();
+    if (this.#retired()) return { id: crypto.randomUUID().replaceAll("-", "") };
+    const saved = this.ctx.storage.transactionSync(() => {
+      const saved = save(feed);
+      if (saved.created) this.#schedule("cursors", Date.now() + FEED_POLICY.cursorTtlMs);
+      return saved;
+    });
+    if (saved.created) await this.#arm();
+    return { id: saved.id };
   }
 
   async ackFeed(id: FeedItemId, at: ThreadVersion): Promise<FeedAck> {
@@ -170,10 +220,10 @@ export class UserDO extends MigratingDO {
   }
 
   /**
-   * Runs what is due, in `KINDS` order, at most `ALARM_STEPS` steps, each
-   * in its own transaction with its schedule row; then sets the alarm to
-   * the earliest row. A step that throws is due again a minute on, the
-   * others still run.
+   * Runs what is due, a step of each kind due in `KINDS` order before any
+   * kind's second, at most `ALARM_STEPS` steps, each in its own
+   * transaction with its schedule row; then sets the alarm to the earliest
+   * row. A step that throws is due again a minute on, the others still run.
    */
   override async alarm(): Promise<void> {
     // Work waits for the directory (the principal may be deleted): unreachable, it is tried
@@ -185,23 +235,26 @@ export class UserDO extends MigratingDO {
       return;
     }
     const feed = this.#feed();
-    let steps = 0;
-    for (const kind of KINDS) {
-      while (steps < ALARM_STEPS && this.#dueNow(kind)) {
-        steps++;
+    const steps = {
+      retire: () => (feed.retireStep() ? Date.now() : null),
+      retain: () => (feed.retainStep() ? Date.now() : feed.nextRetention()),
+      cursors: () => (feed.expireCursorsStep() ? Date.now() : feed.nextCursorExpiry()),
+    } satisfies Record<Kind, () => number | null>;
+    let ran = 0;
+    for (let progress = true; progress && ran < ALARM_STEPS; ) {
+      progress = false;
+      for (const kind of KINDS) {
+        if (ran >= ALARM_STEPS || !this.#dueNow(kind)) continue;
+        ran++;
+        progress = true;
         try {
-          this.ctx.storage.transactionSync(() => {
-            const more = kind === "retire" ? feed.retireStep() : feed.retainStep();
-            const next = more ? Date.now() : kind === "retain" ? feed.nextRetention() : null;
-            this.#setDue(kind, next);
-          });
+          this.ctx.storage.transactionSync(() => this.#setDue(kind, steps[kind]()));
         } catch (error) {
           createLogger({ op: "user.alarm", doClass: "UserDO" }).warn("a step failed", {
             kind,
             error,
           });
           this.#setDue(kind, Date.now() + EPOCH_RETRY_MS);
-          break;
         }
       }
     }

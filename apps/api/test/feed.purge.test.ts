@@ -29,6 +29,7 @@ import { feedSink } from "../src/feed/sink.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { api, json, user } from "./helpers/api.js";
 import { recordingPublish } from "./helpers/effects.js";
+import { FROM_START, shownCount } from "./helpers/feed.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 
@@ -61,7 +62,7 @@ function entry(repoId: string, version: number, occurredAt: number): FeedEntry {
 }
 
 async function shown(stub: DurableObjectStub<UserDO>) {
-  const page = await stub.listFeed(null, 100, {});
+  const page = await stub.listStreams(FROM_START, 100, {});
   if (page.expired) throw new Error("expired");
   return page.items.map((item) => [item.repoId, item.members]);
 }
@@ -122,10 +123,7 @@ describe("purging a feed", () => {
     for (const late of [purgeOf(["rep_a"], t + 1_000, 4), purgeOf(["rep_a"], t - 500, 5)])
       expect(await stub.purge(late)).toEqual({ deleted: 0 });
     expect(await shown(stub)).toHaveLength(2);
-    const items = await runInDurableObject(stub, (_: UserDO, state) =>
-      state.storage.sql.exec("SELECT items FROM feed_meta").one(),
-    );
-    expect(items).toEqual({ items: 2 });
+    expect(await runInDurableObject(stub, (_: UserDO, state) => shownCount(state.storage))).toBe(2);
     // A newer one applies, its mark kept for the repository.
     expect(await stub.purge(purgeOf(["rep_a"], t, 6))).toEqual({ deleted: 1 });
     expect(await marks(stub)).toEqual([
@@ -147,7 +145,7 @@ describe("purging a feed", () => {
     await first.purge(purge);
     await first.applyFeed([old, fresh]);
     const item = async (stub: DurableObjectStub<UserDO>) => {
-      const page = await stub.listFeed(null, 10, {});
+      const page = await stub.listStreams(FROM_START, 10, {});
       if (page.expired) throw new Error("expired");
       return page.items.map((i) => ({ members: i.members, member: i.member, actor: i.actor }));
     };
@@ -168,7 +166,7 @@ describe("purging a feed", () => {
       const stub = env.USER.getByName(uniqueId("usr"));
       for (const one of order) await stub.applyFeed([one]);
       await stub.purge(purgeOf(["rep_a"], t - 500, 5));
-      const page = await stub.listFeed(null, 10, {});
+      const page = await stub.listStreams(FROM_START, 10, {});
       if (page.expired) throw new Error("expired");
       expect(page.items).toMatchObject([
         { epoch: 2, members: ["comment/1"], member: "comment/1", actor: "usr_new" },

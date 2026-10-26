@@ -8,6 +8,7 @@
 // each recipient once per item, deliveries repeated. (A lost invalidation
 // is "refuses at the commit a member removed from the owner team who keeps
 // write elsewhere" in merges.code-owners.test.ts.)
+
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import type { DomainEvent } from "@fyrden/domain";
@@ -21,6 +22,7 @@ import { feedSink } from "../src/feed/sink.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { recordingPublish } from "./helpers/effects.js";
+import { FROM_START } from "./helpers/feed.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
@@ -480,7 +482,7 @@ describe("a busy thread's recipients, each once an item", () => {
       return ids.length;
     };
     const kindsOf = async (principal: string) => {
-      const page = await env.USER.getByName(principal).listFeed(null, 100, {});
+      const page = await env.USER.getByName(principal).listStreams(FROM_START, 100, {});
       if (page.expired) throw new Error("expired");
       return page.items
         .filter((i) => i.repoId === repo.id)

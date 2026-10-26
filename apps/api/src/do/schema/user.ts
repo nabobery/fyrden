@@ -15,7 +15,7 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   feed in sequence order is the order changes arrived in. A row without
  *   one is a tombstone: never shown, it keeps what resolved something the
  *   feed has not shown, against older entries arriving later
- *   (`feed_tombstones` finds the oldest for retention). `thread_epoch` and
+ *   (`feed_items_age`, since v6, finds the oldest for retention). `thread_epoch` and
  *   `version`: the thread's version, in the repository's restore
  *   generation (a newer one's versions are newer). `members`: the ids an
  *   activity item aggregates (JSON, at most 100, each with when and by whom
@@ -35,6 +35,18 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   or past their cap the oldest.
  * - `feed_retired` (v4): the principal was deleted: the feed holds nothing
  *   and takes nothing from then on.
+ * - `feed_streams` (v6): the feed's streams, one per repository and what
+ *   its threads are about (`subject`: `issue`, `pull`), each with its low
+ *   watermark (the greatest sequence number retention or the stream's cap
+ *   deleted from it) and counts of shown items and tombstones. An item's
+ *   `order_at` (v6) is its retention clock: when it last changed, never
+ *   before its stream's last change, so a stream's expired items are a
+ *   prefix of its sequence. `feed_meta.legacy_head` (v6) and
+ *   `low_watermark` are the feed's head and low watermark as v6 found them,
+ *   only to judge cursors of before; `feed_meta.items` is no longer kept.
+ * - `feed_cursors` (v6): cursor snapshots, by random id: a credential's
+ *   positions in the streams it was shown (`state`, canonical JSON, with
+ *   `hash` for finding an equal one), kept a day from `created_at`.
  */
 export const userSchema: readonly DoMigration[] = [
   {
@@ -150,6 +162,123 @@ export const userSchema: readonly DoMigration[] = [
           UNION ALL SELECT min(until_at) FROM purge_marks
           UNION ALL SELECT min(event_at) FROM feed_evictions))
         WHERE oldest IS NOT NULL AND NOT EXISTS (SELECT 1 FROM feed_retired);
+    `,
+  },
+  {
+    version: 6,
+    // Streams: a repository's issue threads, or its pull requests', each with
+    // its own cap and low watermark, and a reader's positions kept per stream,
+    // so activity in one never evicts, expires or moves another's. Sequence
+    // numbers stay the feed's (a reader's position in a stream is the number
+    // of the last item of it given). Items get their stream (`subject`) and
+    // `order_at`, the retention clock: the running greatest `seq_at` in their
+    // stream's order (so a stream's expired items are a prefix of it; a
+    // tombstone's is its `seq_at`), later changes taking now or their
+    // stream's last, whichever is later. Each stream is trimmed
+    // to its caps at once (500 shown items and 500 tombstones, the oldest
+    // going, each leaving a fence; 100 fences a stream), its low watermark the
+    // greatest sequence number trimmed. Indexes are kept to what a write must,
+    // each being a row written on Workers Free's daily allowance.
+    name: "feed_streams",
+    // Drops indexes only this object's code reads, after it no longer does: the
+    // object migrates before it answers anything, and earlier code refuses a
+    // newer schema rather than reading it.
+    contract: {
+      safeSince: "the release adding feed streams",
+      reason: "feed_items' indexes by time and kind are replaced; only UserDO code reads them",
+    },
+    sql: `
+      ALTER TABLE feed_items ADD COLUMN subject TEXT NOT NULL DEFAULT '';
+      ALTER TABLE feed_items ADD COLUMN order_at INTEGER NOT NULL DEFAULT 0;
+      UPDATE feed_items SET subject = substr(thread_key, 1, instr(thread_key, '/') - 1);
+      CREATE TABLE feed_v6_order (
+        repo_id TEXT NOT NULL,
+        thread_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        order_at INTEGER NOT NULL,
+        PRIMARY KEY (repo_id, thread_key, kind)
+      ) STRICT, WITHOUT ROWID;
+      INSERT INTO feed_v6_order
+        SELECT repo_id, thread_key, kind,
+          CASE WHEN feed_seq IS NULL THEN seq_at
+            ELSE max(seq_at) OVER (PARTITION BY repo_id, subject, feed_seq IS NULL
+              ORDER BY feed_seq ROWS UNBOUNDED PRECEDING) END
+        FROM feed_items;
+      UPDATE feed_items SET order_at = o.order_at FROM feed_v6_order o
+        WHERE o.repo_id = feed_items.repo_id AND o.thread_key = feed_items.thread_key
+          AND o.kind = feed_items.kind;
+      DROP TABLE feed_v6_order;
+
+      ALTER TABLE feed_evictions ADD COLUMN subject TEXT NOT NULL DEFAULT '';
+      UPDATE feed_evictions SET subject = substr(thread_key, 1, instr(thread_key, '/') - 1);
+
+      CREATE TABLE feed_v6_trimmed (
+        repo_id TEXT NOT NULL,
+        thread_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        PRIMARY KEY (repo_id, thread_key, kind)
+      ) STRICT, WITHOUT ROWID;
+      INSERT INTO feed_v6_trimmed
+        SELECT repo_id, thread_key, kind FROM (
+          SELECT repo_id, thread_key, kind, row_number() OVER (
+            PARTITION BY repo_id, subject, feed_seq IS NULL
+            ORDER BY feed_seq DESC, order_at DESC, thread_key DESC, kind DESC) AS r
+          FROM feed_items)
+        WHERE r > 500;
+      INSERT INTO feed_evictions (repo_id, thread_key, kind, thread_epoch, version, event_at, subject)
+        SELECT repo_id, thread_key, kind, thread_epoch, version, last_event_at, subject
+        FROM feed_items WHERE (repo_id, thread_key, kind) IN (SELECT * FROM feed_v6_trimmed)
+        ON CONFLICT (repo_id, thread_key, kind) DO UPDATE SET thread_epoch = excluded.thread_epoch,
+          version = excluded.version, event_at = excluded.event_at;
+      DELETE FROM feed_evictions WHERE (repo_id, thread_key, kind) IN (
+        SELECT repo_id, thread_key, kind FROM (
+          SELECT repo_id, thread_key, kind, row_number() OVER (
+            PARTITION BY repo_id, subject ORDER BY event_at DESC, thread_key DESC, kind DESC) AS r
+          FROM feed_evictions)
+        WHERE r > 100);
+
+      CREATE TABLE feed_streams (
+        repo_id TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        low_watermark INTEGER NOT NULL,
+        items INTEGER NOT NULL,
+        tombstones INTEGER NOT NULL,
+        PRIMARY KEY (repo_id, subject)
+      ) STRICT, WITHOUT ROWID;
+      INSERT INTO feed_streams
+        SELECT repo_id, subject,
+          coalesce(max(CASE WHEN trimmed THEN feed_seq END), 0),
+          count(CASE WHEN NOT trimmed THEN feed_seq END),
+          count(CASE WHEN NOT trimmed AND feed_seq IS NULL THEN 1 END)
+        FROM (SELECT i.repo_id, i.subject, i.feed_seq, t.repo_id IS NOT NULL AS trimmed
+          FROM feed_items i LEFT JOIN feed_v6_trimmed t
+            ON t.repo_id = i.repo_id AND t.thread_key = i.thread_key AND t.kind = i.kind)
+        GROUP BY repo_id, subject;
+      DELETE FROM feed_items WHERE (repo_id, thread_key, kind) IN (SELECT * FROM feed_v6_trimmed);
+      DROP TABLE feed_v6_trimmed;
+      ALTER TABLE feed_meta ADD COLUMN legacy_head INTEGER NOT NULL DEFAULT 0;
+      UPDATE feed_meta SET legacy_head = head_seq;
+
+      DROP INDEX feed_items_subject;
+      DROP INDEX feed_items_seq_at;
+      DROP INDEX feed_tombstones;
+      CREATE INDEX feed_items_stream ON feed_items (repo_id, subject, feed_seq)
+        WHERE feed_seq IS NOT NULL;
+      CREATE INDEX feed_items_age ON feed_items (order_at);
+      CREATE INDEX feed_tombstones_stream ON feed_items (repo_id, subject, order_at)
+        WHERE feed_seq IS NULL;
+      CREATE INDEX feed_evictions_stream ON feed_evictions (repo_id, subject, event_at);
+      CREATE INDEX feed_streams_live ON feed_streams (repo_id, subject) WHERE items > 0;
+
+      CREATE TABLE feed_cursors (
+        id TEXT PRIMARY KEY,
+        credential TEXT NOT NULL,
+        hash INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX feed_cursors_credential ON feed_cursors (credential, hash, created_at);
+      CREATE INDEX feed_cursors_age ON feed_cursors (created_at);
     `,
   },
 ];

@@ -8,7 +8,7 @@ import { uniqueId } from "@fyrden/testing";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { FEED_POLICY } from "../src/do/user/feed.js";
-import { entry, feedIn, ids, inFeed } from "./helpers/feed.js";
+import { entry, FROM_START, feedIn, ids, inFeed, readOn, shownCount } from "./helpers/feed.js";
 
 describe("applying entries", () => {
   it("converges on the same items under any order, duplicates and batch splits", async () => {
@@ -110,7 +110,7 @@ describe("applying entries", () => {
         });
       expect(items()).toEqual([]);
       expect(head()).toBe(0);
-      expect(storage.sql.exec("SELECT items FROM feed_meta").one()).toEqual({ items: 0 });
+      expect(shownCount(storage)).toBe(0);
       // A newer resolution updates the tombstone, still unseen.
       apply([entry({ kind: "approved", version: 5, state: "resolved", priority: "P0" })]);
       expect(rows("kind = 'approved'")).toMatchObject([{ version: 5, feed_seq: null }]);
@@ -330,39 +330,39 @@ describe("reading the feed", () => {
   it("never lets a cursor skip a change that arrives late", async () => {
     const stub = env.USER.getByName(uniqueId("usr"));
     await stub.applyFeed([entry({ version: 3 })]);
-    const first = await stub.listFeed(null, 50, {});
+    const first = await stub.listStreams(FROM_START, 50, {});
     if (first.expired) throw new Error("expired");
     expect(first.items.map((i) => i.members)).toEqual([["3"]]);
-    // An older comment arrives after the reader caught up: the item comes again, after the head.
+    // An older comment arrives after the reader caught up: the item comes again, after it.
     await stub.applyFeed([entry({ version: 2 })]);
-    const next = await stub.listFeed(first.head, 50, {});
+    const next = await stub.listStreams(await readOn(stub, first), 50, {});
     if (next.expired) throw new Error("expired");
     expect(next.items).toMatchObject([{ members: ["3", "2"], version: 3 }]);
-    expect(next.items[0]?.seq).toBeGreaterThan(first.head.seq);
-    // A late action entry older than the item changes nothing: nothing new after the head.
+    expect(next.items[0]?.seq).toBeGreaterThan(first.items[0]?.seq ?? 0);
+    // A late action entry older than the item changes nothing: nothing new after it.
     await stub.applyFeed([entry({ kind: "mention", version: 5 })]);
     await stub.applyFeed([entry({ kind: "mention", version: 4 })]);
-    const after = await stub.listFeed(next.head, 50, {});
+    const after = await stub.listStreams(await readOn(stub, next), 50, {});
     if (after.expired) throw new Error("expired");
     expect(after.items.map((i) => [i.kind, i.version])).toEqual([["mention", 5]]);
-    const last = await stub.listFeed(after.head, 50, {});
+    const last = await stub.listStreams(await readOn(stub, after), 50, {});
     expect(last).toMatchObject({ expired: false, items: [], more: false });
   });
 
-  it("pages in sequence order, with filters", async () => {
+  it("pages in the order of change, with filters", async () => {
     const stub = env.USER.getByName(uniqueId("usr"));
     await stub.applyFeed([
       entry({ thread: 1, version: 1 }),
       entry({ thread: 2, kind: "mention", version: 1, priority: "P0" }),
       entry({ thread: 3, version: 1 }),
     ]);
-    const page = await stub.listFeed(null, 2, {});
+    const page = await stub.listStreams(FROM_START, 2, {});
     if (page.expired) throw new Error("expired");
     expect(page.items.map((i) => i.threadKey)).toEqual(["pull/1", "pull/2"]);
     expect(page.more).toBe(true);
-    const mentions = await stub.listFeed(null, 50, { kind: "mention" });
+    const mentions = await stub.listStreams(FROM_START, 50, { kind: "mention" });
     expect(mentions).toMatchObject({ items: [{ threadKey: "pull/2" }], more: false });
-    const p0 = await stub.listFeed(null, 50, { priority: "P0" });
+    const p0 = await stub.listStreams(FROM_START, 50, { priority: "P0" });
     expect(p0).toMatchObject({ items: [{ threadKey: "pull/2" }] });
   });
 
@@ -386,7 +386,7 @@ describe("reading the feed", () => {
     });
     // A newer version of the item keeps the acknowledgement of the older one.
     await stub.applyFeed([entry({ kind, version: 3, priority: "P0" })]);
-    const page = await stub.listFeed(null, 50, {});
+    const page = await stub.listStreams(FROM_START, 50, {});
     expect(page).toMatchObject({ items: [{ version: 3, ackedVersion: 2 }] });
   });
 
@@ -400,30 +400,41 @@ describe("reading the feed", () => {
     await stub.applyFeed([
       entry({ thread: 3, kind: "approved", version: 2, priority: "P0", state: "resolved" }),
     ]);
-    const synced = await stub.syncFeed(null, 50, {});
+    const synced = await stub.syncStreams(null, 50, {});
     expect(synced.items.map((i) => [i.threadKey, i.kind])).toEqual([
       ["pull/1", "review_requested"],
       ["pull/2", "activity"],
     ]);
     expect(synced.more).toBe(false);
-    const first = await stub.syncFeed(null, 1, {});
+    const first = await stub.syncStreams(null, 1, {});
     expect(first).toMatchObject({ items: [{ threadKey: "pull/1" }], more: true });
-    const next = await stub.syncFeed({ open: true, seq: first.items[0]?.seq ?? 0 }, 1, {});
-    expect(next).toMatchObject({ items: [{ threadKey: "pull/2" }], more: false });
+    const [item] = first.items;
+    if (!item) throw new Error("no item");
+    // The next page goes on from the first's place, with its bound (the feed's last order then).
+    await stub.applyFeed([entry({ thread: 4, version: 1 })]);
+    const next = await stub.syncStreams({ ...item, open: true, bound: first.bound }, 1, {});
+    expect(next).toMatchObject({
+      items: [{ threadKey: "pull/4" }],
+      more: true,
+      bound: first.bound,
+    });
     // Limited to some repositories: the others are not read at all.
-    expect((await stub.syncFeed(null, 50, { repoIds: ["rep_other"] })).items).toEqual([]);
+    expect((await stub.syncStreams(null, 50, { repoIds: ["rep_other"] })).items).toEqual([]);
   });
 });
 
 describe("a feed read for one kind of thread", () => {
   it("reads only that kind's items, however many of the other come first", async () => {
     const read = await inFeed((storage) => {
-      const { feed, apply } = feedIn(storage);
+      let now = Date.now();
+      const { feed, apply } = feedIn(storage, () => now);
       apply(
         Array.from({ length: 4_999 }, (_, i) =>
           entry({ subject: "issue", thread: i + 1, version: 1, repoId: "rep_kinds" }),
         ),
       );
+      // A moment later (at the same time, the issues' stream would come first in the order).
+      now += 1;
       apply([entry({ subject: "pull", thread: 1, version: 1, repoId: "rep_kinds" })]);
       const exec = storage.sql.exec.bind(storage.sql);
       let rowsRead = 0;
@@ -438,14 +449,16 @@ describe("a feed read for one kind of thread", () => {
         return cursor;
       }) as typeof storage.sql.exec;
       try {
-        const listed = feed.list(null, 50, { subjects: ["pull"] });
+        const listed = feed.read(FROM_START, 50, { subjects: ["pull"] });
+        const listRows = rowsRead;
         const synced = feed.sync(null, 50, { subjects: ["pull"] });
-        const none = feed.list(null, 50, { subjects: [] });
+        const none = feed.read(FROM_START, 50, { subjects: [] });
         return {
           listed: listed.expired ? [] : listed.items.map((i) => i.threadKey),
           synced: synced.items.map((i) => i.threadKey),
           none: none.expired ? [] : none.items,
-          rowsRead,
+          listRows,
+          syncRows: rowsRead - listRows,
         };
       } finally {
         storage.sql.exec = exec;
@@ -454,7 +467,10 @@ describe("a feed read for one kind of thread", () => {
     expect(read.listed).toEqual(["pull/1"]);
     expect(read.synced).toEqual(["pull/1"]);
     expect(read.none).toEqual([]);
-    // Through the index by kind: the one pull request item (and the feed's meta), not the 4,999.
-    expect(read.rowsRead).toBeLessThan(50);
+    // A list starts at that kind's streams' earliest item not given: the one pull request item
+    // (and the feed's meta and streams), not the issues before it. A sync reads the feed's
+    // items as any sync does (the issues' stream kept to its cap of 500), and its streams.
+    expect(read.listRows).toBeLessThan(50);
+    expect(read.syncRows).toBeLessThan(FEED_POLICY.streamItems + 100);
   });
 });

@@ -12,26 +12,45 @@ import { userSchema } from "../src/do/schema/user.js";
 import type { UserDO } from "../src/do/UserDO.js";
 import { FEED_POLICY, Feed, MAX_GONE_THREADS } from "../src/do/user/feed.js";
 import userV4 from "./fixtures/do-schemas/UserDO/v4.sql?raw";
-import { DAY, entry, feedIn, inFeed } from "./helpers/feed.js";
+import {
+  DAY,
+  type EntryInit,
+  entry,
+  FROM_START,
+  feedIn,
+  inFeed,
+  shownCount,
+} from "./helpers/feed.js";
 
-const many = (n: number, from = 1, at?: number) =>
+/**
+ * `n` items of threads `from` on, 400 a repository (within a stream's cap):
+ * `rep_test`'s first, then `rep_test1`, `rep_test2`...
+ */
+const many = (n: number, from = 1, at?: number, init: Partial<EntryInit> = {}) =>
   Array.from({ length: n }, (_, i) =>
-    entry({ thread: from + i, version: 1, ...(at !== undefined && { occurredAt: at }) }),
+    entry({
+      thread: from + i,
+      version: 1,
+      repoId: i < 400 ? "rep_test" : `rep_test${Math.floor(i / 400)}`,
+      ...(at !== undefined && { occurredAt: at }),
+      ...init,
+    }),
   );
 
 describe("retention, a step at a time", () => {
-  it("deletes a backlog in bounded steps, the low watermark rising with each", async () => {
+  it("deletes a backlog in bounded steps, the streams' low watermarks rising with each", async () => {
     const t0 = Date.now();
     let now = t0;
     await inFeed((storage) => {
       const { feed, apply } = feedIn(storage, () => now);
       apply(many(1_200, 1, t0));
-      now = t0 + FEED_POLICY.retentionMs + 1;
+      now = t0 + FEED_POLICY.retentionMs + 10_000;
       const counts = () =>
         storage.sql
           .exec<{ n: number; items: number; low: number }>(
-            `SELECT (SELECT count(*) FROM feed_items) AS n, items, low_watermark AS low
-             FROM feed_meta`,
+            `SELECT (SELECT count(*) FROM feed_items) AS n, sum(items) AS items,
+               sum(low_watermark) AS low
+             FROM feed_streams`,
           )
           .one();
       const steps: { n: number; items: number; low: number }[] = [];
@@ -39,7 +58,10 @@ describe("retention, a step at a time", () => {
       steps.push(counts());
       expect(steps.map((s) => s.n)).toEqual([700, 200, 0]);
       expect(steps.map((s) => s.items)).toEqual([700, 200, 0]);
-      expect(steps.map((s) => s.low)).toEqual([500, 1_000, 1_200]);
+      // Each stream's watermark at the greatest of its sequence numbers deleted: all of them
+      // in the end (400, 800 and 1,200).
+      expect(steps.at(-1)?.low).toBe(400 + 800 + 1_200);
+      expect(steps.map((s) => s.low)).toEqual([...steps.map((s) => s.low)].sort((a, b) => a - b));
     });
   });
 
@@ -67,18 +89,8 @@ describe("retention, a step at a time", () => {
         });
         const { apply } = feedIn(storage, () => now);
         apply(many(n, 1, t0));
-        apply(
-          Array.from({ length: n }, (_, i) =>
-            entry({
-              thread: 100_000 + i,
-              version: 1,
-              kind: "approved",
-              state: "resolved",
-              occurredAt: t0,
-            }),
-          ),
-        );
-        now = t0 + FEED_POLICY.retentionMs + 1;
+        apply(many(n, 100_000, t0, { kind: "approved", state: "resolved" }));
+        now = t0 + FEED_POLICY.retentionMs + 10_000;
         const feed = new Feed(sql as SqlStorage, () => now);
         expect(storage.transactionSync(() => feed.retainStep())).toBe(true);
         return read;
@@ -102,15 +114,16 @@ describe("retention, a step at a time", () => {
     const stored = await runInDurableObject(
       stub,
       (_: UserDO, state) =>
-        state.storage.sql.exec<{ at: number }>("SELECT max(seq_at) AS at FROM feed_items").one().at,
+        state.storage.sql.exec<{ at: number }>("SELECT max(order_at) AS at FROM feed_items").one()
+          .at,
     );
     vi.setSystemTime(t0 + 3 * DAY);
     await stub.applyFeed([entry({ thread: 3, version: 1 })]);
     vi.setSystemTime(stored + FEED_POLICY.retentionMs + 1);
     // The alarm has not run: both expired items are still stored, and shown to no one.
-    const page = await stub.listFeed(null, 50, {});
+    const page = await stub.listStreams(FROM_START, 50, {});
     expect(page.expired ? [] : page.items.map((i) => i.threadKey)).toEqual(["pull/3"]);
-    const sync = await stub.syncFeed(null, 50, {});
+    const sync = await stub.syncStreams(null, 50, {});
     expect(sync.items.map((i) => i.threadKey)).toEqual(["pull/3"]);
     const kept = await runInDurableObject(
       stub,
@@ -127,12 +140,12 @@ describe("retention, a step at a time", () => {
       const { feed, apply, rows } = feedIn(storage, () => now);
       apply([entry({ thread: 1, version: 1, occurredAt: t0 })]);
       const id = { repoId: "rep_test", threadKey: "pull/1", kind: "activity" } as const;
-      now = t0 + FEED_POLICY.retentionMs + 1;
+      now = t0 + FEED_POLICY.retentionMs + 10_000;
       expect(storage.transactionSync(() => feed.ack(id, { epoch: 1, version: 1 }))).toEqual({
         status: "missing",
       });
       expect(rows()).toEqual([]);
-      expect(storage.sql.exec("SELECT items, low_watermark FROM feed_meta").one()).toEqual({
+      expect(storage.sql.exec("SELECT items, low_watermark FROM feed_streams").one()).toEqual({
         items: 0,
         low_watermark: 1,
       });
@@ -155,7 +168,7 @@ describe("retention, a step at a time", () => {
       );
       apply([entry({ thread: 2, version: 5, ...p0, state: "resolved", occurredAt: t0 })]);
       expect(rows("feed_seq IS NULL")).toHaveLength(1);
-      now = t0 + FEED_POLICY.retentionMs + 1;
+      now = t0 + FEED_POLICY.retentionMs + 10_000;
       // Expired, not deleted yet: both still stored when the entries come.
       expect(rows()).toHaveLength(2);
       apply([
@@ -175,29 +188,7 @@ describe("retention, a step at a time", () => {
       expect(activity).toMatchObject({ acked_version: 0 });
       // Its newer resolved version expired with it: the lower version that came now stands.
       expect(request).toMatchObject({ state: "open", version: 2 });
-      expect(storage.sql.exec("SELECT items FROM feed_meta").one()).toEqual({ items: 2 });
-    });
-  });
-
-  it("trims past the cap within the same bound, after the expired ones", async () => {
-    const t0 = Date.now();
-    let now = t0;
-    await inFeed((storage) => {
-      const { feed, apply } = feedIn(storage, () => now);
-      apply(many(300, 1, t0));
-      now = t0 + DAY;
-      apply(many(FEED_POLICY.maxItems + 400, 1_000, now));
-      now = t0 + FEED_POLICY.retentionMs + 1;
-      // 300 expired, then 200 of the 400 past the cap; then the other 200.
-      expect(storage.transactionSync(() => feed.retainStep())).toBe(true);
-      const n = () =>
-        storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM feed_items").one().n;
-      expect(n()).toBe(FEED_POLICY.maxItems + 200);
-      expect(storage.transactionSync(() => feed.retainStep())).toBe(false);
-      expect(n()).toBe(FEED_POLICY.maxItems);
-      expect(
-        storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM feed_evictions").one().n,
-      ).toBe(400);
+      expect(shownCount(storage)).toBe(2);
     });
   });
 });
@@ -223,7 +214,8 @@ describe("a feed's alarm", () => {
     const stored = await runInDurableObject(
       stub,
       (_: UserDO, state) =>
-        state.storage.sql.exec<{ at: number }>("SELECT max(seq_at) AS at FROM feed_items").one().at,
+        state.storage.sql.exec<{ at: number }>("SELECT max(order_at) AS at FROM feed_items").one()
+          .at,
     );
     vi.setSystemTime(stored + FEED_POLICY.retentionMs + 1);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
@@ -248,7 +240,8 @@ describe("a feed's alarm", () => {
     const stored = await runInDurableObject(
       stub,
       (_: UserDO, state) =>
-        state.storage.sql.exec<{ at: number }>("SELECT min(seq_at) AS at FROM feed_items").one().at,
+        state.storage.sql.exec<{ at: number }>("SELECT min(order_at) AS at FROM feed_items").one()
+          .at,
     );
     const due = stored + FEED_POLICY.retentionMs;
     expect((await schedule(stub)).alarm).toBe(due);
@@ -270,12 +263,14 @@ describe("a feed's alarm", () => {
     const later = await runInDurableObject(
       stub,
       (_: UserDO, state) =>
-        state.storage.sql.exec<{ at: number }>("SELECT max(seq_at) AS at FROM feed_items").one().at,
+        state.storage.sql.exec<{ at: number }>("SELECT max(order_at) AS at FROM feed_items").one()
+          .at,
     );
     const earlier = await runInDurableObject(
       stub,
       (_: UserDO, state) =>
-        state.storage.sql.exec<{ at: number }>("SELECT min(seq_at) AS at FROM feed_items").one().at,
+        state.storage.sql.exec<{ at: number }>("SELECT min(order_at) AS at FROM feed_items").one()
+          .at,
     );
     // A cold instance whose first call is its alarm, once the first item expired.
     await runInDurableObject(stub, (_: UserDO, state) => state.abort("cold")).catch(() => {});
@@ -409,7 +404,7 @@ describe("a feed object migrated to the schedule", () => {
     // A new instance migrates; its first call (a read) sets the alarm by the seeded row.
     await runInDurableObject(stub, (_: UserDO, state) => state.abort("migrate")).catch(() => {});
     const migratedStub = env.USER.getByName(name);
-    await migratedStub.listFeed(null, 10, {});
+    await migratedStub.listStreams(FROM_START, 10, {});
     const alarm = await runInDurableObject(migratedStub, (_: UserDO, state) =>
       state.storage.getAlarm(),
     );
@@ -424,11 +419,11 @@ describe("a feed object migrated to the schedule", () => {
     expect(left).toBe(0);
   });
 
-  it("takes a cold call and trims past the cap when migrated over it", async () => {
+  it("takes a cold call, trimmed to its streams' caps when migrated over them", async () => {
     const name = uniqueId("usr");
     const stub = env.USER.getByName(name);
     const now = Date.now();
-    const over = FEED_POLICY.maxItems + 10;
+    const over = 5_010;
     await runInDurableObject(stub, async (_: UserDO, state) => {
       await state.storage.deleteAll();
       state.storage.sql.exec(userV4);
@@ -456,7 +451,7 @@ describe("a feed object migrated to the schedule", () => {
     await runInDurableObject(stub, (_: UserDO, state) => state.abort("migrate")).catch(() => {});
     const migratedStub = env.USER.getByName(name);
     // Seeded due at once (0): the cold read still answers, the alarm set to now.
-    const page = await migratedStub.listFeed(null, 1, {});
+    const page = await migratedStub.listStreams(FROM_START, 1, {});
     expect(page.expired).toBe(false);
     expect(await runDurableObjectAlarm(migratedStub)).toBe(true);
     const n = await runInDurableObject(
@@ -464,7 +459,7 @@ describe("a feed object migrated to the schedule", () => {
       (_: UserDO, state) =>
         state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM feed_items").one().n,
     );
-    expect(n).toBe(FEED_POLICY.maxItems);
+    expect(n).toBe(FEED_POLICY.streamItems);
   });
 
   it("schedules it at once past the cap, and not at all for a retired feed", async () => {
