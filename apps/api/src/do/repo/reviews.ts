@@ -515,8 +515,7 @@ export class RepoReviews {
           r.requestId,
         );
       for (const r of teamsPromoted) teams.setReasons(r.requestId, r.reasons | MANUAL);
-      if (audience && newTeams.length > 0)
-        teams.askedAt(audience.accountId, audience.epochGen, standing.length > 0);
+      if (audience && newTeams.length > 0) teams.askedAt(audience.accountId, audience.epochGen);
       for (const team of newTeams) teams.ask(number, team, caller.actor, now);
       if (added.length > 0 || newTeams.length > 0)
         this.deps.events.auditChange("pull_request.request_reviewers", caller.actor, {
@@ -658,7 +657,7 @@ export class RepoReviews {
       this.#emitRequest("review_requested", number, id, actor, root);
     }
     if (ask.audience && ask.teams.length > 0)
-      teams.askedAt(ask.audience.accountId, ask.audience.epochGen, live.size > 0);
+      teams.askedAt(ask.audience.accountId, ask.audience.epochGen);
     for (const team of ask.teams) teams.ask(number, team, actor, now, OWNERS);
     if (ask.principals.length > 0 || ask.teams.length > 0)
       this.deps.events.auditChange("pull_request.request_reviewers", actor, {

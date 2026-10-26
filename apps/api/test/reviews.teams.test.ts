@@ -535,6 +535,40 @@ describe("team review requests", () => {
     expect((await requested()).teams).toEqual([kept_]);
   });
 
+  it("still settle a restored-away team when another pull request's first team is asked first", async () => {
+    const core = await team("Core", [alice]);
+    const kept_ = await team("Kept", [bob]);
+    await ok(request({ team_reviewers: [core.slug] }));
+    // A second pull request, with no team asked yet.
+    await branchAt("other", await commitOn("main", "base\n"));
+    await commitOn("other", "base\nthree\n");
+    await ok(
+      api("POST", `${path}/pulls`, owner.token, { title: "Other", head: "other", base: "main" }),
+    );
+    // The organization goes back to before Core.
+    const epoch = await allocateEpoch(env.DIRECTORY, org.id);
+    const version = await runInDurableObject(orgStub(), (_: OrgDO, state) => {
+      const sql = state.storage.sql;
+      sql.exec("DELETE FROM team_members WHERE team_id = ?", core.id);
+      sql.exec("DELETE FROM teams WHERE team_id = ?", core.id);
+      return sql
+        .exec<{ version: number }>(
+          "UPDATE org_meta SET epoch_gen = ? RETURNING acl_version AS version",
+          epoch,
+        )
+        .one().version;
+    });
+    await stub().invalidateAcl(org.id, epoch, version);
+    // Before the check of standing requests runs, pull request 2's first team is asked.
+    await ok(request({ team_reviewers: [kept_.slug] }, owner, 2));
+    const from = await seq();
+    await runJobs();
+    const settling = ofType(await events(from), "pull_request.review_requests_settled");
+    expect(settling.flatMap((e) => settled(e))).toEqual([entry(alice, "resolved")]);
+    expect((await requested(1)).teams).toEqual([]);
+    expect((await requested(2)).teams).toEqual([kept_]);
+  });
+
   it("accept a team against the access its members were read with, pulling it again when older", async () => {
     const big = await team("Many", [alice]);
     // The members join with a new ACL version the repository was not told of.

@@ -349,17 +349,30 @@ export class RepoTeamRequests {
     this.deps.schedule();
   }
 
+  /** Whether a team request stands on any of the repository's pull requests. */
+  #anyStanding(): boolean {
+    const gen = this.liveGen();
+    if (gen === null) return false;
+    return (
+      this.#rows<{ one: number }>(
+        "SELECT 1 AS one FROM review_team_requests WHERE owner_gen = ? LIMIT 1",
+        gen,
+      ).length > 0
+    );
+  }
+
   /**
-   * In the transaction of a request asked with teams read at `epochGen`:
-   * when no other team request stands, nothing older is left to check, so
+   * In the transaction of a request asked with teams read at `epochGen`,
+   * before its teams are added: when no team request stands in the
+   * repository (on any pull request), nothing older is left to check, so
    * that generation is the one checked against.
    */
-  askedAt(accountId: string, epochGen: number, othersStanding: boolean): void {
+  askedAt(accountId: string, epochGen: number): void {
     const account = this.deps.events.account();
     if (!account || account.accountId !== accountId) return;
     const row = this.#epochRow();
     const bound = row?.account_id === accountId && row.owner_gen === account.ownerGen;
-    if (othersStanding || (bound && epochGen < row.observed)) {
+    if (this.#anyStanding() || (bound && epochGen < row.observed)) {
       this.observe(accountId, epochGen);
       return;
     }
