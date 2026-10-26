@@ -146,6 +146,39 @@ describe("beginning a user's deletion", () => {
     ).toEqual({ actor_id: admin.principalId });
   });
 
+  it("begins for a user with more agents than one D1 value could list", async () => {
+    const carol = await user();
+    // 30,000 agents with 39-character handles: their handles together are past 2 MB of JSON.
+    await env.DIRECTORY.prepare(
+      `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 30000)
+       INSERT INTO principals (id, type, handle, owner_id, created_at)
+       SELECT ?1 || '_' || printf('%06d', i), 'agent', ?1 || printf('%06d', i) || 'x', ?2, 0
+       FROM n`,
+    )
+      .bind(uniqueId("agt").slice(0, 24).padEnd(32, "a"), carol.principalId)
+      .run();
+    expect(await begin(carol)).toBe(true);
+    const job = await row<{ released_handles: string }>(
+      "SELECT released_handles FROM user_deletions WHERE user_id = ?",
+      carol.principalId,
+    );
+    // Only the user's own handle: each agent's is held by its own reservation.
+    expect(JSON.parse(job?.released_handles ?? "[]")).toEqual([
+      { id: carol.principalId, handle: carol.handle },
+    ]);
+    const audit = await row<{ details: string }>(
+      "SELECT details FROM audit_log WHERE target_id = ? AND action = 'user.delete'",
+      carol.principalId,
+    );
+    expect(JSON.parse(audit?.details ?? "{}")).toEqual({ principals: 30_001 });
+    expect(
+      await row<{ n: number }>(
+        "SELECT count(*) AS n FROM user_retirements WHERE user_id = ?",
+        carol.principalId,
+      ),
+    ).toEqual({ n: 30_001 });
+  });
+
   it("changes nothing for a user who changed meanwhile, or is being deleted already", async () => {
     const bob = await user();
     const stale = await beginUserDeletion(

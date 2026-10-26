@@ -68,14 +68,14 @@ export async function beginUserDeletion(
       now,
       target.gen,
     ),
-    // The job, with the last account recorded before it began and the handles released.
+    // The job, with the last account recorded before it began and the user's handle released
+    // (each agent's is held by its own reservation; listing them could pass D1's 2 MB value).
     stmt(
       `INSERT INTO user_deletions (user_id, step, requested_by, request_id, scan_until,
          next_attempt_at, released_handles, created_at, updated_at)
        SELECT ?1, 'repositories', ?3, ?4, (SELECT coalesce(max(rowid), 0) FROM source_epochs),
-         ?5, (SELECT json_group_array(json_object('id', id, 'handle', handle)) FROM principals
-           WHERE id = ?1 OR (owner_id = ?1 AND type = 'agent'
-             AND lifecycle IN ('active', 'suspended'))),
+         ?5, (SELECT json_array(json_object('id', id, 'handle', handle)) FROM principals
+           WHERE id = ?1),
          ?5, ?5
        WHERE ${made}`,
       actor.principalId,
@@ -152,8 +152,7 @@ export async function beginUserDeletion(
     stmt(
       `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
        SELECT ?3, ?4, ?5, 'user.delete', ?1,
-         json_object('principals', (SELECT json_group_array(principal_id) FROM user_retirements
-           WHERE user_id = ?1)), ?6
+         json_object('principals', (SELECT count(*) FROM user_retirements WHERE user_id = ?1)), ?6
        WHERE ${made}`,
       now,
       actor.principalId,
