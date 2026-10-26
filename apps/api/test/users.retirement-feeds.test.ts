@@ -2,7 +2,7 @@
 // (a late entry or purge is answered as delivered, changing nothing), and a
 // feed object restored from before its retirement retires itself on its
 // first call, the directory saying the principal is being deleted.
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import type { FeedEntry } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
@@ -11,6 +11,7 @@ import { feedHooks, type UserDO } from "../src/do/UserDO.js";
 import type { Effect } from "../src/effects/journal.js";
 import { feedSink } from "../src/feed/sink.js";
 import { user } from "./helpers/api.js";
+import { feedIn } from "./helpers/feed.js";
 
 function entry(principal: string, version: number): FeedEntry {
   const repoId = "rep_feedretire";
@@ -65,6 +66,13 @@ const state = (stub: DurableObjectStub<UserDO>) =>
     };
   });
 
+/** Runs the feed's alarm until none is set: its cleanup done, a step at a time. */
+async function cleaned(stub: DurableObjectStub<UserDO>): Promise<number> {
+  let alarms = 0;
+  while (await runDurableObjectAlarm(stub)) alarms++;
+  return alarms;
+}
+
 const markDeleting = (principalId: string) =>
   env.DIRECTORY.prepare(
     `UPDATE principals SET lifecycle = 'deleting', disabled_at = ?2,
@@ -97,6 +105,11 @@ describe("a retired feed", () => {
     expect(await state(stub)).toMatchObject({ items: 1, marks: 1, evictions: 1, counted: 1 });
     expect(await state(stub)).toMatchObject({ alarm: true });
     await stub.retire();
+    // Retired at once: it reads as empty and takes nothing; its rows go from its alarm.
+    expect(await state(stub)).toMatchObject({ retired: 1, alarm: true });
+    const empty = await stub.listFeed(null, 10, {});
+    expect(empty.expired ? [] : empty.items).toEqual([]);
+    expect(await cleaned(stub)).toBeGreaterThan(0);
     const retiredAt = await state(stub);
     expect(retiredAt).toMatchObject({
       items: 0,
@@ -108,6 +121,7 @@ describe("a retired feed", () => {
     });
     // Again: nothing changes.
     await stub.retire();
+    expect(await cleaned(stub)).toBeGreaterThanOrEqual(0);
     expect(await state(stub)).toEqual(retiredAt);
     expect(await rows(stub)).toEqual({ items: 0, marks: 0, retired: 1 });
     expect(await stub.applyFeed([entry(who.principalId, 2)])).toEqual({ changed: 0, notified: 0 });
@@ -131,6 +145,7 @@ describe("a retired feed", () => {
       changed: 0,
       notified: 0,
     });
+    await cleaned(restored);
     expect(await rows(restored)).toEqual({ items: 0, marks: 0, retired: 1 });
   });
 
@@ -152,6 +167,7 @@ describe("a retired feed", () => {
       await runInDurableObject(stub, (_: UserDO, s) => s.abort("restore")).catch(() => {});
       const restored = env.USER.getByName(who.principalId);
       await first(restored);
+      await cleaned(restored);
       expect(await rows(restored)).toEqual({ items: 0, marks: 0, retired: 1 });
     }
   });
@@ -204,6 +220,62 @@ describe("a retired feed", () => {
     const restored = env.USER.getByName(who.principalId);
     await runInDurableObject(restored, (instance: UserDO) => instance.alarm());
     expect(await rows(restored)).toEqual({ items: 0, marks: 0, retired: 1 });
+  });
+
+  it("is emptied over several alarms, gated all along, its cleanup surviving eviction and a second retire", async () => {
+    const who = await user();
+    const stub = env.USER.getByName(who.principalId);
+    // 2,600 items: more than one alarm's four steps of 500.
+    await runInDurableObject(stub, (_: UserDO, state) => {
+      const { apply } = feedIn(state.storage);
+      apply(
+        Array.from({ length: 2_600 }, (_, i) => ({
+          ...entry(who.principalId, 1),
+          eventKey: `rep_feedretire:${i}:1`,
+          feed: { ...entry(who.principalId, 1).feed, threadKey: `pull/${i + 1}` },
+        })),
+      );
+    });
+    await stub.retire();
+    const gated = async (feed: DurableObjectStub<UserDO>) => {
+      expect(await feed.applyFeed([entry(who.principalId, 9)])).toEqual({
+        changed: 0,
+        notified: 0,
+      });
+      const page = await feed.listFeed(null, 10, {});
+      expect(page.expired ? [] : page.items).toEqual([]);
+      expect((await feed.syncFeed(null, 10, {})).items).toEqual([]);
+      expect(
+        await feed.ackFeed(
+          { repoId: "rep_feedretire", threadKey: "pull/1", kind: "activity" },
+          { epoch: 1, version: 1 },
+        ),
+      ).toEqual({ status: "missing" });
+    };
+    await gated(stub);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect((await state(stub)).items).toBe(600);
+    // Evicted, and retired again, between alarms: the cleanup goes on from storage.
+    await runInDurableObject(stub, (_: UserDO, s) => s.abort("evict")).catch(() => {});
+    const again = env.USER.getByName(who.principalId);
+    await again.retire();
+    expect(await state(again)).toMatchObject({ items: 600, alarm: true });
+    await gated(again);
+    await cleaned(again);
+    expect(await state(again)).toMatchObject({ items: 0, retired: 1, alarm: false });
+  });
+
+  it("is retired, and emptied, by its alarm when that runs first after a restore", async () => {
+    const who = await user();
+    const stub = env.USER.getByName(who.principalId);
+    await stub.applyFeed([entry(who.principalId, 1)]);
+    await markDeleting(who.principalId);
+    await runInDurableObject(stub, (_: UserDO, state) => state.abort("restore")).catch(() => {});
+    const restored = env.USER.getByName(who.principalId);
+    // Its retention alarm, set before the restore, fires first.
+    expect(await runDurableObjectAlarm(restored)).toBe(true);
+    await cleaned(restored);
+    expect(await state(restored)).toMatchObject({ items: 0, retired: 1, alarm: false });
   });
 
   it("of a principal the directory does not know takes entries as before", async () => {

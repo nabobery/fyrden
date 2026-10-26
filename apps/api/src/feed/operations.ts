@@ -16,6 +16,7 @@ import {
   type FeedItem,
   type FeedItemId,
   type FeedPosition,
+  MAX_GONE_THREADS,
   type SyncPosition,
 } from "../do/user/feed.js";
 import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/cursor.js";
@@ -352,18 +353,16 @@ class Visibility {
    */
   async forgetLost(): Promise<void> {
     const feed = this.ctx.env.USER.getByName(this.ctx.auth.principalId);
-    if (this.#gone.size > 0) {
+    const gone = [...this.#gone].map(([k, epoch]) => {
+      const [repoId, threadKey] = k.split("\n") as [string, string];
+      return { repoId, threadKey, epoch };
+    });
+    // In calls the feed takes (`MAX_GONE_THREADS` each, so each deletes a bounded number).
+    for (let i = 0; i < gone.length; i += MAX_GONE_THREADS) {
       this.ctx.metrics.count("do.request", { class: "UserDO", method: "forgetGoneThreads" });
       // An earlier object has no such method (while a deploy rolls out): nothing is forgotten,
       // and a later read forgets them; never through the earlier method, which has no fence.
-      await feed
-        .forgetGoneThreads(
-          [...this.#gone].map(([k, epoch]) => {
-            const [repoId, threadKey] = k.split("\n") as [string, string];
-            return { repoId, threadKey, epoch };
-          }),
-        )
-        .catch(() => undefined);
+      await feed.forgetGoneThreads(gone.slice(i, i + MAX_GONE_THREADS)).catch(() => undefined);
     }
     if (this.#lost.size === 0) return;
     this.ctx.metrics.count("do.request", { class: "UserDO", method: "forgetRepos" });

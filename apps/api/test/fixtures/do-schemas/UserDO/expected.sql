@@ -1,8 +1,10 @@
 CREATE INDEX feed_evictions_at ON feed_evictions (event_at);
+CREATE INDEX feed_items_seq_at ON feed_items (seq_at, feed_seq);
 CREATE INDEX feed_items_subject
         ON feed_items (substr(thread_key, 1, instr(thread_key, '/') - 1), feed_seq)
         WHERE feed_seq IS NOT NULL;
 CREATE INDEX feed_tombstones ON feed_items (seq_at) WHERE feed_seq IS NULL;
+CREATE INDEX purge_marks_until ON purge_marks (until_at);
 CREATE TABLE feed_evictions (
         repo_id TEXT NOT NULL,
         thread_key TEXT NOT NULL,
@@ -56,4 +58,8 @@ CREATE TABLE purge_marks (
         account_id TEXT NOT NULL,
         epoch_gen INTEGER NOT NULL,
         acl_version INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE user_schedule (
+        kind TEXT PRIMARY KEY,
+        due_at INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;

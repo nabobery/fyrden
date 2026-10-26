@@ -126,4 +126,30 @@ export const userSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 5,
+    // The object's deferred work, by kind, each due at its time: the alarm is
+    // the earliest. Retention's row is seeded from what the feed holds (its
+    // alarm, set before, stays): due when the oldest item, tombstone, mark or
+    // fence expires (7 days, the retention then), at once past the 5,000 cap;
+    // none for an empty feed, or one retired (cleaned when it was).
+    name: "user_schedule",
+    sql: `
+      CREATE TABLE user_schedule (
+        kind TEXT PRIMARY KEY,
+        due_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX feed_items_seq_at ON feed_items (seq_at, feed_seq);
+      CREATE INDEX purge_marks_until ON purge_marks (until_at);
+      INSERT INTO user_schedule (kind, due_at)
+        SELECT 'retain',
+          CASE WHEN (SELECT items FROM feed_meta WHERE id = 1) > 5000 THEN 0
+            ELSE oldest + 604800000 END
+        FROM (SELECT min(at) AS oldest FROM (
+          SELECT min(seq_at) AS at FROM feed_items
+          UNION ALL SELECT min(until_at) FROM purge_marks
+          UNION ALL SELECT min(event_at) FROM feed_evictions))
+        WHERE oldest IS NOT NULL AND NOT EXISTS (SELECT 1 FROM feed_retired);
+    `,
+  },
 ];

@@ -10,6 +10,11 @@ import type { UserDO } from "../src/do/UserDO.js";
 import { FEED_POLICY } from "../src/do/user/feed.js";
 import { DAY, entry, feedIn, ids, inFeed } from "./helpers/feed.js";
 
+/** Retention run to its end, a step at a time, each step its own transaction. */
+function retainAll(storage: DurableObjectStorage, feed: { retainStep(): boolean }): void {
+  while (storage.transactionSync(() => feed.retainStep()));
+}
+
 describe("retention", () => {
   it("deletes items past 7 days in an alarm, and expires cursors below the low watermark", async () => {
     const stub = env.USER.getByName(uniqueId("usr"));
@@ -102,7 +107,7 @@ describe("an item the cap evicted", () => {
       expect(ack(1)).toMatchObject({ status: "acked" });
       apply([entry({ kind, version: 2, priority: "P0", state: "resolved" })]);
       apply(filler(2));
-      storage.transactionSync(() => feed.retain());
+      retainAll(storage, feed);
       const thread = () => rows("thread_key = 'pull/1'");
       expect(thread()).toEqual([]);
       const at = head();
@@ -124,7 +129,7 @@ describe("an item the cap evicted", () => {
       const { feed, apply, rows } = feedIn(storage);
       apply([entry({ version: 5 })]);
       apply(filler(2));
-      storage.transactionSync(() => feed.retain());
+      retainAll(storage, feed);
       apply([entry({ version: 1, epochGen: 2 })]);
       apply([entry({ version: 6 })]);
       expect(rows("thread_key = 'pull/1'")).toMatchObject([{ thread_epoch: 2, version: 1 }]);
@@ -137,7 +142,7 @@ describe("an item the cap evicted", () => {
       const { feed, apply, rows } = feedIn(storage);
       apply([entry({ version: 3 })]);
       apply(filler(2));
-      storage.transactionSync(() => feed.retain());
+      retainAll(storage, feed);
       apply([entry({ version: 4 })]);
       // Of the same generation: an activity item would take it as a member, whatever its version.
       apply([entry({ version: 2 })]);
@@ -156,7 +161,7 @@ describe("an item the cap evicted", () => {
       );
       for (let at = 0; at < history.length; at += 1_000) {
         apply(history.slice(at, at + 1_000));
-        storage.transactionSync(() => feed.retain());
+        retainAll(storage, feed);
       }
       const count = (table: string) =>
         storage.sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table}`).one().n;
@@ -180,14 +185,14 @@ describe("an item the cap evicted", () => {
       const { feed, apply, rows } = feedIn(storage, () => now);
       apply([entry({ version: 1, occurredAt: t0 - DAY })]);
       apply(filler(2));
-      storage.transactionSync(() => feed.retain());
+      retainAll(storage, feed);
       const fences = () =>
         storage.sql.exec("SELECT thread_key, version FROM feed_evictions").toArray();
       expect(fences()).toEqual([{ thread_key: "pull/1", version: 1 }]);
       // The fence expires first: the items left changed at t0.
       expect(feed.nextRetention()).toBe(t0 - DAY + FEED_POLICY.retentionMs);
       now = t0 - DAY + FEED_POLICY.retentionMs + 1;
-      storage.transactionSync(() => feed.retain());
+      retainAll(storage, feed);
       expect(fences()).toEqual([]);
       expect(rows()).toHaveLength(FEED_POLICY.maxItems);
       // Its entries are dropped for their age now.

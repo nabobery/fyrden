@@ -40,7 +40,20 @@ export const FEED_POLICY = {
   maxMembers: 100,
   /** Items a sync returns at most. */
   syncItems: 500,
+  /**
+   * Rows one step of retention or retirement deletes at most: items (with
+   * their eviction fences), then purge marks and eviction fences, each up to
+   * this many (Proposed). More left: the step is due again at once.
+   */
+  sliceRows: 500,
 } as const;
+
+/**
+ * Gone threads one `forgetGoneThreads` call forgets at most: each at most
+ * one item a kind (seven), so a call deletes under 500 rows (see
+ * `FEED_POLICY.sliceRows`).
+ */
+export const MAX_GONE_THREADS = 70;
 
 /**
  * The key a feed's restore generation has in the directory's
@@ -418,7 +431,7 @@ export class Feed {
   #applyOne(entry: FeedEntry, now: number): boolean {
     const { feed, recipient } = entry;
     const id = { repoId: entry.repoId, threadKey: feed.threadKey, kind: recipient.kind };
-    const item = this.#row(id);
+    const item = this.#live(id, now);
     const before = item ? stateOf(item) : blank(entry);
     const newer = newerThan(versionOf(entry), {
       epoch: before.thread_epoch,
@@ -504,6 +517,7 @@ export class Feed {
         `SELECT * FROM feed_items
          WHERE feed_seq > ?1 AND (?2 IS NULL OR priority = ?2) AND (?3 IS NULL OR kind = ?3)
            AND (?5 IS NULL OR repo_id IN (SELECT value FROM json_each(?5)))
+           AND seq_at >= ?7
            ${bySubject(filter.subjects)}
          ORDER BY feed_seq LIMIT ?4`,
         since?.seq ?? 0,
@@ -512,6 +526,8 @@ export class Feed {
         limit + 1,
         filter.repoIds ? JSON.stringify(filter.repoIds) : null,
         oneSubject(filter.subjects),
+        // Expired and not deleted yet (retention goes a slice at a time): gone already.
+        this.now() - FEED_POLICY.retentionMs,
       )
       .toArray();
     return {
@@ -541,7 +557,7 @@ export class Feed {
       .exec<Row>(
         `SELECT * FROM (
            SELECT *, (priority = 'P0' AND state = 'open') AS open FROM feed_items
-           WHERE feed_seq IS NOT NULL
+           WHERE feed_seq IS NOT NULL AND seq_at >= ?1
              AND ((priority = 'P0' AND state = 'open') OR (priority = 'P1' AND last_event_at >= ?1))
              AND (?5 IS NULL OR repo_id IN (SELECT value FROM json_each(?5)))
              ${bySubject(filter.subjects)})
@@ -571,7 +587,7 @@ export class Feed {
    * sequenced, so every reader of the feed sees it.
    */
   ack(id: FeedItemId, at: ThreadVersion): FeedAck {
-    const item = this.#row(id);
+    const item = this.#live(id, this.now());
     if (!item || item.feed_seq === null) return { status: "missing" };
     if (newerThan(at, { epoch: item.thread_epoch, version: item.version }))
       return { status: "ahead" };
@@ -696,27 +712,53 @@ export class Feed {
   }
 
   /**
-   * Deletes items, tombstones, purge marks and eviction fences past the
-   * retention, then the items changed longest ago past the cap, each
-   * leaving a fence, raising the low watermark to the greatest sequence
-   * number deleted (call within a transaction).
+   * One step of retention (call within a transaction): deletes items and
+   * tombstones past the retention, oldest first, then the shown items
+   * changed longest ago past the cap, each leaving its eviction fence, at
+   * most `sliceRows` items in all; and up to `sliceRows` expired purge
+   * marks and eviction fences each. Raises the low watermark to the
+   * greatest sequence number deleted. Returns whether more is left.
    */
-  retain(): void {
+  retainStep(): boolean {
     const meta = this.#meta();
-    const expired = this.now() - FEED_POLICY.retentionMs;
-    const deleted = this.sql
+    const now = this.now();
+    const expired = now - FEED_POLICY.retentionMs;
+    const slice = FEED_POLICY.sliceRows;
+    const gone = this.sql
       .exec<{ feed_seq: number | null }>(
-        "DELETE FROM feed_items WHERE seq_at < ? RETURNING feed_seq",
+        `DELETE FROM feed_items WHERE (repo_id, thread_key, kind) IN
+           (SELECT repo_id, thread_key, kind FROM feed_items WHERE seq_at < ?
+            ORDER BY seq_at, feed_seq LIMIT ?)
+         RETURNING feed_seq`,
         expired,
+        slice,
       )
-      .toArray()
-      .flatMap((r) => (r.feed_seq === null ? [] : [r.feed_seq]));
+      .toArray();
+    const deleted = gone.flatMap((r) => (r.feed_seq === null ? [] : [r.feed_seq]));
     // Entries a mark or a fence would drop are dropped for their age by now: the events up to
     // a mark happened by its time, and those up to a fence's version by the item's last one.
-    this.sql.exec("DELETE FROM purge_marks WHERE until_at < ?", expired);
-    this.sql.exec("DELETE FROM feed_evictions WHERE event_at < ?", expired);
+    const marks = this.sql
+      .exec(
+        `DELETE FROM purge_marks WHERE repo_id IN
+           (SELECT repo_id FROM purge_marks WHERE until_at < ? ORDER BY until_at LIMIT ?)
+         RETURNING repo_id`,
+        expired,
+        slice,
+      )
+      .toArray().length;
+    const fences = this.sql
+      .exec(
+        `DELETE FROM feed_evictions WHERE (repo_id, thread_key, kind) IN
+           (SELECT repo_id, thread_key, kind FROM feed_evictions WHERE event_at < ?
+            ORDER BY event_at LIMIT ?)
+         RETURNING repo_id`,
+        expired,
+        slice,
+      )
+      .toArray().length;
     const excess = meta.items - deleted.length - FEED_POLICY.maxItems;
-    if (excess > 0) {
+    const evict = Math.min(Math.max(excess, 0), slice - gone.length);
+    if (evict > 0) {
       const oldest = `feed_seq IN
         (SELECT feed_seq FROM feed_items WHERE feed_seq IS NOT NULL ORDER BY feed_seq LIMIT ?)`;
       this.sql.exec(
@@ -725,11 +767,11 @@ export class Feed {
          FROM feed_items WHERE ${oldest}
          ON CONFLICT (repo_id, thread_key, kind) DO UPDATE SET thread_epoch = excluded.thread_epoch,
            version = excluded.version, event_at = excluded.event_at`,
-        excess,
+        evict,
       );
       for (const r of this.sql.exec<{ feed_seq: number }>(
         `DELETE FROM feed_items WHERE ${oldest} RETURNING feed_seq`,
-        excess,
+        evict,
       ))
         deleted.push(r.feed_seq);
       this.sql.exec(
@@ -739,12 +781,45 @@ export class Feed {
         FEED_POLICY.maxFences,
       );
     }
-    if (deleted.length === 0) return;
-    this.sql.exec(
-      "UPDATE feed_meta SET low_watermark = max(low_watermark, ?), items = items - ? WHERE id = 1",
-      Math.max(...deleted),
-      deleted.length,
+    if (deleted.length > 0)
+      this.sql.exec(
+        "UPDATE feed_meta SET low_watermark = max(low_watermark, ?), items = items - ? WHERE id = 1",
+        Math.max(...deleted),
+        deleted.length,
+      );
+    return (
+      gone.length + Math.max(evict, 0) >= slice ||
+      excess > evict ||
+      marks >= slice ||
+      fences >= slice
     );
+  }
+
+  /**
+   * One step of a retired feed's cleanup (call within a transaction): up
+   * to `sliceRows` items, then purge marks, then eviction fences. Returns
+   * whether more is left.
+   */
+  retireStep(): boolean {
+    const slice = FEED_POLICY.sliceRows;
+    for (const [table, key] of [
+      ["feed_items", "repo_id, thread_key, kind"],
+      ["purge_marks", "repo_id"],
+      ["feed_evictions", "repo_id, thread_key, kind"],
+    ] as const) {
+      const n = this.sql
+        .exec(
+          `DELETE FROM ${table} WHERE (${key}) IN (SELECT ${key} FROM ${table} LIMIT ?)
+           RETURNING repo_id`,
+          slice,
+        )
+        .toArray().length;
+      if (n > 0) {
+        if (table === "feed_items") this.sql.exec("UPDATE feed_meta SET items = 0 WHERE id = 1");
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -785,6 +860,24 @@ export class Feed {
   /** Takes the directory's restore generation for the feed, when newer than the one recorded. */
   takeEpoch(epochGen: number): void {
     this.sql.exec("UPDATE feed_meta SET epoch_gen = ?1 WHERE id = 1 AND epoch_gen < ?1", epochGen);
+  }
+
+  /**
+   * The item, unless retention has it already: an expired item is deleted
+   * here, as its retention step would (the low watermark raised past a
+   * shown one), so no write merges into it or brings it back while the
+   * steps catch up.
+   */
+  #live(id: FeedItemId, now: number): Row | undefined {
+    const row = this.#row(id);
+    if (!row || row.seq_at >= now - FEED_POLICY.retentionMs) return row;
+    this.sql.exec(`DELETE FROM feed_items WHERE ${WHERE_ITEM}`, id.repoId, id.threadKey, id.kind);
+    if (row.feed_seq !== null)
+      this.sql.exec(
+        "UPDATE feed_meta SET low_watermark = max(low_watermark, ?), items = items - 1 WHERE id = 1",
+        row.feed_seq,
+      );
+    return undefined;
   }
 
   #row(id: FeedItemId): Row | undefined {
