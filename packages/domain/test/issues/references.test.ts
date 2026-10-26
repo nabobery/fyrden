@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { MAX_REFERENCES, referencesIn } from "../../src/issues/references.js";
+import { MENTION_SOURCE_LENGTH } from "../../src/pulls/mentions.js";
 
 describe("referencesIn", () => {
   it("finds numbers in this repository and in others, standing apart", () => {
@@ -65,6 +66,39 @@ const keyword = fc
 const blanks = fc
   .array(fc.constantFrom(" ", "\t"), { minLength: 1, maxLength: 40 })
   .map((a) => a.join(""));
+
+describe("referencesIn, of a text longer than it reads", () => {
+  it("never reads a reference the cut shortened, or one in code it opened", () => {
+    // `fixes #123` straddles the limit: no closing `#1` (nor `#12`) from it.
+    const ending = (keep: number) =>
+      `${"x".repeat(MENTION_SOURCE_LENGTH - " fixes #".length - keep)} fixes #123 after`;
+    for (const keep of [1, 2, 3]) expect(referencesIn(ending(keep))).toEqual([]);
+    // Inline code the limit cuts: its text stays code, never a closing reference.
+    expect(referencesIn(`intro \` fixes #1 ${"z ".repeat(9_000)}\``)).toEqual([]);
+    // One CRLF in code the limit cuts is no blank line: nothing is read.
+    expect(referencesIn(`intro \` fixes #1\r\n${"x".repeat(MENTION_SOURCE_LENGTH)}\``)).toEqual([]);
+    // Blank lines with LF, CR and CRLF endings: what comes before each is read.
+    for (const blank of ["\n\n", "\r\r", "\r\n\r\n", "\r\n \t\r\n"])
+      expect(
+        referencesIn(`fixes #7${blank}${"x".repeat(MENTION_SOURCE_LENGTH)}`),
+        JSON.stringify(blank),
+      ).toEqual([{ number: 7, closes: true }]);
+    // An image whose definition comes after the last line read stays an image.
+    expect(
+      referencesIn(`![fixes #1][p]\n\n[p]: /image.png\n${"x".repeat(MENTION_SOURCE_LENGTH)}`),
+    ).toEqual([]);
+    // Before a blank line: read whole.
+    const kept = `fixes #7\n\n${"x".repeat(MENTION_SOURCE_LENGTH)} fixes #123`;
+    expect(referencesIn(kept)).toEqual([{ number: 7, closes: true }]);
+    // Within the limit: read as it is.
+    expect(referencesIn(`${"x ".repeat(100)}fixes #123`)).toEqual([{ number: 123, closes: true }]);
+  });
+
+  it("reads what comes before the last paragraph break whole", () => {
+    const text = `see #4\n\n${"y ".repeat(MENTION_SOURCE_LENGTH)}#5`;
+    expect(referencesIn(text)).toEqual([{ number: 4, closes: false }]);
+  });
+});
 
 describe("referencesIn, as properties", () => {
   it("closes after a whole keyword, an optional colon and any run of blanks", () => {

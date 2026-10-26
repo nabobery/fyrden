@@ -107,6 +107,27 @@ describe("mentions as the page joins its text", () => {
     expect(mentionsIn(`${"x ".repeat(MENTION_SOURCE_LENGTH)}@late`)).toEqual([]);
   });
 
+  it("never read a mention the cut of a long text shortened", () => {
+    // `@alicebob` straddles the limit: no `@alice` (nor anything else) from it.
+    const handle = "alicebob";
+    const head = "x".repeat(MENTION_SOURCE_LENGTH - 6);
+    expect(mentionsIn(`${head} @${handle} more`)).toEqual([]);
+    // A longer text is read up to its last blank line before the limit, whole.
+    expect(mentionsIn(`@first\n\n${"y".repeat(MENTION_SOURCE_LENGTH)} @${handle}`)).toEqual([
+      "first",
+    ]);
+    expect(mentionsIn(`@crlf\r\n \r\n${"y ".repeat(MENTION_SOURCE_LENGTH)}`)).toEqual(["crlf"]);
+    // One with no blank line before the limit is not read.
+    expect(mentionsIn(`@kept ${head} @${handle}`)).toEqual([]);
+  });
+
+  it("never read as text what a long text's cut leaves of inline code", () => {
+    // Code past the limit is not opened at the cut to show its rest as text.
+    const code = `\` @hidden ${"z ".repeat(MENTION_SOURCE_LENGTH / 2)}\``;
+    expect(mentionsIn(`intro\n\n${code}`)).toEqual([]);
+    expect(mentionsIn(`intro ${code}`)).toEqual([]);
+  });
+
   it("read a wide table without rendering it", () => {
     const columns = 200;
     const table = `${"|h".repeat(columns)}|\n${"|-".repeat(columns)}|\n${"|@z\n".repeat(200)}`;
