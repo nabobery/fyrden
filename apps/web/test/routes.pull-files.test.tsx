@@ -116,6 +116,7 @@ describe("the files page", () => {
       "GET /api/repos/ada/demo/pulls/7/comments": () => json({ comments: all, next_cursor: "p2" }),
     });
     const shown: number[] = [];
+    const shownAfter: number[] = [];
     let at: string | null = null;
     for (let navigation = 0; navigation < 10; navigation++) {
       const query: string = at ? `?comments=${encodeURIComponent(at)}` : "";
@@ -135,6 +136,7 @@ describe("the files page", () => {
       const sent = data.threads.flatMap((t) => t.comments);
       expect(sent.reduce((n, c) => n + c.body.length, 0)).toBeLessThanOrEqual(512 * 1024);
       shown.push(...sent.map((c) => c.id));
+      if (sent.length > 0) shownAfter.push(sent.at(-1)?.id as number);
       const next = data.threadPages.next;
       if (!next) break;
       at = new URL(`${ORIGIN}${next}`).searchParams.get("comments");
@@ -144,8 +146,13 @@ describe("the files page", () => {
     expect(shown).toEqual(all.map((c) => c.id));
     expect(at).toBe(":p2");
     expect(read[0]).toBe("GET /api/repos/ada/demo/pulls/7/comments?per_page=30");
-    expect(new Set(read.slice(1))).toEqual(
-      new Set(["GET /api/repos/ada/demo/pulls/7/comments?per_page=30"]),
+    // Each later navigation asks for the comments after the last one shown, never the API page
+    // again (it may hold fewer of them by then).
+    expect(read.slice(1)).toEqual(
+      // (the last page's goes on to the API's next page instead)
+      shownAfter
+        .slice(0, -1)
+        .map((id) => `GET /api/repos/ada/demo/pulls/7/comments?per_page=30&after=${id}`),
     );
   });
 

@@ -96,18 +96,20 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   // A comment's permalink (when no page of comments is named): the page that starts with it.
   const named = commentsAt.cursor !== null || commentsAt.after !== null;
   const linked = named ? null : positiveId(url.searchParams.get("comment"));
-  // Comments are in id order: a continuation without the API's cursor resumes after its last
-  // comment shown (a permalink's page, or one cut by its source, goes on from where it was).
-  const commentsQuery = new URLSearchParams({ per_page: String(CONVERSATION_PAGE) });
-  if (commentsAt.cursor) commentsQuery.set("cursor", commentsAt.cursor);
-  else if (commentsAt.after !== null) commentsQuery.set("after", String(commentsAt.after));
-  else if (linked !== null && linked > 1) commentsQuery.set("after", String(linked - 1));
-  const reviewsAt = readContinuation(url.searchParams.get("reviews"));
-  const page = (at: Continuation) => {
+  // Comments and reviews are in id order: a continuation that names the last one shown (a page
+  // cut by its source, or a permalink's) resumes after it, never from the API page it saved,
+  // which may have grown or shrunk since; one that names none starts at its API page.
+  const page = (at: Continuation, after: number | null = at.after) => {
     const query = new URLSearchParams({ per_page: String(CONVERSATION_PAGE) });
-    if (at.cursor) query.set("cursor", at.cursor);
+    if (after !== null) query.set("after", String(after));
+    else if (at.cursor) query.set("cursor", at.cursor);
     return query.toString();
   };
+  const commentsQuery = page(
+    commentsAt,
+    commentsAt.after ?? (linked !== null && linked > 1 ? linked - 1 : null),
+  );
+  const reviewsAt = readContinuation(url.searchParams.get("reviews"));
   const [comments, reviews, repo, rulesets] = await Promise.all([
     apiCall<IssueCommentsPage>(
       context,

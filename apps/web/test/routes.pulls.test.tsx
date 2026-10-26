@@ -562,7 +562,11 @@ describe("a pull request comment's permalink", () => {
       context,
       params,
     } as never);
-    return { data, listed: calls.map(pathOf).find((p) => p.includes("/comments")) };
+    return {
+      data,
+      listed: calls.map(pathOf).find((p) => p.includes("/comments")),
+      reviewed: calls.map(pathOf).find((p) => p.includes("/reviews")),
+    };
   }
 
   it("loads the page that starts with it, and says when it is not there", async () => {
@@ -579,13 +583,24 @@ describe("a pull request comment's permalink", () => {
 
   it("gives way to a named page of comments, with a cursor or without", async () => {
     for (const [search, asked] of [
-      ["?comment=9&comments=3%3AC2", "cursor=C2"],
+      ["?comment=9&comments=%3AC2", "cursor=C2"],
       ["?comment=30&comments=3%3A", "after=3"],
     ] as const) {
       const { data, listed } = await load(search);
       expect(listed, search).toBe(`GET /api/repos/ada/demo/issues/7/comments?per_page=25&${asked}`);
       expect(data).toMatchObject({ linked: null });
     }
+  });
+
+  it("goes on after the last item shown, never back through an API page that grew", async () => {
+    // Shown up to 29 of the page C25 begins: the comments after 29, whatever C25 holds now.
+    const { listed, reviewed } = await load("?comments=29%3AC25&reviews=4%3AR2");
+    expect(listed).toBe("GET /api/repos/ada/demo/issues/7/comments?per_page=25&after=29");
+    expect(reviewed).toBe("GET /api/repos/ada/demo/pulls/7/reviews?per_page=25&after=4");
+    // An API page not yet gone into: its cursor.
+    expect((await load("?reviews=%3AR2")).reviewed).toBe(
+      "GET /api/repos/ada/demo/pulls/7/reviews?per_page=25&cursor=R2",
+    );
   });
 
   it("goes on from it, its next pages never the permalink again, their first the start", async () => {
