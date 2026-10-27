@@ -31,12 +31,23 @@ export interface DeployDeps {
   /**
    * The email provider, set as `FYRDEN_EMAIL_PROVIDER` and
    * `FYRDEN_EMAIL_FROM`, its key uploaded as the secret `RESEND_API_KEY`
-   * (each deploy given it uploads it again: a new value rotates it); left
-   * out, the variables are not set and the deployment sends no email.
-   * Sending itself stays off (`FYRDEN_EMAIL_SENDING`) until its safeguards
-   * exist.
+   * and its webhook's signing secret, when given, as
+   * `RESEND_WEBHOOK_SECRET` (each deploy given them uploads them again: a
+   * new value rotates it); `FYRDEN_EMAIL_SENDING=on` when sending, and the
+   * allowance's limits given as `FYRDEN_EMAIL_DAILY_LIMIT`,
+   * `FYRDEN_EMAIL_MONTHLY_LIMIT` and `FYRDEN_EMAIL_RESERVE`. Left out, none
+   * of the variables is set and the deployment sends no email.
    */
-  email?: { provider: "resend"; from: string; apiKey: string } | undefined;
+  email?:
+    | {
+        provider: "resend";
+        from: string;
+        apiKey: string;
+        webhookSecret?: string;
+        sending?: boolean;
+        limits?: { daily?: number; monthly?: number; reserve?: number };
+      }
+    | undefined;
   runner: WranglerRunner;
   /** Builds fyrden-web (react-router build). */
   buildWeb: () => Promise<void>;
@@ -170,6 +181,16 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
       ...(deps.email && {
         FYRDEN_EMAIL_PROVIDER: deps.email.provider,
         FYRDEN_EMAIL_FROM: deps.email.from,
+        ...(deps.email.sending && { FYRDEN_EMAIL_SENDING: "on" }),
+        ...(deps.email.limits?.daily !== undefined && {
+          FYRDEN_EMAIL_DAILY_LIMIT: String(deps.email.limits.daily),
+        }),
+        ...(deps.email.limits?.monthly !== undefined && {
+          FYRDEN_EMAIL_MONTHLY_LIMIT: String(deps.email.limits.monthly),
+        }),
+        ...(deps.email.limits?.reserve !== undefined && {
+          FYRDEN_EMAIL_RESERVE: String(deps.email.limits.reserve),
+        }),
       }),
     },
     d1_databases: (config.d1_databases ?? []).map((d) => ({
@@ -249,6 +270,7 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   if (!existing?.has("EMAIL_KEY")) upload.EMAIL_KEY = base64urlKey();
   // The email provider's key, whenever one is given (a new one replaces it).
   if (deps.email) upload.RESEND_API_KEY = deps.email.apiKey;
+  if (deps.email?.webhookSecret) upload.RESEND_WEBHOOK_SECRET = deps.email.webhookSecret;
   if (Object.keys(upload).length > 0) {
     secretsDir = await mkdtemp(join(tmpdir(), "fyrden-secrets-"));
     const file = join(secretsDir, "secrets.json");

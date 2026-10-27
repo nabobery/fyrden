@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { runMaintenance } from "../cron/maintenance.js";
+import { recheckSuppressions } from "../email/suppressions.js";
 import { runSearchRepairs } from "../search/repairs.js";
 
 /**
@@ -12,6 +13,7 @@ import { runSearchRepairs } from "../search/repairs.js";
 export class MaintenanceDO extends DurableObject<Env> {
   #running: Promise<void> | null = null;
   #repairing: Promise<void> | null = null;
+  #rechecking: Promise<void> | null = null;
 
   /**
    * Reconciles the search projections that need it (`runSearchRepairs`), in
@@ -28,6 +30,24 @@ export class MaintenanceDO extends DurableObject<Env> {
       this.#repairing = null;
     });
     return this.#repairing;
+  }
+
+  /**
+   * Rechecks the email provider's suppressions that are due
+   * (`recheckSuppressions`), in a request of its own: its lookups are
+   * external subrequests of an invocation of their own.
+   */
+  recheckSuppressions(): Promise<void> {
+    if (this.#rechecking) return this.#rechecking;
+    const metrics = createMetrics(this.env.METRICS);
+    this.#rechecking = measureInvocation(
+      metrics,
+      { where: "do", op: "recheckSuppressions", doClass: "MaintenanceDO" },
+      () => recheckSuppressions(this.env, { now: Date.now(), metrics }),
+    ).finally(() => {
+      this.#rechecking = null;
+    });
+    return this.#rechecking;
   }
 
   run(): Promise<void> {

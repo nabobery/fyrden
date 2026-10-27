@@ -6021,6 +6021,8 @@ export type UsersEmailsListOutput = {
   verified: boolean;
   /** Always null: Fyrden shows no address publicly. */
   visibility: null;
+  /** False while the email provider suppresses the mailbox (it bounced, or its owner marked Fyrden's mail as spam): nothing is sent to it until the suppression is removed at the provider. Not a promise of delivery. A Fyrden extension. */
+  deliverable: boolean;
 }[];
 
 /** Input of `users.emails.add`: Add email addresses. */
@@ -6036,6 +6038,8 @@ export type UsersEmailsAddOutput = {
   verified: boolean;
   /** Always null: Fyrden shows no address publicly. */
   visibility: null;
+  /** False while the email provider suppresses the mailbox (it bounced, or its owner marked Fyrden's mail as spam): nothing is sent to it until the suppression is removed at the provider. Not a promise of delivery. A Fyrden extension. */
+  deliverable: boolean;
 }[];
 
 /** Input of `users.emails.delete`: Remove email addresses. */
@@ -6059,6 +6063,8 @@ export type UsersEmailsConfirmOutput = {
   verified: boolean;
   /** Always null: Fyrden shows no address publicly. */
   visibility: null;
+  /** False while the email provider suppresses the mailbox (it bounced, or its owner marked Fyrden's mail as spam): nothing is sent to it until the suppression is removed at the provider. Not a promise of delivery. A Fyrden extension. */
+  deliverable: boolean;
 };
 
 /** Input of `users.emails.confirmation`: Send a new confirmation link. */
@@ -8054,13 +8060,13 @@ export interface Operations {
   "feed.digest": { input: FeedDigestInput; output: FeedDigestOutput };
   /** List your email addresses. Your notification addresses (at most 10), verified or not. Web sessions only (any other credential: 403). */
   "users.emails.list": { input: UsersEmailsListInput; output: UsersEmailsListOutput };
-  /** Add email addresses. Adds notification addresses (at most 10 in all; 422 `too_many_emails`), each sent a link to confirm it (good for a day). One already yours is kept as it is. A user is sent at most 5 confirmation emails an hour and a mailbox at most 3 a day, whoever asks (429 `confirmation_rate_limited`, nothing added). While the deployment sends no email: 503 `email_unavailable`. Web sessions only. */
+  /** Add email addresses. Adds notification addresses (at most 10 in all; 422 `too_many_emails`), each sent a link to confirm it (good for a day). One already yours is kept as it is. A user is sent at most 5 confirmation emails an hour and a mailbox at most 3 a day, whoever asks (429 `confirmation_rate_limited`, nothing added). A mailbox the email provider suppresses: 422 `email_undeliverable`, nothing added. An address is added even when its confirmation could not be sent now; asking for a new link says why. While the deployment sends no email: 503 `email_unavailable`. Web sessions only. */
   "users.emails.add": { input: UsersEmailsAddInput; output: UsersEmailsAddOutput };
   /** Remove email addresses. Removes notification addresses of yours (one not yours, or already removed, changes nothing); their confirmation links stop working. Web sessions only. */
   "users.emails.delete": { input: UsersEmailsDeleteInput; output: UsersEmailsDeleteOutput };
   /** Confirm an email address. Confirms one of your addresses with the token its link carried (once, within a day, by the account that added it). 404 `confirmation_not_found` for a token unknown, used, expired, of another account or of an address removed; 409 `email_taken` when another account has confirmed the mailbox first (the token is used up). Web sessions only. A Fyrden extension. */
   "users.emails.confirm": { input: UsersEmailsConfirmInput; output: UsersEmailsConfirmOutput };
-  /** Send a new confirmation link. Sends a new link to confirm an unverified address of yours (earlier links stop working), under the same limits as adding one. 404 `email_not_found` for an address not yours, removed or already verified. Web sessions only. A Fyrden extension. */
+  /** Send a new confirmation link. Sends a new link to confirm an unverified address of yours (earlier links stop working), under the same limits as adding one. 404 `email_not_found` for an address not yours, removed or already verified; 422 `email_undeliverable` for a mailbox the email provider suppresses; 503 `email_unavailable` with `Retry-After` when it could not be sent now (the deployment's allowance or the provider's rate limit spent; the new link stays the current one). Web sessions only. A Fyrden extension. */
   "users.emails.confirmation": { input: UsersEmailsConfirmationInput; output: UsersEmailsConfirmationOutput };
   /** Get your notification settings. Which notification email Fyrden sends you, by category (Fyrden's defaults until you set them). Web sessions only (any other credential: 403). A Fyrden extension. */
   "users.notification_settings.get": { input: UsersNotificationSettingsGetInput; output: UsersNotificationSettingsGetOutput };

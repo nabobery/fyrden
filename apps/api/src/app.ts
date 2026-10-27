@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { requestId } from "hono/request-id";
 import { authRouter } from "./auth/login.js";
+import { mountEmailEvents } from "./email/events.js";
 import { mountUnsubscribe } from "./email/unsubscribe.js";
 import { gitRouter } from "./git/router.js";
 import { deepHealth } from "./health.js";
@@ -44,6 +45,7 @@ export function createApp() {
 
   app.route("/v0/admin/bootstrap", bootstrap);
   app.route("/oauth", oauthRouter);
+  mountEmailEvents(app);
   app.route("/auth", authRouter);
   app.route("/.well-known", wellKnownRouter);
   mountRest(app);

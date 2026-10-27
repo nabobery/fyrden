@@ -16,6 +16,8 @@ import {
   emailHooks,
   resendProvider,
 } from "../src/email/provider.js";
+import { periodsOf } from "../src/email/spending.js";
+import { applying } from "../src/email/suppressions.js";
 import { unsubscribeToken } from "../src/email/unsubscribe.js";
 import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { advanceDeletions } from "../src/repos/deletion.js";
@@ -37,10 +39,12 @@ const recording: EmailProvider = {
   },
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   sent = [];
   emailHooks.provider = recording;
   emailHooks.sending = true;
+  // The allowance is the deployment's: a test's spending is no other's.
+  await env.DIRECTORY.prepare("DELETE FROM email_spend").run();
 });
 
 afterEach(() => {
@@ -130,7 +134,9 @@ describe("notification addresses", () => {
     const added = await add(who, [address]);
     expect(added).toMatchObject({
       status: 201,
-      body: [{ email: address, primary: false, verified: false, visibility: null }],
+      body: [
+        { email: address, primary: false, verified: false, visibility: null, deliverable: true },
+      ],
     });
     expect(sent).toHaveLength(1);
     expect(sent[0]?.text).toContain(`${ORIGIN}/settings/emails/confirm?token=`);
@@ -140,7 +146,7 @@ describe("notification addresses", () => {
     });
     // Adding it again changes nothing and mails nothing.
     expect((await add(who, [address.toUpperCase()])).body).toEqual([
-      { email: address, primary: true, verified: true, visibility: null },
+      { email: address, primary: true, verified: true, visibility: null, deliverable: true },
     ]);
     expect(sent).toHaveLength(1);
     expect((await remove(who, [address])).status).toBe(204);
@@ -536,6 +542,240 @@ describe("notification addresses", () => {
         .bind(address)
         .first<{ n: number }>(),
     ).toEqual({ n: 0 });
+  });
+});
+
+describe("confirmation emails", () => {
+  const spent = async () => {
+    const { day, month } = periodsOf(Date.now());
+    const rows = await env.DIRECTORY.prepare(
+      "SELECT scope, used FROM email_spend WHERE (scope = 'day' AND period = ?) OR (scope = 'month' AND period = ?)",
+    )
+      .bind(day, month)
+      .all<{ scope: string; used: number }>();
+    const of = (scope: string) => rows.results.find((r) => r.scope === scope)?.used ?? 0;
+    return { day: of("day"), month: of("month") };
+  };
+  const spend = async (used: { day: number; month: number }) => {
+    const { day, month } = periodsOf(Date.now());
+    await env.DIRECTORY.batch([
+      env.DIRECTORY.prepare("INSERT OR REPLACE INTO email_spend VALUES ('day', ?, ?)").bind(
+        day,
+        used.day,
+      ),
+      env.DIRECTORY.prepare("INSERT OR REPLACE INTO email_spend VALUES ('month', ?, ?)").bind(
+        month,
+        used.month,
+      ),
+    ]);
+  };
+
+  it("each take one message of the day's and the month's allowance, both or neither", async () => {
+    freshDay();
+    await spend({ day: 0, month: 0 });
+    const who = await signedIn();
+    expect((await add(who, [mailbox(), mailbox()])).status).toBe(201);
+    expect(sent).toHaveLength(2);
+    expect(await spent()).toEqual({ day: 2, month: 2 });
+    // The day spent: added, nothing sent or spent; asking again says when there is room.
+    await spend({ day: 100, month: 500 });
+    const late = mailbox();
+    expect((await add(who, [late])).status).toBe(201);
+    expect(sent).toHaveLength(2);
+    const again1 = await again(who, late);
+    expect(again1).toMatchObject({ status: 503, body: { code: "email_unavailable" } });
+    // Until midnight: the clock moves on from a minute past it while the test runs.
+    const wait = Number(again1.headers.get("Retry-After"));
+    expect(wait).toBeLessThanOrEqual(24 * 60 * 60 - 60);
+    expect(wait).toBeGreaterThan(24 * 60 * 60 - 120);
+    expect(await spent()).toEqual({ day: 100, month: 500 });
+    // The month spent: the day's row is not charged either.
+    await spend({ day: 0, month: 3_000 });
+    const monthly = await again(who, late);
+    expect(monthly.status).toBe(503);
+    expect(Number(monthly.headers.get("Retry-After"))).toBeGreaterThan(60);
+    expect(await spent()).toEqual({ day: 0, month: 3_000 });
+    expect(sent).toHaveLength(2);
+  });
+
+  it("give the message back when refused, and keep it when the outcome is unknown", async () => {
+    freshDay();
+    await spend({ day: 0, month: 0 });
+    const who = await signedIn();
+    emailHooks.provider = {
+      ...recording,
+      send: async () => ({
+        status: "refused",
+        permanent: false,
+        reason: "429 rate_limit_exceeded",
+        retryAfterMs: 2500,
+      }),
+    };
+    const address = mailbox();
+    expect((await add(who, [address])).status).toBe(201);
+    expect(await spent()).toEqual({ day: 0, month: 0 });
+    const refused = await again(who, address);
+    expect(refused).toMatchObject({ status: 503, body: { code: "email_unavailable" } });
+    expect(refused.headers.get("Retry-After")).toBe("3");
+    expect(await spent()).toEqual({ day: 0, month: 0 });
+    emailHooks.provider = {
+      ...recording,
+      send: async () => ({ status: "unknown", reason: "lost" }),
+    };
+    expect((await again(who, address)).status).toBe(204);
+    expect(await spent()).toEqual({ day: 1, month: 1 });
+  });
+
+  it("are sent only while the user holds: none after a change between two", async () => {
+    freshDay();
+    await spend({ day: 0, month: 0 });
+    const who = await signedIn();
+    emailHooks.provider = {
+      ...recording,
+      async send(message) {
+        await env.DIRECTORY.prepare(
+          "UPDATE principals SET lifecycle_gen = lifecycle_gen + 1 WHERE id = ?",
+        )
+          .bind(who.principalId)
+          .run();
+        return recording.send(message);
+      },
+    };
+    expect((await add(who, [mailbox(), mailbox()])).status).toBe(201);
+    expect(sent).toHaveLength(1);
+    expect(await spent()).toEqual({ day: 1, month: 1 });
+  });
+
+  it("are not sent for an address removed, or a link replaced, after the request was admitted", async () => {
+    freshDay();
+    const who = await signedIn();
+    const [first, removed, replaced] = [mailbox(), mailbox(), mailbox()];
+    emailHooks.provider = {
+      ...recording,
+      async send(message) {
+        await env.DIRECTORY.batch([
+          env.DIRECTORY.prepare(
+            "UPDATE user_emails SET removed_at = ? WHERE principal_id = ? AND address_key = ?",
+          ).bind(Date.now(), who.principalId, removed),
+          env.DIRECTORY.prepare(
+            "UPDATE email_confirmations SET used_at = ? WHERE address_key = ? AND used_at IS NULL",
+          ).bind(Date.now(), replaced),
+        ]);
+        return recording.send(message);
+      },
+    };
+    expect((await add(who, [first, removed, replaced])).status).toBe(201);
+    expect(sent.map((m) => m.to)).toEqual([first]);
+    expect(await spent()).toEqual({ day: 1, month: 1 });
+  });
+
+  it("give a refused message back to the day it was reserved in, past midnight", async () => {
+    freshDay();
+    // A minute before midnight, the last of the month.
+    const date = new Date(Date.now());
+    vi.setSystemTime(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) - 60_000);
+    const before = periodsOf(Date.now());
+    await spend({ day: 5, month: 5 });
+    const who = await signedIn();
+    emailHooks.provider = {
+      ...recording,
+      async send() {
+        vi.setSystemTime(Date.now() + 2 * 60_000);
+        return { status: "refused", permanent: true, reason: "422 validation_error" };
+      },
+    };
+    expect((await add(who, [mailbox()])).status).toBe(201);
+    const rows = await env.DIRECTORY.prepare(
+      "SELECT scope, period, used FROM email_spend ORDER BY scope, period",
+    ).all<{ scope: string; period: number; used: number }>();
+    expect(rows.results).toEqual([
+      { scope: "day", period: before.day, used: 5 },
+      { scope: "month", period: before.month, used: 5 },
+    ]);
+  });
+
+  it("are not sent to a mailbox suppressed after the request was admitted", async () => {
+    freshDay();
+    await spend({ day: 0, month: 0 });
+    const who = await signedIn();
+    const [first, second] = [mailbox(), mailbox()];
+    emailHooks.provider = {
+      ...recording,
+      async send(message) {
+        await applying(
+          env.DIRECTORY,
+          { id: crypto.randomUUID(), email: second, origin: "complaint", createdAt: Date.now() },
+          true,
+          Date.now(),
+        ).run();
+        return recording.send(message);
+      },
+    };
+    expect((await add(who, [first, second])).status).toBe(201);
+    expect(sent.map((m) => m.to)).toEqual([first]);
+    expect(await spent()).toEqual({ day: 1, month: 1 });
+  });
+
+  it("are not sent to a suppressed mailbox, which is rechecked at once", async () => {
+    freshDay();
+    const who = await signedIn();
+    const [suppressed, later] = [mailbox(), mailbox()];
+    const suppress = (email: string) =>
+      applying(
+        env.DIRECTORY,
+        { id: crypto.randomUUID(), email, origin: "bounce", createdAt: Date.now() },
+        true,
+        Date.now(),
+      ).run();
+    await suppress(suppressed);
+    expect(await add(who, [suppressed, mailbox()])).toMatchObject({
+      status: 422,
+      body: { code: "email_undeliverable" },
+    });
+    expect((await list(who)).body).toEqual([]);
+    expect(
+      await count(
+        "SELECT count(*) AS n FROM email_suppressions WHERE address_key = ? AND next_check_at <= ?",
+        suppressed,
+        Date.now(),
+      ),
+    ).toBe(1);
+    // Suppressed after it was added: listed as not deliverable, and not mailed again.
+    expect((await add(who, [later])).status).toBe(201);
+    await suppress(later);
+    expect((await list(who)).body).toMatchObject([{ email: later, deliverable: false }]);
+    expect(await again(who, later)).toMatchObject({
+      status: 422,
+      body: { code: "email_undeliverable" },
+    });
+    expect(sent.filter((m) => m.to === later)).toHaveLength(1);
+  });
+
+  it("leave spending rows only for the current and the last period", async () => {
+    freshDay();
+    const { day, month } = periodsOf(Date.now());
+    await env.DIRECTORY.batch(
+      [
+        ["day", day - 2],
+        ["day", day - 1],
+        ["day", day],
+        ["month", month - 2],
+        ["month", month - 1],
+        ["month", month],
+      ].map(([scope, period]) =>
+        env.DIRECTORY.prepare("INSERT INTO email_spend VALUES (?, ?, 1)").bind(scope, period),
+      ),
+    );
+    await reapEmails(env, { now: Date.now() });
+    const left = await env.DIRECTORY.prepare(
+      "SELECT scope, period FROM email_spend ORDER BY scope, period",
+    ).all<{ scope: string; period: number }>();
+    expect(left.results).toEqual([
+      { scope: "day", period: day - 1 },
+      { scope: "day", period: day },
+      { scope: "month", period: month - 1 },
+      { scope: "month", period: month },
+    ]);
   });
 });
 

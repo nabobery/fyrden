@@ -18,6 +18,7 @@ describe("the web Worker's routing", () => {
       "/alice/repo/git-receive-pack",
       "/alice/repo/uploads/01ARZ3NDEKTSV4RRFFQ69G5FAV/parts/1",
       "/unsubscribe",
+      "/auth/email/events",
     ])
       expect(isApiPath(path), path).toBe(true);
     for (const path of [

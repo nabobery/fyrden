@@ -1,3 +1,8 @@
+import { countSubrequests } from "@fyrden/adapters-cloudflare/obs";
+import { emailLimits } from "./spending.js";
+import { type Lookup, suppressionOf } from "./suppressions.js";
+import { webhookSecretBytes } from "./webhook-signature.js";
+
 /*
  * The email provider port: one message sent, its outcome classified so
  * that nothing is sent twice. `accepted` only when the provider answered
@@ -12,7 +17,7 @@
  * Configured by the deployment: `FYRDEN_EMAIL_PROVIDER` (`resend`; any
  * other value: none), `FYRDEN_EMAIL_FROM` (the sending address) and, for
  * Resend, the secret `RESEND_API_KEY`; all or none. Sending anything at all
- * also needs `FYRDEN_EMAIL_SENDING=on` (see `emailSending`).
+ * also needs `FYRDEN_EMAIL_SENDING=on` and its safeguards (see `emailSending`).
  */
 
 /** One message. */
@@ -22,7 +27,7 @@ export interface EmailMessage {
   readonly text: string;
   readonly html?: string;
   readonly headers?: Readonly<Record<string, string>>;
-  /** Provider tags (Resend's), for correlating its callbacks. */
+  /** Provider tags (Resend's), for reading its logs. */
   readonly tags?: Readonly<Record<string, string>>;
   /** The same for every attempt of one message (with the same payload). */
   readonly idempotencyKey: string;
@@ -44,6 +49,8 @@ export interface EmailProvider {
   /** The sending address every message goes from. */
   readonly from: string;
   send(message: EmailMessage): Promise<SendOutcome>;
+  /** The provider's suppression of an address (as it gave it), when it keeps a list. */
+  lookupSuppression?(email: string): Promise<Lookup>;
 }
 
 /** Hooks for tests: a provider of their own, in place of the deployment's. */
@@ -54,6 +61,7 @@ type EmailEnv = {
   FYRDEN_EMAIL_FROM?: unknown;
   FYRDEN_EMAIL_SENDING?: unknown;
   RESEND_API_KEY?: unknown;
+  RESEND_WEBHOOK_SECRET?: unknown;
 };
 
 /** The deployment's provider, or null when it has none (or one configured only in part). */
@@ -72,13 +80,20 @@ export function emailProvider(env: object): EmailProvider | null {
 }
 
 /**
- * Whether the deployment sends email at all (`FYRDEN_EMAIL_SENDING=on`,
- * and a provider): off until callbacks, suppression and spending exist to
- * keep it safe.
+ * Whether the deployment sends email at all: `FYRDEN_EMAIL_SENDING=on`, a
+ * provider, its callbacks' usable secret (`RESEND_WEBHOOK_SECRET`, so its
+ * suppressions reach Fyrden) and usable limits (`emailLimits`).
  */
 export function emailSending(env: object): boolean {
-  const on = emailHooks.sending ?? (env as EmailEnv).FYRDEN_EMAIL_SENDING === "on";
-  return on && emailProvider(env) !== null;
+  if (emailHooks.sending !== undefined)
+    return emailHooks.sending && emailProvider(env) !== null && emailLimits(env) !== null;
+  const { FYRDEN_EMAIL_SENDING, RESEND_WEBHOOK_SECRET } = env as EmailEnv;
+  return (
+    FYRDEN_EMAIL_SENDING === "on" &&
+    webhookSecretBytes(RESEND_WEBHOOK_SECRET) !== undefined &&
+    emailProvider(env) !== null &&
+    emailLimits(env) !== null
+  );
 }
 
 /**
@@ -135,6 +150,7 @@ export function resendProvider(
     async send(message) {
       let response: Response;
       try {
+        countSubrequests("external");
         response = await fetcher("https://api.resend.com/emails", {
           method: "POST",
           headers: {
@@ -184,6 +200,42 @@ export function resendProvider(
         };
       }
       return { status: "unknown", reason };
+    },
+    async lookupSuppression(email) {
+      let response: Response;
+      countSubrequests("external");
+      try {
+        // The address as one path segment: `/`, `#`, `?`, `%` and `+` stay in it.
+        response = await fetcher(
+          `https://api.resend.com/suppressions/${encodeURIComponent(email)}`,
+          {
+            headers: { Authorization: `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(RESEND_TIMEOUT_MS),
+          },
+        );
+      } catch {
+        return { status: "failed" };
+      }
+      if (response.status === 404) return { status: "absent" };
+      if (response.status === 401 || response.status === 403 || response.status === 429)
+        return { status: "failed" };
+      if (response.status >= 500) return { status: "failed" };
+      if (!response.ok) return { status: "invalid" };
+      // A body cut off is the provider's failure; a whole one that does not parse, the row's.
+      let text: string;
+      try {
+        text = await response.text();
+      } catch {
+        return { status: "failed" };
+      }
+      let body: unknown;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        return { status: "invalid" };
+      }
+      const suppression = suppressionOf(body);
+      return suppression ? { status: "found", suppression } : { status: "invalid" };
     },
   };
 }

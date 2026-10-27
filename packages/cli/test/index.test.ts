@@ -1,5 +1,15 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { asksForHelp, envDeployOptions, main, parseDeployArgs } from "../src/index.ts";
+import {
+  asksForHelp,
+  checkEmailKey,
+  emailDeploy,
+  envDeployOptions,
+  main,
+  parseDeployArgs,
+} from "../src/index.ts";
 
 describe("command line", () => {
   it.each([
@@ -108,7 +118,13 @@ describe("envDeployOptions", () => {
     const email = ["--email", "resend", "--email-from", "Fyrden <n@notify.example>"];
     expect(parseDeployArgs([...email, "--email-secrets-file", "/s.json"])).toEqual({
       plan: "paid",
-      email: { provider: "resend", from: "Fyrden <n@notify.example>", secretsFile: "/s.json" },
+      email: {
+        provider: "resend",
+        from: "Fyrden <n@notify.example>",
+        secretsFile: "/s.json",
+        sending: false,
+        limits: {},
+      },
     });
     expect(
       parseDeployArgs([
@@ -136,6 +152,114 @@ describe("envDeployOptions", () => {
     expect(
       parseDeployArgs(["--email", "resend", "--email-from", "nobody", "--email-secrets-file", "s"]),
     ).toBeUndefined();
+  });
+
+  it("takes the sending switch and the allowance's limits only with a provider, when they fit", () => {
+    const email = [
+      "--email",
+      "resend",
+      "--email-from",
+      "n@notify.example",
+      "--email-secrets-file",
+      "/s.json",
+    ];
+    expect(
+      parseDeployArgs([
+        ...email,
+        "--email-sending",
+        "on",
+        "--email-daily-limit",
+        "50000",
+        "--email-monthly-limit",
+        "1000000",
+        "--email-reserve",
+        "500",
+      ]),
+    ).toMatchObject({
+      email: { sending: true, limits: { daily: 50_000, monthly: 1_000_000, reserve: 500 } },
+    });
+    expect(parseDeployArgs([...email, "--email-sending", "off"])).toMatchObject({
+      email: { sending: false },
+    });
+    // A daily limit of 0 (no email) fits whatever the reserve.
+    expect(parseDeployArgs([...email, "--email-daily-limit", "0"])).toMatchObject({
+      email: { limits: { daily: 0 } },
+    });
+    for (const extra of [
+      ["--email-sending", "yes"],
+      ["--email-daily-limit", "5"],
+      ["--email-daily-limit", "200", "--email-monthly-limit", "100"],
+      ["--email-reserve", "100"],
+      ["--email-daily-limit", "-1"],
+      ["--email-daily-limit", "1e3"],
+    ])
+      expect(parseDeployArgs([...email, ...extra]), extra.join(" ")).toBeUndefined();
+    // Without a provider: no deploy.
+    expect(parseDeployArgs(["--email-sending", "on"])).toBeUndefined();
+    expect(parseDeployArgs(["--email-daily-limit", "10"])).toBeUndefined();
+  });
+
+  it("sends email only with the webhook's secret and a key that reads the suppression list", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fyrden-email-"));
+    const file = join(dir, "secrets.json");
+    const args = {
+      provider: "resend" as const,
+      from: "n@notify.example",
+      secretsFile: file,
+      sending: true,
+      limits: {},
+    };
+    const secret = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
+    const asked: string[] = [];
+    const answering = (status: number) =>
+      (async (url: string) => {
+        asked.push(url);
+        return new Response("{}", { status });
+      }) as unknown as typeof fetch;
+    await writeFile(file, JSON.stringify({ RESEND_API_KEY: "re_test12345" }));
+    await expect(emailDeploy(args, answering(200))).rejects.toThrow(/RESEND_WEBHOOK_SECRET/);
+    // Not sending: the secret may wait.
+    expect(await emailDeploy({ ...args, sending: false }, answering(200))).toMatchObject({
+      apiKey: "re_test12345",
+      sending: false,
+    });
+    expect(asked).toEqual([]);
+    for (const bad of [
+      "nope",
+      `whsec_${"A".repeat(33)}`,
+      "whsec_AAAA",
+      "whsec_not base64!",
+      `whsec_${"A".repeat(22)}=`,
+      `whsec_${"A".repeat(22)}`,
+      `whsec_${"A".repeat(21)}B==`,
+      `whsec_${"A".repeat(32)}==`,
+    ]) {
+      await writeFile(
+        file,
+        JSON.stringify({ RESEND_API_KEY: "re_test12345", RESEND_WEBHOOK_SECRET: bad }),
+      );
+      await expect(emailDeploy({ ...args, sending: false }), bad).rejects.toThrow(
+        /RESEND_WEBHOOK_SECRET is not a webhook signing secret/,
+      );
+    }
+    await writeFile(
+      file,
+      JSON.stringify({ RESEND_API_KEY: "re_test12345", RESEND_WEBHOOK_SECRET: secret }),
+    );
+    expect(await emailDeploy(args, answering(200))).toMatchObject({
+      webhookSecret: secret,
+      sending: true,
+    });
+    expect(asked).toEqual(["https://api.resend.com/suppressions?limit=1"]);
+    await expect(emailDeploy(args, answering(401))).rejects.toThrow(/full-access key/);
+    await expect(emailDeploy(args, answering(403))).rejects.toThrow(/full-access key/);
+    await expect(emailDeploy(args, answering(500))).rejects.toThrow(/answered 500/);
+    await expect(
+      checkEmailKey("re_test12345", (async () => {
+        throw new TypeError("offline");
+      }) as unknown as typeof fetch),
+    ).rejects.toThrow(/could not reach Resend/);
+    await rm(dir, { recursive: true });
   });
 
   it("accepts a daily allowance for discretionary work, resource by resource, on either plan", () => {

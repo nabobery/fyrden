@@ -62,7 +62,7 @@ export class OperationError extends Error {
     readonly resync?: string,
     /** For `stale`: the version it is at now. */
     readonly currentVersion?: number,
-    /** With a 429: seconds to wait before trying again. */
+    /** With a 429 or a 503: seconds to wait before trying again. */
     readonly retryAfter?: number,
   ) {
     super(detail);

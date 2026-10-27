@@ -33,6 +33,10 @@ function counting() {
             runs.push(`${name} repairSearch`);
             return stub.repairSearch();
           },
+          recheckSuppressions: () => {
+            runs.push(`${name} recheckSuppressions`);
+            return stub.recheckSuppressions();
+          },
         };
       },
     },
@@ -66,8 +70,12 @@ describe("the five-minute maintenance", () => {
     const left = await expiredKey();
     const { runs, traced } = counting();
     await cron(traced);
-    // The maintenance, and search repairs in a request of their own.
-    expect(runs).toEqual([`${MAINTENANCE_OBJECT} run`, `${MAINTENANCE_OBJECT} repairSearch`]);
+    // The maintenance, and search repairs and suppression rechecks in requests of their own.
+    expect(runs).toEqual([
+      `${MAINTENANCE_OBJECT} run`,
+      `${MAINTENANCE_OBJECT} repairSearch`,
+      `${MAINTENANCE_OBJECT} recheckSuppressions`,
+    ]);
     expect(await left()).toBe(0);
   });
 

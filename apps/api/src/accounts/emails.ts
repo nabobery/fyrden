@@ -12,6 +12,16 @@ import type {
   setNotificationSettings,
 } from "@fyrden/api-contract";
 import { emailProvider, emailSending } from "../email/provider.js";
+import {
+  emailLimits,
+  giveBack,
+  periodsOf,
+  reapingSpend,
+  reserving,
+  roomFor,
+  secondsUntilRoom,
+} from "../email/spending.js";
+import { makingDue } from "../email/suppressions.js";
 import { randomSecret, sha256Hex } from "../oauth/params.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock, newId } from "../services.js";
@@ -47,7 +57,14 @@ export const emailWriteHooks: { beforeWrite?: () => Promise<void> } = {};
 const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
 
-type Row = { id: string; address: string; address_key: string; verified_at: number | null };
+type Row = {
+  id: string;
+  address: string;
+  address_key: string;
+  verified_at: number | null;
+  /** 1 while the provider suppresses the mailbox. */
+  suppressed: number;
+};
 type Entry = Output<typeof listUserEmails>[number];
 
 const unavailable = () =>
@@ -61,6 +78,13 @@ const rateLimited = (retryAfter: number) =>
     undefined,
     undefined,
     retryAfter,
+  );
+
+const undeliverable = () =>
+  new OperationError(
+    422,
+    "email_undeliverable",
+    "The email provider suppresses this mailbox (it bounced, or Fyrden's mail was marked as spam): remove the suppression at the provider before asking again.",
   );
 
 const tooMany = () =>
@@ -99,8 +123,9 @@ async function liveRows(ctx: OpContext): Promise<Row[]> {
   ctx.metrics.count("d1.query", { db: "directory", op: "emails_list" });
   const { results } = await ctx.env.DIRECTORY.withSession("first-primary")
     .prepare(
-      `SELECT id, address, address_key, verified_at FROM user_emails
-       WHERE principal_id = ? AND removed_at IS NULL ORDER BY created_at, id`,
+      `SELECT e.id, e.address, e.address_key, e.verified_at, coalesce(s.suppressed, 0) AS suppressed
+       FROM user_emails e LEFT JOIN email_suppressions s ON s.address_key = e.address_key
+       WHERE e.principal_id = ? AND e.removed_at IS NULL ORDER BY e.created_at, e.id`,
     )
     .bind(ctx.auth.principalId)
     .all<Row>();
@@ -119,6 +144,7 @@ function entries(rows: readonly Row[]): Entry[] {
     primary: r.id === primary?.id,
     verified: r.verified_at !== null,
     visibility: null,
+    deliverable: r.suppressed === 0,
   }));
 }
 
@@ -215,7 +241,15 @@ const withinLimits = (n: number, keys: string, user: string, hour: string, day: 
      WHERE coalesce((SELECT sent FROM email_counters c WHERE c.scope = 'mailbox_day'
        AND c.key = k.value AND c.period = ${day}), 0) + 1 > ${EMAIL_POLICY.perMailboxDay})`;
 
-/** Why a batch's admission held back (read again: the limits, or the user not holding). */
+/** The condition that none of the mailboxes `?<keys>` (JSON) is suppressed. */
+const notSuppressed = (keys: string) =>
+  `NOT EXISTS (SELECT 1 FROM email_suppressions WHERE suppressed = 1
+     AND address_key IN (SELECT value FROM json_each(${keys})))`;
+
+/**
+ * Why a batch's admission held back (read again: the user not holding, a
+ * mailbox suppressed, made due for a recheck at once, or the limits).
+ */
 async function refusal(ctx: OpContext, keys: readonly string[], adding: number): Promise<never> {
   const now = clock();
   const hour = Math.floor(now / HOUR);
@@ -230,12 +264,24 @@ async function refusal(ctx: OpContext, keys: readonly string[], adding: number):
            AND period = ?2), 0) AS hourly,
          (SELECT max((SELECT sent FROM email_counters c WHERE c.scope = 'mailbox_day'
            AND c.key = k.value AND c.period = ?4)) FROM json_each(?3) k) AS daily,
-         ${issuerHolds("?1", "?5")} AS holds`,
+         ${issuerHolds("?1", "?5")} AS holds,
+         NOT ${notSuppressed("?3")} AS suppressed`,
     )
     .bind(ctx.auth.principalId, hour, JSON.stringify(keys), day, ctx.auth.lifecycleGen)
-    .first<{ live: number; hourly: number; daily: number | null; holds: number }>();
+    .first<{
+      live: number;
+      hourly: number;
+      daily: number | null;
+      holds: number;
+      suppressed: number;
+    }>();
   if (!row?.holds)
     throw new OperationError(401, "invalid_token", "The session is no longer valid.");
+  if (row.suppressed) {
+    ctx.metrics.count("d1.query", { db: "directory", op: "suppressions_due" });
+    await makingDue(ctx.env.DIRECTORY, JSON.stringify(keys), now).run();
+    throw undeliverable();
+  }
   if (adding > 0 && row.live + adding > EMAIL_POLICY.maxAddresses) throw tooMany();
   if (row.hourly + keys.length > EMAIL_POLICY.perUserHour)
     throw rateLimited(Math.ceil(((hour + 1) * HOUR - now) / 1000));
@@ -245,22 +291,127 @@ async function refusal(ctx: OpContext, keys: readonly string[], adding: number):
   throw new OperationError(409, "conflict", "The addresses changed meanwhile: try again.");
 }
 
-/** Mails each confirmation (after its batch committed); an outcome lost is never sent again. */
-async function mail(ctx: OpContext, issues: readonly Issue[]): Promise<void> {
+/** What became of one confirmation email. */
+type Mailed =
+  | { readonly status: "sent" }
+  /** The provider may have it: never sent again. */
+  | { readonly status: "unknown" }
+  | {
+      readonly status: "not_sent";
+      readonly why: "allowance" | "suppressed" | "refused" | "gone";
+      /** Seconds until it may be asked for again, when known. */
+      readonly retryAfter?: number;
+    };
+
+/**
+ * Mails each confirmation (after its batch committed), one at a time. Right
+ * before each provider call one batch (the fence, in the admission
+ * pattern) checks that the user still holds, the address is still theirs
+ * and unverified, its link the current unused one, the mailbox not
+ * suppressed, and the allowance has room in the day and the month, and
+ * reserves one message in both only when all hold: a change after the
+ * fence cannot recall the call. A refusal gives the reservation back; an
+ * outcome lost keeps it and is never sent again.
+ */
+async function mail(ctx: OpContext, issues: readonly Issue[]): Promise<Mailed[]> {
+  const mailed: Mailed[] = [];
+  for (const issue of issues) mailed.push(await mailOne(ctx, issue));
+  return mailed;
+}
+
+async function mailOne(ctx: OpContext, issue: Issue): Promise<Mailed> {
   const provider = emailProvider(ctx.env);
-  if (!provider) return;
-  for (const issue of issues) {
-    const link = `${ctx.requestOrigin}/settings/emails/confirm?token=${issue.token}`;
-    ctx.metrics.count("email.send", { kind: "confirmation" });
-    const outcome = await provider.send({
-      to: issue.address,
-      subject: "Confirm your email address for Fyrden",
-      text: `Someone added ${issue.address} to a Fyrden account. To have its notifications sent here, open this link within a day, signed in to that account:\n\n${link}\n\nIf it was not you, ignore this email: nothing is sent here unless the address is confirmed.`,
-      idempotencyKey: `confirmation-${issue.hash}`,
-    });
-    if (outcome.status !== "accepted")
-      ctx.metrics.count("email.not_sent", { kind: "confirmation", status: outcome.status });
+  const limits = emailLimits(ctx.env);
+  if (!provider || !limits) return { status: "not_sent", why: "refused" };
+  const db = ctx.env.DIRECTORY;
+  const nonce = randomSecret(32);
+  const now = clock();
+  const periods = periodsOf(now);
+  ctx.metrics.count("d1.query", { db: "directory", op: "email_fence" }, 3);
+  const [fence] = await db.batch([
+    db
+      .prepare(
+        `INSERT INTO email_admissions (nonce, at)
+         SELECT ?1, ?2 WHERE ${issuerHolds("?3", "?4")}
+           AND EXISTS (SELECT 1 FROM user_emails WHERE id = ?5 AND principal_id = ?3
+             AND removed_at IS NULL AND verified_at IS NULL)
+           AND EXISTS (SELECT 1 FROM email_confirmations c
+             JOIN email_mailboxes m ON m.address_key = c.address_key
+             WHERE c.token_hash = ?6 AND c.email_id = ?5 AND c.used_at IS NULL
+               AND c.expires_at > ?2 AND c.claim = m.claim)
+           AND ${notSuppressed("?7")}
+           AND ${roomFor(limits, false, "?8", "?9")}`,
+      )
+      .bind(
+        nonce,
+        now,
+        ctx.auth.principalId,
+        ctx.auth.lifecycleGen,
+        issue.emailId,
+        issue.hash,
+        JSON.stringify([issue.key]),
+        periods.day,
+        periods.month,
+      ),
+    ...reserving(db, nonce, periods),
+  ]);
+  if ((fence?.meta.changes ?? 0) === 0) {
+    const why = await heldBack(ctx, issue, limits, periods, now);
+    ctx.metrics.count("email.not_sent", { kind: "confirmation", status: why.why });
+    return why;
   }
+  const link = `${ctx.requestOrigin}/settings/emails/confirm?token=${issue.token}`;
+  ctx.metrics.count("email.send", { kind: "confirmation" });
+  const outcome = await provider.send({
+    to: issue.address,
+    subject: "Confirm your email address for Fyrden",
+    text: `Someone added ${issue.address} to a Fyrden account. To have its notifications sent here, open this link within a day, signed in to that account:\n\n${link}\n\nIf it was not you, ignore this email: nothing is sent here unless the address is confirmed.`,
+    tags: { fyrden_kind: "confirmation", fyrden_address: issue.emailId },
+    idempotencyKey: `confirmation-${issue.hash}`,
+  });
+  if (outcome.status === "accepted") return { status: "sent" };
+  ctx.metrics.count("email.not_sent", { kind: "confirmation", status: outcome.status });
+  if (outcome.status === "unknown") return { status: "unknown" };
+  // It sent nothing: the periods it took have the message back.
+  ctx.metrics.count("d1.query", { db: "directory", op: "email_give_back" }, 2);
+  await giveBack(db, periods);
+  return {
+    status: "not_sent",
+    why: "refused",
+    ...(!outcome.permanent && {
+      retryAfter: Math.max(1, Math.ceil((outcome.retryAfterMs ?? 60_000) / 1000)),
+    }),
+  };
+}
+
+/** Why a fence held a confirmation back (read again from the primary). */
+async function heldBack(
+  ctx: OpContext,
+  issue: Issue,
+  limits: NonNullable<ReturnType<typeof emailLimits>>,
+  periods: { day: number; month: number },
+  now: number,
+): Promise<Mailed & { status: "not_sent" }> {
+  ctx.metrics.count("d1.query", { db: "directory", op: "email_held_back" });
+  const row = await ctx.env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT NOT ${notSuppressed("?1")} AS suppressed,
+         coalesce((SELECT used FROM email_spend WHERE scope = 'day' AND period = ?2), 0) AS day,
+         coalesce((SELECT used FROM email_spend WHERE scope = 'month' AND period = ?3), 0) AS month`,
+    )
+    .bind(JSON.stringify([issue.key]), periods.day, periods.month)
+    .first<{ suppressed: number; day: number; month: number }>();
+  if (row?.suppressed) {
+    ctx.metrics.count("d1.query", { db: "directory", op: "suppressions_due" });
+    await makingDue(ctx.env.DIRECTORY, JSON.stringify([issue.key]), now).run();
+    return { status: "not_sent", why: "suppressed" };
+  }
+  if ((row?.month ?? 0) >= limits.monthly)
+    return { status: "not_sent", why: "allowance", retryAfter: secondsUntilRoom(now, "month") };
+  if ((row?.day ?? 0) >= limits.daily)
+    return { status: "not_sent", why: "allowance", retryAfter: secondsUntilRoom(now, "day") };
+  // The user, the address or its link changed after its batch.
+  return { status: "not_sent", why: "gone" };
 }
 
 /** The `users.emails.add` operation. */
@@ -291,6 +442,7 @@ export async function addUserEmailsOperation(
                + ?5 <= ${EMAIL_POLICY.maxAddresses}
              AND NOT EXISTS (SELECT 1 FROM user_emails WHERE principal_id = ?3
                AND removed_at IS NULL AND address_key IN (SELECT value FROM json_each(?6)))
+             AND ${notSuppressed("?6")}
              AND ${withinLimits(rows.length, "?6", "?3", "?7", "?8")}`,
         )
         .bind(
@@ -330,6 +482,7 @@ export async function addUserEmailsOperation(
         rows.map((r) => r.key),
         rows.length,
       );
+    // A confirmation not sent is asked for again; that answer says why.
     await mail(ctx, issues);
   }
   const keys = new Set(asked.map((a) => a.key));
@@ -498,6 +651,7 @@ export async function requestUserEmailConfirmationOperation(
          SELECT ?1, ?2 WHERE ${issuerHolds("?3", "?4")}
            AND EXISTS (SELECT 1 FROM user_emails WHERE id = ?5 AND principal_id = ?3
              AND removed_at IS NULL AND verified_at IS NULL)
+           AND ${notSuppressed("?6")}
            AND ${withinLimits(1, "?6", "?3", "?7", "?8")}`,
       )
       .bind(
@@ -525,7 +679,19 @@ export async function requestUserEmailConfirmationOperation(
     if (!still || still.verified_at !== null) throw absent();
     return refusal(ctx, [row.address_key], 0);
   }
-  await mail(ctx, [issue]);
+  const [mailed] = await mail(ctx, [issue]);
+  if (mailed?.status === "not_sent") {
+    if (mailed.why === "suppressed") throw undeliverable();
+    if (mailed.why === "gone") throw absent();
+    throw new OperationError(
+      503,
+      "email_unavailable",
+      "The confirmation email could not be sent now: ask again later. Its new link is the address's current one.",
+      undefined,
+      undefined,
+      mailed.retryAfter,
+    );
+  }
   return null;
 }
 
@@ -610,8 +776,9 @@ export async function reapEmails(
 ): Promise<void> {
   const { now } = deps;
   const db = env.DIRECTORY;
-  deps.metrics?.count("d1.query", { db: "directory", op: "emails_reap" }, 7);
+  deps.metrics?.count("d1.query", { db: "directory", op: "emails_reap" }, 8);
   await db.batch([
+    reapingSpend(db, now),
     db
       .prepare(
         `DELETE FROM email_confirmations WHERE token_hash IN (SELECT token_hash

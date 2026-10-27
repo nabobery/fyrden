@@ -350,6 +350,31 @@ describe("fyrden deploy", () => {
     generated = await generatedConfig();
     expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_PROVIDER");
     expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_FROM");
+    // Sending, with its webhook's secret and limits of its own; each deploy says so again.
+    await deploy(
+      deps(fake.runner, {
+        email: {
+          ...email,
+          webhookSecret: "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+          sending: true,
+          limits: { daily: 500, reserve: 20 },
+        },
+      }).d,
+    );
+    generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({
+      FYRDEN_EMAIL_SENDING: "on",
+      FYRDEN_EMAIL_DAILY_LIMIT: "500",
+      FYRDEN_EMAIL_RESERVE: "20",
+    });
+    expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_MONTHLY_LIMIT");
+    expect(fake.state.secrets.get("RESEND_WEBHOOK_SECRET")).toBe(
+      "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+    );
+    await deploy(deps(fake.runner, { email }).d);
+    generated = await generatedConfig();
+    expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_SENDING");
+    expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_DAILY_LIMIT");
   });
 
   it("raises a committed subrequest limit below the internal calls asked, keeping its other limits", async () => {

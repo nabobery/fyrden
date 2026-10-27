@@ -79,6 +79,26 @@ CREATE TABLE email_preferences (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+-- table email_spend
+CREATE TABLE email_spend (
+  scope TEXT NOT NULL CHECK (scope IN ('day', 'month')),
+  period INTEGER NOT NULL,
+  used INTEGER NOT NULL,
+  PRIMARY KEY (scope, period)
+) STRICT, WITHOUT ROWID;
+
+-- table email_suppressions
+CREATE TABLE email_suppressions (
+  address_key TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  suppression_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  origin TEXT NOT NULL CHECK (origin IN ('bounce', 'complaint', 'manual')),
+  suppressed INTEGER NOT NULL CHECK (suppressed IN (0, 1)),
+  rev INTEGER NOT NULL,
+  next_check_at INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+
 -- table email_unsubscribes
 CREATE TABLE email_unsubscribes (
   email_id TEXT NOT NULL,
@@ -463,6 +483,10 @@ CREATE INDEX email_counters_period ON email_counters (scope, period);
 
 -- index email_mailboxes_idle
 CREATE INDEX email_mailboxes_idle ON email_mailboxes (idle_since) WHERE idle_since IS NOT NULL;
+
+-- index email_suppressions_due
+CREATE INDEX email_suppressions_due ON email_suppressions (next_check_at, address_key)
+  WHERE suppressed = 1;
 
 -- index grants_agent
 CREATE INDEX grants_agent ON grants (agent_id);

@@ -69,13 +69,15 @@ export default {
     // The rest in the maintenance object: a Free cron trigger's 10 ms of CPU is too little.
     await measureInvocation(metrics, { where: "worker", op: "cron" }, async () => {
       const maintenance = env.MAINTENANCE.getByName(MAINTENANCE_OBJECT);
-      metrics.count("do.request", { class: "MaintenanceDO", method: "run" }, 2);
-      // Search repairs in a request of their own, so their D1 calls are an invocation's own.
-      const [run, repair] = await Promise.allSettled([
+      metrics.count("do.request", { class: "MaintenanceDO", method: "run" }, 3);
+      // Search repairs and suppression rechecks in requests of their own, so their D1 calls and
+      // lookups are an invocation's own.
+      const outcomes = await Promise.allSettled([
         maintenance.run(),
         maintenance.repairSearch(),
+        maintenance.recheckSuppressions(),
       ]);
-      for (const outcome of [run, repair]) if (outcome.status === "rejected") throw outcome.reason;
+      for (const outcome of outcomes) if (outcome.status === "rejected") throw outcome.reason;
     });
   },
 } satisfies ExportedHandler<Env>;

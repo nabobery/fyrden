@@ -156,6 +156,13 @@
       "name": "RATE_LIMIT_UNSUBSCRIBE",
       "namespace_id": "1006",
       "simple": { "limit": 10, "period": 60 }
+    },
+    // The email provider's callbacks (/auth/email/events): spent only by requests whose
+    // signature does not verify, by client address.
+    {
+      "name": "RATE_LIMIT_EMAIL_EVENTS_IP",
+      "namespace_id": "1007",
+      "simple": { "limit": 120, "period": 60 }
     }
   ],
 

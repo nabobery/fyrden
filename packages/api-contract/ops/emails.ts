@@ -20,6 +20,11 @@ export const UserEmail = z.object({
     .describe("The address notifications go to: the earliest one verified (Fyrden's meaning)."),
   verified: z.boolean(),
   visibility: z.null().describe("Always null: Fyrden shows no address publicly."),
+  deliverable: z
+    .boolean()
+    .describe(
+      "False while the email provider suppresses the mailbox (it bounced, or its owner marked Fyrden's mail as spam): nothing is sent to it until the suppression is removed at the provider. Not a promise of delivery. A Fyrden extension.",
+    ),
 });
 
 const Address = z.string().min(3).max(254);
@@ -44,7 +49,7 @@ export const addUserEmails = defineOperation({
   method: "POST",
   path: "/user/emails",
   summary: "Add email addresses",
-  description: `Adds notification addresses (at most ${MAX_ADDRESSES} in all; 422 \`too_many_emails\`), each sent a link to confirm it (good for a day). One already yours is kept as it is. A user is sent at most 5 confirmation emails an hour and a mailbox at most 3 a day, whoever asks (429 \`confirmation_rate_limited\`, nothing added). While the deployment sends no email: 503 \`email_unavailable\`. Web sessions only.`,
+  description: `Adds notification addresses (at most ${MAX_ADDRESSES} in all; 422 \`too_many_emails\`), each sent a link to confirm it (good for a day). One already yours is kept as it is. A user is sent at most 5 confirmation emails an hour and a mailbox at most 3 a day, whoever asks (429 \`confirmation_rate_limited\`, nothing added). A mailbox the email provider suppresses: 422 \`email_undeliverable\`, nothing added. An address is added even when its confirmation could not be sent now; asking for a new link says why. While the deployment sends no email: 503 \`email_unavailable\`. Web sessions only.`,
   input: z.object({ emails: z.array(Address).min(1).max(MAX_ADDRESSES) }),
   output: z.array(UserEmail),
   permission: "emails:write",
@@ -94,7 +99,7 @@ export const requestUserEmailConfirmation = defineOperation({
   path: "/user/emails/confirmation",
   summary: "Send a new confirmation link",
   description:
-    "Sends a new link to confirm an unverified address of yours (earlier links stop working), under the same limits as adding one. 404 `email_not_found` for an address not yours, removed or already verified. Web sessions only. A Fyrden extension.",
+    "Sends a new link to confirm an unverified address of yours (earlier links stop working), under the same limits as adding one. 404 `email_not_found` for an address not yours, removed or already verified; 422 `email_undeliverable` for a mailbox the email provider suppresses; 503 `email_unavailable` with `Retry-After` when it could not be sent now (the deployment's allowance or the provider's rate limit spent; the new link stays the current one). Web sessions only. A Fyrden extension.",
   input: z.object({ email: Address }),
   output: NoContent,
   permission: "emails:write",
