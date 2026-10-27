@@ -244,6 +244,9 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   // The key webhook secrets are sealed with: made once, never shown; replace
   // it only as docs/operations/webhooks.md says, or every hook's secret is lost.
   if (!existing?.has("WEBHOOKS_KEY")) upload.WEBHOOKS_KEY = signingKey();
+  // The key unsubscribe links are signed with: made once, kept across deploys (replacing it
+  // breaks every link already sent).
+  if (!existing?.has("EMAIL_KEY")) upload.EMAIL_KEY = base64urlKey();
   // The email provider's key, whenever one is given (a new one replaces it).
   if (deps.email) upload.RESEND_API_KEY = deps.email.apiKey;
   if (Object.keys(upload).length > 0) {
@@ -283,6 +286,11 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   }
 
   return { created: resources.created, apiUrl, webUrl };
+}
+
+/** 32 random bytes as unpadded base64url. */
+function base64urlKey(): string {
+  return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
 }
 
 /** A new Ed25519 signing key: its 32-byte seed, base64. */

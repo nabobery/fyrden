@@ -36242,6 +36242,171 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/user/notification-settings": {
+      "get": {
+        "description": "Which notification email Fyrden sends you, by category (Fyrden's defaults until you set them). Web sessions only (any other credential: 403). A Fyrden extension.",
+        "operationId": "users.notification_settings.get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "email": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "direct": {
+                          "description": "What asks something of you: review requests (yours or your team's), assignments, mentions, your own issues and pull requests closed, reopened, merged or in conflict. On unless set.",
+                          "type": "boolean",
+                        },
+                        "participating": {
+                          "description": "Activity on threads you take part in or subscribed to. Off unless set.",
+                          "type": "boolean",
+                        },
+                        "watching": {
+                          "description": "Activity in repositories you watch. Off unless set.",
+                          "type": "boolean",
+                        },
+                      },
+                      "required": [
+                        "direct",
+                        "participating",
+                        "watching",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "email",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "session": [],
+            "sessionHeader": [],
+          },
+        ],
+        "summary": "Get your notification settings",
+        "x-fyrden-permission": "emails:read",
+        "x-fyrden-principals": [
+          "user",
+        ],
+      },
+      "put": {
+        "description": "Sets the categories given (the others keep theirs); the last write wins. Web sessions only. A Fyrden extension.",
+        "operationId": "users.notification_settings.put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "email": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "direct": {
+                        "type": "boolean",
+                      },
+                      "participating": {
+                        "type": "boolean",
+                      },
+                      "watching": {
+                        "type": "boolean",
+                      },
+                    },
+                    "type": "object",
+                  },
+                },
+                "required": [
+                  "email",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "email": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "direct": {
+                          "description": "What asks something of you: review requests (yours or your team's), assignments, mentions, your own issues and pull requests closed, reopened, merged or in conflict. On unless set.",
+                          "type": "boolean",
+                        },
+                        "participating": {
+                          "description": "Activity on threads you take part in or subscribed to. Off unless set.",
+                          "type": "boolean",
+                        },
+                        "watching": {
+                          "description": "Activity in repositories you watch. Off unless set.",
+                          "type": "boolean",
+                        },
+                      },
+                      "required": [
+                        "direct",
+                        "participating",
+                        "watching",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "email",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "session": [],
+            "sessionHeader": [],
+          },
+        ],
+        "summary": "Set your notification settings",
+        "x-fyrden-permission": "emails:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/user/quota": {
       "get": {
         "description": "The authenticated user's quota: how many repositories it may have and how many bytes their pushes may store, and how much of each is used. A deleted repository's bytes are free again once its deletion finishes.",

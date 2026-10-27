@@ -962,6 +962,8 @@ A user's notification addresses, managed from Fyrden's web pages signed in: `GET
 | Limits | Confirmation emails: 5 a user an hour, 3 a mailbox a day whoever asks; a request needing more is refused whole (429 `confirmation_rate_limited` with `Retry-After`, nothing added or counted) |
 | Primary | `primary` is the address notifications will go to: the earliest verified. GitHub's other deviations: no pagination, `visibility` always null |
 | Cleanup | Links go a day after their expiry or use, counters after their period, addresses 30 days after their removal, a mailbox a day after no live address names it: by indexes, 1,000 rows of each a maintenance run. A user's deletion removes their addresses with its other rows |
+| Settings | `GET` and `PUT /user/notification-settings` (Fyrden's; web sessions only): which notification email is sent, by category: `direct` (a review requested of you or your team, an assignment, a mention, your own issue or pull request closed, reopened, merged or in conflict; on unless set), `participating` (activity on threads you take part in or subscribed to; off unless set), `watching` (activity in repositories you watch; off unless set). An event's email takes the strongest category its entries for you reach, decided by that event, never by a thread's earlier reasons; what only settles something, and your own actions, are never emailed. A `PUT` sets the fields given, the last write winning. Digests are not emailed |
+| Unsubscribing | Every notification email carries a one-click link (RFC 8058: `List-Unsubscribe` and `List-Unsubscribe-Post`, and in its footer) to `/unsubscribe` on the public origin, signed with the Worker secret `EMAIL_KEY` (its own: rotating the commit signing key leaves links working; replacing it, only after a compromise, breaks every link sent). A link names one address (as added: added again, it starts clean) and one category. A `POST` with no credential and any body unsubscribes it (answered 200 whether or not the address still exists, writing nothing then); `GET` and `HEAD` show a page that changes nothing, with a form posting the same. One-click posts: 10 a minute an address and category; links that do not verify: 120 a minute a client address (429 with `Retry-After`). Unsubscribes go with their address |
 | Provider | Resend (`FYRDEN_EMAIL_PROVIDER=resend`): a message is accepted only when Resend answers with its id; refused when it answers that the request is at fault (never sent again) or limited for now; any other outcome (a server error, no answer, an answer without an id) is unknown and never sent again. Each message carries an idempotency key |
 
 ## Search (not yet served)
@@ -1038,8 +1040,9 @@ and the default applies.
 | `QUOTA_AGENT_MAX_REPOS` | 100 | 0 | Active repositories one agent may have created acting for users |
 | `AGENT_REPO_TTL_DAYS` | 7 | 1 | Days until a repository an agent creates expires, unless it gives an expiry |
 
-`fyrden-api` also needs the secret `BOOTSTRAP_SECRET`, which `fyrden deploy`
-sets. The `fyrden` CLI reads `FYRDEN_TOKEN` (the token for `fyrden push`),
+`fyrden-api` also needs the secrets `BOOTSTRAP_SECRET`, `SIGNING_KEY`,
+`WEBHOOKS_KEY` and `EMAIL_KEY` (unsubscribe links' key), which `fyrden deploy`
+makes once each when missing and keeps. The `fyrden` CLI reads `FYRDEN_TOKEN` (the token for `fyrden push`),
 `FYRDEN_PUSH_BODY_LIMIT` (its body limit) and `FYRDEN_GIT_BINARY` (the `git`
 to run) from its own environment.
 

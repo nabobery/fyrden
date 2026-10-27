@@ -107,6 +107,28 @@ describe("fyrden deploy", () => {
     expect(fake.state.secrets.get("WEBHOOKS_KEY")).toBe(key);
   });
 
+  it("makes the unsubscribe links' key once (base64url), never shown, and keeps it", async () => {
+    const fake = fakeWrangler();
+    const { d, lines } = deps(fake.runner);
+    await deploy(d);
+    const key = fake.state.secrets.get("EMAIL_KEY") as string;
+    expect(key).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(Buffer.from(key, "base64url")).toHaveLength(32);
+    expect(lines.join("\n")).not.toContain(key);
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.secrets.get("EMAIL_KEY")).toBe(key);
+  });
+
+  it("adds the unsubscribe links' key to a deployment made without it", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    fake.state.secrets.delete("EMAIL_KEY");
+    const webhooks = fake.state.secrets.get("WEBHOOKS_KEY");
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.secrets.get("EMAIL_KEY")).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(fake.state.secrets.get("WEBHOOKS_KEY")).toBe(webhooks);
+  });
+
   it("makes a commit signing key once, never shown, and keeps it", async () => {
     const fake = fakeWrangler();
     const { d, lines } = deps(fake.runner);

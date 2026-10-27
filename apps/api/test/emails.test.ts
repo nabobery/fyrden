@@ -16,8 +16,10 @@ import {
   emailHooks,
   resendProvider,
 } from "../src/email/provider.js";
+import { unsubscribeToken } from "../src/email/unsubscribe.js";
 import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { advanceDeletions } from "../src/repos/deletion.js";
+import { newId } from "../src/services.js";
 import { api, user, type Who } from "./helpers/api.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { testSession } from "./helpers/oauth.js";
@@ -397,7 +399,12 @@ describe("notification addresses", () => {
     const address = mailbox();
     await add(who, [address]);
     expect((await confirm(who, tokenFor(address))).status).toBe(200);
-    // A backlog of removed addresses, two links each: more than a slice deletes.
+    // A backlog of removed addresses, two links and three unsubscribes each: more than a slice
+    // deletes; and notification settings.
+    expect(
+      (await asSession(who, "PUT", "/user/notification-settings", { email: { watching: true } }))
+        .status,
+    ).toBe(200);
     const at = Date.now();
     await env.DIRECTORY.batch(
       Array.from({ length: 251 }, (_, i) => {
@@ -418,9 +425,25 @@ describe("notification addresses", () => {
               at + DAY,
             ),
           ),
+          ...["direct", "participating", "watching"].map((scope) =>
+            env.DIRECTORY.prepare(
+              "INSERT INTO email_unsubscribes (email_id, scope, at) VALUES (?1, ?2, ?3)",
+            ).bind(id, scope, at),
+          ),
         ];
       }).flat(),
     );
+    // One of them with an id a link can name.
+    const backlogged = newId("eml");
+    await env.DIRECTORY.batch([
+      env.DIRECTORY.prepare(
+        `INSERT INTO user_emails (id, principal_id, address, address_key, verified_at, created_at,
+           removed_at) VALUES (?1, ?2, 'linked@example.com', 'linked@example.com', NULL, ?3, ?3)`,
+      ).bind(backlogged, who.principalId, at),
+      env.DIRECTORY.prepare(
+        "INSERT INTO email_unsubscribes (email_id, scope, at) VALUES (?1, 'direct', ?2)",
+      ).bind(backlogged, at),
+    ]);
     // Another account's proof issued while the deleted user held the mailbox.
     await add(other, [address]);
     const stale = tokenFor(address);
@@ -443,7 +466,38 @@ describe("notification addresses", () => {
         .run();
       await advanceDeletions(env, { limit: 100 });
       await runDeletionSlice(env, who.principalId);
+      // An address stays while anything of it does.
+      expect(
+        await count(
+          `SELECT count(*) AS n FROM email_unsubscribes u
+           WHERE NOT EXISTS (SELECT 1 FROM user_emails e WHERE e.id = u.email_id)`,
+        ),
+      ).toBe(0);
     }
+    expect(
+      await count(
+        "SELECT count(*) AS n FROM email_unsubscribes WHERE email_id LIKE 'eml_backlog%' OR email_id = ?",
+        backlogged,
+      ),
+    ).toBe(0);
+    expect(
+      await count(
+        "SELECT count(*) AS n FROM email_preferences WHERE principal_id = ?",
+        who.principalId,
+      ),
+    ).toBe(0);
+    // An unsubscribe link of theirs replayed after: nothing comes back.
+    const replay = (await unsubscribeToken(env, backlogged, "direct")) as string;
+    expect(
+      (
+        await exports.default.fetch(`${ORIGIN}/unsubscribe?t=${encodeURIComponent(replay)}`, {
+          method: "POST",
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      await count("SELECT count(*) AS n FROM email_unsubscribes WHERE email_id = ?", backlogged),
+    ).toBe(0);
     expect(
       await count("SELECT count(*) AS n FROM user_emails WHERE principal_id = ?", who.principalId),
     ).toBe(0);

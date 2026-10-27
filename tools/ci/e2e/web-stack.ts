@@ -31,6 +31,8 @@ export interface WebStack {
   readonly page: Page;
   /** A scratch directory, removed by `stop`. */
   readonly scratch: string;
+  /** The key unsubscribe links are signed with (base64url), to make one as an email would. */
+  readonly emailKey: string;
   /** What the browser refused under the pages' Content Security Policy, on any page. */
   readonly refused: string[];
   /** Everything both Workers wrote. */
@@ -89,7 +91,11 @@ export async function startWebStack(
     const envFile = join(scratch, "test.env");
     const bootstrapSecret = `web-${crypto.randomUUID()}`;
     const signingSeed = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64");
-    await writeFile(envFile, `BOOTSTRAP_SECRET=${bootstrapSecret}\nSIGNING_KEY=${signingSeed}\n`);
+    const emailKey = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+    await writeFile(
+      envFile,
+      `BOOTSTRAP_SECRET=${bootstrapSecret}\nSIGNING_KEY=${signingSeed}\nEMAIL_KEY=${emailKey}\n`,
+    );
     for (const db of ["DIRECTORY", "ORG_READ"]) {
       const migrated = await wrangler(
         ["d1", "migrations", "apply", db, "--local", "--persist-to", persist, "-c", apiConfig],
@@ -134,6 +140,7 @@ export async function startWebStack(
       handle,
       page,
       scratch,
+      emailKey,
       refused,
       output: () => output,
       stop,

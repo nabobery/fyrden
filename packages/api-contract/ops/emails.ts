@@ -104,3 +104,57 @@ export const requestUserEmailConfirmation = defineOperation({
   successStatus: 204,
   mcp: false,
 });
+
+export const NotificationSettings = z.object({
+  email: z.object({
+    direct: z
+      .boolean()
+      .describe(
+        "What asks something of you: review requests (yours or your team's), assignments, mentions, your own issues and pull requests closed, reopened, merged or in conflict. On unless set.",
+      ),
+    participating: z
+      .boolean()
+      .describe("Activity on threads you take part in or subscribed to. Off unless set."),
+    watching: z.boolean().describe("Activity in repositories you watch. Off unless set."),
+  }),
+});
+
+export const getNotificationSettings = defineOperation({
+  id: "users.notification_settings.get",
+  method: "GET",
+  path: "/user/notification-settings",
+  summary: "Get your notification settings",
+  description:
+    "Which notification email Fyrden sends you, by category (Fyrden's defaults until you set them). Web sessions only (any other credential: 403). A Fyrden extension.",
+  input: z.object({}),
+  output: NotificationSettings,
+  permission: "emails:read",
+  principals: ["user"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: false,
+});
+
+export const setNotificationSettings = defineOperation({
+  id: "users.notification_settings.put",
+  method: "PUT",
+  path: "/user/notification-settings",
+  summary: "Set your notification settings",
+  description:
+    "Sets the categories given (the others keep theirs); the last write wins. Web sessions only. A Fyrden extension.",
+  input: z.object({
+    email: z
+      .object({
+        direct: z.boolean().optional(),
+        participating: z.boolean().optional(),
+        watching: z.boolean().optional(),
+      })
+      .strict(),
+  }),
+  output: NotificationSettings,
+  permission: "emails:write",
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  mcp: false,
+});

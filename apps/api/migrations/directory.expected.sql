@@ -70,6 +70,23 @@ CREATE TABLE email_mailboxes (
   idle_since INTEGER
 ) STRICT, WITHOUT ROWID;
 
+-- table email_preferences
+CREATE TABLE email_preferences (
+  principal_id TEXT PRIMARY KEY REFERENCES principals (id),
+  direct INTEGER NOT NULL CHECK (direct IN (0, 1)),
+  participating INTEGER NOT NULL CHECK (participating IN (0, 1)),
+  watching INTEGER NOT NULL CHECK (watching IN (0, 1)),
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+-- table email_unsubscribes
+CREATE TABLE email_unsubscribes (
+  email_id TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK (scope IN ('direct', 'participating', 'watching')),
+  at INTEGER NOT NULL,
+  PRIMARY KEY (email_id, scope)
+) STRICT, WITHOUT ROWID;
+
 -- table grants
 CREATE TABLE grants (
   id TEXT PRIMARY KEY,

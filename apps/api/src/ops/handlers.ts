@@ -20,8 +20,10 @@ import {
   addUserEmailsOperation,
   confirmUserEmailOperation,
   deleteUserEmailsOperation,
+  getNotificationSettingsOperation,
   listUserEmailsOperation,
   requestUserEmailConfirmationOperation,
+  setNotificationSettingsOperation,
 } from "../accounts/emails.js";
 import {
   createTeamOperation,
@@ -590,6 +592,8 @@ export const handlers: Handlers = {
   "users.emails.delete": deleteUserEmailsOperation,
   "users.emails.confirm": confirmUserEmailOperation,
   "users.emails.confirmation": requestUserEmailConfirmationOperation,
+  "users.notification_settings.get": getNotificationSettingsOperation,
+  "users.notification_settings.put": setNotificationSettingsOperation,
 
   // Quotas live in each account's object (accounts/quotas).
   "quotas.user.get": getUserQuotaOperation,

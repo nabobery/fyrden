@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { requestId } from "hono/request-id";
 import { authRouter } from "./auth/login.js";
+import { mountUnsubscribe } from "./email/unsubscribe.js";
 import { gitRouter } from "./git/router.js";
 import { deepHealth } from "./health.js";
 import { problem } from "./http/problem.js";
@@ -49,6 +50,7 @@ export function createApp() {
   mountRaw(app);
   mountArchives(app);
   mountMcp(app);
+  mountUnsubscribe(app);
   app.route("/", gitRouter);
 
   return app;

@@ -144,13 +144,25 @@
       "name": "RATE_LIMIT_AUTH",
       "namespace_id": "1004",
       "simple": { "limit": 1200, "period": 60 }
+    },
+    // Unsubscribe links: per client address for links that do not verify, per address and list
+    // for one-click posts of links that do (a mail provider's shared egress blocks no one).
+    {
+      "name": "RATE_LIMIT_UNSUBSCRIBE_IP",
+      "namespace_id": "1005",
+      "simple": { "limit": 120, "period": 60 }
+    },
+    {
+      "name": "RATE_LIMIT_UNSUBSCRIBE",
+      "namespace_id": "1006",
+      "simple": { "limit": 10, "period": 60 }
     }
   ],
 
   // Uploaded with the first deploy by `fyrden deploy` (--secrets-file): the first-run setup's
   // secret, and the platform's commit signing key. Listed, they also reach `wrangler dev` from an
   // env file (only listed secrets do).
-  "secrets": { "required": ["BOOTSTRAP_SECRET", "SIGNING_KEY", "WEBHOOKS_KEY"] },
+  "secrets": { "required": ["BOOTSTRAP_SECRET", "SIGNING_KEY", "WEBHOOKS_KEY", "EMAIL_KEY"] },
 
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "fyrden_metrics" }],
 

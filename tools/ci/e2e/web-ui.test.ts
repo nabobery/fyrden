@@ -8,6 +8,7 @@
 // a post from another origin and no page's data is cached. Every
 // page it visits is checked with axe for WCAG 2.x A and AA. Needs `pnpm
 // --filter @fyrden/web build` first (turbo does it).
+import { createHmac, randomBytes } from "node:crypto";
 import { mentionsToken } from "@fyrden/domain";
 import { type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -269,5 +270,33 @@ describe("the web UI", () => {
 
   it("never had a script, style or image refused by the policy on any page", () => {
     expect(stack?.refused).toEqual([]);
+  });
+  it("serves unsubscribe links on the public origin, with no credential", async () => {
+    // A link as an email carries it (signed with the deployment's key), for an address it never
+    // had: answered as any, nothing written.
+    const id = `eml_${randomBytes(16)
+      .toString("hex")
+      .toUpperCase()
+      .replace(/[ILOU]/g, "0")
+      .slice(0, 26)}`;
+    const payload = `v1.${id}.watching`;
+    const mac = createHmac("sha256", Buffer.from((stack as WebStack).emailKey, "base64url"))
+      .update(payload)
+      .digest("base64url");
+    const link = `${origin}/unsubscribe?t=${encodeURIComponent(`${payload}.${mac}`)}`;
+    const opened = await fetch(link);
+    expect(opened.status).toBe(200);
+    expect(await opened.text()).toContain('method="post"');
+    const head = await fetch(link, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    const oneClick = await fetch(link, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "List-Unsubscribe=One-Click",
+      redirect: "manual",
+    });
+    expect(oneClick.status).toBe(200);
+    const forged = await fetch(`${origin}/unsubscribe?t=v1.forged`, { method: "POST" });
+    expect(forged.status).toBe(400);
   });
 });

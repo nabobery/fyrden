@@ -4,10 +4,12 @@ import type {
   addUserEmails,
   confirmUserEmail,
   deleteUserEmails,
+  getNotificationSettings,
   Input,
   listUserEmails,
   Output,
   requestUserEmailConfirmation,
+  setNotificationSettings,
 } from "@fyrden/api-contract";
 import { emailProvider, emailSending } from "../email/provider.js";
 import { randomSecret, sha256Hex } from "../oauth/params.js";
@@ -527,6 +529,72 @@ export async function requestUserEmailConfirmationOperation(
   return null;
 }
 
+/** The categories' defaults: what asks something of the user on, the rest off. */
+export const EMAIL_DEFAULTS = { direct: true, participating: false, watching: false } as const;
+
+type Settings = Output<typeof getNotificationSettings>;
+
+async function settingsOf(ctx: OpContext): Promise<Settings> {
+  ctx.metrics.count("d1.query", { db: "directory", op: "email_preferences" });
+  const row = await ctx.env.DIRECTORY.withSession("first-primary")
+    .prepare("SELECT direct, participating, watching FROM email_preferences WHERE principal_id = ?")
+    .bind(ctx.auth.principalId)
+    .first<{ direct: number; participating: number; watching: number }>();
+  return {
+    email: row
+      ? {
+          direct: row.direct === 1,
+          participating: row.participating === 1,
+          watching: row.watching === 1,
+        }
+      : { ...EMAIL_DEFAULTS },
+  };
+}
+
+/** The `users.notification_settings.get` operation. */
+export async function getNotificationSettingsOperation(
+  ctx: OpContext,
+  _input: Input<typeof getNotificationSettings>,
+): Promise<Output<typeof getNotificationSettings>> {
+  return settingsOf(ctx);
+}
+
+/** The `users.notification_settings.put` operation: the fields given, the last write winning. */
+export async function setNotificationSettingsOperation(
+  ctx: OpContext,
+  input: Input<typeof setNotificationSettings>,
+): Promise<Output<typeof setNotificationSettings>> {
+  const bit = (value: boolean | undefined) => (value === undefined ? null : value ? 1 : 0);
+  const { direct, participating, watching } = input.email;
+  const db = ctx.env.DIRECTORY;
+  await emailWriteHooks.beforeWrite?.();
+  ctx.metrics.count("d1.query", { db: "directory", op: "email_preferences_set" });
+  // A new row starts from the defaults; an existing one keeps the fields not given.
+  const written = await db
+    .prepare(
+      `INSERT INTO email_preferences (principal_id, direct, participating, watching, updated_at)
+       SELECT ?1, coalesce(?2, ${EMAIL_DEFAULTS.direct ? 1 : 0}),
+         coalesce(?3, ${EMAIL_DEFAULTS.participating ? 1 : 0}),
+         coalesce(?4, ${EMAIL_DEFAULTS.watching ? 1 : 0}), ?5
+       WHERE ${issuerHolds("?1", "?6")}
+       ON CONFLICT (principal_id) DO UPDATE SET direct = coalesce(?2, direct),
+         participating = coalesce(?3, participating), watching = coalesce(?4, watching),
+         updated_at = ?5`,
+    )
+    .bind(
+      ctx.auth.principalId,
+      bit(direct),
+      bit(participating),
+      bit(watching),
+      clock(),
+      ctx.auth.lifecycleGen,
+    )
+    .run();
+  if ((written.meta.changes ?? 0) === 0)
+    throw new OperationError(401, "invalid_token", "The session is no longer valid.");
+  return settingsOf(ctx);
+}
+
 /** Rows one reaping step deletes at most, of each kind. */
 const REAP_ROWS = 1_000;
 
@@ -542,7 +610,7 @@ export async function reapEmails(
 ): Promise<void> {
   const { now } = deps;
   const db = env.DIRECTORY;
-  deps.metrics?.count("d1.query", { db: "directory", op: "emails_reap" }, 6);
+  deps.metrics?.count("d1.query", { db: "directory", op: "emails_reap" }, 7);
   await db.batch([
     db
       .prepare(
@@ -572,10 +640,23 @@ export async function reapEmails(
            WHERE at < ?1 ORDER BY at LIMIT ?2)`,
       )
       .bind(now - DAY, REAP_ROWS),
+    // A window of the oldest removed addresses (bounded before any join, so a backlog costs one
+    // window a run): their unsubscribes (three at most each), then each address once none of
+    // them or of its links remain. Links are reaped within days, long before their address's 30
+    // days are up, so the window does not stall on them.
+    db
+      .prepare(
+        `DELETE FROM email_unsubscribes WHERE email_id IN (SELECT id
+           FROM user_emails INDEXED BY user_emails_removed
+           WHERE removed_at IS NOT NULL AND removed_at < ?1 ORDER BY removed_at LIMIT ?2)`,
+      )
+      .bind(now - 30 * DAY, REAP_ROWS),
     db
       .prepare(
         `DELETE FROM user_emails WHERE id IN (SELECT id FROM user_emails INDEXED BY user_emails_removed
-           WHERE removed_at IS NOT NULL AND removed_at < ?1 ORDER BY removed_at LIMIT ?2)`,
+           WHERE removed_at IS NOT NULL AND removed_at < ?1 ORDER BY removed_at LIMIT ?2)
+         AND NOT EXISTS (SELECT 1 FROM email_unsubscribes u WHERE u.email_id = user_emails.id)
+         AND NOT EXISTS (SELECT 1 FROM email_confirmations c WHERE c.email_id = user_emails.id)`,
       )
       .bind(now - 30 * DAY, REAP_ROWS),
     db

@@ -1,7 +1,7 @@
 import { isReservedHandle } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
 import routes from "../app/routes.js";
-import { API_PREFIXES, dataSuffixRedirect, isApiPath } from "../workers/app.js";
+import { API_PATHS, API_PREFIXES, dataSuffixRedirect, isApiPath } from "../workers/app.js";
 
 describe("the web Worker's routing", () => {
   it("hands the API's paths to fyrden-api and keeps its own pages", () => {
@@ -17,6 +17,7 @@ describe("the web Worker's routing", () => {
       "/alice/repo.git/git-upload-pack",
       "/alice/repo/git-receive-pack",
       "/alice/repo/uploads/01ARZ3NDEKTSV4RRFFQ69G5FAV/parts/1",
+      "/unsubscribe",
     ])
       expect(isApiPath(path), path).toBe(true);
     for (const path of [
@@ -32,6 +33,7 @@ describe("the web Worker's routing", () => {
       "/mcperson/demo",
       "/mcp-tools/demo/tree/main",
       "/mcpx",
+      "/unsubscribe/demo",
     ])
       expect(isApiPath(path), path).toBe(false);
   });
@@ -57,6 +59,7 @@ describe("the web Worker's routing", () => {
   it("reserves, as handles, every name an API path or a page takes at the top", () => {
     const names = [
       ...API_PREFIXES.map((p) => p.replace(/^\/|\/$/g, "")),
+      ...API_PATHS.map((p) => p.slice(1)),
       ...routes.flatMap((r) => (r.path && !r.path.startsWith(":") ? [r.path.split("/")[0]] : [])),
     ].filter((name): name is string => name !== undefined && !name.startsWith("."));
     // The built assets the platform serves before the Worker runs.

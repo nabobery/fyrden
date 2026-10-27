@@ -30,6 +30,8 @@ describe("D1 directory schema", () => {
       "email_confirmations",
       "email_counters",
       "email_mailboxes",
+      "email_preferences",
+      "email_unsubscribes",
       "grants",
       "handle_reservations",
       "idempotency_keys",

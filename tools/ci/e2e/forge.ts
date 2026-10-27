@@ -110,6 +110,7 @@ export async function startForge(name: string): Promise<Forge> {
       `BOOTSTRAP_SECRET=${bootstrapSecret}`,
       `SIGNING_KEY=${randomBytes(32).toString("base64")}`,
       `WEBHOOKS_KEY=${randomBytes(32).toString("base64")}`,
+      `EMAIL_KEY=${randomBytes(32).toString("base64url")}`,
       "",
     ].join("\n"),
   );

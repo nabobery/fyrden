@@ -6069,6 +6069,42 @@ export type UsersEmailsConfirmationInput = {
 /** Output of `users.emails.confirmation`. */
 export type UsersEmailsConfirmationOutput = null;
 
+/** Input of `users.notification_settings.get`: Get your notification settings. */
+export type UsersNotificationSettingsGetInput = Record<string, never>;
+
+/** Output of `users.notification_settings.get`. */
+export type UsersNotificationSettingsGetOutput = {
+  email: {
+    /** What asks something of you: review requests (yours or your team's), assignments, mentions, your own issues and pull requests closed, reopened, merged or in conflict. On unless set. */
+    direct: boolean;
+    /** Activity on threads you take part in or subscribed to. Off unless set. */
+    participating: boolean;
+    /** Activity in repositories you watch. Off unless set. */
+    watching: boolean;
+  };
+};
+
+/** Input of `users.notification_settings.put`: Set your notification settings. */
+export type UsersNotificationSettingsPutInput = {
+  email: {
+    direct?: boolean;
+    participating?: boolean;
+    watching?: boolean;
+  };
+};
+
+/** Output of `users.notification_settings.put`. */
+export type UsersNotificationSettingsPutOutput = {
+  email: {
+    /** What asks something of you: review requests (yours or your team's), assignments, mentions, your own issues and pull requests closed, reopened, merged or in conflict. On unless set. */
+    direct: boolean;
+    /** Activity on threads you take part in or subscribed to. Off unless set. */
+    participating: boolean;
+    /** Activity in repositories you watch. Off unless set. */
+    watching: boolean;
+  };
+};
+
 /** Input of `quotas.user.get`: Get your quota. */
 export type QuotasUserGetInput = Record<string, never>;
 
@@ -7671,6 +7707,8 @@ export const OPERATIONS = {
   "users.emails.delete": { method: "DELETE", path: "/user/emails", pathParams: [], idempotent: true },
   "users.emails.confirm": { method: "POST", path: "/user/emails/confirm", pathParams: [], idempotent: true },
   "users.emails.confirmation": { method: "POST", path: "/user/emails/confirmation", pathParams: [], idempotent: true },
+  "users.notification_settings.get": { method: "GET", path: "/user/notification-settings", pathParams: [], idempotent: false },
+  "users.notification_settings.put": { method: "PUT", path: "/user/notification-settings", pathParams: [], idempotent: true },
   "quotas.user.get": { method: "GET", path: "/user/quota", pathParams: [], idempotent: false },
   "quotas.org.get": { method: "GET", path: "/orgs/{org}/quota", pathParams: ["org"], idempotent: false },
   "admin.quotas.set": { method: "PUT", path: "/admin/accounts/{account}/quota", pathParams: ["account"], idempotent: true },
@@ -8024,6 +8062,10 @@ export interface Operations {
   "users.emails.confirm": { input: UsersEmailsConfirmInput; output: UsersEmailsConfirmOutput };
   /** Send a new confirmation link. Sends a new link to confirm an unverified address of yours (earlier links stop working), under the same limits as adding one. 404 `email_not_found` for an address not yours, removed or already verified. Web sessions only. A Fyrden extension. */
   "users.emails.confirmation": { input: UsersEmailsConfirmationInput; output: UsersEmailsConfirmationOutput };
+  /** Get your notification settings. Which notification email Fyrden sends you, by category (Fyrden's defaults until you set them). Web sessions only (any other credential: 403). A Fyrden extension. */
+  "users.notification_settings.get": { input: UsersNotificationSettingsGetInput; output: UsersNotificationSettingsGetOutput };
+  /** Set your notification settings. Sets the categories given (the others keep theirs); the last write wins. Web sessions only. A Fyrden extension. */
+  "users.notification_settings.put": { input: UsersNotificationSettingsPutInput; output: UsersNotificationSettingsPutOutput };
   /** Get your quota. The authenticated user's quota: how many repositories it may have and how many bytes their pushes may store, and how much of each is used. A deleted repository's bytes are free again once its deletion finishes. */
   "quotas.user.get": { input: QuotasUserGetInput; output: QuotasUserGetOutput };
   /** Get an organization's quota. An organization's quota and its use, for its members. */

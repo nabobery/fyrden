@@ -46,8 +46,10 @@ import {
   addUserEmails,
   confirmUserEmail,
   deleteUserEmails,
+  getNotificationSettings,
   listUserEmails,
   requestUserEmailConfirmation,
+  setNotificationSettings,
 } from "../ops/emails.js";
 import { ackFeedItem, getFeed, getFeedDigest, syncFeed } from "../ops/feed.js";
 import { createFileCommit, deleteContents, putContents } from "../ops/file-writes.js";
@@ -369,6 +371,8 @@ export const registry = defineRegistry([
   deleteUserEmails,
   confirmUserEmail,
   requestUserEmailConfirmation,
+  getNotificationSettings,
+  setNotificationSettings,
   getUserQuota,
   getOrgQuota,
   setQuota,

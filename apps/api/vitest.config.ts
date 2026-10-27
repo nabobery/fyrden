@@ -23,6 +23,8 @@ export default defineConfig(async () => {
             SIGNING_KEY: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
             // A fixed key webhook secrets are sealed with (32 bytes).
             WEBHOOKS_KEY: "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
+            // A fixed key unsubscribe links are signed with (32 bytes, base64url).
+            EMAIL_KEY: "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
           },
         },
       }),
