@@ -80,8 +80,18 @@ async function sealedWith(repo: Repo, told: readonly Told[], prepare?: (r: RepoD
   return { window, epoch };
 }
 
-const read = (who: Who, repoId: string, window: number, epoch: number, token = who.token) =>
-  json<Answer>(api("GET", `/feed/digests/${repoId}/issue/${window}/${epoch}`, token));
+/**
+ * Reads a digest as `who`, with `token` or a token minted now (sealing moves the clock past a
+ * window, so one minted earlier in the test may have expired).
+ */
+const read = async (who: Who, repoId: string, window: number, epoch: number, token?: string) =>
+  json<Answer>(
+    api(
+      "GET",
+      `/feed/digests/${repoId}/issue/${window}/${epoch}`,
+      token ?? (await scopedToken(who.principalId, [])),
+    ),
+  );
 
 /** Opens issues titled `T<i>` as `who`; their numbers. */
 async function issues(who: Who, repo: Repo, n: number) {
