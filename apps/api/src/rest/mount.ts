@@ -24,6 +24,7 @@ export function opContext(c: AppContext): OpContext {
     requestId: c.get("requestId"),
     requestHost: new URL(c.req.url).hostname,
     requestOrigin: new URL(c.req.url).origin,
+    receivedAt: c.get("receivedAt"),
     waitUntil: (p) => c.executionCtx.waitUntil(p),
   };
 }
@@ -119,7 +120,7 @@ function respond(c: AppContext, op: OperationDef, result: OpResult): Response | 
   }
   if (op.etag) return respondWithEtag(c, result.output, result.status ?? op.successStatus ?? 200);
   // Nothing to answer: no body (a replay of it too).
-  if (answersNothing(op)) return c.body(null, 204, replayed);
+  if (answersNothing(op)) return c.body(null, op.successStatus === 205 ? 205 : 204, replayed);
   // A secret (a new token) is shown once: no cache keeps it.
   return c.json(
     result.output as Record<string, unknown>,

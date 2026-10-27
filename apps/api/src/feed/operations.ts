@@ -188,7 +188,7 @@ type FeedItemOutput = Output<typeof getFeed>["items"][number];
  * anything of the feed is read (whether activity arrived never shows to a
  * credential revoked meanwhile); a refusal answers 401.
  */
-async function freshly(ctx: OpContext): Promise<OpContext> {
+export async function freshly(ctx: OpContext): Promise<OpContext> {
   const fresh = await reverified(ctx);
   if (!fresh.ok) throw new OperationError(401, fresh.code, fresh.detail);
   return {
@@ -200,7 +200,7 @@ async function freshly(ctx: OpContext): Promise<OpContext> {
 
 /** The caller's feed: its token's principal's object. */
 /** Whether watched activity may be missing (deployment-wide, see `deliveryState`). */
-const deliveryOf = (ctx: OpContext) =>
+export const deliveryOf = (ctx: OpContext) =>
   deliveryState(readModelFor(ctx.env, DEFAULT_ORG_SHARD), Date.now(), ctx.metrics);
 
 const feedOf = (ctx: OpContext) => ctx.env.USER.getByName(ctx.auth.principalId);
@@ -208,14 +208,19 @@ const feedOf = (ctx: OpContext) => ctx.env.USER.getByName(ctx.auth.principalId);
 const counted = (ctx: OpContext, method: string) =>
   ctx.metrics.count("do.request", { class: "UserDO", method });
 
-/** An item as a check needs it: its repository, its thread, and the member it displays. */
-type Displayed = Pick<FeedItem, "repoId" | "threadKey" | "member" | "epoch">;
+/**
+ * An item as a check needs it: its repository, its thread, the member it
+ * displays, and (an inbox thread's) the conversation it is about.
+ */
+export type Displayed = Pick<FeedItem, "repoId" | "threadKey" | "member" | "epoch"> & {
+  readonly conversation?: string;
+};
 
 /**
  * What the caller may see of a feed's items, decided once per repository
  * within one answer, and what the members they display say.
  */
-class Visibility {
+export class Visibility {
   readonly #decided = new Map<
     string,
     { entry: RepoEntry; role: RepoRole | null } | "denied" | "unknown"
@@ -236,6 +241,16 @@ class Visibility {
    * answer of its (excerpts, threads) must be judged under it too.
    */
   readonly #pinned = new Map<string, { readonly accountId: string; readonly ownerGen: number }>();
+  /** Repositories whose threads are asked about by conversation (an inbox's). */
+  readonly #identify = new Set<string>();
+  /**
+   * The conversation each thread asked about names now (null: none) and its
+   * title, with the generation then.
+   */
+  readonly #identities = new Map<
+    string,
+    { conversation: string | null; title: string; epoch: number }
+  >();
 
   constructor(private readonly ctx: OpContext) {
     this.#fresh = new FreshAccess(ctx, ctx.auth);
@@ -249,9 +264,15 @@ class Visibility {
     const { env, auth, metrics } = this.ctx;
     const members = new Map<string, Map<string, FeedMember>>();
     const threads = new Map<string, Set<string>>();
-    for (const { repoId, threadKey, member, epoch } of items) {
-      // Only an issue's thread can be gone for good: each is checked, whenever it first shows.
-      if (subjectOf(threadKey) === "issue" && !this.#checkedThreads.has(key(repoId, threadKey)))
+    for (const { repoId, threadKey, member, epoch, conversation } of items) {
+      // Only an issue's thread can be gone for good: each is checked, whenever it first shows; an
+      // inbox thread's, of either kind, is also identified (the conversation its number names).
+      if (conversation !== undefined) this.#identify.add(repoId);
+      const k = key(repoId, threadKey);
+      if (
+        (subjectOf(threadKey) === "issue" && !this.#checkedThreads.has(k)) ||
+        (conversation !== undefined && !this.#identities.has(k))
+      )
         threads.set(repoId, (threads.get(repoId) ?? new Set()).add(threadKey));
       if (this.#decided.has(repoId)) continue;
       const set = members.get(repoId) ?? new Map<string, FeedMember>();
@@ -329,7 +350,11 @@ class Visibility {
     const calls: Promise<void>[] = [];
     for (const [repoId, set] of threads) {
       if (typeof this.#decided.get(repoId) !== "object") continue;
-      const unchecked = [...set].filter((t) => !this.#checkedThreads.has(key(repoId, t)));
+      const unchecked = [...set].filter(
+        (t) =>
+          !this.#checkedThreads.has(key(repoId, t)) ||
+          (this.#identify.has(repoId) && !this.#identities.has(key(repoId, t))),
+      );
       for (
         let i = 0;
         i < unchecked.length && this.#threadChecks < SCAN.threadChecks;
@@ -421,7 +446,13 @@ class Visibility {
   async #view(repoId: string, members: readonly FeedMember[], threads: readonly string[] = []) {
     const { env, auth, metrics } = this.ctx;
     metrics.count("do.request", { class: "RepoDO", method: "feedView" });
-    let view = await viewOf(env, repoId).feedView(auth.principalId, auth.grantId, members, threads);
+    let view = await viewOf(env, repoId).feedView(
+      auth.principalId,
+      auth.grantId,
+      members,
+      threads,
+      this.#identify.has(repoId),
+    );
     const pinned = this.#pinned.get(repoId);
     if (
       pinned &&
@@ -437,6 +468,15 @@ class Visibility {
       const at = memberKey(member);
       this.#excerpts.set(key(repoId, at), view.excerpts[at] ?? null);
     }
+    // Only a readable answer with its generation identifies threads (an earlier object's, without
+    // them, leaves them unidentified: an answer stops at them).
+    if (view.readable && view.conversations && Number.isSafeInteger(view.epoch))
+      for (const thread of threads)
+        this.#identities.set(key(repoId, thread), {
+          conversation: view.conversations[thread]?.conversation ?? null,
+          title: view.conversations[thread]?.title ?? "",
+          epoch: view.epoch,
+        });
     return view;
   }
 
@@ -460,6 +500,29 @@ class Visibility {
     return allowedWithRole(this.ctx.auth, decided.entry, READ[subject], decided.role)
       ? decided.entry
       : "hidden";
+  }
+
+  /**
+   * Whether the caller may read the repository, as decided: its entry,
+   * false when denied, undefined when not decided or not known.
+   */
+  repository(repoId: string): RepoEntry | false | undefined {
+    const decided = this.#decided.get(repoId);
+    if (decided === undefined || decided === "unknown") return undefined;
+    return decided === "denied" ? false : decided.entry;
+  }
+
+  /**
+   * The conversation an inbox thread's number names now, its title, and
+   * the repository's generation then; undefined when not identified yet.
+   */
+  identity(
+    repoId: string,
+    threadKey: string,
+  ):
+    | { readonly conversation: string | null; readonly title: string; readonly epoch: number }
+    | undefined {
+    return this.#identities.get(key(repoId, threadKey));
   }
 
   /**

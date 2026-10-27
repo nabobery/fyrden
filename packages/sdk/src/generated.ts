@@ -152,7 +152,7 @@ export type UsersTokensListOutput = {
 export type UsersTokensCreateInput = {
   type?: "pat" | "git";
   /** Permissions it is limited to (and what they imply). Empty: your token's. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -217,7 +217,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -373,7 +373,7 @@ export type AgentsTokensCreateInput = {
   agent: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -441,7 +441,7 @@ export type GrantsCreateInput = {
   /** The agent's handle. */
   agent: string;
   /** Permissions the agent may use for you (and what they imply). */
-  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
   repositories?: string[];
   expires_in_days?: number;
@@ -5563,6 +5563,242 @@ export type WatchingThreadDeleteInput = {
 /** Output of `watching.thread_delete`. */
 export type WatchingThreadDeleteOutput = Record<string, never>;
 
+/** Input of `notifications.list`: List notifications for the authenticated user. */
+export type NotificationsListInput = {
+  /** `true`: read threads too (default: unread only). */
+  all?: "0" | "1" | "true" | "false";
+  /** `true`: only threads that name the caller (requested, mentioned, assigned, its own, commented on). */
+  participating?: "0" | "1" | "true" | "false";
+  /** Only threads updated after this time. */
+  since?: string;
+  /** Only threads updated before this time. */
+  before?: string;
+  /** Page size, 1-50. */
+  per_page?: number;
+  /** GitHub's page number: only 1 (follow `next_cursor` instead). */
+  page?: number;
+  /** A previous answer's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `notifications.list`. */
+export type NotificationsListOutput = {
+  notifications: ({
+    /** The thread's id: its repository and conversation. */
+    id: string;
+    repository: {
+      id: string;
+      name: string;
+      full_name: string;
+      private: boolean;
+      owner: {
+        login: string;
+      };
+    };
+    subject: {
+      title: string;
+      url: string;
+      latest_comment_url: null;
+      type: "Issue" | "PullRequest";
+    };
+    /** Why: `review_requested`, `mention`, `team_mention`, `assign`, `author`, `manual` (subscribed to the thread), `comment`, `subscribed` (watching the repository) or `state_change`. It only moves to a stronger one. */
+    reason: string;
+    unread: boolean;
+    /** When it last notified, ISO 8601. */
+    updated_at: string;
+    last_read_at: string | null;
+    url: string;
+    subscription_url: string;
+  })[];
+  /** Pass as `cursor` for the next page; null when the answer passed nothing it may show. */
+  next_cursor: string | null;
+  /** `degraded`: activity in watched repositories may be missing. The deployment's daily allowance for it ran out within the last 7 days. The same for every caller. */
+  delivery: "complete" | "degraded";
+};
+
+/** Input of `notifications.repo_list`: List repository notifications for the authenticated user. */
+export type NotificationsRepoListInput = {
+  /** The repository's owner handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** `true`: read threads too (default: unread only). */
+  all?: "0" | "1" | "true" | "false";
+  /** `true`: only threads that name the caller (requested, mentioned, assigned, its own, commented on). */
+  participating?: "0" | "1" | "true" | "false";
+  /** Only threads updated after this time. */
+  since?: string;
+  /** Only threads updated before this time. */
+  before?: string;
+  /** Page size, 1-50. */
+  per_page?: number;
+  /** GitHub's page number: only 1 (follow `next_cursor` instead). */
+  page?: number;
+  /** A previous answer's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `notifications.repo_list`. */
+export type NotificationsRepoListOutput = {
+  notifications: ({
+    /** The thread's id: its repository and conversation. */
+    id: string;
+    repository: {
+      id: string;
+      name: string;
+      full_name: string;
+      private: boolean;
+      owner: {
+        login: string;
+      };
+    };
+    subject: {
+      title: string;
+      url: string;
+      latest_comment_url: null;
+      type: "Issue" | "PullRequest";
+    };
+    /** Why: `review_requested`, `mention`, `team_mention`, `assign`, `author`, `manual` (subscribed to the thread), `comment`, `subscribed` (watching the repository) or `state_change`. It only moves to a stronger one. */
+    reason: string;
+    unread: boolean;
+    /** When it last notified, ISO 8601. */
+    updated_at: string;
+    last_read_at: string | null;
+    url: string;
+    subscription_url: string;
+  })[];
+  /** Pass as `cursor` for the next page; null when the answer passed nothing it may show. */
+  next_cursor: string | null;
+  /** `degraded`: activity in watched repositories may be missing. The deployment's daily allowance for it ran out within the last 7 days. The same for every caller. */
+  delivery: "complete" | "degraded";
+};
+
+/** Input of `notifications.thread_get`: Get a thread. */
+export type NotificationsThreadGetInput = {
+  /** The thread's id, as a notification gives it. */
+  thread_id: string;
+};
+
+/** Output of `notifications.thread_get`. */
+export type NotificationsThreadGetOutput = {
+  /** The thread's id: its repository and conversation. */
+  id: string;
+  repository: {
+    id: string;
+    name: string;
+    full_name: string;
+    private: boolean;
+    owner: {
+      login: string;
+    };
+  };
+  subject: {
+    title: string;
+    url: string;
+    latest_comment_url: null;
+    type: "Issue" | "PullRequest";
+  };
+  /** Why: `review_requested`, `mention`, `team_mention`, `assign`, `author`, `manual` (subscribed to the thread), `comment`, `subscribed` (watching the repository) or `state_change`. It only moves to a stronger one. */
+  reason: string;
+  unread: boolean;
+  /** When it last notified, ISO 8601. */
+  updated_at: string;
+  last_read_at: string | null;
+  url: string;
+  subscription_url: string;
+};
+
+/** Input of `notifications.thread_read`: Mark a thread as read. */
+export type NotificationsThreadReadInput = {
+  /** The thread's id, as a notification gives it. */
+  thread_id: string;
+};
+
+/** Output of `notifications.thread_read`. */
+export type NotificationsThreadReadOutput = null;
+
+/** Input of `notifications.thread_done`: Mark a thread as done. */
+export type NotificationsThreadDoneInput = {
+  /** The thread's id, as a notification gives it. */
+  thread_id: string;
+};
+
+/** Output of `notifications.thread_done`. */
+export type NotificationsThreadDoneOutput = null;
+
+/** Input of `notifications.mark`: Mark notifications as read. */
+export type NotificationsMarkInput = {
+  /** Threads updated after this are not marked. */
+  last_read_at?: string;
+  /** Only `true` (the default) is supported. */
+  read?: boolean;
+};
+
+/** Output of `notifications.mark`. */
+export type NotificationsMarkOutput = {
+  message: string;
+};
+
+/** Input of `notifications.repo_mark`: Mark repository notifications as read. */
+export type NotificationsRepoMarkInput = {
+  /** The repository's owner handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** Threads updated after this are not marked. */
+  last_read_at?: string;
+};
+
+/** Output of `notifications.repo_mark`. */
+export type NotificationsRepoMarkOutput = {
+  message: string;
+};
+
+/** Input of `notifications.subscription_get`: Get a thread subscription for the authenticated user. */
+export type NotificationsSubscriptionGetInput = {
+  /** The thread's id, as a notification gives it. */
+  thread_id: string;
+};
+
+/** Output of `notifications.subscription_get`. */
+export type NotificationsSubscriptionGetOutput = {
+  subscribed: boolean;
+  ignored: boolean;
+  reason: null;
+  created_at: string | null;
+  url: string;
+  thread_url: string;
+  repository_url: string;
+};
+
+/** Input of `notifications.subscription_put`: Set a thread subscription. */
+export type NotificationsSubscriptionPutInput = {
+  /** The thread's id, as a notification gives it. */
+  thread_id: string;
+  /** Unsubscribe from the conversation. */
+  ignored?: boolean;
+};
+
+/** Output of `notifications.subscription_put`. */
+export type NotificationsSubscriptionPutOutput = {
+  subscribed: boolean;
+  ignored: boolean;
+  reason: null;
+  created_at: string | null;
+  url: string;
+  thread_url: string;
+  repository_url: string;
+};
+
+/** Input of `notifications.subscription_delete`: Delete a thread subscription. */
+export type NotificationsSubscriptionDeleteInput = {
+  /** The thread's id, as a notification gives it. */
+  thread_id: string;
+};
+
+/** Output of `notifications.subscription_delete`. */
+export type NotificationsSubscriptionDeleteOutput = null;
+
 /** Input of `feed.list`: Get the activity feed. */
 export type FeedListInput = {
   /** A previous answer's `next_cursor`; from the start without. */
@@ -7298,6 +7534,16 @@ export const OPERATIONS = {
   "watching.thread_get": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}/subscription", pathParams: ["owner","repo","issue_number"], idempotent: false },
   "watching.thread_put": { method: "PUT", path: "/repos/{owner}/{repo}/issues/{issue_number}/subscription", pathParams: ["owner","repo","issue_number"], idempotent: true },
   "watching.thread_delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/subscription", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "notifications.list": { method: "GET", path: "/notifications", pathParams: [], idempotent: false, items: "notifications" },
+  "notifications.repo_list": { method: "GET", path: "/repos/{owner}/{repo}/notifications", pathParams: ["owner","repo"], idempotent: false, items: "notifications" },
+  "notifications.thread_get": { method: "GET", path: "/notifications/threads/{thread_id}", pathParams: ["thread_id"], idempotent: false },
+  "notifications.thread_read": { method: "PATCH", path: "/notifications/threads/{thread_id}", pathParams: ["thread_id"], idempotent: true },
+  "notifications.thread_done": { method: "DELETE", path: "/notifications/threads/{thread_id}", pathParams: ["thread_id"], idempotent: true },
+  "notifications.mark": { method: "PUT", path: "/notifications", pathParams: [], idempotent: true },
+  "notifications.repo_mark": { method: "PUT", path: "/repos/{owner}/{repo}/notifications", pathParams: ["owner","repo"], idempotent: true },
+  "notifications.subscription_get": { method: "GET", path: "/notifications/threads/{thread_id}/subscription", pathParams: ["thread_id"], idempotent: false },
+  "notifications.subscription_put": { method: "PUT", path: "/notifications/threads/{thread_id}/subscription", pathParams: ["thread_id"], idempotent: true },
+  "notifications.subscription_delete": { method: "DELETE", path: "/notifications/threads/{thread_id}/subscription", pathParams: ["thread_id"], idempotent: true },
   "feed.list": { method: "GET", path: "/feed", pathParams: [], idempotent: false },
   "feed.sync": { method: "GET", path: "/feed/sync", pathParams: [], idempotent: false },
   "feed.ack": { method: "POST", path: "/feed/ack", pathParams: [], idempotent: true },
@@ -7616,6 +7862,26 @@ export interface Operations {
   "watching.thread_put": { input: WatchingThreadPutInput; output: WatchingThreadPutOutput };
   /** Delete a thread subscription. Deletes the caller's preference for one conversation: told of it again only as a participant. A Fyrden extension at Gitea's route, for the caller itself, on an issue or pull request it may read (`issues:read` or `pull_requests:read` by its kind; any other, or none, answers 404 `issue_not_found`). A repository restored from a backup answers 503 `preferences_recovering` while it takes its preferences back. While the deployment has not turned watch audiences on (`FYRDEN_WATCH_AUDIENCES`), the level is kept and reported but adds nothing to feeds. */
   "watching.thread_delete": { input: WatchingThreadDeleteInput; output: WatchingThreadDeleteOutput };
+  /** List notifications for the authenticated user. The caller's notification threads, as GitHub's. Newest first. A page checks at most 100 repositories and reads at most 1,000 threads, so it can hold fewer than `per_page`; follow `next_cursor` until it is null. Threads of repositories the caller cannot read now are left out (and forgotten once the read finds the principal itself cannot read them). Delegated tokens are refused (403 `delegated_listing`): list with the user's own credentials. */
+  "notifications.list": { input: NotificationsListInput; output: NotificationsListOutput };
+  /** List repository notifications for the authenticated user. The caller's notification threads of one repository it can read, as GitHub's. Newest first. A page checks at most 100 repositories and reads at most 1,000 threads, so it can hold fewer than `per_page`; follow `next_cursor` until it is null. Threads of repositories the caller cannot read now are left out (and forgotten once the read finds the principal itself cannot read them). Delegated tokens are refused (403 `delegated_listing`). */
+  "notifications.repo_list": { input: NotificationsRepoListInput; output: NotificationsRepoListOutput };
+  /** Get a thread. One of the caller's notification threads; 404 when there is none, or the caller cannot read its repository or its kind now, or its number names another conversation now. */
+  "notifications.thread_get": { input: NotificationsThreadGetInput; output: NotificationsThreadGetOutput };
+  /** Mark a thread as read. Marks the thread read where it stands: a later event makes it unread again. 205, as GitHub's. */
+  "notifications.thread_read": { input: NotificationsThreadReadInput; output: NotificationsThreadReadOutput };
+  /** Mark a thread as done. Marks the thread done (and read) where it stands: a later event reopens it. 204, as GitHub's. */
+  "notifications.thread_done": { input: NotificationsThreadDoneInput; output: NotificationsThreadDoneOutput };
+  /** Mark notifications as read. Marks read up to 500 threads updated at or before `last_read_at` (default now; a later time counts as now), of up to 100 repositories and kinds the caller can read, decided now. It always answers 202 with what to do next: repeat the request (with the same `last_read_at`, and a new Idempotency-Key or none) until a list with `all=false` shows none left. GitHub keeps going itself and may answer 205. Delegated tokens are refused (403 `delegated_listing`). */
+  "notifications.mark": { input: NotificationsMarkInput; output: NotificationsMarkOutput };
+  /** Mark repository notifications as read. Marks read up to 500 threads updated at or before `last_read_at` (default now; a later time counts as now), of up to 100 repositories and kinds the caller can read, decided now. It always answers 202 with what to do next: repeat the request (with the same `last_read_at`, and a new Idempotency-Key or none) until a list with `all=false` shows none left. GitHub keeps going itself and may answer 205. One repository's threads. Delegated tokens are refused (403 `delegated_listing`). */
+  "notifications.repo_mark": { input: NotificationsRepoMarkInput; output: NotificationsRepoMarkOutput };
+  /** Get a thread subscription for the authenticated user. The caller's preference for the thread's conversation (the same as `/repos/{owner}/{repo}/issues/{issue_number}/subscription`): 404 when the thread's number names another conversation now. A repository restored from a backup answers 503 `preferences_recovering` meanwhile. Without a preference: `subscribed: false`, `ignored: false`, `created_at: null`. */
+  "notifications.subscription_get": { input: NotificationsSubscriptionGetInput; output: NotificationsSubscriptionGetOutput };
+  /** Set a thread subscription. The caller's preference for the thread's conversation (the same as `/repos/{owner}/{repo}/issues/{issue_number}/subscription`): 404 when the thread's number names another conversation now. A repository restored from a backup answers 503 `preferences_recovering` meanwhile. `ignored: true` unsubscribes (its activity no longer notifies; mentions, requests and assignments still do), else subscribes. */
+  "notifications.subscription_put": { input: NotificationsSubscriptionPutInput; output: NotificationsSubscriptionPutOutput };
+  /** Delete a thread subscription. The caller's preference for the thread's conversation (the same as `/repos/{owner}/{repo}/issues/{issue_number}/subscription`): 404 when the thread's number names another conversation now. A repository restored from a backup answers 503 `preferences_recovering` meanwhile. Clears the preference (back to what participating or watching gives). */
+  "notifications.subscription_delete": { input: NotificationsSubscriptionDeleteInput; output: NotificationsSubscriptionDeleteOutput };
   /** Get the activity feed. The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's `next_cursor` as `since` for what changed after it; a changed item comes again, so keep the latest copy by `item_key`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short; a cursor records, per repository and kind of thread (issues, pull requests), only what the caller was shown, so nothing it cannot read moves or expires it. An answer checks at most 100 repositories and reads at most 1,000 items, so a page can end early, even empty, and items the caller cannot read ahead of its own can delay them; the items of repositories the feed's owner itself cannot read now are then forgotten, so a later answer gets past them. Poll by `poll_after_ms`: while nothing changes the wait grows to 30 minutes, and an answer that shows something brings it back to 30 seconds. A cursor belongs to the credential that got it and lasts a day (reading on with it renews it); one past that, of another credential or epoch, or behind what the feed keeps of a repository the caller can read (7 days, 500 items a repository and kind), is refused with 410 `cursor_expired`: start over from `GET /feed/sync`. The answer carries an ETag; with `If-None-Match` an unchanged one is 304. */
   "feed.list": { input: FeedListInput; output: FeedListOutput };
   /** Sync the activity feed. The feed's current state, to start from or start over: open P0 items, then P1 and P2 items of the last 7 days, newest first (500 at most), and the cursor to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. `complete` is false when more were left out, or when not every repository could be checked (at most 100 an answer): `head_cursor` then reads every repository from what the feed keeps of it. A complete sync's `head_cursor` follows on after it in the repositories it showed items of, and reads the others from what the feed keeps of them. */

@@ -96,6 +96,22 @@ export const PERMISSIONS = {
     implies: ["watching:read"],
     writes: true,
   },
+  "notifications:read": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "See the user's (or an agent's own) notification threads.",
+    principals: ["user", "agent"],
+    implies: [],
+    writes: false,
+  },
+  "notifications:write": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "Mark the user's (or an agent's own) notification threads read or done.",
+    principals: ["user", "agent"],
+    implies: ["notifications:read"],
+    writes: true,
+  },
   "ssh_signing_keys:read": {
     resource: "account",
     minAccountRole: "owner",

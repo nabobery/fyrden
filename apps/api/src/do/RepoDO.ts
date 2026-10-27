@@ -785,6 +785,10 @@ export class RepoDO extends MigratingDO {
       isTransferring: () => this.events.isTransferring(),
       epoch: () => this.events.epochGen(),
       account: () => this.events.account(),
+      conversationOf: (kind, number) => {
+        const subject = this.threads.subjectOf(number);
+        return subject?.kind === kind ? subject.conversation : undefined;
+      },
     });
     this.#codeOwnerFacts = new CodeOwnerFacts({
       codeOwners: this.codeOwners,
@@ -3417,9 +3421,10 @@ export class RepoDO extends MigratingDO {
     grantId: string | null,
     members: readonly FeedMember[],
     threads: readonly string[] = [],
+    identify = false,
   ): Promise<FeedViewAnswer> {
     return this.#measured("feedView", () =>
-      this.#feedView.view(principal, grantId, members, threads),
+      this.#feedView.view(principal, grantId, members, threads, identify),
     );
   }
 
@@ -3570,6 +3575,7 @@ export class RepoDO extends MigratingDO {
     principal: string,
     number: number,
     kinds: readonly SubjectKind[],
+    expected?: string,
   ): Promise<
     { status: "gone" | "not_found" | "recovering" } | { status: "ok"; row: ThreadRow | null }
   > {
@@ -3577,7 +3583,12 @@ export class RepoDO extends MigratingDO {
     await this.checkEpoch();
     if (this.#refusesReads()) return { status: "gone" };
     const subject = this.threads.subjectOf(number);
-    if (!subject || !kinds.includes(subject.kind)) return { status: "not_found" };
+    if (
+      !subject ||
+      !kinds.includes(subject.kind) ||
+      (expected !== undefined && subject.conversation !== expected)
+    )
+      return { status: "not_found" };
     if (this.threads.recovering(subject.kind)) return { status: "recovering" };
     return { status: "ok", row: this.threads.get(principal, subject.conversation) ?? null };
   }
@@ -3595,6 +3606,7 @@ export class RepoDO extends MigratingDO {
     number: number,
     kinds: readonly SubjectKind[],
     state: ThreadState | null,
+    expected?: string,
   ): Promise<ThreadCommand | { status: "gone" | "not_found" }> {
     if (this.#gone()) return { status: "gone" };
     return this.#measured("setThreadPreference", async () => {
@@ -3602,9 +3614,9 @@ export class RepoDO extends MigratingDO {
       if (this.#refusesReads()) return { status: "gone" as const };
       const ceilings = await this.#authority.rolesPulled(principal, grantId);
       const root = rootIdentity({ principalId: principal, grantId, ceilingIds: ceilings });
-      // The conversation the first attempt found: the second sets that one only (the number given
-      // to another meanwhile answers as none).
-      let pinned: string | undefined;
+      // The conversation the first attempt found (or the one the caller expects): the second sets
+      // that one only (the number given to another meanwhile answers as none).
+      let pinned: string | undefined = expected;
       // Judged again right before each attempt, with no await between.
       const command = (): ThreadCommand | { status: "gone" | "not_found" } => {
         const reads =

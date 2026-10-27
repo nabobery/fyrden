@@ -66,6 +66,18 @@ import {
 import { getRepoImport, startImport } from "../git/import/operations.js";
 import { forkRepoOperation, listForksOperation } from "../network/operations.js";
 import {
+  deleteNotificationThreadSubscriptionOperation,
+  getNotificationThreadOperation,
+  getNotificationThreadSubscriptionOperation,
+  listNotificationsOperation,
+  listRepoNotificationsOperation,
+  markNotificationsReadOperation,
+  markNotificationThreadDoneOperation,
+  markNotificationThreadReadOperation,
+  markRepoNotificationsReadOperation,
+  setNotificationThreadSubscriptionOperation,
+} from "../notifications/operations.js";
+import {
   compareCommitsOperation,
   getArchiveOperation,
   getBranchOperation,
@@ -545,6 +557,16 @@ export const handlers: Handlers = {
   "watching.thread_get": getThreadSubscriptionOperation,
   "watching.thread_put": setThreadSubscriptionOperation,
   "watching.thread_delete": deleteThreadSubscriptionOperation,
+  "notifications.list": listNotificationsOperation,
+  "notifications.repo_list": listRepoNotificationsOperation,
+  "notifications.thread_get": getNotificationThreadOperation,
+  "notifications.thread_read": markNotificationThreadReadOperation,
+  "notifications.thread_done": markNotificationThreadDoneOperation,
+  "notifications.mark": markNotificationsReadOperation,
+  "notifications.repo_mark": markRepoNotificationsReadOperation,
+  "notifications.subscription_get": getNotificationThreadSubscriptionOperation,
+  "notifications.subscription_put": setNotificationThreadSubscriptionOperation,
+  "notifications.subscription_delete": deleteNotificationThreadSubscriptionOperation,
 
   // The caller's activity feed (feed/operations).
   "feed.list": getFeedOperation,

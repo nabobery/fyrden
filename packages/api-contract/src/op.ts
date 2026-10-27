@@ -50,10 +50,11 @@ export interface OperationDef<
   idempotency: "none" | "key";
   /**
    * HTTP status of a successful response; 201 when the operation creates a
-   * resource, 202 where GitHub answers it, 204 (with `NoContent` as the
-   * output) where GitHub answers nothing.
+   * resource, 202 where GitHub answers it, 204 or 205 (with `NoContent` as
+   * the output) where GitHub answers nothing (205: Reset Content, as
+   * GitHub's marking a notification thread read).
    */
-  successStatus?: 200 | 201 | 202 | 204;
+  successStatus?: 200 | 201 | 202 | 204 | 205;
   /** The response carries a secret, so idempotent replays omit it. */
   secretResponse?: boolean;
   /**
@@ -77,7 +78,7 @@ export interface OperationDef<
 }
 
 /**
- * The output of an operation that answers nothing (`successStatus: 204`):
+ * The output of an operation that answers nothing (`successStatus: 204` or 205):
  * `null` to its handler, idempotency replays and the SDK; REST sends no
  * body, MCP a short text.
  */
@@ -130,8 +131,8 @@ function validate(def: OperationDef): void {
   if (def.method !== "GET" && def.idempotency !== "key")
     fail("non-GET operations require an Idempotency-Key");
   if (def.method === "GET" && def.successStatus === 201) fail("a GET operation cannot answer 201");
-  if ((def.successStatus === 204) !== answersNothing(def))
-    fail("an operation answers 204 exactly when its output is NoContent");
+  if ((def.successStatus === 204 || def.successStatus === 205) !== answersNothing(def))
+    fail("an operation answers 204 or 205 exactly when its output is NoContent");
   if (def.etag && answersNothing(def)) fail("an operation answering nothing has no ETag");
   if (def.etag && def.method !== "GET") fail("only a GET operation answers with an ETag");
   if (def.mcp && !TOOL.test(def.mcp.tool)) fail(`MCP tool name ${def.mcp.tool} is invalid`);

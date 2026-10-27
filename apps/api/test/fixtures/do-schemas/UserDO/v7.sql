@@ -123,7 +123,10 @@ CREATE INDEX feed_tombstones_stream ON feed_items (repo_id, subject, order_at)
 CREATE INDEX inbox_evictions_age ON inbox_evictions (event_at);
 CREATE INDEX inbox_evictions_stream ON inbox_evictions (repo_id, subject, event_at);
 CREATE UNIQUE INDEX inbox_threads_conversation ON inbox_threads (repo_id, conversation);
-CREATE INDEX inbox_threads_kind ON inbox_threads (subject, updated_at, id);
+CREATE INDEX inbox_threads_open ON inbox_threads (subject, updated_at, id)
+        WHERE dn_event IS NULL;
+CREATE INDEX inbox_threads_open_stream ON inbox_threads (repo_id, subject, updated_at, id)
+        WHERE dn_event IS NULL;
 CREATE INDEX inbox_threads_stream ON inbox_threads (repo_id, subject, updated_at, id);
 CREATE INDEX inbox_threads_unread ON inbox_threads (subject, unread, updated_at, id);
 CREATE INDEX purge_marks_until ON purge_marks (until_at);

@@ -31,6 +31,8 @@ export interface OpContext {
   requestHost: string;
   /** The origin (scheme, host and port) the request arrived on, for links back to this API. */
   requestOrigin: string;
+  /** When the request arrived, before anything awaited (milliseconds since the epoch). */
+  receivedAt?: number;
   waitUntil(promise: Promise<unknown>): void;
 }
 

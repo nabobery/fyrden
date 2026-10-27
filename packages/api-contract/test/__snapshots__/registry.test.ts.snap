@@ -545,6 +545,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "starring:write",
                         "watching:read",
                         "watching:write",
+                        "notifications:read",
+                        "notifications:write",
                         "ssh_signing_keys:read",
                         "ssh_signing_keys:write",
                         "tokens:read",
@@ -1500,6 +1502,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "starring:write",
                         "watching:read",
                         "watching:write",
+                        "notifications:read",
+                        "notifications:write",
                         "ssh_signing_keys:read",
                         "ssh_signing_keys:write",
                         "tokens:read",
@@ -2632,6 +2636,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "starring:write",
                         "watching:read",
                         "watching:write",
+                        "notifications:read",
+                        "notifications:write",
                         "ssh_signing_keys:read",
                         "ssh_signing_keys:write",
                         "tokens:read",
@@ -3021,6 +3027,813 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "agent",
           "installation",
         ],
+      },
+    },
+    "/notifications": {
+      "get": {
+        "description": "The caller's notification threads, as GitHub's. Newest first. A page checks at most 100 repositories and reads at most 1,000 threads, so it can hold fewer than \`per_page\`; follow \`next_cursor\` until it is null. Threads of repositories the caller cannot read now are left out (and forgotten once the read finds the principal itself cannot read them). Delegated tokens are refused (403 \`delegated_listing\`): list with the user's own credentials.",
+        "operationId": "notifications.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "all",
+            "required": false,
+            "schema": {
+              "description": "\`true\`: read threads too (default: unread only).",
+              "enum": [
+                "0",
+                "1",
+                "true",
+                "false",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "participating",
+            "required": false,
+            "schema": {
+              "description": "\`true\`: only threads that name the caller (requested, mentioned, assigned, its own, commented on).",
+              "enum": [
+                "0",
+                "1",
+                "true",
+                "false",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "description": "Only threads updated after this time.",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "description": "Only threads updated before this time.",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "Page size, 1-50.",
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "description": "GitHub's page number: only 1 (follow \`next_cursor\` instead).",
+              "maximum": 1,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "A previous answer's \`next_cursor\`.",
+              "maxLength": 400,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "delivery": {
+                      "description": "\`degraded\`: activity in watched repositories may be missing. The deployment's daily allowance for it ran out within the last 7 days. The same for every caller.",
+                      "enum": [
+                        "complete",
+                        "degraded",
+                      ],
+                      "type": "string",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null when the answer passed nothing it may show.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "notifications": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "description": "The thread's id: its repository and conversation.",
+                            "type": "string",
+                          },
+                          "last_read_at": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "reason": {
+                            "description": "Why: \`review_requested\`, \`mention\`, \`team_mention\`, \`assign\`, \`author\`, \`manual\` (subscribed to the thread), \`comment\`, \`subscribed\` (watching the repository) or \`state_change\`. It only moves to a stronger one.",
+                            "type": "string",
+                          },
+                          "repository": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "full_name": {
+                                "type": "string",
+                              },
+                              "id": {
+                                "type": "string",
+                              },
+                              "name": {
+                                "type": "string",
+                              },
+                              "owner": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "login": {
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "login",
+                                ],
+                                "type": "object",
+                              },
+                              "private": {
+                                "type": "boolean",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "name",
+                              "full_name",
+                              "private",
+                              "owner",
+                            ],
+                            "type": "object",
+                          },
+                          "subject": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "latest_comment_url": {
+                                "type": "null",
+                              },
+                              "title": {
+                                "type": "string",
+                              },
+                              "type": {
+                                "enum": [
+                                  "Issue",
+                                  "PullRequest",
+                                ],
+                                "type": "string",
+                              },
+                              "url": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "title",
+                              "url",
+                              "latest_comment_url",
+                              "type",
+                            ],
+                            "type": "object",
+                          },
+                          "subscription_url": {
+                            "type": "string",
+                          },
+                          "unread": {
+                            "type": "boolean",
+                          },
+                          "updated_at": {
+                            "description": "When it last notified, ISO 8601.",
+                            "type": "string",
+                          },
+                          "url": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "repository",
+                          "subject",
+                          "reason",
+                          "unread",
+                          "updated_at",
+                          "last_read_at",
+                          "url",
+                          "subscription_url",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "notifications",
+                    "next_cursor",
+                    "delivery",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List notifications for the authenticated user",
+        "x-fyrden-permission": "notifications:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "put": {
+        "description": "Marks read up to 500 threads updated at or before \`last_read_at\` (default now; a later time counts as now), of up to 100 repositories and kinds the caller can read, decided now. It always answers 202 with what to do next: repeat the request (with the same \`last_read_at\`, and a new Idempotency-Key or none) until a list with \`all=false\` shows none left. GitHub keeps going itself and may answer 205. Delegated tokens are refused (403 \`delegated_listing\`).",
+        "operationId": "notifications.mark",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "last_read_at": {
+                    "description": "Threads updated after this are not marked.",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string",
+                  },
+                  "read": {
+                    "description": "Only \`true\` (the default) is supported.",
+                    "type": "boolean",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "message",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Accepted",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Mark notifications as read",
+        "x-fyrden-permission": "notifications:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/notifications/threads/{thread_id}": {
+      "delete": {
+        "description": "Marks the thread done (and read) where it stands: a later event reopens it. 204, as GitHub's.",
+        "operationId": "notifications.thread_done",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "description": "The thread's id, as a notification gives it.",
+              "pattern": "^[A-Za-z0-9_-]{1,400}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Mark a thread as done",
+        "x-fyrden-permission": "notifications:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "One of the caller's notification threads; 404 when there is none, or the caller cannot read its repository or its kind now, or its number names another conversation now.",
+        "operationId": "notifications.thread_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "description": "The thread's id, as a notification gives it.",
+              "pattern": "^[A-Za-z0-9_-]{1,400}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "description": "The thread's id: its repository and conversation.",
+                      "type": "string",
+                    },
+                    "last_read_at": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "reason": {
+                      "description": "Why: \`review_requested\`, \`mention\`, \`team_mention\`, \`assign\`, \`author\`, \`manual\` (subscribed to the thread), \`comment\`, \`subscribed\` (watching the repository) or \`state_change\`. It only moves to a stronger one.",
+                      "type": "string",
+                    },
+                    "repository": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "full_name": {
+                          "type": "string",
+                        },
+                        "id": {
+                          "type": "string",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "owner": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "login": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "login",
+                          ],
+                          "type": "object",
+                        },
+                        "private": {
+                          "type": "boolean",
+                        },
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "full_name",
+                        "private",
+                        "owner",
+                      ],
+                      "type": "object",
+                    },
+                    "subject": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "latest_comment_url": {
+                          "type": "null",
+                        },
+                        "title": {
+                          "type": "string",
+                        },
+                        "type": {
+                          "enum": [
+                            "Issue",
+                            "PullRequest",
+                          ],
+                          "type": "string",
+                        },
+                        "url": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "title",
+                        "url",
+                        "latest_comment_url",
+                        "type",
+                      ],
+                      "type": "object",
+                    },
+                    "subscription_url": {
+                      "type": "string",
+                    },
+                    "unread": {
+                      "type": "boolean",
+                    },
+                    "updated_at": {
+                      "description": "When it last notified, ISO 8601.",
+                      "type": "string",
+                    },
+                    "url": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "repository",
+                    "subject",
+                    "reason",
+                    "unread",
+                    "updated_at",
+                    "last_read_at",
+                    "url",
+                    "subscription_url",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a thread",
+        "x-fyrden-permission": "notifications:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "patch": {
+        "description": "Marks the thread read where it stands: a later event makes it unread again. 205, as GitHub's.",
+        "operationId": "notifications.thread_read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "description": "The thread's id, as a notification gives it.",
+              "pattern": "^[A-Za-z0-9_-]{1,400}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "205": {
+            "description": "Reset Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Mark a thread as read",
+        "x-fyrden-permission": "notifications:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/notifications/threads/{thread_id}/subscription": {
+      "delete": {
+        "description": "The caller's preference for the thread's conversation (the same as \`/repos/{owner}/{repo}/issues/{issue_number}/subscription\`): 404 when the thread's number names another conversation now. A repository restored from a backup answers 503 \`preferences_recovering\` meanwhile. Clears the preference (back to what participating or watching gives).",
+        "operationId": "notifications.subscription_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "description": "The thread's id, as a notification gives it.",
+              "pattern": "^[A-Za-z0-9_-]{1,400}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete a thread subscription",
+        "x-fyrden-permission": "notifications:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "The caller's preference for the thread's conversation (the same as \`/repos/{owner}/{repo}/issues/{issue_number}/subscription\`): 404 when the thread's number names another conversation now. A repository restored from a backup answers 503 \`preferences_recovering\` meanwhile. Without a preference: \`subscribed: false\`, \`ignored: false\`, \`created_at: null\`.",
+        "operationId": "notifications.subscription_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "description": "The thread's id, as a notification gives it.",
+              "pattern": "^[A-Za-z0-9_-]{1,400}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "ignored": {
+                      "type": "boolean",
+                    },
+                    "reason": {
+                      "type": "null",
+                    },
+                    "repository_url": {
+                      "type": "string",
+                    },
+                    "subscribed": {
+                      "type": "boolean",
+                    },
+                    "thread_url": {
+                      "type": "string",
+                    },
+                    "url": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "subscribed",
+                    "ignored",
+                    "reason",
+                    "created_at",
+                    "url",
+                    "thread_url",
+                    "repository_url",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a thread subscription for the authenticated user",
+        "x-fyrden-permission": "notifications:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "put": {
+        "description": "The caller's preference for the thread's conversation (the same as \`/repos/{owner}/{repo}/issues/{issue_number}/subscription\`): 404 when the thread's number names another conversation now. A repository restored from a backup answers 503 \`preferences_recovering\` meanwhile. \`ignored: true\` unsubscribes (its activity no longer notifies; mentions, requests and assignments still do), else subscribes.",
+        "operationId": "notifications.subscription_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "description": "The thread's id, as a notification gives it.",
+              "pattern": "^[A-Za-z0-9_-]{1,400}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "ignored": {
+                    "description": "Unsubscribe from the conversation.",
+                    "type": "boolean",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "ignored": {
+                      "type": "boolean",
+                    },
+                    "reason": {
+                      "type": "null",
+                    },
+                    "repository_url": {
+                      "type": "string",
+                    },
+                    "subscribed": {
+                      "type": "boolean",
+                    },
+                    "thread_url": {
+                      "type": "string",
+                    },
+                    "url": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "subscribed",
+                    "ignored",
+                    "reason",
+                    "created_at",
+                    "url",
+                    "thread_url",
+                    "repository_url",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Set a thread subscription",
+        "x-fyrden-permission": "notifications:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
       },
     },
     "/orgs/{org}": {
@@ -20656,6 +21469,379 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/notifications": {
+      "get": {
+        "description": "The caller's notification threads of one repository it can read, as GitHub's. Newest first. A page checks at most 100 repositories and reads at most 1,000 threads, so it can hold fewer than \`per_page\`; follow \`next_cursor\` until it is null. Threads of repositories the caller cannot read now are left out (and forgotten once the read finds the principal itself cannot read them). Delegated tokens are refused (403 \`delegated_listing\`).",
+        "operationId": "notifications.repo_list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The repository's owner handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "all",
+            "required": false,
+            "schema": {
+              "description": "\`true\`: read threads too (default: unread only).",
+              "enum": [
+                "0",
+                "1",
+                "true",
+                "false",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "participating",
+            "required": false,
+            "schema": {
+              "description": "\`true\`: only threads that name the caller (requested, mentioned, assigned, its own, commented on).",
+              "enum": [
+                "0",
+                "1",
+                "true",
+                "false",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "description": "Only threads updated after this time.",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "description": "Only threads updated before this time.",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "Page size, 1-50.",
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "description": "GitHub's page number: only 1 (follow \`next_cursor\` instead).",
+              "maximum": 1,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "A previous answer's \`next_cursor\`.",
+              "maxLength": 400,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "delivery": {
+                      "description": "\`degraded\`: activity in watched repositories may be missing. The deployment's daily allowance for it ran out within the last 7 days. The same for every caller.",
+                      "enum": [
+                        "complete",
+                        "degraded",
+                      ],
+                      "type": "string",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null when the answer passed nothing it may show.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "notifications": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "description": "The thread's id: its repository and conversation.",
+                            "type": "string",
+                          },
+                          "last_read_at": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "reason": {
+                            "description": "Why: \`review_requested\`, \`mention\`, \`team_mention\`, \`assign\`, \`author\`, \`manual\` (subscribed to the thread), \`comment\`, \`subscribed\` (watching the repository) or \`state_change\`. It only moves to a stronger one.",
+                            "type": "string",
+                          },
+                          "repository": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "full_name": {
+                                "type": "string",
+                              },
+                              "id": {
+                                "type": "string",
+                              },
+                              "name": {
+                                "type": "string",
+                              },
+                              "owner": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "login": {
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "login",
+                                ],
+                                "type": "object",
+                              },
+                              "private": {
+                                "type": "boolean",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "name",
+                              "full_name",
+                              "private",
+                              "owner",
+                            ],
+                            "type": "object",
+                          },
+                          "subject": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "latest_comment_url": {
+                                "type": "null",
+                              },
+                              "title": {
+                                "type": "string",
+                              },
+                              "type": {
+                                "enum": [
+                                  "Issue",
+                                  "PullRequest",
+                                ],
+                                "type": "string",
+                              },
+                              "url": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "title",
+                              "url",
+                              "latest_comment_url",
+                              "type",
+                            ],
+                            "type": "object",
+                          },
+                          "subscription_url": {
+                            "type": "string",
+                          },
+                          "unread": {
+                            "type": "boolean",
+                          },
+                          "updated_at": {
+                            "description": "When it last notified, ISO 8601.",
+                            "type": "string",
+                          },
+                          "url": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "repository",
+                          "subject",
+                          "reason",
+                          "unread",
+                          "updated_at",
+                          "last_read_at",
+                          "url",
+                          "subscription_url",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "notifications",
+                    "next_cursor",
+                    "delivery",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List repository notifications for the authenticated user",
+        "x-fyrden-permission": "notifications:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "put": {
+        "description": "Marks read up to 500 threads updated at or before \`last_read_at\` (default now; a later time counts as now), of up to 100 repositories and kinds the caller can read, decided now. It always answers 202 with what to do next: repeat the request (with the same \`last_read_at\`, and a new Idempotency-Key or none) until a list with \`all=false\` shows none left. GitHub keeps going itself and may answer 205. One repository's threads. Delegated tokens are refused (403 \`delegated_listing\`).",
+        "operationId": "notifications.repo_mark",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The repository's owner handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "last_read_at": {
+                    "description": "Threads updated after this are not marked.",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "message",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Accepted",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Mark repository notifications as read",
+        "x-fyrden-permission": "notifications:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}/pulls": {
       "get": {
         "description": "The repository's pull requests, newest first.",
@@ -36178,6 +37364,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "starring:write",
                         "watching:read",
                         "watching:write",
+                        "notifications:read",
+                        "notifications:write",
                         "ssh_signing_keys:read",
                         "ssh_signing_keys:write",
                         "tokens:read",

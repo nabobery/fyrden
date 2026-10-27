@@ -336,8 +336,12 @@ export const userSchema: readonly DoMigration[] = [
       ) STRICT, WITHOUT ROWID;
       CREATE UNIQUE INDEX inbox_threads_conversation ON inbox_threads (repo_id, conversation);
       CREATE INDEX inbox_threads_stream ON inbox_threads (repo_id, subject, updated_at, id);
-      CREATE INDEX inbox_threads_kind ON inbox_threads (subject, updated_at, id);
       CREATE INDEX inbox_threads_unread ON inbox_threads (subject, unread, updated_at, id);
+      -- Lists read threads not done only.
+      CREATE INDEX inbox_threads_open ON inbox_threads (subject, updated_at, id)
+        WHERE dn_event IS NULL;
+      CREATE INDEX inbox_threads_open_stream ON inbox_threads (repo_id, subject, updated_at, id)
+        WHERE dn_event IS NULL;
 
       CREATE TABLE inbox_streams (
         repo_id TEXT NOT NULL,

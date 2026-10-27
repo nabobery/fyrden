@@ -54,7 +54,7 @@ function operationObject(op: OperationDef): JsonSchema {
     }),
     responses: {
       [String(op.successStatus ?? 200)]: answersNothing(op)
-        ? { description: "No Content" }
+        ? { description: op.successStatus === 205 ? "Reset Content" : "No Content" }
         : {
             description:
               op.successStatus === 201 ? "Created" : op.successStatus === 202 ? "Accepted" : "OK",

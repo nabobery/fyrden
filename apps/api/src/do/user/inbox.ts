@@ -159,6 +159,71 @@ const frontier = (
 
 const SUBJECTS = ["issue", "pull"] as const;
 
+/** Rows a list reads of each repository's stream at a time while merging them. Proposed. */
+export const MERGE_CHUNK = 8;
+export type SubjectKind = (typeof SUBJECTS)[number];
+
+/** What a list of threads asks for (see `Inbox.page`). */
+export interface InboxQuery {
+  /** Only unread threads (GitHub's default: `all=false`). */
+  readonly unreadOnly: boolean;
+  /** The kinds the caller may read. */
+  readonly subjects: readonly SubjectKind[];
+  /** Only these repositories' (a token's own, or one repository's list); null for any. */
+  readonly repoIds: readonly string[] | null;
+  /** Updated after (milliseconds since the epoch). */
+  readonly since: number | null;
+  /** Updated before. */
+  readonly before: number | null;
+  /** The last thread a previous page gave. */
+  readonly after: { readonly updatedAt: number; readonly id: string } | null;
+  readonly limit: number;
+}
+
+/** A thread as readers get it. */
+export interface InboxThread {
+  readonly id: string;
+  readonly repoId: string;
+  readonly conversation: string;
+  readonly subject: SubjectKind;
+  readonly number: number;
+  readonly title: string;
+  readonly reason: string;
+  readonly unread: boolean;
+  readonly updatedAt: number;
+  readonly lastReadAt: number | null;
+  /** The repository's restore generation it last notified in. */
+  readonly epoch: number;
+}
+
+type InboxRow = {
+  id: string;
+  repo_id: string;
+  conversation: string;
+  subject: SubjectKind;
+  number: number;
+  title: string;
+  reason: string;
+  unread: number;
+  updated_at: number;
+  last_read_at: number | null;
+  nt_epoch: number;
+};
+
+const threadOf = (row: InboxRow): InboxThread => ({
+  id: row.id,
+  repoId: row.repo_id,
+  conversation: row.conversation,
+  subject: row.subject,
+  number: row.number,
+  title: row.title,
+  reason: row.reason,
+  unread: row.unread === 1,
+  updatedAt: row.updated_at,
+  lastReadAt: row.last_read_at,
+  epoch: row.nt_epoch,
+});
+
 /** Identities of one number a gone thread's forgetting deletes at most (see `forgetNumber`). */
 export const GONE_IDENTITIES = 2;
 
@@ -443,6 +508,215 @@ export class Inbox {
   }
 
   /**
+   * Threads not done, newest first (by `updated_at`, then id) after
+   * `query.after`, of the kinds and repositories asked: each kind through
+   * its own index, or each listed repository's stream, merged by reading
+   * each a few rows at a time. Consumes at most `query.limit` and reads
+   * about `budget` rows at most, as SQLite counts them (stopping short of
+   * either: a read starts only while some is left): each consumed one with
+   * whether it matches `query` (a stream's read thread does not, when
+   * only unread ones are asked); `ended` when nothing is left.
+   */
+  page(
+    query: InboxQuery,
+    budget: number,
+  ): { threads: (InboxThread & { matches: boolean })[]; ended: boolean; read: number } {
+    const bounds: string[] = [];
+    const args: SqlStorageValue[] = [];
+    if (query.since !== null) {
+      bounds.push("updated_at > ?");
+      args.push(query.since);
+    }
+    if (query.before !== null) {
+      bounds.push("updated_at < ?");
+      args.push(query.before);
+    }
+    type Source = {
+      index: string;
+      scope: string;
+      scopeArgs: SqlStorageValue[];
+      after: { updatedAt: number; id: string } | null;
+      rows: InboxRow[];
+      done: boolean;
+    };
+    const sources: Source[] = query.subjects.flatMap((subject) =>
+      query.repoIds === null
+        ? [
+            {
+              // An unread thread is never done (marking done reads it).
+              index: query.unreadOnly ? "inbox_threads_unread" : "inbox_threads_open",
+              scope: query.unreadOnly
+                ? "subject = ? AND unread = 1"
+                : "subject = ? AND dn_event IS NULL",
+              scopeArgs: [subject],
+              after: query.after,
+              rows: [],
+              done: false,
+            },
+          ]
+        : query.repoIds.map((repoId) => ({
+            index: "inbox_threads_open_stream",
+            scope: "repo_id = ? AND subject = ? AND dn_event IS NULL",
+            scopeArgs: [repoId, subject],
+            after: query.after,
+            rows: [],
+            done: false,
+          })),
+    );
+    // A kind's own index reads a page at once; many streams, a few rows each at a time (fewer
+    // when there are so many that their first rows would take half the budget).
+    const chunk =
+      sources.length <= 2
+        ? query.limit
+        : Math.max(1, Math.min(MERGE_CHUNK, Math.floor(budget / (2 * sources.length))));
+    let read = 0;
+    /** Fills a source's next rows within the budget; false when the budget is spent. */
+    const fill = (source: Source): boolean => {
+      const n = Math.min(chunk, budget - read);
+      if (n <= 0) return false;
+      const cursor = source.after ? " AND (updated_at, id) < (?, ?)" : "";
+      const query_ = this.sql.exec<InboxRow>(
+        `SELECT id, repo_id, conversation, subject, number, title, reason, unread,
+             updated_at, last_read_at, nt_epoch
+           FROM inbox_threads INDEXED BY ${source.index}
+           WHERE ${[source.scope, ...bounds].join(" AND ")}${cursor}
+           ORDER BY updated_at DESC, id DESC LIMIT ?`,
+        ...source.scopeArgs,
+        ...args,
+        ...(source.after ? [source.after.updatedAt, source.after.id] : []),
+        n,
+      );
+      const rows = query_.toArray();
+      // What SQLite read, index entries and empty reads included.
+      read += Math.max(query_.rowsRead, rows.length);
+      source.rows.push(...rows);
+      const last = rows.at(-1);
+      if (last) source.after = { updatedAt: last.updated_at, id: last.id };
+      if (rows.length < n) source.done = true;
+      return true;
+    };
+    const newer = (a: InboxRow, b: InboxRow) =>
+      a.updated_at > b.updated_at || (a.updated_at === b.updated_at && a.id > b.id);
+    const consumed: (InboxThread & { matches: boolean })[] = [];
+    while (consumed.length < query.limit) {
+      let best: Source | undefined;
+      for (const source of sources) {
+        // A source left unfilled (the budget spent) stops the merge: its rows could come first.
+        if (source.rows.length === 0 && !source.done && !fill(source))
+          return { threads: consumed, ended: false, read };
+        const head = source.rows[0];
+        if (head && (!best || newer(head, best.rows[0] as InboxRow))) best = source;
+      }
+      if (!best) return { threads: consumed, ended: true, read };
+      const row = best.rows.shift() as InboxRow;
+      consumed.push({ ...threadOf(row), matches: !query.unreadOnly || row.unread === 1 });
+    }
+    return { threads: consumed, ended: false, read };
+  }
+
+  /** One thread, or undefined. */
+  thread(id: string): InboxThread | undefined {
+    const row = this.sql
+      .exec<InboxRow>(
+        `SELECT id, repo_id, conversation, subject, number, title, reason, unread, updated_at,
+           last_read_at, nt_epoch FROM inbox_threads WHERE id = ?`,
+        id,
+      )
+      .toArray()[0];
+    return row ? threadOf(row) : undefined;
+  }
+
+  /**
+   * The streams (repository and kind) of `subjects` holding unread threads
+   * updated at or before `cutoff`, the most recently updated first, at most
+   * `limit`: of `repoIds` when given, each read through its own stream's
+   * index (a token's repositories never depend on others' threads); else
+   * found within the newest `scan` such threads.
+   */
+  unreadStreams(
+    cutoff: number,
+    subjects: readonly SubjectKind[],
+    repoIds: readonly string[] | null,
+    limit: number,
+    scan = 5_000,
+  ): { repoId: string; subject: SubjectKind }[] {
+    const found: { repoId: string; subject: SubjectKind; at: number }[] = [];
+    if (repoIds !== null)
+      for (const repoId of repoIds)
+        for (const subject of subjects) {
+          const row = this.sql
+            .exec<{ at: number }>(
+              `SELECT updated_at AS at FROM inbox_threads INDEXED BY inbox_threads_stream
+               WHERE repo_id = ? AND subject = ? AND updated_at <= ? AND unread = 1
+               ORDER BY updated_at DESC LIMIT 1`,
+              repoId,
+              subject,
+              cutoff,
+            )
+            .toArray()[0];
+          if (row) found.push({ repoId, subject, at: row.at });
+        }
+    else
+      for (const subject of subjects)
+        for (const row of this.sql
+          .exec<{ repo_id: string; updated_at: number }>(
+            `SELECT repo_id, updated_at FROM inbox_threads INDEXED BY inbox_threads_unread
+             WHERE subject = ? AND unread = 1 AND updated_at <= ?
+             ORDER BY updated_at DESC LIMIT ?`,
+            subject,
+            cutoff,
+            scan,
+          )
+          .toArray())
+          found.push({ repoId: row.repo_id, subject, at: row.updated_at });
+    found.sort((a, b) => b.at - a.at);
+    const streams = new Map<string, { repoId: string; subject: SubjectKind }>();
+    for (const { repoId, subject } of found) {
+      const key = `${repoId}\n${subject}`;
+      if (!streams.has(key)) streams.set(key, { repoId, subject });
+      if (streams.size >= limit) break;
+    }
+    return [...streams.values()];
+  }
+
+  /**
+   * Marks read the unread threads of `streams` updated at or before
+   * `cutoff`, at most `limit` (each where the feed's thread stands, as
+   * `markRead`); how many.
+   */
+  markReadBefore(
+    streams: readonly { repoId: string; subject: SubjectKind }[],
+    cutoff: number,
+    limit: number,
+  ): number {
+    let marked = 0;
+    for (const { repoId, subject } of streams) {
+      if (marked >= limit) break;
+      const ids = this.sql
+        .exec<{ id: string }>(
+          `SELECT id FROM inbox_threads INDEXED BY inbox_threads_stream
+           WHERE repo_id = ? AND subject = ? AND updated_at <= ? AND unread = 1 LIMIT ?`,
+          repoId,
+          subject,
+          cutoff,
+          limit - marked,
+        )
+        .toArray();
+      for (const { id } of ids) if (this.#mark(id, false)) marked++;
+    }
+    return marked;
+  }
+
+  /**
+   * Deletes threads found replaced (their number names another
+   * conversation now), each only when it last notified in the repository's
+   * generation it was found so in, or before.
+   */
+  forget(threads: readonly { id: string; epoch: number }[]): void {
+    for (const { id, epoch } of threads) this.#delete("id = ? AND nt_epoch <= ?", id, epoch);
+  }
+
+  /**
    * Deletes a repository's threads updated up to `until` (call within the
    * purge's transaction): at most two streams' caps.
    */
@@ -484,14 +758,16 @@ export class Inbox {
     const expired = this.now() - retentionMs;
     let more = false;
     for (const subject of SUBJECTS)
-      more ||=
-        this.#delete(
-          `id IN (SELECT id FROM inbox_threads INDEXED BY inbox_threads_kind
-            WHERE subject = ? AND updated_at < ? ORDER BY updated_at, id LIMIT ?)`,
-          subject,
-          expired,
-          slice,
-        ) >= slice;
+      for (const unread of [0, 1])
+        more ||=
+          this.#delete(
+            `id IN (SELECT id FROM inbox_threads INDEXED BY inbox_threads_unread
+              WHERE subject = ? AND unread = ? AND updated_at < ? ORDER BY updated_at, id LIMIT ?)`,
+            subject,
+            unread,
+            expired,
+            slice,
+          ) >= slice;
     const fences = this.sql
       .exec(
         `DELETE FROM inbox_evictions WHERE (repo_id, conversation) IN
@@ -509,9 +785,15 @@ export class Inbox {
   oldest(): number | null {
     const times = this.sql
       .exec<{ at: number | null }>(
-        `SELECT (SELECT min(updated_at) FROM inbox_threads WHERE subject = 'issue') AS at
-         UNION ALL SELECT (SELECT min(updated_at) FROM inbox_threads WHERE subject = 'pull')
-         UNION ALL SELECT (SELECT min(event_at) FROM inbox_evictions)`,
+        `SELECT min(updated_at) AS at FROM inbox_threads INDEXED BY inbox_threads_unread
+         WHERE subject = 'issue' AND unread = 0
+         UNION ALL SELECT min(updated_at) FROM inbox_threads INDEXED BY inbox_threads_unread
+         WHERE subject = 'issue' AND unread = 1
+         UNION ALL SELECT min(updated_at) FROM inbox_threads INDEXED BY inbox_threads_unread
+         WHERE subject = 'pull' AND unread = 0
+         UNION ALL SELECT min(updated_at) FROM inbox_threads INDEXED BY inbox_threads_unread
+         WHERE subject = 'pull' AND unread = 1
+         UNION ALL SELECT min(event_at) FROM inbox_evictions`,
       )
       .toArray()
       .flatMap((row) => (row.at === null ? [] : [row.at]));

@@ -13,8 +13,9 @@ function fake(responses: { status?: number; body: unknown }[]) {
       ...(init?.body !== undefined && { body: String(init.body) }),
     });
     const next = responses.shift() ?? { body: {} };
-    // A 204 has no body.
-    if (next.status === 204) return new Response(null, { status: 204 });
+    // A 204 or 205 has no body.
+    if (next.status === 204 || next.status === 205)
+      return new Response(null, { status: next.status });
     return new Response(JSON.stringify(next.body), { status: next.status ?? 200 });
   }) as unknown as typeof fetch;
   return { sent, fetchFn };
@@ -37,6 +38,16 @@ describe("FyrdenClient", () => {
     expect(sent[0]).toMatchObject({
       method: "PUT",
       url: "https://f.test/api/users/someone/suspended",
+    });
+  });
+
+  it("gives null for an operation that answers 205 (Reset Content)", async () => {
+    const { sent, fetchFn } = fake([{ status: 205, body: null }]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test/api", token: "t", fetch: fetchFn });
+    expect(await client.call("notifications.thread_read", { thread_id: "abc" })).toBeNull();
+    expect(sent[0]).toMatchObject({
+      method: "PATCH",
+      url: "https://f.test/api/notifications/threads/abc",
     });
   });
 

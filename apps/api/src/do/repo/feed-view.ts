@@ -38,6 +38,14 @@ export interface FeedViewAnswer {
   /** Of the threads asked about, those gone for good (a deleted issue's). */
   readonly gone: readonly string[];
   /**
+   * The conversation each thread asked about names now (null: none) and
+   * its title, when asked to identify them (absent from an earlier
+   * object's answer).
+   */
+  readonly conversations?: Readonly<
+    Record<string, { readonly conversation: string; readonly title: string } | null>
+  >;
+  /**
    * The repository's restore generation `gone` was found in: a restore can
    * give a gone thread's number to a new conversation, which a feed must
    * not forget for the old one's sake.
@@ -85,6 +93,8 @@ export interface FeedViewDeps {
   readonly epoch: () => number;
   /** The account the repository belongs to now (undefined for an object without an identity). */
   readonly account: () => RepoAccount | undefined;
+  /** The identity of the conversation `number` of `kind` names now (undefined: none). */
+  readonly conversationOf: (kind: "issue" | "pull", number: number) => string | undefined;
 }
 
 export class RepoFeedView {
@@ -100,14 +110,16 @@ export class RepoFeedView {
    * restore: ids and numbers can be used again after a restore, so a
    * member is shown only while it belongs to that issue or pull request,
    * in the restore generation the item was told in), and which of
-   * `threads` (at most 100) are gone for good. When it does not read it,
-   * `denial` says how sure that is (see `FeedViewDenial`).
+   * `threads` (at most 100) are gone for good, and (with `identify`) the
+   * conversation each names now. When it does not read it, `denial` says
+   * how sure that is (see `FeedViewDenial`).
    */
   async view(
     principal: string,
     grantId: string | null,
     members: readonly FeedMember[],
     threads: readonly string[] = [],
+    identify = false,
   ): Promise<FeedViewAnswer> {
     const { authority } = this.deps;
     const gone = () => ({
@@ -202,11 +214,31 @@ export class RepoFeedView {
       const n = Number(id);
       return kind === "issue" && Number.isSafeInteger(n) && this.deps.issues.deleted(n);
     });
+    // The conversation each thread names now, and its title, when asked.
+    const conversations: Record<string, { conversation: string; title: string } | null> = {};
+    if (identify)
+      for (const thread of threads.slice(0, 100)) {
+        const [kind, id] = thread.split("/");
+        const n = Number(id);
+        const conversation =
+          Number.isSafeInteger(n) && n > 0 && (kind === "issue" || kind === "pull")
+            ? this.deps.conversationOf(kind, n)
+            : undefined;
+        const title =
+          conversation === undefined
+            ? undefined
+            : kind === "pull"
+              ? this.deps.pulls.get(n)?.title
+              : this.deps.issues.get(n)?.title;
+        conversations[thread] =
+          conversation === undefined ? null : { conversation, title: String(title ?? "") };
+      }
     return {
       readable,
       role,
       excerpts,
       gone: goneThreads,
+      ...(identify && { conversations }),
       epoch: this.deps.epoch(),
       denial: null,
       account,

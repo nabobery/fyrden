@@ -312,6 +312,8 @@ const SECONDARY: Record<string, { permission: string; input: Record<string, unkn
   "watching.thread_get": { permission: "issues:read", input: {} },
   "watching.thread_put": { permission: "issues:read", input: { subscribed: true } },
   "watching.thread_delete": { permission: "issues:read", input: {} },
+  "notifications.repo_list": { permission: "metadata:read", input: {} },
+  "notifications.repo_mark": { permission: "metadata:read", input: {} },
 };
 // Organization operations on a repository (a team's) check the organization
 // first; their tests are with the organization's.

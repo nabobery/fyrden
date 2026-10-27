@@ -22,7 +22,13 @@ import {
   type SyncPage,
   type ThreadVersion,
 } from "./user/feed.js";
-import { type Gate, OPEN_GATE } from "./user/inbox.js";
+import {
+  type Gate,
+  type InboxQuery,
+  type InboxThread,
+  OPEN_GATE,
+  type SubjectKind,
+} from "./user/inbox.js";
 
 /** When an alarm that could not reach the directory, or a step that failed, tries again. Proposed. */
 const EPOCH_RETRY_MS = 60_000;
@@ -116,6 +122,65 @@ export class UserDO extends MigratingDO {
     // Even with nothing shown changed: a tombstone may have been written.
     if (entries.length > 0) await this.#scheduleRetention(feed);
     return expired.length > 0 ? { ...applied, expired } : applied;
+  }
+
+  /** A page of the inbox's threads, within `budget` rows read (see `Inbox.page`); none when retired. */
+  async inboxPage(
+    query: InboxQuery,
+    budget: number,
+  ): Promise<{ threads: (InboxThread & { matches: boolean })[]; ended: boolean; read: number }> {
+    await this.#checkEpoch();
+    if (this.#retired()) return { threads: [], ended: true, read: 0 };
+    return this.#feed().inbox.page(query, budget);
+  }
+
+  /** One inbox thread; null when there is none (or the feed is retired). */
+  async inboxThread(id: string): Promise<InboxThread | null> {
+    await this.#checkEpoch();
+    if (this.#retired()) return null;
+    return this.#feed().inbox.thread(id) ?? null;
+  }
+
+  /** Marks an inbox thread read, or done; whether there was one. */
+  async markInboxThread(id: string, done: boolean): Promise<boolean> {
+    await this.#checkEpoch();
+    if (this.#retired()) return false;
+    const inbox = this.#feed().inbox;
+    return this.ctx.storage.transactionSync(() => (done ? inbox.markDone(id) : inbox.markRead(id)));
+  }
+
+  /** Streams holding unread threads up to `cutoff` (see `Inbox.unreadStreams`). */
+  async inboxUnreadStreams(
+    cutoff: number,
+    subjects: readonly SubjectKind[],
+    repoIds: readonly string[] | null,
+    limit: number,
+  ): Promise<{ repoId: string; subject: SubjectKind }[]> {
+    await this.#checkEpoch();
+    if (this.#retired()) return [];
+    return this.#feed().inbox.unreadStreams(cutoff, subjects, repoIds, limit);
+  }
+
+  /** Marks read up to `limit` unread threads of `streams` up to `cutoff`; how many. */
+  async markInboxReadBefore(
+    streams: readonly { repoId: string; subject: SubjectKind }[],
+    cutoff: number,
+    limit: number,
+  ): Promise<number> {
+    await this.#checkEpoch();
+    if (this.#retired()) return 0;
+    const inbox = this.#feed().inbox;
+    return this.ctx.storage.transactionSync(() => inbox.markReadBefore(streams, cutoff, limit));
+  }
+
+  /** Forgets inbox threads a read found replaced (see `Inbox.forget`); at most 100 a call. */
+  async forgetInboxThreads(threads: readonly { id: string; epoch: number }[]): Promise<void> {
+    if (threads.length > 100)
+      throw new RangeError(`at most 100 threads a call, not ${threads.length}`);
+    await this.#checkEpoch();
+    if (this.#retired()) return;
+    const inbox = this.#feed().inbox;
+    this.ctx.storage.transactionSync(() => inbox.forget(threads));
   }
 
   /**
