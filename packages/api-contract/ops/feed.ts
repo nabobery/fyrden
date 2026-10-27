@@ -67,6 +67,12 @@ const Coverage = z
     "`partial`: the cursor follows 1,000 streams (a repository's issues, or its pull requests) and items of others are left out until a sync starts a new one.",
   );
 
+const Delivery = z
+  .enum(["complete", "degraded"])
+  .describe(
+    "`degraded`: activity in watched repositories may be missing from feeds. The deployment's daily allowance for it ran out within the last 7 days. The same for every caller; things to act on and threads you take part in are never left out.",
+  );
+
 export const getFeed = defineOperation({
   id: "feed.list",
   method: "GET",
@@ -87,6 +93,7 @@ export const getFeed = defineOperation({
     ),
     head_cursor: Cursor.describe("The same as `next_cursor`."),
     coverage: Coverage,
+    delivery: Delivery,
     poll_after_ms: PollAfter,
   }),
   permission: AUTHENTICATED,
@@ -116,6 +123,7 @@ export const syncFeed = defineOperation({
     complete: z.boolean(),
     head_cursor: Cursor.describe("Pass as `since` to `GET /feed` for what changes next."),
     coverage: Coverage,
+    delivery: Delivery,
     poll_after_ms: PollAfter,
   }),
   permission: AUTHENTICATED,

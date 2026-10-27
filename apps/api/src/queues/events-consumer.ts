@@ -14,6 +14,7 @@ import {
   REPO_ENTITY,
   type RepoRow,
 } from "@fyrden/domain";
+import { discretionaryAllowance } from "../effects/discretionary.js";
 import { deliverEffects } from "../effects/dispatcher.js";
 import {
   EFFECT_POLICY,
@@ -384,7 +385,8 @@ export async function applyEnvelope(
   // Sinks see every event whole (stored ones with their row and data).
   const whole = sinks.length > 0 ? await hydrate(payloads, events) : events;
   const plan = planEffects(sinks, whole);
-  const effects = journalStatements(db, sourceId, plan, now);
+  const allowance = discretionaryAllowance(env);
+  const effects = journalStatements(db, sourceId, plan, now, EFFECT_POLICY, allowance);
   // Search's statements, while it indexes (a stored payload gone leaves the repository's own row
   // behind too: its reconciliation covers both).
   const live =
@@ -403,7 +405,9 @@ export async function applyEnvelope(
   ];
   calls.applied = true;
   options.metrics?.count("d1.query", { db: "org", op: "events_apply" }, statements.length);
-  const results = await db.batch<{ effect_id: string; sink: string }>(statements);
+  const results = await db.batch<{ effect_id?: string; sink?: string; admitted?: string }>(
+    statements,
+  );
   if (live) {
     const start = live.before.length + 1 + snapshots.length;
     const settlement = live.settlement(
@@ -417,10 +421,19 @@ export async function applyEnvelope(
       await db.batch(settlement);
     }
   }
-  const fresh = results
-    .slice(statements.length - effects.length)
-    .flatMap((result) => result.results);
-  const planned = new Map(plan.map((row) => [row.id, row]));
+  const journaled = results.slice(statements.length - effects.length).flatMap((r) => r.results);
+  const fresh = journaled.flatMap((row) =>
+    row.effect_id !== undefined && row.sink !== undefined
+      ? [{ effect_id: row.effect_id, sink: row.sink }]
+      : [],
+  );
+  // Discretionary effects the allowance did not admit are not journaled, and not looked for among
+  // the unsent (one an earlier delivery of the envelope journaled is sent by the effects cron once
+  // overdue); they are counted (such an earlier one too).
+  const admitted = new Set(journaled.flatMap((row) => row.admitted ?? []));
+  const refused = allowance ? plan.filter((row) => row.admission && !admitted.has(row.id)) : [];
+  for (const row of refused) options.metrics?.count("effects.refused", { sink: row.sink });
+  const planned = new Map(plan.filter((row) => !refused.includes(row)).map((row) => [row.id, row]));
   const unsent = await unsentEffects(db, fresh, planned, options.metrics);
   // A share of the inline sinks' effects is delivered by this invocation (a call per recipient, and
   // no queue's wait), within the calls left once the later messages' share is kept and within its

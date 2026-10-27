@@ -202,6 +202,12 @@ export interface FeedItem {
 export interface FeedApplied {
   readonly changed: number;
   readonly notified: number;
+  /**
+   * The events whose watched (P2) entries came past their admission
+   * window (`FeedEntry.until`) and were dropped, unapplied; absent when
+   * none (as from an object before windows).
+   */
+  readonly expired?: readonly string[];
 }
 
 export interface FeedFilter {
@@ -1345,9 +1351,17 @@ export class Feed {
         stream.subject,
       )
       .one();
+    // Each through its stream's partial index: SQLite otherwise sorts a stream's tombstones whole
+    // to find the oldest (about 1,000 rows read for one eviction).
     const over = [
-      [counts.items - FEED_POLICY.streamItems, "feed_seq IS NOT NULL ORDER BY feed_seq"],
-      [counts.tombstones - FEED_POLICY.streamTombstones, "feed_seq IS NULL ORDER BY order_at"],
+      [
+        counts.items - FEED_POLICY.streamItems,
+        "INDEXED BY feed_items_stream WHERE repo_id = ? AND subject = ? AND feed_seq IS NOT NULL ORDER BY feed_seq",
+      ],
+      [
+        counts.tombstones - FEED_POLICY.streamTombstones,
+        "INDEXED BY feed_tombstones_stream WHERE repo_id = ? AND subject = ? AND feed_seq IS NULL ORDER BY order_at",
+      ],
     ] as const;
     const evicted: Row[] = [];
     for (const [n, oldest] of over)
@@ -1356,8 +1370,7 @@ export class Feed {
           ...this.sql
             .exec<Row>(
               `DELETE FROM feed_items WHERE (repo_id, thread_key, kind) IN
-                 (SELECT repo_id, thread_key, kind FROM feed_items
-                  WHERE repo_id = ? AND subject = ? AND ${oldest} LIMIT ?)
+                 (SELECT repo_id, thread_key, kind FROM feed_items ${oldest} LIMIT ?)
                RETURNING *`,
               stream.repoId,
               stream.subject,

@@ -2,6 +2,13 @@ import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { DomainEvent } from "@fyrden/domain";
 import { eventKey } from "@fyrden/domain";
 import { consumerCalls } from "../invocation-calls.js";
+import {
+  ADMITTED_EFFECT,
+  type Admission,
+  type Allowance,
+  admissionStatements,
+  pruneHoursStatement,
+} from "./discretionary.js";
 
 /**
  * The effects journal. A sink (webhooks, the activity feed) says what an
@@ -21,6 +28,12 @@ export interface PlannedEffect {
   readonly payload: Record<string, unknown>;
   /** This effect stands across a transfer of its source, as a sink's `acrossTransfers` says of all its own. */
   readonly acrossTransfers?: boolean;
+  /**
+   * Discretionary work: journaled only when the deployment's daily
+   * allowance admits its price, delivered within its window, at most its
+   * attempts (see `discretionary.ts`).
+   */
+  readonly admission?: Admission;
 }
 
 /** A journaled effect, as the sink delivers it. */
@@ -32,6 +45,8 @@ export interface Effect {
   readonly attempts: number;
   /** When the dispatcher claimed it (the delivery's own time, not the sink's). */
   readonly claimedAt?: number;
+  /** When it stops being delivered, when it has a horizon or a window (a discretionary one's). */
+  readonly deliverUntil?: number;
 }
 
 /** What a single delivery may answer besides done (return) or retry (throw): ended for good. */
@@ -291,8 +306,12 @@ export interface JournalRow {
   readonly calls: number;
   /** The events consumer may deliver it itself (`EffectSink.inline`, `inlineable`). */
   readonly inline: boolean;
-  /** How long after it is journaled it is delivered (`EffectSink.horizonMs`), or null. */
+  /** How long after it is journaled it is delivered (`EffectSink.horizonMs`, or its window), or null. */
   readonly horizon: number | null;
+  /** Its attempts at most, when its own (a discretionary effect's), else null. */
+  readonly maxAttempts: number | null;
+  /** How it is admitted, when discretionary (against the deployment's allowance). */
+  readonly admission?: Admission;
 }
 
 /** The effects `events` require of `sinks`, each sink asked once per event. */
@@ -317,25 +336,47 @@ export function planEffects(
           anyOwner: sink.acrossTransfers === true || planned.acrossTransfers === true ? 1 : 0,
           calls: effectCalls(sink, planned),
           inline: sink.inline === true && sink.inlineable?.(planned) !== false,
-          horizon: sink.horizonMs ?? null,
+          horizon: planned.admission?.windowMs ?? sink.horizonMs ?? null,
+          maxAttempts: planned.admission?.maxAttempts ?? null,
+          ...(planned.admission && { admission: planned.admission }),
         });
       }
   }
   return rows;
 }
 
-/** `effectStatements` for effects already planned (`planEffects`). */
+/**
+ * `effectStatements` for effects already planned (`planEffects`). A
+ * discretionary effect (`price`) is journaled by its own statements after
+ * its admission's, when `allowance` caps anything: inserted only when
+ * admitted (see `admissionStatements`); with nothing capped, as any other.
+ */
 export function journalStatements(
   db: D1Database,
   sourceId: string,
   planned: readonly JournalRow[],
   now: number,
   policy: EffectPolicy = EFFECT_POLICY,
+  allowance: Allowance | null = null,
 ): D1PreparedStatement[] {
-  type Row = Omit<JournalRow, "calls" | "inline">;
+  type Row = Omit<JournalRow, "calls" | "inline" | "admission">;
   const chunks: Row[][] = [[]];
+  const admitted: D1PreparedStatement[] = [];
   let bytes = 0;
-  for (const { calls: _calls, inline: _inline, ...row } of planned) {
+  for (const { calls: _calls, inline: _inline, admission, ...row } of planned) {
+    if (admission && allowance) {
+      admitted.push(
+        ...admissionStatements(db, row.id, sourceId, admission, allowance, guardsOf(row)),
+        insertStatement(db, ADMITTED_EFFECT(5)).bind(
+          now + policy.publishGraceMs,
+          now,
+          JSON.stringify([row]),
+          sourceId,
+          row.id,
+        ),
+      );
+      continue;
+    }
     // The row as it is bound: UTF-8 JSON, its payload escaped once more.
     const size = encoder.encode(JSON.stringify(row)).length + 1;
     if (bytes + size > STATEMENT_BYTES && (chunks.at(-1)?.length ?? 0) > 0) {
@@ -345,24 +386,57 @@ export function journalStatements(
     chunks.at(-1)?.push(row);
     bytes += size;
   }
-  return chunks
-    .filter((rows) => rows.length > 0)
-    .map((rows) =>
-      db
-        .prepare(
-          `INSERT OR IGNORE INTO effects (effect_id, sink, target, payload, next_attempt_at,
-             created_at, source_id, epoch_gen, owner_gen, any_owner, recover_at, deliver_until)
-           SELECT e.value ->> 'id', e.value ->> 'sink', e.value ->> 'target', e.value ->> 'payload',
-             ?2, ?2, ?4, e.value ->> 'epoch', e.value ->> 'ownerGen', e.value ->> 'anyOwner', ?1,
-             ?2 + (e.value ->> 'horizon')
-           FROM json_each(?3) e
-           WHERE (e.value ->> 'epoch') >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?4)
-             AND ((e.value ->> 'anyOwner') = 1 OR (e.value ->> 'ownerGen') >=
-                 coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?4), 0))
-             -- Nothing of a deleted repository once its tombstone is in: its cleanups may have run.
-             AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = ?4 AND deleted = 1)
-           RETURNING effect_id, sink`,
-        )
-        .bind(now + policy.publishGraceMs, now, JSON.stringify(rows), sourceId),
-    );
+  return [
+    ...chunks
+      .filter((rows) => rows.length > 0)
+      .map((rows) =>
+        insertStatement(db).bind(now + policy.publishGraceMs, now, JSON.stringify(rows), sourceId),
+      ),
+    ...admitted,
+    ...(admitted.length > 0 ? [pruneHoursStatement(db)] : []),
+  ];
+}
+
+/**
+ * The journal's guards for one effect's admission, as the insert has them
+ * (`?2` the source): the effect's epoch and ownership generation written
+ * in (whole numbers, from the event).
+ */
+function guardsOf(row: { epoch: number; ownerGen: number; anyOwner: 0 | 1 }): string {
+  for (const n of [row.epoch, row.ownerGen])
+    if (!Number.isSafeInteger(n)) throw new Error(`not a generation: ${n}`);
+  return `${row.epoch} >= coalesce((SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?2), 0)
+    AND (${row.anyOwner} = 1 OR ${row.ownerGen} >=
+      coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?2), 0))
+    AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = ?2 AND deleted = 1)`;
+}
+
+/**
+ * The journal insert of `rows` (bound `?1` its recovery time, `?2` now,
+ * `?3` the rows, `?4` the source), guarded like projections: nothing for
+ * an event of an older epoch or an older ownership generation than the
+ * read model has seen, nor of a deleted repository; `also` a further
+ * condition. Returns the ids (and sinks) it inserted.
+ */
+function insertStatement(db: D1Database, also?: string): D1PreparedStatement {
+  return db.prepare(
+    `INSERT OR IGNORE INTO effects (effect_id, sink, target, payload, next_attempt_at,
+       created_at, source_id, epoch_gen, owner_gen, any_owner, recover_at, deliver_until,
+       max_attempts)
+     SELECT e.value ->> 'id', e.value ->> 'sink', e.value ->> 'target', e.value ->> 'payload',
+       ?2, ?2, ?4, e.value ->> 'epoch', e.value ->> 'ownerGen', e.value ->> 'anyOwner', ?1,
+       ?2 + (e.value ->> 'horizon'), e.value ->> 'maxAttempts'
+     FROM json_each(?3) e
+     WHERE (e.value ->> 'epoch') >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?4)
+       AND ((e.value ->> 'anyOwner') = 1 OR (e.value ->> 'ownerGen') >=
+           coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?4), 0))
+       -- Nothing of a deleted repository once its tombstone is in: its cleanups may have run.
+       AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = ?4 AND deleted = 1)${
+         also
+           ? `
+       AND ${also}`
+           : ""
+       }
+     RETURNING effect_id, sink`,
+  );
 }

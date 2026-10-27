@@ -33,12 +33,13 @@ type Row = {
   createdAt?: number;
   occurredAt?: number;
   attempts?: number;
+  maxAttempts?: number;
 };
 
 function insert(db: DatabaseSync, row: Row): void {
   db.prepare(
     `INSERT INTO effects (effect_id, sink, target, payload, state, attempts, next_attempt_at,
-       last_error, created_at, recover_at) VALUES (?, ?, 't', ?, ?, ?, 0, ?, ?, 0)`,
+       last_error, created_at, recover_at, max_attempts) VALUES (?, ?, 't', ?, ?, ?, 0, ?, ?, 0, ?)`,
   ).run(
     row.id,
     row.sink ?? "feed",
@@ -47,6 +48,7 @@ function insert(db: DatabaseSync, row: Row): void {
     row.attempts ?? 20,
     row.lastError === undefined ? "feed unavailable" : row.lastError,
     row.createdAt ?? NOW - DAY,
+    row.maxAttempts ?? null,
   );
 }
 
@@ -62,6 +64,8 @@ describe("effects repair", () => {
     insert(db, { id: "pending", state: "pending" });
     insert(db, { id: "done", state: "done" });
     insert(db, { id: "webhook", sink: "webhooks" });
+    // Watched activity: one attempt within a window long gone; never reopened.
+    insert(db, { id: "watched", attempts: 1, maxAttempts: 1, lastError: "attempts spent" });
     insert(db, { id: "before-since", createdAt: NOW - 3 * DAY });
     // Past the horizon by when it happened, though journaled since.
     insert(db, { id: "too-old", occurredAt: NOW - REPAIR_HORIZON_MS - 1 });

@@ -8,7 +8,8 @@ import {
   type FeedEntry,
 } from "@fyrden/domain";
 import { z } from "zod";
-import { PURGE_REPOS } from "../do/user/feed.js";
+import { type FeedApplied, PURGE_REPOS } from "../do/user/feed.js";
+import { DISCRETIONARY_WINDOW_MS, type ResourceVector } from "../effects/discretionary.js";
 import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effects/journal.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 
@@ -76,6 +77,44 @@ export async function settledInPool<T>(
   };
   await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, run));
   return results;
+}
+
+/**
+ * A watched entry's worst case, priced when its effect is admitted
+ * (Proposed; measured locally, 2026-10-27). Per recipient: its feed's call
+ * (a new item at its stream's cap: 122 rows read, 15 written; a fresh
+ * feed's creation: 33 read, 24 written; the epoch's adoption and the
+ * alarm a few more), the item's later deletion, half a second of the
+ * object's time, and its cold read of the directory (two rows). Per
+ * effect: its journal row's life at its worst (inserted, sent, sent again
+ * by the effects cron, claimed and given back, ended, pruned, with their
+ * indexes: 53 rows read and 20 written, measured locally; its admission
+ * reads up to 26 hours' rows more), and a queue message and one sent
+ * again by the effects cron, whether it goes inline or not.
+ */
+export const WATCH_PRICE = {
+  recipient: {
+    do_requests: 1,
+    do_rows_read: 170,
+    do_rows_written: 34,
+    do_duration_ms: 500,
+    d1_rows_read: 2,
+  },
+  effect: { d1_rows_read: 100, d1_rows_written: 24, queue_ops: 6 },
+} as const;
+
+/** The price of a watch effect telling `n` watchers. */
+export function watchPrice(n: number): ResourceVector {
+  const { recipient: r, effect: e } = WATCH_PRICE;
+  return {
+    do_requests: r.do_requests * n,
+    do_rows_read: r.do_rows_read * n,
+    do_rows_written: r.do_rows_written * n,
+    do_duration_ms: r.do_duration_ms * n,
+    d1_rows_read: e.d1_rows_read + r.d1_rows_read * n,
+    d1_rows_written: e.d1_rows_written,
+    queue_ops: e.queue_ops,
+  };
 }
 
 /** What an event means for feeds, as its effect carries it. */
@@ -172,37 +211,74 @@ const isPage = (effect: Effect) => "page" in effect.payload;
 interface Entries {
   readonly id: string;
   readonly event: Omit<PlannedFeed, "feed">;
-  readonly feed: Omit<FeedBlock, "audience" | "pages" | "deadline">;
+  readonly feed: Omit<FeedBlock, "audience" | "pages" | "deadline" | "watchers">;
   readonly audience: readonly FeedEntry["recipient"][];
+  /** A watch effect's window's end: its entries are dropped past it. */
+  readonly until?: number;
 }
+
+/** A watch effect (its watched entries, admitted against the day's allowance). */
+const isWatch = (effect: Effect) => effect.target === "watch";
 
 /** An event's effect's entries (the recipients it carries). */
 function entriesOf(effect: Effect): Entries {
   const { feed: block, ...event } = effect.payload as unknown as PlannedFeed;
-  const { audience, pages: _pages, deadline: _deadline, ...feed } = block;
-  return { id: effect.id, event, feed, audience };
+  const { audience, pages: _pages, deadline: _deadline, watchers: _watchers, ...feed } = block;
+  return {
+    id: effect.id,
+    event,
+    feed,
+    audience,
+    ...(isWatch(effect) && effect.deliverUntil !== undefined && { until: effect.deliverUntil }),
+  };
 }
 
-/** One call to a feed, and the effects it delivers part of. */
+/**
+ * One call to a feed, the effects it delivers part of, and, of those,
+ * the watch effects by their event's key (one an event).
+ */
 interface FeedCall {
   readonly effects: ReadonlySet<string>;
+  readonly watches: ReadonlyMap<string, string>;
   readonly call: () => Promise<unknown>;
 }
 
-/** Each recipient's entries across the effects: one call each. */
+/**
+ * Each recipient's entries across the effects: one call each. A call
+ * leaves out watched entries whose window passed before it starts, and
+ * starts not at all when nothing else is left; it answers those entries'
+ * events as expired, as the feed answers its own (see `UserDO.applyFeed`).
+ */
 function entryCalls(effects: readonly Entries[], env: Env): FeedCall[] {
-  const recipients = new Map<string, { entries: FeedEntry[]; effects: Set<string> }>();
-  for (const { id, event, feed, audience } of effects) {
+  type Group = { entries: FeedEntry[]; effects: Set<string>; watches: Map<string, string> };
+  const recipients = new Map<string, Group>();
+  for (const { id, event, feed, audience, until } of effects) {
     for (const recipient of audience) {
-      const group = recipients.get(recipient.principal) ?? { entries: [], effects: new Set() };
+      const group: Group = recipients.get(recipient.principal) ?? {
+        entries: [],
+        effects: new Set(),
+        watches: new Map(),
+      };
       recipients.set(recipient.principal, group);
-      group.entries.push({ ...event, feed, recipient });
+      group.entries.push({ ...event, feed, recipient, ...(until !== undefined && { until }) });
       group.effects.add(id);
+      if (until !== undefined) group.watches.set(event.eventKey, id);
     }
   }
   return [...recipients].map(([principal, group]) => ({
     effects: group.effects,
-    call: () => env.USER.getByName(principal).applyFeed(group.entries),
+    watches: group.watches,
+    call: async (): Promise<FeedApplied> => {
+      const now = Date.now();
+      const late = (e: FeedEntry) => e.until !== undefined && e.until <= now;
+      const expired = [...new Set(group.entries.filter(late).map((e) => e.eventKey))];
+      const entries = group.entries.filter((e) => !late(e));
+      const applied: FeedApplied =
+        entries.length > 0
+          ? await env.USER.getByName(principal).applyFeed(entries)
+          : { changed: 0, notified: 0 };
+      return { ...applied, expired: [...expired, ...(applied.expired ?? [])] };
+    },
   }));
 }
 
@@ -228,6 +304,7 @@ async function purgeCalls(effects: readonly Effect[], env: Env): Promise<FeedCal
     if (repoIds.length === 0) return [];
     return purge.principals.map((principal) => ({
       effects: new Set([purge.id]),
+      watches: new Map(),
       call: () =>
         env.USER.getByName(principal).purge({
           repoIds,
@@ -293,7 +370,7 @@ export const feedSink: EffectSink = {
     // delivers the recipients the event carries, so it is no version to go back to once
     // events with pages are made.
     const settling = settlementsOf(event);
-    if (!event.feed || event.feed.audience.length === 0) return settling;
+    if (!event.feed) return settling;
     const about = {
       repoId: event.id.sourceId,
       eventKey: eventKey(event.id),
@@ -301,9 +378,12 @@ export const feedSink: EffectSink = {
       actor: event.actor,
       epochGen: event.id.epochGen,
     };
-    const { audience: _audience, pages = [], deadline, ...feed } = event.feed;
+    const { watchers = [], ...block } = event.feed;
+    const { audience, pages = [], deadline, ...feed } = block;
     return [
-      { target: "feed", payload: { ...about, feed: event.feed } satisfies PlannedFeed },
+      ...(audience.length === 0
+        ? []
+        : [{ target: "feed", payload: { ...about, feed: block } satisfies PlannedFeed }]),
       // Each further page an effect of its own: its own attempts, its own outcome.
       ...(deadline === undefined
         ? []
@@ -317,6 +397,22 @@ export const feedSink: EffectSink = {
               feed,
             } satisfies PlannedPage,
           }))),
+      // Its watchers' entries, discretionary: journaled only when the day's allowance admits them,
+      // delivered once within their window.
+      ...(watchers.length === 0
+        ? []
+        : [
+            {
+              target: "watch",
+              payload: { ...about, feed: { ...feed, audience: watchers } } satisfies PlannedFeed,
+              admission: {
+                price: watchPrice(watchers.length),
+                maxAttempts: 1,
+                windowMs: DISCRETIONARY_WINDOW_MS,
+                warnMs: FEED_HORIZON_MS,
+              },
+            },
+          ]),
       ...settling,
     ];
   },
@@ -406,6 +502,9 @@ async function deliverFeeds(
     [...effects.filter((effect) => !isPurge(effect) && !isPage(effect)).map(entriesOf), ...pages],
     env,
   );
+  // A watch effect any of whose entries came past its window: ended (its one attempt), whatever
+  // its other recipients' calls did.
+  const expired = new Set<string>();
   // A purge planned before purges named at most `PURGE_REPOS` repositories: delivered as its
   // children, journaled now (each then bounded); the parent is done once they are.
   const legacy = effects.filter(
@@ -432,10 +531,19 @@ async function deliverFeeds(
     FEED_CALLS_IN_FLIGHT,
   );
   results.forEach((result, i) => {
-    if (result.status === "fulfilled") return;
+    const call = calls[i];
+    if (result.status === "fulfilled") {
+      for (const key of (result.value as FeedApplied | undefined)?.expired ?? []) {
+        const id = call?.watches.get(key);
+        if (id !== undefined) expired.add(id);
+      }
+      return;
+    }
     error ??= result.reason;
-    for (const id of calls[i]?.effects ?? []) if (!failed.has(id)) failed.set(id, result.reason);
+    for (const id of call?.effects ?? []) if (!failed.has(id)) failed.set(id, result.reason);
   });
+  for (const id of expired)
+    if (!failed.has(id)) ended.set(id, "expired: past its admission window");
   const callsMs = Date.now() - started;
   if (calls.length > 0) metrics?.count("feed.stage_ms", { stage: "calls" }, callsMs);
   createLogger({ op: "feed.deliver" }).info("feeds delivered", {

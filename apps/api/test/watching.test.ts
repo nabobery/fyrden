@@ -153,7 +153,7 @@ describe("watch audiences", () => {
         .toArray()
         .map((row) => JSON.parse(row.event) as DomainEvent)
         .flatMap((e) =>
-          (e.feed?.audience ?? []).map(
+          [...(e.feed?.audience ?? []), ...(e.feed?.watchers ?? [])].map(
             (a) =>
               `${e.type} ${a.principal} ${a.kind} ${a.priority} ${a.reasons.join(",")}${a.silent ? " silent" : ""}`,
           ),
@@ -189,11 +189,25 @@ describe("watch audiences", () => {
   const comment = (who: Who, fullName: string, number: number, body: string) =>
     api("POST", `/repos/${fullName}/issues/${number}/comments`, who.token, { body });
 
-  it("tell watchers of new conversations and activity, P2, once the switch is on", async () => {
+  it("tell watchers of new conversations and activity, P2, apart from the audience, once the switch is on", async () => {
     const { owner, watcher, commenter, repo } = await watched(true);
     const from = await seqOf(repo.id);
     const number = await open(owner, repo.fullName);
     await comment(commenter, repo.fullName, number, "a comment");
+    // Watched entries ride apart (their own effect, admitted against the daily allowance): never
+    // in the audience or its pages.
+    const blocks = await runInDurableObject(env.REPO.getByName(repo.id), (r: RepoDO) =>
+      r.git.context.storage.sql
+        .exec<{ event: string }>("SELECT event FROM outbox WHERE source_seq > ?", from)
+        .toArray()
+        .map((row) => (JSON.parse(row.event) as DomainEvent).feed)
+        .filter((feed) => feed !== undefined),
+    );
+    expect(blocks.flatMap((b) => b.audience).filter((a) => a.priority === "P2")).toEqual([]);
+    expect(blocks.map((b) => (b.watchers ?? []).map((w) => w.principal))).toEqual([
+      [watcher.principalId],
+      [watcher.principalId],
+    ]);
     expect(await told(repo.id, from)).toEqual(
       expect.arrayContaining([
         `issue.opened ${watcher.principalId} activity P2 watching`,

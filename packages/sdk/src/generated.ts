@@ -5629,6 +5629,8 @@ export type FeedListOutput = {
   head_cursor: string;
   /** `partial`: the cursor follows 1,000 streams (a repository's issues, or its pull requests) and items of others are left out until a sync starts a new one. */
   coverage: "full" | "partial";
+  /** `degraded`: activity in watched repositories may be missing from feeds. The deployment's daily allowance for it ran out within the last 7 days. The same for every caller; things to act on and threads you take part in are never left out. */
+  delivery: "complete" | "degraded";
   /** Wait at least this long (milliseconds) before polling `GET /feed` again with `next_cursor` (a sync's `head_cursor`): 0 after a full page, as more may follow; else 30 seconds after an answer that showed something, or a sync, doubling with each answer in a row that showed nothing (the cursor counts them), up to 30 minutes. */
   poll_after_ms: number;
 };
@@ -5689,6 +5691,8 @@ export type FeedSyncOutput = {
   head_cursor: string;
   /** `partial`: the cursor follows 1,000 streams (a repository's issues, or its pull requests) and items of others are left out until a sync starts a new one. */
   coverage: "full" | "partial";
+  /** `degraded`: activity in watched repositories may be missing from feeds. The deployment's daily allowance for it ran out within the last 7 days. The same for every caller; things to act on and threads you take part in are never left out. */
+  delivery: "complete" | "degraded";
   /** Wait at least this long (milliseconds) before polling `GET /feed` again with `next_cursor` (a sync's `head_cursor`): 0 after a full page, as more may follow; else 30 seconds after an answer that showed something, or a sync, doubling with each answer in a row that showed nothing (the cursor counts them), up to 30 minutes. */
   poll_after_ms: number;
 };

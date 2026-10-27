@@ -14,10 +14,14 @@ import { readSource } from "./source.ts";
 import { nodeWranglerRunner } from "./wrangler.ts";
 
 const USAGE = `usage:
-  fyrden deploy [--plan free|paid] [--internal-calls N]
+  fyrden deploy [--plan free|paid] [--internal-calls N] [--discretionary resource=n,...]
                                      create resources, migrate and deploy both Workers;
                                      Paid: N calls to D1, R2 and Durable Objects an invocation
-                                     (1,000 to 10,000,000; default 1,000)
+                                     (1,000 to 10,000,000; default 1,000);
+                                     a daily allowance for watched activity per resource
+                                     (do_requests, do_rows_read, do_rows_written, do_duration_ms,
+                                     d1_rows_read, d1_rows_written, queue_ops; Free: a fifth of
+                                     each of its limits unless set, Paid: uncapped unless set)
   fyrden doctor                      check login, resources and D1 schemas without changing anything
   fyrden destroy [--yes]             list what deploy created; with --yes delete it all (data loss)
   ${REPAIR_USAGE}
@@ -55,28 +59,55 @@ export function envDeployOptions(
 const HELP_FLAGS = new Set(["--help", "-h"]);
 
 /**
- * The deploy's plan (Paid by default) and internal calls if `args` are
- * exactly what `deploy` accepts; undefined otherwise. Anything unknown (a
- * typo, `--help`, a flag twice, internal calls on Free, which cannot raise
- * its 1,000) must never start a deploy.
+ * The deploy's plan (Paid by default), internal calls and discretionary
+ * allowance if `args` are exactly what `deploy` accepts; undefined
+ * otherwise. Anything unknown (a typo, `--help`, a flag twice, internal
+ * calls on Free, which cannot raise its 1,000, an allowance the API would
+ * not read whole) must never start a deploy.
  */
 export function parseDeployArgs(
   args: readonly string[],
-): { plan: Plan; internalCalls?: number } | undefined {
+): { plan: Plan; internalCalls?: number; discretionary?: string } | undefined {
   const given = new Map<string, string>();
   for (let i = 0; i < args.length; i += 2) {
     const [flag, value] = [args[i] as string, args[i + 1]];
     if (value === undefined || given.has(flag)) return undefined;
-    if (flag !== "--plan" && flag !== "--internal-calls") return undefined;
+    if (!["--plan", "--internal-calls", "--discretionary"].includes(flag)) return undefined;
     given.set(flag, value);
   }
   const plan = given.get("--plan") ?? "paid";
   if (plan !== "free" && plan !== "paid") return undefined;
+  const discretionary = given.get("--discretionary");
+  if (discretionary !== undefined && !validAllowance(discretionary)) return undefined;
+  const extra = discretionary === undefined ? {} : { discretionary };
   const calls = given.get("--internal-calls");
-  if (calls === undefined) return { plan };
+  if (calls === undefined) return { plan, ...extra };
   const internalCalls = /^\d+$/.test(calls) ? Number(calls) : Number.NaN;
   if (plan !== "paid" || !(internalCalls >= 1_000 && internalCalls <= 10_000_000)) return undefined;
-  return { plan, internalCalls };
+  return { plan, internalCalls, ...extra };
+}
+
+/** The resources a discretionary allowance names (as the API's `FYRDEN_DISCRETIONARY_DAILY`). */
+const DISCRETIONARY_RESOURCES = new Set([
+  "do_requests",
+  "do_rows_read",
+  "do_rows_written",
+  "do_duration_ms",
+  "d1_rows_read",
+  "d1_rows_written",
+  "queue_ops",
+]);
+
+/** Whether the API reads `value` whole: `resource=n,…`, each resource known and once. */
+function validAllowance(value: string): boolean {
+  const seen = new Set<string>();
+  for (const part of value.split(",")) {
+    const match = /^([a-z0-9_]+)=(0|[1-9][0-9]{0,14})$/.exec(part.trim());
+    const resource = match?.[1];
+    if (!resource || !DISCRETIONARY_RESOURCES.has(resource) || seen.has(resource)) return false;
+    seen.add(resource);
+  }
+  return seen.size > 0;
 }
 
 /**
@@ -156,11 +187,16 @@ export async function main(argv: string[]): Promise<number> {
     });
     return result.complete ? 0 : 1;
   }
-  const { plan, internalCalls } = parseDeployArgs(rest) as { plan: Plan; internalCalls?: number };
+  const { plan, internalCalls, discretionary } = parseDeployArgs(rest) as {
+    plan: Plan;
+    internalCalls?: number;
+    discretionary?: string;
+  };
   const result = await deploy({
     repoRoot,
     plan,
     internalCalls,
+    discretionary,
     runner,
     buildWeb: async () => {
       await promisify(execFile)("pnpm", ["--filter", "@fyrden/web", "build"], { cwd: repoRoot });

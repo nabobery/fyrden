@@ -22,6 +22,12 @@ export interface DeployDeps {
    * limit (Paid's default 10,000, or the committed config's).
    */
   internalCalls?: number | undefined;
+  /**
+   * The daily allowance for discretionary work (watched activity), set as
+   * `FYRDEN_DISCRETIONARY_DAILY` (`resource=n,…`); left out, the plan's
+   * default (each deploy sets the variables, so leaving it out goes back).
+   */
+  discretionary?: string | undefined;
   runner: WranglerRunner;
   /** Builds fyrden-web (react-router build). */
   buildWeb: () => Promise<void>;
@@ -146,6 +152,9 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
       FYRDEN_PLAN: deps.plan,
       FYRDEN_COMMIT: commitLabel(deps.source),
       ...(deps.plan === "paid" && { FYRDEN_INTERNAL_CALLS: String(internalCalls) }),
+      ...(deps.discretionary !== undefined && {
+        FYRDEN_DISCRETIONARY_DAILY: deps.discretionary,
+      }),
     },
     d1_databases: (config.d1_databases ?? []).map((d) => ({
       ...d,

@@ -22,6 +22,8 @@ import {
   type StreamKey,
   type StreamPosition,
 } from "../do/user/feed.js";
+import { deliveryState } from "../effects/discretionary.js";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError, reverified } from "../ops/execute.js";
 import { allowedWithRole, findReposById, type RepoEntry } from "../repos/directory.js";
@@ -197,6 +199,10 @@ async function freshly(ctx: OpContext): Promise<OpContext> {
 }
 
 /** The caller's feed: its token's principal's object. */
+/** Whether watched activity may be missing (deployment-wide, see `deliveryState`). */
+const deliveryOf = (ctx: OpContext) =>
+  deliveryState(readModelFor(ctx.env, DEFAULT_ORG_SHARD), Date.now(), ctx.metrics);
+
 const feedOf = (ctx: OpContext) => ctx.env.USER.getByName(ctx.auth.principalId);
 
 const counted = (ctx: OpContext, method: string) =>
@@ -755,6 +761,7 @@ export async function getFeedOperation(
     next_cursor: next,
     head_cursor: next,
     coverage: partial || state.positions.length >= FEED_POLICY.coverage ? "partial" : "full",
+    delivery: await deliveryOf(ctx),
     // Read on at once only after a full page: what the caller sees says so, never what it
     // does not (see the top).
     poll_after_ms: given.length === input.limit ? 0 : pollAfter(quiet),
@@ -812,6 +819,7 @@ export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof s
     complete: !more,
     head_cursor: encodeFeedCursor(epoch, id),
     coverage: "full",
+    delivery: await deliveryOf(ctx),
     poll_after_ms: FEED_POLL.baseMs,
   };
 }

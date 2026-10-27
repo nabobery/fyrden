@@ -83,6 +83,8 @@ export const METRICS = {
   "effects.failed": ["sink"],
   // Retried past its attempts at the longest back-off, until its sink's horizon.
   "effects.parked": ["sink"],
+  // Discretionary effects (watched entries) the day's allowance did not admit: never journaled.
+  "effects.refused": ["sink"],
   // Envelopes the events consumer gave up on, stored from its dead-letter queue, by the
   // source's kind = repository | account | malformed.
   "events.failed": ["kind"],

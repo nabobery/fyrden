@@ -244,6 +244,16 @@ describe("fyrden deploy", () => {
     expect(generated).not.toHaveProperty("limits");
   });
 
+  it("sets the discretionary allowance when given, and leaves it unset (the plan's default) when not", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner, { discretionary: "do_rows_written=5000" }).d);
+    let generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_DISCRETIONARY_DAILY: "do_rows_written=5000" });
+    await deploy(deps(fake.runner).d);
+    generated = await generatedConfig();
+    expect(generated.vars).not.toHaveProperty("FYRDEN_DISCRETIONARY_DAILY");
+  });
+
   it("raises a committed subrequest limit below the internal calls asked, keeping its other limits", async () => {
     const path = join(repoRoot, "apps/api/wrangler.jsonc");
     const committed = parseJsonc<Record<string, unknown>>(await readFile(path, "utf8"));

@@ -224,6 +224,8 @@ export class RepoFeed {
     const actorRoot = this.#actor?.root ?? actor;
     const readers = this.deps.readers();
     const audience: FeedRecipient[] = [];
+    // Watched entries (P2) apart: discretionary, delivered as their own effect, never paged.
+    const watchers: FeedRecipient[] = [];
     // One entry per principal and kind (a participant mentioned hears of both).
     const named = new Set<string>();
     const add = (r: Named, exact = false, ownState = false) => {
@@ -241,7 +243,7 @@ export class RepoFeed {
       if (!readers.mayRead(r.principal) && !settlesRequest(r) && !r.standing) return;
       named.add(key);
       const { root: _root, standing: _standing, ...recipient } = r;
-      audience.push({ ...recipient, silent: self });
+      (recipient.priority === "P2" ? watchers : audience).push({ ...recipient, silent: self });
     };
     for (const r of plan.direct) add(r, plan.exact);
     for (const who of plan.mentions) {
@@ -316,9 +318,9 @@ export class RepoFeed {
       if (overflow) this.deps.metrics.count("feed.preference_overflow", { kind: "watchers" });
     }
     for (const [who, reason] of plan.joins) this.#join(plan.number, who, reason, readers);
-    if (audience.length === 0) return undefined;
-    // Things to act on first, then threads taken part in, then watched ones, when there are more
-    // than one event may name (stable within each).
+    if (audience.length === 0 && watchers.length === 0) return undefined;
+    // Things to act on first, then threads taken part in, when there are more than one event may
+    // name (stable within each).
     audience.sort((a, b) => (a.priority < b.priority ? -1 : a.priority > b.priority ? 1 : 0));
     const pages = this.#keepPages(audience.slice(MAX_FEED_AUDIENCE), event);
     const threadKey = `${subject.kind}/${plan.number}`;
@@ -338,6 +340,7 @@ export class RepoFeed {
       // Read live from `member` when a feed is shown (an edit or deletion shows at once).
       excerpt: null,
       audience: audience.slice(0, MAX_FEED_AUDIENCE),
+      ...(watchers.length > 0 && { watchers }),
       ...(pages.length > 0 && { pages, deadline: event.at + FEED_HORIZON_MS }),
     };
   }

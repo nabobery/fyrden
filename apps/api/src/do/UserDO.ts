@@ -68,15 +68,25 @@ export class UserDO extends MigratingDO {
     return new Feed(this.ctx.storage.sql, () => Date.now());
   }
 
-  /** Applies one batch of the principal's feed entries, in one transaction (see `Feed.apply`). */
-  async applyFeed(entries: readonly FeedEntry[]): Promise<FeedApplied> {
+  /**
+   * Applies one batch of the principal's feed entries, in one transaction
+   * (see `Feed.apply`). A watched entry past its admission window is
+   * dropped, decided once the object is ready (its epoch read), right
+   * before the transaction: discretionary work writes only within the
+   * window it was admitted in; such entries' events are answered.
+   */
+  async applyFeed(all: readonly FeedEntry[]): Promise<FeedApplied> {
     await this.#checkEpoch();
     if (this.#retired()) return NOTHING_APPLIED;
+    const now = Date.now();
+    const late = (e: FeedEntry) => e.until !== undefined && e.until <= now;
+    const entries = all.filter((e) => !late(e));
+    const expired = [...new Set(all.filter(late).map((e) => e.eventKey))];
     const feed = this.#feed();
     const applied = this.ctx.storage.transactionSync(() => feed.apply(entries));
     // Even with nothing shown changed: a tombstone may have been written.
     if (entries.length > 0) await this.#scheduleRetention(feed);
-    return applied;
+    return expired.length > 0 ? { ...applied, expired } : applied;
   }
 
   /**

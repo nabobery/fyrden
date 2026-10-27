@@ -154,3 +154,26 @@ export async function readOn(
   const { id } = await stub.saveCursor(credential, state);
   return { credential, cursor: { epoch: page.epoch, id }, after: null };
 }
+
+/**
+ * Counts what `sql`'s statements read and write until `stop` (which puts
+ * its `exec` back): a call's own, made through the storage it was given.
+ */
+export function countingExec(sql: SqlStorage) {
+  const exec = sql.exec;
+  const cursors: SqlStorageCursor<Record<string, SqlStorageValue>>[] = [];
+  (sql as { exec: unknown }).exec = (query: string, ...bindings: SqlStorageValue[]) => {
+    const cursor = exec.call(sql, query, ...bindings);
+    cursors.push(cursor);
+    return cursor;
+  };
+  return {
+    stop: () => {
+      (sql as { exec: unknown }).exec = exec;
+      return cursors.reduce(
+        (sum, c) => ({ read: sum.read + c.rowsRead, written: sum.written + c.rowsWritten }),
+        { read: 0, written: 0 },
+      );
+    },
+  };
+}

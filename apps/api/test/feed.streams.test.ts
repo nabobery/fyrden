@@ -11,7 +11,7 @@ import { userSchema } from "../src/do/schema/user.js";
 import type { UserDO } from "../src/do/UserDO.js";
 import { FEED_POLICY, Feed, type StreamRead } from "../src/do/user/feed.js";
 import userV5 from "./fixtures/do-schemas/UserDO/v5.sql?raw";
-import { DAY, entry, FROM_START, feedIn, inFeed } from "./helpers/feed.js";
+import { countingExec, DAY, entry, FROM_START, feedIn, inFeed } from "./helpers/feed.js";
 
 type V5Row = {
   repo: string;
@@ -717,6 +717,37 @@ describe("a snapshot of before streams", () => {
         FEED_POLICY.coverage,
       );
       expect(read()).toEqual({ expired: true });
+    });
+  });
+});
+
+describe("a stream at its caps", () => {
+  it("evicts its oldest item or tombstone reading about a row each, not the whole stream", async () => {
+    await inFeed((storage) => {
+      const { apply } = feedIn(storage);
+      const shown = [];
+      const resolved = [];
+      for (let i = 1; i <= FEED_POLICY.streamItems + 120; i++)
+        shown.push(entry({ version: 1, thread: i }));
+      for (let i = 1; i <= FEED_POLICY.streamTombstones + 120; i++)
+        resolved.push(entry({ version: 1, thread: 10_000 + i, state: "resolved" }));
+      apply(shown);
+      apply(resolved);
+      const feed = new Feed(storage.sql, Date.now);
+      const one = (e: ReturnType<typeof entry>) => {
+        const counting = countingExec(storage.sql);
+        storage.transactionSync(() => feed.apply([e]));
+        return counting.stop();
+      };
+      // A fence trim reads the stream's fences it keeps (100); nothing else reads past a few rows.
+      const bound = FEED_POLICY.streamFences + 30;
+      expect(one(entry({ version: 1, thread: 5_000 })).read).toBeLessThan(bound);
+      expect(one(entry({ version: 1, thread: 20_000, state: "resolved" })).read).toBeLessThan(
+        bound,
+      );
+      expect(count(storage.sql, "feed_items WHERE feed_seq IS NULL")).toBe(
+        FEED_POLICY.streamTombstones,
+      );
     });
   });
 });

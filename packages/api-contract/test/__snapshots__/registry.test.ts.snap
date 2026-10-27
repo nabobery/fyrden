@@ -1768,6 +1768,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "string",
                     },
+                    "delivery": {
+                      "description": "\`degraded\`: activity in watched repositories may be missing from feeds. The deployment's daily allowance for it ran out within the last 7 days. The same for every caller; things to act on and threads you take part in are never left out.",
+                      "enum": [
+                        "complete",
+                        "degraded",
+                      ],
+                      "type": "string",
+                    },
                     "head_cursor": {
                       "description": "The same as \`next_cursor\`.",
                       "maxLength": 200,
@@ -1979,6 +1987,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "next_cursor",
                     "head_cursor",
                     "coverage",
+                    "delivery",
                     "poll_after_ms",
                   ],
                   "type": "object",
@@ -2146,6 +2155,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "enum": [
                         "full",
                         "partial",
+                      ],
+                      "type": "string",
+                    },
+                    "delivery": {
+                      "description": "\`degraded\`: activity in watched repositories may be missing from feeds. The deployment's daily allowance for it ran out within the last 7 days. The same for every caller; things to act on and threads you take part in are never left out.",
+                      "enum": [
+                        "complete",
+                        "degraded",
                       ],
                       "type": "string",
                     },
@@ -2355,6 +2372,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "complete",
                     "head_cursor",
                     "coverage",
+                    "delivery",
                     "poll_after_ms",
                   ],
                   "type": "object",

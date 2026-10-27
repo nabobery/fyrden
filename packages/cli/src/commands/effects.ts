@@ -35,11 +35,13 @@ const EFFECTS_DB_BINDING = "ORG_READ";
  * Failed effects of `sink` journaled since `since` that a repair reopens:
  * not ended because their source moved on, nor because nothing could
  * deliver them any more (past their deadline, a page gone, no such sink),
- * and whose change (or, without one, their journaling) is within the
- * horizon at `now`. Literal values only: wrangler runs it as one command.
+ * nor discretionary ones (with attempts of their own: watched activity,
+ * admitted for one attempt within a window that is gone), and whose
+ * change (or, without one, their journaling) is within the horizon at
+ * `now`. Literal values only: wrangler runs it as one command.
  */
 function repairable(sink: RepairableSink, since: number, now: number): string {
-  return `state = 'failed' AND sink = '${sink}' AND created_at >= ${since}
+  return `state = 'failed' AND sink = '${sink}' AND created_at >= ${since} AND max_attempts IS NULL
     AND coalesce(last_error, '') NOT LIKE 'invalidated:%'
     AND coalesce(last_error, '') NOT LIKE 'expired:%'
     AND coalesce(last_error, '') NOT LIKE 'page missing:%'

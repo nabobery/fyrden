@@ -33,6 +33,7 @@ type Row = {
   target: string;
   payload: string;
   attempts: number;
+  deliver_until?: number | null;
   bytes: number;
 };
 
@@ -84,10 +85,15 @@ const effectBytes = (payload: string) =>
 /**
  * Where a pending effect stands when a claim passes it over: within its
  * attempts, or (its sink's having a horizon) before its horizon, whatever
- * its attempts.
+ * its attempts; and within its own attempts, when it has them (a
+ * discretionary effect's one).
  */
 const ELIGIBLE = `e.sink = ?2 AND e.state = 'pending' AND (e.lease_until IS NULL OR e.lease_until <= ?3)
-  AND ((e.deliver_until IS NULL AND e.attempts < ?4) OR e.deliver_until > ?3)`;
+  AND ((e.deliver_until IS NULL AND e.attempts < ?4) OR e.deliver_until > ?3)
+  AND (e.max_attempts IS NULL OR e.attempts < e.max_attempts)`;
+
+/** SQL true when an effect's own attempts (a discretionary effect's) are spent. */
+const OWN_SPENT = "(max_attempts IS NOT NULL AND attempts >= max_attempts)";
 
 /**
  * The largest exponent the back-off's doubling is taken to: past it the
@@ -229,7 +235,8 @@ async function claim(
              WHERE ${ELIGIBLE} AND e.next_attempt_at <= ?3
              WINDOW listed AS (ORDER BY j.key ROWS UNBOUNDED PRECEDING))
            WHERE upto <= ?7 OR (n = 1 AND ?8))
-         RETURNING effect_id, sink, target, payload, attempts, ${effectBytes("payload")} AS bytes`,
+         RETURNING effect_id, sink, target, payload, attempts, deliver_until,
+           ${effectBytes("payload")} AS bytes`,
       )
       .bind(
         list,
@@ -292,7 +299,12 @@ async function failUnknown(deps: DispatchDeps, sinkName: string, ids: readonly s
     .run();
 }
 
-/** Gives claimed effects back untried: the attempt is not counted, and their message goes out again. */
+/**
+ * Gives claimed effects back untried: the attempt is not counted, and
+ * their message goes out again. An effect with its own attempts keeps the
+ * attempt (a discretionary effect is never claimed twice: the effects cron
+ * ends it), so claims and releases cannot cycle at core's expense.
+ */
 async function release(
   deps: DispatchDeps,
   policy: EffectPolicy,
@@ -303,7 +315,8 @@ async function release(
   await deps.db
     .prepare(
       // Due as before the claim (an attempt past its effect's attempts moved it on).
-      `UPDATE effects SET lease_token = NULL, lease_until = NULL, attempts = attempts - 1,
+      `UPDATE effects SET lease_token = NULL, lease_until = NULL,
+         attempts = attempts - CASE WHEN max_attempts IS NULL THEN 1 ELSE 0 END,
          recover_at = ?3, next_attempt_at = min(next_attempt_at, ?4)
        WHERE effect_id IN (SELECT value FROM json_each(?1)) AND lease_token = ?2`,
     )
@@ -336,6 +349,7 @@ function effectOf(row: Row, claimedAt?: number): Effect {
     payload: payloadOf(row),
     attempts: row.attempts,
     ...(claimedAt !== undefined && { claimedAt }),
+    ...(row.deliver_until != null && { deliverUntil: row.deliver_until }),
   };
 }
 
@@ -505,7 +519,7 @@ async function markFailed(
     });
   deps.metrics?.count("d1.query", { db: "org", op: "effects_retry" });
   const backoff = "min(?2 << min(attempts - 1, ?9), ?3)";
-  const over = "((deliver_until IS NULL AND attempts >= ?6) OR deliver_until <= ?1)";
+  const over = `((deliver_until IS NULL AND attempts >= ?6) OR deliver_until <= ?1 OR ${OWN_SPENT})`;
   const { results } = await deps.db
     .prepare(
       `UPDATE effects SET next_attempt_at = CASE WHEN ${over} THEN ?1 ELSE ?1 + ${backoff} END,
@@ -593,7 +607,7 @@ export async function recoverEffects(deps: DispatchDeps): Promise<Recovered> {
   const policy = deps.policy ?? EFFECT_POLICY;
   const now = deps.now();
   const sinks = JSON.stringify(deps.sinks.map((sink) => sink.name));
-  const ending = `((deliver_until IS NULL AND attempts >= ?4) OR deliver_until <= ?1
+  const ending = `((deliver_until IS NULL AND attempts >= ?4) OR deliver_until <= ?1 OR ${OWN_SPENT}
     OR sink NOT IN (SELECT value FROM json_each(?5)))`;
   deps.metrics?.count("d1.query", { db: "org", op: "effects_recover" });
   const { results } = await deps.db
@@ -602,7 +616,7 @@ export async function recoverEffects(deps: DispatchDeps): Promise<Recovered> {
          state = CASE WHEN ${ending} THEN 'failed' ELSE state END,
          next_attempt_at = CASE WHEN ${ending} THEN ?1 ELSE next_attempt_at END,
          last_error = CASE WHEN deliver_until <= ?1 THEN 'past its delivery horizon'
-           WHEN deliver_until IS NULL AND attempts >= ?4 THEN 'attempts spent'
+           WHEN (deliver_until IS NULL AND attempts >= ?4) OR ${OWN_SPENT} THEN 'attempts spent'
            WHEN sink NOT IN (SELECT value FROM json_each(?5)) THEN 'no sink named ' || sink
            ELSE last_error END,
          lease_token = CASE WHEN ${ending} THEN NULL ELSE lease_token END,

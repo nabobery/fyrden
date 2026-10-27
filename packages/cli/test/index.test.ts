@@ -103,4 +103,24 @@ describe("envDeployOptions", () => {
     expect(envDeployOptions({ CLOUDFLARE_ACCOUNT_ID: "" }).envAccountId).toBeUndefined();
     expect(envDeployOptions({ CLOUDFLARE_ACCOUNT_ID: "a1" }).envAccountId).toBe("a1");
   });
+
+  it("accepts a daily allowance for discretionary work, resource by resource, on either plan", () => {
+    expect(
+      parseDeployArgs(["--plan", "free", "--discretionary", "do_rows_written=5000,queue_ops=500"]),
+    ).toEqual({ plan: "free", discretionary: "do_rows_written=5000,queue_ops=500" });
+    expect(parseDeployArgs(["--discretionary", "do_requests=0"])).toEqual({
+      plan: "paid",
+      discretionary: "do_requests=0",
+    });
+    for (const bad of [
+      "",
+      "rows=5",
+      "do_rows_written=",
+      "do_rows_written=1e4",
+      "do_rows_written=-1",
+      "do_rows_written=5;queue_ops=1",
+      "do_rows_written=5,do_rows_written=6",
+    ])
+      expect(parseDeployArgs(["--discretionary", bad]), bad).toBeUndefined();
+  });
 });

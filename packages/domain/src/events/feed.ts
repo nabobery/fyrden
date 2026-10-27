@@ -35,10 +35,17 @@ export const MAX_FEED_AUDIENCE = 100;
  * the recipients one event can have past the first 100. The most is a
  * close or reopening of a pull request asking teams: its requested teams'
  * members (10,000 at most), a thread's 1,000 participants and 1,000
- * subscribers, the repository's 100 watchers, the 50 it may mention and
- * those it names directly, under 12,200 in all.
+ * subscribers, the 50 it may mention and those it names directly, under
+ * 12,100 in all (watchers are carried apart: `MAX_FEED_WATCHERS`).
  */
 export const MAX_FEED_PAGES = 128;
+/**
+ * A repository's watchers one event tells at most (watching more is
+ * refused). They are carried apart from the audience and never paged:
+ * their entries are discretionary (P2), admitted against the deployment's
+ * daily allowance as one effect.
+ */
+export const MAX_FEED_WATCHERS = 100;
 /** Bytes of one page of recipients, as JSON, at most. */
 export const MAX_FEED_PAGE_BYTES = 64 * 1024;
 /**
@@ -93,6 +100,8 @@ export const FeedBlockSchema = z
     member: z.string().max(64).nullable(),
     excerpt: z.string().max(MAX_FEED_EXCERPT).nullable(),
     audience: z.array(FeedRecipientSchema).max(MAX_FEED_AUDIENCE),
+    /** Its watchers' entries (P2 only), apart from the audience; absent when none. */
+    watchers: z.array(FeedRecipientSchema).min(1).max(MAX_FEED_WATCHERS).optional(),
     /**
      * The further recipients' pages, which the repository keeps (each
      * recipient's entry frozen with the event): their numbers from 1, and
@@ -119,7 +128,13 @@ export const FeedBlockSchema = z
   })
   .refine((block) => (block.pages === undefined) === (block.deadline === undefined), {
     message: "pages come with a deadline, and a deadline with pages",
-  });
+  })
+  .refine(
+    (block) =>
+      block.audience.every((r) => r.priority !== "P2") &&
+      (block.watchers ?? []).every((r) => r.priority === "P2"),
+    { message: "watched entries go in watchers, and only they" },
+  );
 export type FeedBlock = z.infer<typeof FeedBlockSchema>;
 
 /** A feed item's key in a principal's feed. */
@@ -141,6 +156,12 @@ export interface FeedEntry {
    * versions count within it, and a newer one's are newer.
    */
   readonly epochGen: number;
-  readonly feed: Omit<FeedBlock, "audience">;
+  readonly feed: Omit<FeedBlock, "audience" | "watchers">;
   readonly recipient: FeedRecipient;
+  /**
+   * A watched (P2) entry's admission window's end (milliseconds since the
+   * epoch): a feed applying it later drops it, so discretionary work never
+   * writes past the window it was granted in.
+   */
+  readonly until?: number;
 }

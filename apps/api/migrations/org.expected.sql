@@ -5,6 +5,27 @@ CREATE TABLE consumer_epochs (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+-- table discretionary_hours
+CREATE TABLE discretionary_hours (
+  hour INTEGER PRIMARY KEY,
+  do_requests INTEGER NOT NULL DEFAULT 0,
+  do_rows_read INTEGER NOT NULL DEFAULT 0,
+  do_rows_written INTEGER NOT NULL DEFAULT 0,
+  do_duration_ms INTEGER NOT NULL DEFAULT 0,
+  d1_rows_read INTEGER NOT NULL DEFAULT 0,
+  d1_rows_written INTEGER NOT NULL DEFAULT 0,
+  queue_ops INTEGER NOT NULL DEFAULT 0,
+  granted INTEGER NOT NULL DEFAULT 0,
+  last_grant TEXT
+) STRICT;
+
+-- table discretionary_state
+CREATE TABLE discretionary_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  refused_day INTEGER NOT NULL,
+  warn_until INTEGER NOT NULL
+) STRICT;
+
 -- table effects
 CREATE TABLE effects (
   effect_id TEXT PRIMARY KEY,
@@ -21,7 +42,7 @@ CREATE TABLE effects (
   lease_until INTEGER,
   created_at INTEGER NOT NULL,
   done_at INTEGER
-, source_id TEXT, epoch_gen INTEGER, owner_gen INTEGER, any_owner INTEGER NOT NULL DEFAULT 0 CHECK (any_owner IN (0, 1)), recover_at INTEGER NOT NULL DEFAULT 0, deliver_until INTEGER) STRICT;
+, source_id TEXT, epoch_gen INTEGER, owner_gen INTEGER, any_owner INTEGER NOT NULL DEFAULT 0 CHECK (any_owner IN (0, 1)), recover_at INTEGER NOT NULL DEFAULT 0, deliver_until INTEGER, max_attempts INTEGER CHECK (max_attempts IS NULL OR max_attempts >= 1)) STRICT;
 
 -- table events_failed
 CREATE TABLE events_failed (
