@@ -11,6 +11,7 @@ import {
   RepoGitStorage,
   recordRepoStorage,
   reflogPruneHandler,
+  type SliceResult,
 } from "@fyrden/adapters-cloudflare/git";
 import {
   atInvocationEnd,
@@ -24,6 +25,7 @@ import {
 import {
   decideMetadataAction,
   type Envelope,
+  FEED_HORIZON_MS,
   type LabelSpec,
   type LockReason,
   protectsBranch,
@@ -34,6 +36,11 @@ import {
   rootIdentity,
 } from "@fyrden/domain";
 import { type BlockCache, type LsRefsArgs, type Oid, oidToHex } from "@fyrden/git-core";
+import {
+  admissionStatements,
+  discretionaryAllowance,
+  type ResourceVector,
+} from "../effects/discretionary.js";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
 import { checkObjectAccess } from "../git/cache/object-check.js";
@@ -150,6 +157,7 @@ import {
   type TreeListing,
   treeListing,
 } from "./repo/contents.js";
+import { DIGEST_POLICY, RepoDigests, windowOf } from "./repo/digests.js";
 import { readDirectoryEpoch } from "./repo/epoch.js";
 import { type EraseOutcome, eraseRepository, recordNetwork } from "./repo/erase.js";
 import {
@@ -162,7 +170,7 @@ import {
   type RepoUpdate,
 } from "./repo/events.js";
 import { type ExportPage, type ExportPageRequest, readExportPage } from "./repo/export.js";
-import { type FeedPageAsk, type FeedPageRead, RepoFeed } from "./repo/feed.js";
+import { FEED_PAGE_GRACE_MS, type FeedPageAsk, type FeedPageRead, RepoFeed } from "./repo/feed.js";
 import { type FeedMember, type FeedViewAnswer, RepoFeedView } from "./repo/feed-view.js";
 import {
   type FileWriteDeps,
@@ -279,6 +287,28 @@ const PREFERENCE_RECOVERY_JOB = "preference_recovery";
 const PREFERENCE_RECOVERY_RETRY_MS = 60_000;
 /** The job that deletes what deleted conversations' deletions left of their preferences. */
 const PREFERENCE_CLEANUP_JOB = "preference_cleanup";
+/** The jobs that seal and clean up digest windows, and ask the ledger for digest credit. */
+const DIGEST_SEAL_JOB = "digest_seal";
+const DIGEST_CREDIT_JOB = "digest_credit";
+/** The type of a sealed window's event, which tells its members (see `RepoDigests`). */
+export const DIGEST_EVENT = "repository.digest";
+
+/**
+ * The price of a block of digest credit: each unit a thread's upsert in a
+ * window (its row, its indexes, its bucket's update) and its later
+ * deletion by cleanup, in the repository (measured locally: a new thread 5
+ * rows read and 6 written, its deletion's share 6 and 2); one grant row in
+ * the read model. Proposed.
+ */
+const digestCreditPrice = (units: number): ResourceVector => ({
+  do_requests: 0,
+  do_rows_read: units * 12,
+  do_rows_written: units * 8,
+  do_duration_ms: 0,
+  d1_rows_read: 30,
+  d1_rows_written: 2,
+  queue_ops: 0,
+});
 const FEED_PAGES_PRUNE_BATCH = 500;
 const WEBHOOK_BLOBS_JOB = "webhook_blobs_prune";
 /** The job that settles team review requests no longer standing (see `RepoTeamRequests`). */
@@ -444,6 +474,8 @@ export class RepoDO extends MigratingDO {
   readonly feed: RepoFeed;
   readonly watching: RepoWatching;
   readonly threads: RepoThreadPreferences;
+  /** Digest windows for watchers past the pushed tier. */
+  readonly digests: RepoDigests;
   /** For tests: watch audiences on or off whatever the deployment's switch says. */
   watchAudiences: boolean | undefined;
   readonly webhookBlobStore: RepoWebhookBlobs;
@@ -503,12 +535,21 @@ export class RepoDO extends MigratingDO {
         this.watching.restored(this.events.epochGen());
         this.threads.restored(this.events.epochGen());
         this.git.jobs.ensure(PREFERENCE_RECOVERY_JOB, PREFERENCE_RECOVERY_JOB);
+        // An older generation's digest windows are never sealed or read: cleaned up.
+        this.git.jobs.ensure(DIGEST_SEAL_JOB, DIGEST_SEAL_JOB);
       },
     );
     this.watching = new RepoWatching({ git: this.git, epochGen: () => this.events.epochGen() });
     this.threads = new RepoThreadPreferences({
       git: this.git,
       epochGen: () => this.events.epochGen(),
+    });
+    this.digests = new RepoDigests({
+      git: this.git,
+      epochGen: () => this.events.epochGen(),
+      audiences: () => this.watchAudiences ?? watchAudiencesOn(this.env),
+      capped: () => discretionaryAllowance(this.env) !== null,
+      wantCredit: () => this.git.jobs.ensure(DIGEST_CREDIT_JOB, DIGEST_CREDIT_JOB),
     });
     this.changeLists = new ChangeLists(this.git);
     this.reactions = new RepoReactions({ git: this.git, events: this.events });
@@ -606,12 +647,7 @@ export class RepoDO extends MigratingDO {
     });
     this.feed = new RepoFeed({
       git: this.git,
-      readers: () => {
-        // Anyone reads a public repository: no participant's place is ever reclaimed there.
-        if (this.events.visibility() === "public") return { mayRead: () => true, key: "public" };
-        const { roleOf, key } = this.acl.lastRoles();
-        return { mayRead: (principal) => roleOf(principal) !== null, key };
-      },
+      readers: () => this.#feedReaders(),
       roleOf: (principal) => this.acl.lastRoleOf(principal),
       prunePagesAt: (at) => this.git.jobs.ensure("feed_pages_prune", FEED_PAGES_JOB, { runAt: at }),
       refreshAccess: () => this.acl.refresh(),
@@ -619,6 +655,12 @@ export class RepoDO extends MigratingDO {
       prepareTexts: (texts) => this.references.prepare(texts),
       audiences: () => this.watchAudiences ?? watchAudiencesOn(this.env),
       watchers: () => this.watching.candidates(),
+      digest: (entry) => {
+        if (this.digests.record(entry))
+          this.git.jobs.ensure(DIGEST_SEAL_JOB, DIGEST_SEAL_JOB, {
+            runAt: (windowOf(entry.at) + 1) * DIGEST_POLICY.windowMs + DIGEST_POLICY.sealAfterMs,
+          });
+      },
       subscribers: (number) => this.threads.subscribers(number),
       metrics: this.git.context.metrics,
     });
@@ -689,6 +731,10 @@ export class RepoDO extends MigratingDO {
         forget: (number) => this.subjectMeta.forget(number),
         forgetReactions: (number) => this.reactions.forgetSubject(number),
         forgetPreferences: (number) => {
+          // Its digest rows too: a deleted conversation never shows, nor keeps a digest showing.
+          const subject = this.threads.subjectOf(number);
+          if (subject && this.digests.forgetConversation(subject.conversation, subject.kind))
+            this.git.jobs.ensure(DIGEST_SEAL_JOB, DIGEST_SEAL_JOB);
           if (this.threads.forgetConversation(number))
             this.git.jobs.ensure(PREFERENCE_CLEANUP_JOB, PREFERENCE_CLEANUP_JOB);
         },
@@ -3245,6 +3291,8 @@ export class RepoDO extends MigratingDO {
             : { done: true };
         },
       },
+      [DIGEST_SEAL_JOB]: { runSlice: () => this.#digestSealSlice() },
+      [DIGEST_CREDIT_JOB]: { runSlice: () => this.#digestCreditSlice() },
       [PREFERENCE_CLEANUP_JOB]: {
         // A page an invocation: its rows are written with no I/O to bound it otherwise.
         runSlice: async () =>
@@ -3409,6 +3457,192 @@ export class RepoDO extends MigratingDO {
    */
   #headReadable(headRepoId: string, root: string): Promise<boolean> {
     return this.env.REPO.getByName(headRepoId).readableBy(root);
+  }
+
+  /**
+   * One run of the digest seal job: the windows due are sealed, at most
+   * `sealsPerRun` an invocation (each in one transaction: its members
+   * written as pages, one `repository.digest` event; a deleted
+   * conversation whose rows are still being deleted counts for nothing),
+   * or with audiences off discarded; then a cleanup slice. A slice that
+   * deleted anything ends the invocation (the next goes on at once). A repository that cannot publish now (a
+   * transfer freezes it, it is taking its watchers back after a restore,
+   * or its access cannot be read) waits, doubling from a minute to an
+   * hour, spending no attempt; its cleanup goes on meanwhile.
+   */
+  async #digestSealSlice(): Promise<SliceResult> {
+    await this.checkEpoch();
+    const ended: SliceResult = { done: false, cursor: null, endInvocation: true };
+    const audiences = this.watchAudiences ?? watchAudiencesOn(this.env);
+    let waiting: number | null = null;
+    let due = this.digests.dueWindows();
+    if (due.length > 0 && !audiences)
+      this.ctx.storage.transactionSync(() => {
+        for (const window of due) this.digests.discard(window);
+      });
+    else if (due.length > 0 && this.git.context.now() < this.#digestWaitUntil)
+      waiting = this.#digestWaitUntil - this.git.context.now();
+    else if (due.length > 0) {
+      // Members are those who read the repository now: its access pulled if stale (a failed pull
+      // leaves none to judge by, and the seal waits).
+      await this.acl.refresh().catch(() => undefined);
+      // No await from here: what is sealed, and by whom, is decided as it is written.
+      due = this.digests.dueWindows();
+      const readers = this.#feedReaders();
+      if (
+        !this.events.canEmit() ||
+        this.watching.recovering() ||
+        (readers.key === null && due.length > 0)
+      ) {
+        this.#digestWaits = Math.min(
+          this.#digestWaits * 2 || DIGEST_POLICY.sealRetryMs,
+          DIGEST_POLICY.sealRetryMaxMs,
+        );
+        this.#digestWaitUntil = this.git.context.now() + this.#digestWaits;
+        waiting = this.#digestWaits;
+      } else {
+        this.#digestWaits = 0;
+        this.#digestWaitUntil = 0;
+        for (const window of due) this.#sealDigest(window, readers.mayRead);
+        if (due.length > 0) this.#armOutbox();
+      }
+    }
+    if (!audiences) this.ctx.storage.transactionSync(() => this.digests.dropCredit());
+    // A cleanup slice an invocation, as a run's seals are (their rows are written with no I/O to
+    // bound an invocation otherwise).
+    if (
+      this.ctx.storage.transactionSync(() => this.digests.cleanupStep()) ||
+      (waiting === null && due.length >= DIGEST_POLICY.sealsPerRun)
+    )
+      return ended;
+    if (waiting !== null) return { done: false, cursor: null, runAfterMs: waiting };
+    const next = this.digests.nextDue();
+    return next === null
+      ? { done: true }
+      : { done: false, cursor: null, runAfterMs: Math.max(0, next - this.git.context.now()) };
+  }
+
+  /** Seals one window in one transaction (see `#digestSealSlice`). */
+  #sealDigest(window: number, mayRead: (principal: string) => boolean): void {
+    this.ctx.storage.transactionSync(() => {
+      const buckets = this.digests.liveBuckets(window);
+      const members =
+        buckets.length === 0
+          ? []
+          : this.digests.members(
+              buckets,
+              (floor, limit) => this.watching.after(floor, limit),
+              mayRead,
+            );
+      if (members.length > 0) {
+        const epochGen = this.events.epochGen();
+        const ownerGen = this.events.account()?.ownerGen ?? 0;
+        const deadline = (window + 1) * DIGEST_POLICY.windowMs + DIGEST_POLICY.deliveryMs;
+        const key = `digest:${this.#repoId()}:${epochGen}:${window}`;
+        const pages = this.feed.keepMemberPages(
+          key,
+          members,
+          { epochGen, ownerGen },
+          deadline + FEED_PAGE_GRACE_MS,
+        );
+        this.events.emitActivity(DIGEST_EVENT, null, {
+          digest: {
+            key,
+            window,
+            epochGen,
+            ownerGen,
+            subjects: buckets.map((b) => b.subject),
+            pages,
+            deadline,
+          },
+        });
+      }
+      this.digests.sealed(window);
+    });
+  }
+
+  /** How long a seal that cannot publish last waited (doubling while it cannot), and until when. */
+  #digestWaits = 0;
+  #digestWaitUntil = 0;
+
+  /**
+   * One run of the digest credit job: asks the read model's ledger for a
+   * block of each wanted kind's credit (admitted against the deployment's
+   * daily allowance), installed only while that request is still the
+   * kind's and the generation the one it was asked in, spendable for an
+   * hour and never past the end of the hour after the one the ledger
+   * charged it to. A refused request waits and asks again with a new one;
+   * one whose answer was lost asks again by its own id. What is wanted is
+   * kept in storage, so a kind wanting credit meanwhile is asked for next.
+   */
+  async #digestCreditSlice(): Promise<SliceResult> {
+    await this.checkEpoch();
+    const allowance = discretionaryAllowance(this.env);
+    if (!(this.watchAudiences ?? watchAudiencesOn(this.env)) || allowance === null) {
+      this.ctx.storage.transactionSync(() => this.digests.dropCredit());
+      return { done: true };
+    }
+    const asks = this.ctx.storage.transactionSync(() => this.digests.creditAsks());
+    for (const ask of asks) {
+      const units = DIGEST_POLICY.creditBlock;
+      const id = `credit:${this.#repoId()}:${ask.subject}:${ask.request}`;
+      // How long the credit may be spent, by the ledger's clock (`left`), counted from before it
+      // was asked (on this object's clock): never later than the ledger allows.
+      const asked = this.git.context.now();
+      let answer: { admitted: boolean; left: number } | undefined;
+      try {
+        this.git.context.metrics.count("d1.query", { db: "org", op: "digest_credit" });
+        const db = this.env.ORG_READ;
+        // The database's time first: the grant is charged to its hour or a later one.
+        const [clock, ...results] = await db.batch<{ at?: number; admitted?: string }>([
+          db.prepare("SELECT unixepoch() AS at"),
+          ...admissionStatements(
+            db,
+            id,
+            this.#repoId(),
+            {
+              price: digestCreditPrice(units),
+              maxAttempts: 1,
+              windowMs: DIGEST_POLICY.creditTtlMs,
+              warnMs: FEED_HORIZON_MS,
+            },
+            allowance,
+            "1 = 1",
+          ),
+        ]);
+        const at = clock?.results[0]?.at;
+        if (typeof at !== "number") throw new Error("the ledger's clock was not answered");
+        // Spendable until the end of the hour after the one it was charged to, an hour at most.
+        const left = Math.min(
+          DIGEST_POLICY.creditTtlMs,
+          (Math.floor(at / 3600) + 2) * 3_600_000 - at * 1000,
+        );
+        answer = {
+          admitted: results.some((r) => r.results.some((row) => row.admitted === id)),
+          left,
+        };
+      } catch (error) {
+        this.#log().warn("asking for digest credit failed", { error });
+      }
+      // No await from here: the generation and the pending request are as `grant` reads them.
+      this.ctx.storage.transactionSync(() => {
+        if (!answer) this.digests.unanswered(ask);
+        else if (!answer.admitted) this.digests.refused(ask);
+        else this.digests.grant(ask, units, asked + answer.left);
+      });
+    }
+    const next = this.digests.nextCreditDue();
+    return next === null
+      ? { done: true }
+      : { done: false, cursor: null, runAfterMs: Math.max(0, next - this.git.context.now()) };
+  }
+
+  /** Who reads the repository now, as the feed's audiences and digests' members are judged. */
+  #feedReaders(): { mayRead: (principal: string) => boolean; key: string | null } {
+    // Anyone reads a public repository: no participant's place is ever reclaimed there.
+    if (this.events.visibility() === "public") return { mayRead: () => true, key: "public" };
+    const { roleOf, key } = this.acl.lastRoles();
+    return { mayRead: (principal) => roleOf(principal) !== null, key };
   }
 
   /**

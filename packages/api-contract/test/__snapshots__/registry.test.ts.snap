@@ -33955,7 +33955,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "put": {
-        "description": "Watches a repository the caller can read (\`subscribed: true\`: activity of every conversation comes to its feed, P2), or ignores it (\`ignored: true\`, which wins); neither: back to participating. At most 100 principals watch a repository (409 \`watchers_full\` past it). After a 503, repeat the request (with a new Idempotency-Key, or none): it sets a state. While the deployment has not turned watch audiences on (\`FYRDEN_WATCH_AUDIENCES\`), the level is kept and reported but adds nothing to feeds.",
+        "description": "Watches a repository the caller can read (\`subscribed: true\`: activity of every conversation comes to its feed, P2), or ignores it (\`ignored: true\`, which wins); neither: back to participating. At most 5,000 principals watch a repository (409 \`watchers_full\` past it); each event tells the first 100, the rest are told once a window in digests. After a 503, repeat the request (with a new Idempotency-Key, or none): it sets a state. While the deployment has not turned watch audiences on (\`FYRDEN_WATCH_AUDIENCES\`), the level is kept and reported but adds nothing to feeds.",
         "operationId": "watching.put",
         "parameters": [
           {

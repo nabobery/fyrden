@@ -47,7 +47,7 @@ export const setRepoSubscription = defineOperation({
   method: "PUT",
   path: "/repos/{owner}/{repo}/subscription",
   summary: "Set a repository subscription",
-  description: `Watches a repository the caller can read (\`subscribed: true\`: activity of every conversation comes to its feed, P2), or ignores it (\`ignored: true\`, which wins); neither: back to participating. At most 100 principals watch a repository (409 \`watchers_full\` past it). After a 503, repeat the request (with a new Idempotency-Key, or none): it sets a state.${DORMANT}`,
+  description: `Watches a repository the caller can read (\`subscribed: true\`: activity of every conversation comes to its feed, P2), or ignores it (\`ignored: true\`, which wins); neither: back to participating. At most 5,000 principals watch a repository (409 \`watchers_full\` past it); each event tells the first 100, the rest are told once a window in digests. After a 503, repeat the request (with a new Idempotency-Key, or none): it sets a state.${DORMANT}`,
   input: z.object({
     owner: Owner,
     repo: RepoName,

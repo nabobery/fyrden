@@ -17,6 +17,7 @@ import {
   newMentions,
   type RepoRole,
 } from "@fyrden/domain";
+import type { DigestEntry, WatcherKey } from "./digests.js";
 import { IDENTITY } from "./thread-preferences.js";
 
 /*
@@ -99,11 +100,16 @@ export interface RepoFeedDeps {
    * Off: none of them.
    */
   readonly audiences?: () => boolean;
-  /** The watchers an event may tell (see `RepoWatching.candidates`). */
+  /**
+   * The watchers an event tells, the pushed tier, and the floor past which
+   * watchers are told in digests (see `RepoWatching.candidates`).
+   */
   readonly watchers?: () => {
     readonly watchers: readonly FeedPrincipal[];
-    readonly overflow: boolean;
+    readonly floor: WatcherKey | null;
   };
+  /** Records an event's thread in its window's digest (see `RepoDigests.record`). */
+  readonly digest?: (entry: DigestEntry) => void;
   /** The subscribers an event of a thread may tell (see `RepoThreadPreferences.subscribers`). */
   readonly subscribers?: (number: number) => {
     readonly subscribers: readonly FeedPrincipal[];
@@ -306,8 +312,8 @@ export class RepoFeed {
     }
     // Watchers, after everyone told for another reason (a participant stays P1).
     if (watching && (plan.activity || OPENED.has(type))) {
-      const { watchers, overflow } = this.deps.watchers?.() ?? { watchers: [], overflow: false };
-      for (const who of watchers)
+      const { watchers: pushed, floor } = this.deps.watchers?.() ?? { watchers: [], floor: null };
+      for (const who of pushed)
         add({
           principal: who.id,
           root: who.root,
@@ -316,7 +322,16 @@ export class RepoFeed {
           priority: "P2",
           state: "open",
         });
-      if (overflow) this.deps.metrics.count("feed.preference_overflow", { kind: "watchers" });
+      // The watchers past the pushed tier hear of it in the window's digest.
+      if (floor)
+        this.deps.digest?.({
+          subject: subject.kind,
+          conversation: String(subject.conversation),
+          number: plan.number,
+          at: event.at,
+          actorRoot,
+          floor,
+        });
     }
     for (const [who, reason] of plan.joins) this.#join(plan.number, who, reason, readers);
     if (audience.length === 0 && watchers.length === 0) return undefined;
@@ -398,6 +413,43 @@ export class RepoFeed {
     }
     keep();
     if (dropped > 0) this.deps.metrics.count("feed.audience_dropped", {}, dropped);
+    if (pages.length > 0) this.deps.prunePagesAt(expiresAt);
+    return pages;
+  }
+
+  /**
+   * Keeps a digest's members as pages of up to 100 (call within the seal's
+   * transaction), keyed by the digest's own key, in the current generation
+   * and ownership (as an event's further recipients are, so `readPage`
+   * reads them only while they are still the repository's); their manifest.
+   */
+  keepMemberPages(
+    key: string,
+    members: readonly unknown[],
+    current: { readonly epochGen: number; readonly ownerGen: number },
+    expiresAt: number,
+  ): { n: number; count: number; bytes: number }[] {
+    const pages: { n: number; count: number; bytes: number }[] = [];
+    for (let at = 0; at < members.length; at += MAX_FEED_AUDIENCE) {
+      const page = members.slice(at, at + MAX_FEED_AUDIENCE);
+      const json = JSON.stringify(page);
+      const n = pages.length + 1;
+      const bytes = encoder.encode(json).length;
+      this.#exec(
+        "feed.pages",
+        `INSERT INTO feed_audience_pages (event_key, page, epoch_gen, owner_gen, recipients, bytes,
+           expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (event_key, page) DO NOTHING`,
+        key,
+        n,
+        current.epochGen,
+        current.ownerGen,
+        json,
+        bytes,
+        expiresAt,
+      );
+      pages.push({ n, count: page.length, bytes });
+    }
     if (pages.length > 0) this.deps.prunePagesAt(expiresAt);
     return pages;
   }

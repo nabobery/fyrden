@@ -37,6 +37,8 @@ export const JOB_KINDS = [
   "code_owner_requests",
   "preference_recovery",
   "preference_cleanup",
+  "digest_seal",
+  "digest_credit",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 

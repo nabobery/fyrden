@@ -40,10 +40,10 @@ export const MAX_FEED_AUDIENCE = 100;
  */
 export const MAX_FEED_PAGES = 128;
 /**
- * A repository's watchers one event tells at most (watching more is
- * refused). They are carried apart from the audience and never paged:
- * their entries are discretionary (P2), admitted against the deployment's
- * daily allowance as one effect.
+ * A repository's watchers one event tells at most (the pushed tier; the
+ * rest are told in digests). They are carried apart from the audience and
+ * never paged: their entries are discretionary (P2), admitted against the
+ * deployment's daily allowance as one effect.
  */
 export const MAX_FEED_WATCHERS = 100;
 /** Bytes of one page of recipients, as JSON, at most. */

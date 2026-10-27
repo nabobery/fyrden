@@ -1431,6 +1431,56 @@ export const repoSchema: readonly DoMigration[] = [
         conversation TEXT PRIMARY KEY,
         kind TEXT NOT NULL CHECK (kind IN ('issue', 'pull'))
       ) STRICT, WITHOUT ROWID;
+
+      -- Digests for watchers past the pushed tier: each window's threads per kind (by
+      -- restore generation, each with the lowest floor of its events), its buckets (counts and
+      -- marks; sealed 1 when published or empty, 2 when discarded with audiences off), the
+      -- credit each kind spends recording them (wanted: asked for; pending: a request not yet
+      -- answered), and deleted conversations whose rows are left to cleanup.
+      CREATE TABLE digest_windows (
+        win INTEGER NOT NULL,
+        epoch_gen INTEGER NOT NULL,
+        subject TEXT NOT NULL CHECK (subject IN ('issue', 'pull')),
+        threads INTEGER NOT NULL,
+        live INTEGER NOT NULL,
+        truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
+        incomplete INTEGER NOT NULL CHECK (incomplete IN (0, 1)),
+        sealed INTEGER NOT NULL CHECK (sealed IN (0, 1, 2)),
+        PRIMARY KEY (win, epoch_gen, subject)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX digest_windows_due ON digest_windows (sealed, epoch_gen, win);
+      CREATE INDEX digest_windows_generation ON digest_windows (epoch_gen);
+      CREATE TABLE digest_threads (
+        win INTEGER NOT NULL,
+        epoch_gen INTEGER NOT NULL,
+        subject TEXT NOT NULL CHECK (subject IN ('issue', 'pull')),
+        conversation TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        last_at INTEGER NOT NULL,
+        actors TEXT NOT NULL,
+        many INTEGER NOT NULL CHECK (many IN (0, 1)),
+        floor_revision INTEGER NOT NULL,
+        floor_principal TEXT NOT NULL,
+        PRIMARY KEY (win, epoch_gen, subject, conversation)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX digest_threads_newest ON digest_threads (win, epoch_gen, subject, last_at, conversation);
+      CREATE INDEX digest_threads_floor
+        ON digest_threads (win, epoch_gen, subject, floor_revision, floor_principal);
+      CREATE INDEX digest_threads_conversation ON digest_threads (conversation);
+      CREATE TABLE digest_credit (
+        subject TEXT PRIMARY KEY CHECK (subject IN ('issue', 'pull')),
+        epoch_gen INTEGER NOT NULL,
+        units INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        wanted INTEGER NOT NULL CHECK (wanted IN (0, 1)),
+        pending TEXT,
+        retry_at INTEGER NOT NULL,
+        refusals INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE digest_forgets (
+        conversation TEXT PRIMARY KEY,
+        subject TEXT NOT NULL CHECK (subject IN ('issue', 'pull'))
+      ) STRICT, WITHOUT ROWID;
     `,
   },
 ];

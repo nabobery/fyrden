@@ -18,8 +18,10 @@ import { bumpIgnoreVersion } from "./thread-preferences.js";
 
 /** Proposed. */
 export const WATCH_POLICY = {
-  /** Principals watching at most (the pushed tier). */
-  maxWatchers: 100,
+  /** Principals watching at most (the pushed tier and the digested one). */
+  maxWatchers: 5_000,
+  /** Watchers told of each event (the pushed tier): the first, in `(revision, principal)` order. */
+  pushed: 100,
   /** Rows one step of a recovery clears or imports. */
   recoveryPage: 200,
 } as const;
@@ -146,21 +148,53 @@ export class RepoWatching {
   }
 
   /**
-   * The watchers an event may tell, at most `maxWatchers` in the index's
-   * order (more, after a restore, wait their turn: `overflow`); none while
+   * The watchers an event tells (the pushed tier), at most `pushed` in the
+   * index's order; and, when there are watchers past them (told in
+   * digests), the last pushed watcher's key (`floor`). None while
    * recovering.
    */
-  candidates(): { readonly watchers: readonly FeedPrincipal[]; readonly overflow: boolean } {
-    if (this.recovering()) return { watchers: [], overflow: false };
+  candidates(): {
+    readonly watchers: readonly FeedPrincipal[];
+    readonly floor: { readonly revision: number; readonly principal: string } | null;
+  } {
+    if (this.recovering()) return { watchers: [], floor: null };
     const rows = this.#sql
-      .exec<{ principal: string; root: string }>(WATCHING, WATCH_POLICY.maxWatchers + 1)
+      .exec<{ principal: string; root: string; revision: number }>(
+        `SELECT principal, root, revision FROM watchers INDEXED BY watchers_level
+         WHERE level = 'watching' ORDER BY revision, principal LIMIT ?`,
+        WATCH_POLICY.pushed + 1,
+      )
       .toArray();
+    const pushed = rows.slice(0, WATCH_POLICY.pushed);
+    const last = pushed.at(-1);
     return {
-      watchers: rows
-        .slice(0, WATCH_POLICY.maxWatchers)
-        .map((r) => ({ id: r.principal, root: r.root })),
-      overflow: rows.length > WATCH_POLICY.maxWatchers,
+      watchers: pushed.map((r) => ({ id: r.principal, root: r.root })),
+      floor:
+        rows.length > WATCH_POLICY.pushed && last
+          ? { revision: last.revision, principal: last.principal }
+          : null,
     };
+  }
+
+  /**
+   * Watchers past `floor` in the index's order (a digest's members), at most
+   * `limit`; none while recovering.
+   */
+  after(
+    floor: { readonly revision: number; readonly principal: string },
+    limit: number,
+  ): { principal: string; root: string }[] {
+    if (this.recovering()) return [];
+    return this.#sql
+      .exec<{ principal: string; root: string }>(
+        `SELECT principal, root FROM watchers INDEXED BY watchers_level
+         WHERE level = 'watching' AND (revision, principal) > (?, ?)
+         ORDER BY revision, principal LIMIT ?`,
+        floor.revision,
+        floor.principal,
+        limit,
+      )
+      .toArray();
   }
 
   /** After a restore (in its transaction): the watchers are taken back from the copy, from the start. */

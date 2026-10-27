@@ -14,6 +14,12 @@ CREATE INDEX code_owner_pointers_eval ON code_owner_pointers (eval_id);
 CREATE INDEX code_owner_request_jobs_due
         ON code_owner_request_jobs (requested_at, pr_number);
 CREATE INDEX comments_number ON comments (number, comment_id);
+CREATE INDEX digest_threads_conversation ON digest_threads (conversation);
+CREATE INDEX digest_threads_floor
+        ON digest_threads (win, epoch_gen, subject, floor_revision, floor_principal);
+CREATE INDEX digest_threads_newest ON digest_threads (win, epoch_gen, subject, last_at, conversation);
+CREATE INDEX digest_windows_due ON digest_windows (sealed, epoch_gen, win);
+CREATE INDEX digest_windows_generation ON digest_windows (epoch_gen);
 CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
 CREATE INDEX feed_audience_pages_expiry ON feed_audience_pages (expires_at);
 CREATE INDEX feed_participants_joined ON feed_participants (number, joined_seq);
@@ -252,6 +258,44 @@ CREATE TABLE cursor_keys (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         key BLOB NOT NULL CHECK (length(key) = 32)
       ) STRICT;
+CREATE TABLE digest_credit (
+        subject TEXT PRIMARY KEY CHECK (subject IN ('issue', 'pull')),
+        epoch_gen INTEGER NOT NULL,
+        units INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        wanted INTEGER NOT NULL CHECK (wanted IN (0, 1)),
+        pending TEXT,
+        retry_at INTEGER NOT NULL,
+        refusals INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE digest_forgets (
+        conversation TEXT PRIMARY KEY,
+        subject TEXT NOT NULL CHECK (subject IN ('issue', 'pull'))
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE digest_threads (
+        win INTEGER NOT NULL,
+        epoch_gen INTEGER NOT NULL,
+        subject TEXT NOT NULL CHECK (subject IN ('issue', 'pull')),
+        conversation TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        last_at INTEGER NOT NULL,
+        actors TEXT NOT NULL,
+        many INTEGER NOT NULL CHECK (many IN (0, 1)),
+        floor_revision INTEGER NOT NULL,
+        floor_principal TEXT NOT NULL,
+        PRIMARY KEY (win, epoch_gen, subject, conversation)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE digest_windows (
+        win INTEGER NOT NULL,
+        epoch_gen INTEGER NOT NULL,
+        subject TEXT NOT NULL CHECK (subject IN ('issue', 'pull')),
+        threads INTEGER NOT NULL,
+        live INTEGER NOT NULL,
+        truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
+        incomplete INTEGER NOT NULL CHECK (incomplete IN (0, 1)),
+        sealed INTEGER NOT NULL CHECK (sealed IN (0, 1, 2)),
+        PRIMARY KEY (win, epoch_gen, subject)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE ended_transfers (
         transfer_id TEXT PRIMARY KEY,
         landed INTEGER NOT NULL CHECK (landed IN (0, 1)),

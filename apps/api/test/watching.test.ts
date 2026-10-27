@@ -325,12 +325,12 @@ describe("a restored repository's recovery", () => {
     expect(levels).toEqual({ suspended: "watching", deleted: null });
   });
 
-  it("pages through more than a step's rows, past the cap (told at most the cap)", async () => {
+  it("pages through more than a step's rows, telling at most the pushed tier", async () => {
     const owner = await user();
     const repo = await repoOf(owner);
     const count = 250;
     const now = Date.now();
-    // The copy holds 250 watchers (more than the cap, as earlier failed copies can leave it).
+    // The copy holds 250 watchers (more than the pushed tier).
     await env.DIRECTORY.batch(
       Array.from({ length: count }, (_, i) => {
         const id = `usr_w${String(i).padStart(4, "0")}${uniqueId("x").slice(-6)}`;
@@ -367,8 +367,8 @@ describe("a restored repository's recovery", () => {
       candidates: instance.watching.candidates(),
     }));
     expect(after.rows).toBe(count);
-    expect(after.candidates.watchers).toHaveLength(WATCH_POLICY.maxWatchers);
-    expect(after.candidates.overflow).toBe(true);
+    // Told of each event: the pushed tier (the rest, in digests).
+    expect(after.candidates.watchers).toHaveLength(WATCH_POLICY.pushed);
   });
 });
 
