@@ -1,5 +1,5 @@
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
-import type { RepoRole } from "@fyrden/domain";
+import { type FeedSubjectKind, parseThreadKey, type RepoRole } from "@fyrden/domain";
 import type { FeedPurge } from "../user/feed.js";
 import type { RepoAccount, RepoAcl } from "./acl.js";
 import type { RepoAuthority } from "./authority.js";
@@ -35,7 +35,11 @@ export interface FeedViewAnswer {
   readonly readable: boolean;
   readonly role: RepoRole | null;
   readonly excerpts: Record<string, string | null>;
-  /** Of the threads asked about, those gone for good (a deleted issue's). */
+  /**
+   * Of the threads asked about, those gone for good: a deleted issue's, and
+   * a digest's whose window no longer holds a conversation the repository
+   * has (or is of another generation, or expired).
+   */
   readonly gone: readonly string[];
   /**
    * The conversation each thread asked about names now (null: none) and
@@ -95,6 +99,8 @@ export interface FeedViewDeps {
   readonly account: () => RepoAccount | undefined;
   /** The identity of the conversation `number` of `kind` names now (undefined: none). */
   readonly conversationOf: (kind: "issue" | "pull", number: number) => string | undefined;
+  /** Whether a kind's digest of a window, of a generation, still shows (see `RepoDigests.shows`). */
+  readonly digestShows: (subject: FeedSubjectKind, window: number, epoch: number) => boolean;
 }
 
 export class RepoFeedView {
@@ -208,11 +214,12 @@ export class RepoFeedView {
           body = kind === "pull" ? this.deps.pulls.get(n)?.body : this.deps.issues.get(n)?.body;
       excerpts[memberKey(m)] = excerpt(body);
     }
-    // A deleted issue's thread: its number is never used again.
+    // A deleted issue's thread (its number is never used again), and a digest that no longer shows.
     const goneThreads = threads.slice(0, 100).filter((thread) => {
-      const [kind, id] = thread.split("/");
-      const n = Number(id);
-      return kind === "issue" && Number.isSafeInteger(n) && this.deps.issues.deleted(n);
+      const named = parseThreadKey(thread);
+      if (named && "digest" in named)
+        return !this.deps.digestShows(named.subject, named.digest.window, named.digest.epoch);
+      return named?.subject === "issue" && this.deps.issues.deleted(named.number);
     });
     // The conversation each thread names now, and its title, when asked.
     const conversations: Record<string, { conversation: string; title: string } | null> = {};

@@ -157,7 +157,7 @@ import {
   type TreeListing,
   treeListing,
 } from "./repo/contents.js";
-import { DIGEST_POLICY, RepoDigests, windowOf } from "./repo/digests.js";
+import { DIGEST_EVENT, DIGEST_POLICY, RepoDigests, windowOf } from "./repo/digests.js";
 import { readDirectoryEpoch } from "./repo/epoch.js";
 import { type EraseOutcome, eraseRepository, recordNetwork } from "./repo/erase.js";
 import {
@@ -290,8 +290,6 @@ const PREFERENCE_CLEANUP_JOB = "preference_cleanup";
 /** The jobs that seal and clean up digest windows, and ask the ledger for digest credit. */
 const DIGEST_SEAL_JOB = "digest_seal";
 const DIGEST_CREDIT_JOB = "digest_credit";
-/** The type of a sealed window's event, which tells its members (see `RepoDigests`). */
-export const DIGEST_EVENT = "repository.digest";
 
 /**
  * The price of a block of digest credit: each unit a thread's upsert in a
@@ -835,6 +833,7 @@ export class RepoDO extends MigratingDO {
         const subject = this.threads.subjectOf(number);
         return subject?.kind === kind ? subject.conversation : undefined;
       },
+      digestShows: (subject, window, epoch) => this.digests.shows(subject, window, epoch),
     });
     this.#codeOwnerFacts = new CodeOwnerFacts({
       codeOwners: this.codeOwners,

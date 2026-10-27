@@ -1,5 +1,12 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { FeedBlockSchema, MAX_FEED_PAGE_BYTES, MAX_FEED_PAGES } from "../../src/events/feed.js";
+import {
+  digestThreadKey,
+  FeedBlockSchema,
+  MAX_FEED_PAGE_BYTES,
+  MAX_FEED_PAGES,
+  parseThreadKey,
+} from "../../src/events/feed.js";
 
 const block = (threadKey: string, kind: "issue" | "pull", number: number) => ({
   threadKey,
@@ -52,5 +59,84 @@ describe("FeedBlockSchema", () => {
     expect(
       FeedBlockSchema.safeParse({ ...block("issue/7", "issue", 7), deadline: 1_000 }).success,
     ).toBe(false);
+  });
+});
+
+describe("parseThreadKey", () => {
+  it("names a conversation, or a kind's digest of a window in a generation", () => {
+    expect(parseThreadKey("issue/7")).toEqual({ subject: "issue", number: 7 });
+    expect(parseThreadKey("pull/12")).toEqual({ subject: "pull", number: 12 });
+    expect(parseThreadKey(digestThreadKey("pull", 1_992_439, 3))).toEqual({
+      subject: "pull",
+      digest: { window: 1_992_439, epoch: 3 },
+    });
+    expect(digestThreadKey("issue", 5, 1)).toBe("issue-digest/5.1");
+  });
+
+  it("reads back every key it makes, and a conversation's of any safe number", () => {
+    const subject = fc.constantFrom("issue" as const, "pull" as const);
+    const positive = fc.integer({ min: 1, max: Number.MAX_SAFE_INTEGER });
+    fc.assert(
+      fc.property(subject, positive, positive, (kind, window, epoch) => {
+        expect(parseThreadKey(digestThreadKey(kind, window, epoch))).toEqual({
+          subject: kind,
+          digest: { window, epoch },
+        });
+      }),
+    );
+    fc.assert(
+      fc.property(subject, positive, (kind, number) => {
+        expect(parseThreadKey(`${kind}/${number}`)).toEqual({ subject: kind, number });
+      }),
+    );
+  });
+
+  it("names nothing for a key that is not one of its own, whatever its text", () => {
+    fc.assert(
+      fc.property(fc.string(), (key) => {
+        const named = parseThreadKey(key);
+        if (named === undefined) return;
+        // Whatever it names is spelled as its own key would be (no leading zeros, no extras).
+        expect(
+          "digest" in named
+            ? digestThreadKey(named.subject, named.digest.window, named.digest.epoch)
+            : `${named.subject}/${named.number}`,
+        ).toBe(key);
+      }),
+    );
+  });
+
+  it("names nothing for any other key", () => {
+    for (const key of [
+      "issue/0",
+      "issue/07",
+      "discussion/7",
+      "issue-digest/5",
+      "issue-digest/0.1",
+      "issue-digest/5.0",
+      "pull-digest/5.1.2",
+      "issue/9007199254740993",
+      "",
+    ])
+      expect(parseThreadKey(key), key).toBeUndefined();
+  });
+});
+
+describe("an event's recipients", () => {
+  it("are never told a digest (digest events tell digests)", () => {
+    const recipient = (kind: string) => ({
+      principal: "usr_1",
+      kind,
+      reasons: ["watching"],
+      priority: "P1",
+      state: "open",
+      silent: false,
+    });
+    const told = (kind: string) => ({
+      ...block("issue/7", "issue", 7),
+      audience: [recipient(kind)],
+    });
+    expect(FeedBlockSchema.safeParse(told("activity")).success).toBe(true);
+    expect(FeedBlockSchema.safeParse(told("digest")).success).toBe(false);
   });
 });

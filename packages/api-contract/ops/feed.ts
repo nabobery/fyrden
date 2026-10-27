@@ -7,13 +7,30 @@ const Cursor = z.string().max(200);
 export const FeedItem = z.object({
   item_key: z.string().describe("The item's key: `<repository id>:<thread>:<kind>`."),
   repo: z.object({ id: z.string(), full_name: z.string().describe("owner/name") }),
-  thread_key: z.string().describe("The thread within the repository, e.g. `pull/12` or `issue/7`."),
+  thread_key: z
+    .string()
+    .describe(
+      "The thread within the repository, e.g. `pull/12` or `issue/7`; a digest's: `issue-digest/<window>.<epoch>`.",
+    ),
   kind: z.enum(FEED_KINDS),
   subject: z.object({
     kind: z.enum(FEED_SUBJECT_KINDS),
-    number: z.number().int(),
+    number: z.number().int().optional().describe("The conversation's number; none for a digest."),
     title: z.string(),
   }),
+  digest: z
+    .object({
+      window: z
+        .number()
+        .int()
+        .describe("The window's number (15-minute windows since the Unix epoch)."),
+      starts_at: z.number().int().describe("When the window starts, Unix time in milliseconds."),
+      ends_at: z.number().int().describe("When it ends, Unix time in milliseconds."),
+    })
+    .optional()
+    .describe(
+      "For `digest`: the window of a watched repository's activity of the subject's kind it tells of (watchers past the first 100 are told once a window).",
+    ),
   epoch: z
     .number()
     .int()
@@ -145,7 +162,7 @@ export const ackFeedItem = defineOperation({
   path: "/feed/ack",
   summary: "Acknowledge a feed item",
   description:
-    "Records that the feed's owner has seen an item at a version, its `epoch` and `version` (every reader of the feed shares it, and the item comes again in `GET /feed`). Versions order by epoch, then version. A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing.",
+    "Records that the feed's owner has seen an item at a version, its `epoch` and `version` (every reader of the feed shares it, and the item comes again in `GET /feed`). Versions order by epoch, then version. A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing. A digest is acknowledged at its own epoch and version only (422 `digest_version_inexact`).",
   input: z.object({
     item_key: z.string().max(300),
     epoch: z.number().int().positive(),

@@ -127,6 +127,9 @@ export interface DigestDeps {
   readonly wantCredit: () => void;
 }
 
+/** The type of a sealed window's event, which tells its members. */
+export const DIGEST_EVENT = "repository.digest";
+
 /** The window a time falls in. */
 export const windowOf = (at: number) => Math.floor(at / DIGEST_POLICY.windowMs);
 
@@ -408,6 +411,30 @@ export class RepoDigests {
         this.deps.epochGen(),
       )
       .toArray();
+  }
+
+  /**
+   * Whether a kind's digest of a window still shows: of the current
+   * generation, not expired, sealed, and holding a conversation the
+   * repository still has (none whose rows are still being deleted). Once
+   * not, never again: a sealed window takes no more threads.
+   */
+  shows(subject: FeedSubjectKind, window: number, epoch: number): boolean {
+    if (epoch !== this.deps.epochGen()) return false;
+    if (window < windowOf(this.#now() - DIGEST_POLICY.keepMs)) return false;
+    return (
+      this.#sql
+        .exec(
+          `SELECT 1 FROM digest_windows b WHERE win = ? AND epoch_gen = ? AND subject = ?
+             AND sealed = 1 AND live > 0 AND EXISTS (SELECT 1 FROM digest_threads t
+               WHERE t.win = b.win AND t.epoch_gen = b.epoch_gen AND t.subject = b.subject
+                 AND t.conversation NOT IN (SELECT conversation FROM digest_forgets))`,
+          window,
+          epoch,
+          subject,
+        )
+        .toArray().length > 0
+    );
   }
 
   /** Marks a window's buckets sealed (published, or with nothing to publish); call within a transaction. */

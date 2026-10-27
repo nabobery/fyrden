@@ -1752,6 +1752,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                 "assigned",
                 "mention",
                 "activity",
+                "digest",
               ],
               "type": "string",
             },
@@ -1820,6 +1821,36 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             ],
                             "type": "string",
                           },
+                          "digest": {
+                            "additionalProperties": false,
+                            "description": "For \`digest\`: the window of a watched repository's activity of the subject's kind it tells of (watchers past the first 100 are told once a window).",
+                            "properties": {
+                              "ends_at": {
+                                "description": "When it ends, Unix time in milliseconds.",
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "starts_at": {
+                                "description": "When the window starts, Unix time in milliseconds.",
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "window": {
+                                "description": "The window's number (15-minute windows since the Unix epoch).",
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "window",
+                              "starts_at",
+                              "ends_at",
+                            ],
+                            "type": "object",
+                          },
                           "epoch": {
                             "description": "The repository's restore generation \`version\` counts in: a newer generation's versions are newer, whatever their numbers.",
                             "maximum": 9007199254740991,
@@ -1852,6 +1883,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "assigned",
                               "mention",
                               "activity",
+                              "digest",
                             ],
                             "type": "string",
                           },
@@ -1922,6 +1954,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "type": "string",
                               },
                               "number": {
+                                "description": "The conversation's number; none for a digest.",
                                 "maximum": 9007199254740991,
                                 "minimum": -9007199254740991,
                                 "type": "integer",
@@ -1932,13 +1965,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             },
                             "required": [
                               "kind",
-                              "number",
                               "title",
                             ],
                             "type": "object",
                           },
                           "thread_key": {
-                            "description": "The thread within the repository, e.g. \`pull/12\` or \`issue/7\`.",
+                            "description": "The thread within the repository, e.g. \`pull/12\` or \`issue/7\`; a digest's: \`issue-digest/<window>.<epoch>\`.",
                             "type": "string",
                           },
                           "version": {
@@ -2036,7 +2068,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/feed/ack": {
       "post": {
-        "description": "Records that the feed's owner has seen an item at a version, its \`epoch\` and \`version\` (every reader of the feed shares it, and the item comes again in \`GET /feed\`). Versions order by epoch, then version. A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing.",
+        "description": "Records that the feed's owner has seen an item at a version, its \`epoch\` and \`version\` (every reader of the feed shares it, and the item comes again in \`GET /feed\`). Versions order by epoch, then version. A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing. A digest is acknowledged at its own epoch and version only (422 \`digest_version_inexact\`).",
         "operationId": "feed.ack",
         "requestBody": {
           "content": {
@@ -2210,6 +2242,36 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             ],
                             "type": "string",
                           },
+                          "digest": {
+                            "additionalProperties": false,
+                            "description": "For \`digest\`: the window of a watched repository's activity of the subject's kind it tells of (watchers past the first 100 are told once a window).",
+                            "properties": {
+                              "ends_at": {
+                                "description": "When it ends, Unix time in milliseconds.",
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "starts_at": {
+                                "description": "When the window starts, Unix time in milliseconds.",
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "window": {
+                                "description": "The window's number (15-minute windows since the Unix epoch).",
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "window",
+                              "starts_at",
+                              "ends_at",
+                            ],
+                            "type": "object",
+                          },
                           "epoch": {
                             "description": "The repository's restore generation \`version\` counts in: a newer generation's versions are newer, whatever their numbers.",
                             "maximum": 9007199254740991,
@@ -2242,6 +2304,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "assigned",
                               "mention",
                               "activity",
+                              "digest",
                             ],
                             "type": "string",
                           },
@@ -2312,6 +2375,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "type": "string",
                               },
                               "number": {
+                                "description": "The conversation's number; none for a digest.",
                                 "maximum": 9007199254740991,
                                 "minimum": -9007199254740991,
                                 "type": "integer",
@@ -2322,13 +2386,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             },
                             "required": [
                               "kind",
-                              "number",
                               "title",
                             ],
                             "type": "object",
                           },
                           "thread_key": {
-                            "description": "The thread within the repository, e.g. \`pull/12\` or \`issue/7\`.",
+                            "description": "The thread within the repository, e.g. \`pull/12\` or \`issue/7\`; a digest's: \`issue-digest/<window>.<epoch>\`.",
                             "type": "string",
                           },
                           "version": {

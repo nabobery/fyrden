@@ -5,10 +5,13 @@ import {
   FEED_SUBJECT_KINDS,
   type FeedKind,
   type FeedSubjectKind,
+  type FeedThread,
   feedItemKey,
+  parseThreadKey,
   type RepoRole,
   scopesAllow,
 } from "@fyrden/domain";
+import { DIGEST_POLICY } from "../do/repo/digests.js";
 import { type FeedMember, type FeedViewDenial, memberKey } from "../do/repo/feed-view.js";
 import {
   type CursorRef,
@@ -102,10 +105,22 @@ const RESYNC = "/api/feed/sync";
 /** The permission an item's repository must grant the caller now, by what its thread is about. */
 const READ = { issue: "issues:read", pull: "pull_requests:read" } as const;
 
-/** What a thread key's thread is about (`issue/7`, `pull/12`); undefined for any other key. */
+/**
+ * What a thread key's thread is about (`issue/7`, `pull/12`, a kind's
+ * digest); undefined for any other key.
+ */
 function subjectOf(threadKey: string): FeedSubjectKind | undefined {
-  const kind = /^(issue|pull)\/[1-9][0-9]*$/.exec(threadKey)?.[1];
-  return kind as FeedSubjectKind | undefined;
+  return parseThreadKey(threadKey)?.subject;
+}
+
+/**
+ * Whether a thread can be gone for good, so its repository checks it when
+ * it shows: an issue's (deleted), or a digest's (its conversations all
+ * deleted, another generation's, or expired).
+ */
+function checked(threadKey: string): boolean {
+  const named = parseThreadKey(threadKey);
+  return named !== undefined && ("digest" in named || named.subject === "issue");
 }
 
 /**
@@ -265,12 +280,13 @@ export class Visibility {
     const members = new Map<string, Map<string, FeedMember>>();
     const threads = new Map<string, Set<string>>();
     for (const { repoId, threadKey, member, epoch, conversation } of items) {
-      // Only an issue's thread can be gone for good: each is checked, whenever it first shows; an
-      // inbox thread's, of either kind, is also identified (the conversation its number names).
+      // Only an issue's thread or a digest can be gone for good: each is checked, whenever it first
+      // shows; an inbox thread's, of either kind, is also identified (the conversation its number
+      // names).
       if (conversation !== undefined) this.#identify.add(repoId);
       const k = key(repoId, threadKey);
       if (
-        (subjectOf(threadKey) === "issue" && !this.#checkedThreads.has(k)) ||
+        (checked(threadKey) && !this.#checkedThreads.has(k)) ||
         (conversation !== undefined && !this.#identities.has(k))
       )
         threads.set(repoId, (threads.get(repoId) ?? new Set()).add(threadKey));
@@ -491,8 +507,8 @@ export class Visibility {
     const subject = subjectOf(item.threadKey);
     if (decided === "denied" || subject === undefined) return "hidden";
     const thread = key(item.repoId, item.threadKey);
-    // An issue's thread not checked (past the budget): not known whether it is gone.
-    if (subject === "issue" && !this.#checkedThreads.has(thread)) return undefined;
+    // An issue's thread or a digest not checked (past the budget): not known whether it is gone.
+    if (checked(item.threadKey) && !this.#checkedThreads.has(thread)) return undefined;
     // Gone in the generation it was checked in: an item told in a later one (a restore gave its
     // number to a new conversation) is not known yet, so the scan stops before it.
     const goneIn = this.#gone.get(thread);
@@ -628,17 +644,25 @@ async function scan<P>(
 }
 
 function itemOutput(item: FeedItem, repo: RepoEntry, excerpt: string | null): FeedItemOutput {
+  // Shown items have a thread of a known kind (`of` hides any other).
+  const named = parseThreadKey(item.threadKey) as FeedThread;
   return {
     item_key: feedItemKey(item.repoId, item.threadKey, item.kind),
     repo: { id: repo.id, full_name: `${repo.ownerHandle}/${repo.name}` },
     thread_key: item.threadKey,
     kind: item.kind,
-    // Shown items have a thread of a known kind (`of` hides any other).
     subject: {
-      kind: subjectOf(item.threadKey) as FeedSubjectKind,
-      number: item.number,
+      kind: named.subject,
+      ...("number" in named && { number: named.number }),
       title: item.title,
     },
+    ...("digest" in named && {
+      digest: {
+        window: named.digest.window,
+        starts_at: named.digest.window * DIGEST_POLICY.windowMs,
+        ends_at: (named.digest.window + 1) * DIGEST_POLICY.windowMs,
+      },
+    }),
     epoch: item.epoch,
     version: item.version,
     state: item.state,
@@ -925,6 +949,12 @@ export async function ackFeedItemOperation(
       409,
       "version_ahead",
       "The item has no such version yet: acknowledge a version it has.",
+    );
+  if (acked.status === "inexact")
+    throw new OperationError(
+      422,
+      "digest_version_inexact",
+      "A digest is acknowledged at its own epoch and version only.",
     );
   return {
     item_key: input.item_key,

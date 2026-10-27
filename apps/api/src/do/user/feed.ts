@@ -1,4 +1,11 @@
-import { FEED_HORIZON_MS, type FeedEntry, type FeedKind, type FeedPriority } from "@fyrden/domain";
+import {
+  FEED_HORIZON_MS,
+  type FeedEntry,
+  type FeedKind,
+  type FeedPriority,
+  parseThreadKey,
+} from "@fyrden/domain";
+import { DIGEST_POLICY } from "../repo/digests.js";
 import { type Gate, Inbox, OPEN_GATE } from "./inbox.js";
 
 /*
@@ -105,9 +112,13 @@ export interface StreamKey {
   readonly subject: string;
 }
 
-/** What a thread key's thread is about: its part before the `/` (none: empty). */
+/**
+ * What a thread key's thread is about (a digest's: its kind's, so it is in
+ * that kind's stream); for any other key its part before the `/` (none:
+ * empty).
+ */
 export const subjectOfThread = (threadKey: string) =>
-  threadKey.slice(0, Math.max(0, threadKey.indexOf("/")));
+  parseThreadKey(threadKey)?.subject ?? threadKey.slice(0, Math.max(0, threadKey.indexOf("/")));
 
 /** A stream's position: `[repository, subject, sequence number]`. */
 export type StreamPosition = readonly [repoId: string, subject: string, seq: number];
@@ -205,8 +216,9 @@ export interface FeedApplied {
   readonly notified: number;
   /**
    * The events whose watched (P2) entries came past their admission
-   * window (`FeedEntry.until`) and were dropped, unapplied; absent when
-   * none (as from an object before windows).
+   * window (`FeedEntry.until`), or whose digests are of a window ahead of
+   * the feed's clock, and were dropped, unapplied; absent when none (as
+   * from an object before windows).
    */
   readonly expired?: readonly string[];
 }
@@ -231,7 +243,7 @@ export interface FeedFilter {
  * given: no filter, null). The empty list is answered before any query.
  */
 function oneSubject(subjects: readonly string[] | null | undefined): string | null {
-  if (!subjects || subjects.length !== 1) return null;
+  if (subjects?.length !== 1) return null;
   return subjects[0] ?? null;
 }
 
@@ -307,10 +319,11 @@ const versionOf = (entry: FeedEntry): ThreadVersion => ({
   version: entry.feed.subject.version,
 });
 
-/** `ahead`: the item has no such version yet. */
+/** `ahead`: the item has no such version yet; `inexact`: a digest acknowledged at another one. */
 export type FeedAck =
   | { readonly status: "missing" }
   | { readonly status: "ahead" }
+  | { readonly status: "inexact" }
   | { readonly status: "acked"; readonly item: FeedItem };
 
 /**
@@ -548,6 +561,7 @@ export class Feed {
     const now = this.now();
     let changed = 0;
     let notified = 0;
+    const ahead = new Set<string>();
     const ordered = [...entries].sort(
       (a, b) => a.epochGen - b.epochGen || a.feed.subject.version - b.feed.subject.version,
     );
@@ -558,18 +572,25 @@ export class Feed {
     };
     for (const entry of ordered) {
       if (entry.occurredAt < now - FEED_POLICY.retentionMs) continue;
+      // A digest of a window not ended by this feed's clock (a window's skew allowed) is dropped,
+      // and its event answered as expired: so a stream keeps at most a day of windows' forgotten
+      // digests from its cap (see `#cap`).
+      if (entry.recipient.kind === "digest" && entry.occurredAt > now + DIGEST_POLICY.windowMs) {
+        ahead.add(entry.eventKey);
+        continue;
+      }
       const until = purgedUntil(entry.repoId);
       if (until !== null && entry.occurredAt <= until) continue;
       const applied = !this.#evicted(entry) && this.#applyOne(entry, now);
       // The inbox takes what is neither too old nor purged (its threads have their own caps),
       // each entry judged by what the feed knows of its thread once it applied that entry (not the
-      // call's later ones).
-      this.inbox.take(entry, gate);
+      // call's later ones); digests are the feed's only.
+      if (entry.recipient.kind !== "digest") this.inbox.take(entry, gate);
       if (!applied) continue;
       changed++;
       if (!entry.recipient.silent) notified++;
     }
-    return { changed, notified };
+    return ahead.size > 0 ? { changed, notified, expired: [...ahead] } : { changed, notified };
   }
 
   /**
@@ -585,6 +606,8 @@ export class Feed {
     const { feed, recipient } = entry;
     const id = { repoId: entry.repoId, threadKey: feed.threadKey, kind: recipient.kind };
     const item = this.#live(id, now);
+    // A digest only ever opens: its tombstone is one a read forgot (see `forgetThreads`).
+    if (recipient.kind === "digest" && item?.feed_seq === null) return false;
     const before = item ? stateOf(item) : blank(entry);
     const newer = newerThan(versionOf(entry), {
       epoch: before.thread_epoch,
@@ -1000,13 +1023,17 @@ export class Feed {
   /**
    * Records that the owner has seen `version` of an item (call within a
    * transaction). Refused for a version the item does not have yet; an
-   * older one than already acknowledged changes nothing. A change is
-   * sequenced in the item's stream, so every reader of the feed sees it.
+   * older one than already acknowledged changes nothing. A digest is
+   * acknowledged at its own version only, so its clock moves once. A
+   * change is sequenced in the item's stream, so every reader of the feed
+   * sees it.
    */
   ack(id: FeedItemId, at: ThreadVersion): FeedAck {
     const now = this.now();
     const item = this.#live(id, now);
     if (!item || item.feed_seq === null) return { status: "missing" };
+    if (item.kind === "digest" && (at.epoch !== item.thread_epoch || at.version !== item.version))
+      return { status: "inexact" };
     if (newerThan(at, { epoch: item.thread_epoch, version: item.version }))
       return { status: "ahead" };
     if (!newerThan(at, { epoch: item.acked_epoch, version: item.acked_version }))
@@ -1119,6 +1146,34 @@ export class Feed {
     // can give its number to a new conversation, whose items stay. A caller of the earlier shape
     // (no generation, while a deploy rolls out) binds null, which matches nothing.
     for (const { repoId, threadKey, epoch } of threads) {
+      const named = parseThreadKey(threadKey);
+      if (named && "digest" in named) {
+        // A digest is kept as a tombstone, never shown again: a replay of its entry (within its
+        // delivery window) is dropped (see `#applyOne`), never taking a place in its stream. Its
+        // time is its delivery's end, which its stream's cap waits for (see `#cap`).
+        const stream = { repoId, subject: named.subject };
+        const now = this.now();
+        const deadline =
+          (named.digest.window + 1) * DIGEST_POLICY.windowMs + DIGEST_POLICY.deliveryMs;
+        const hidden = this.sql
+          .exec(
+            `UPDATE feed_items SET feed_seq = NULL, seq_at = ?, order_at = ?
+             WHERE repo_id = ? AND thread_key = ? AND thread_epoch <= ? AND feed_seq IS NOT NULL
+             RETURNING 1`,
+            now,
+            deadline,
+            repoId,
+            threadKey,
+            epoch ?? null,
+          )
+          .toArray().length;
+        if (hidden > 0) {
+          this.#count(stream, -hidden, hidden);
+          this.#cap(stream);
+        }
+        deleted += hidden;
+        continue;
+      }
       const [subject, number] = threadKey.split("/");
       this.inbox.forgetNumber(repoId, String(subject), Number(number), epoch ?? null);
       deleted += this.#forgot(
@@ -1371,19 +1426,24 @@ export class Feed {
       )
       .one();
     // Each through its stream's partial index: SQLite otherwise sorts a stream's tombstones whole
-    // to find the oldest (about 1,000 rows read for one eviction).
+    // to find the oldest (about 1,000 rows read for one eviction). A forgotten digest's tombstone
+    // stays until its delivery ends (its time: a day after its window), so no entry of it opens it
+    // again; a day of windows a stream at most, the stream's latest tombstones.
     const over = [
       [
         counts.items - FEED_POLICY.streamItems,
         "INDEXED BY feed_items_stream WHERE repo_id = ? AND subject = ? AND feed_seq IS NOT NULL ORDER BY feed_seq",
+        [],
       ],
       [
         counts.tombstones - FEED_POLICY.streamTombstones,
-        "INDEXED BY feed_tombstones_stream WHERE repo_id = ? AND subject = ? AND feed_seq IS NULL ORDER BY order_at",
+        `INDEXED BY feed_tombstones_stream WHERE repo_id = ? AND subject = ? AND feed_seq IS NULL
+           AND NOT (kind = 'digest' AND order_at > ?) ORDER BY order_at`,
+        [this.now()],
       ],
     ] as const;
     const evicted: Row[] = [];
-    for (const [n, oldest] of over)
+    for (const [n, oldest, binds] of over)
       if (n > 0)
         evicted.push(
           ...this.sql
@@ -1393,6 +1453,7 @@ export class Feed {
                RETURNING *`,
               stream.repoId,
               stream.subject,
+              ...binds,
               n,
             )
             .toArray(),

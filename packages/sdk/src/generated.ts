@@ -5808,7 +5808,7 @@ export type FeedListInput = {
   /** Only items of this priority. */
   priority?: "P0" | "P1" | "P2";
   /** Only items of this kind. */
-  kind?: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity";
+  kind?: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity" | "digest";
 };
 
 /** Output of `feed.list`. */
@@ -5821,13 +5821,23 @@ export type FeedListOutput = {
       /** owner/name */
       full_name: string;
     };
-    /** The thread within the repository, e.g. `pull/12` or `issue/7`. */
+    /** The thread within the repository, e.g. `pull/12` or `issue/7`; a digest's: `issue-digest/<window>.<epoch>`. */
     thread_key: string;
-    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity";
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity" | "digest";
     subject: {
       kind: "issue" | "pull";
-      number: number;
+      /** The conversation's number; none for a digest. */
+      number?: number;
       title: string;
+    };
+    /** For `digest`: the window of a watched repository's activity of the subject's kind it tells of (watchers past the first 100 are told once a window). */
+    digest?: {
+      /** The window's number (15-minute windows since the Unix epoch). */
+      window: number;
+      /** When the window starts, Unix time in milliseconds. */
+      starts_at: number;
+      /** When it ends, Unix time in milliseconds. */
+      ends_at: number;
     };
     /** The repository's restore generation `version` counts in: a newer generation's versions are newer, whatever their numbers. */
     epoch: number;
@@ -5884,13 +5894,23 @@ export type FeedSyncOutput = {
       /** owner/name */
       full_name: string;
     };
-    /** The thread within the repository, e.g. `pull/12` or `issue/7`. */
+    /** The thread within the repository, e.g. `pull/12` or `issue/7`; a digest's: `issue-digest/<window>.<epoch>`. */
     thread_key: string;
-    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity";
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity" | "digest";
     subject: {
       kind: "issue" | "pull";
-      number: number;
+      /** The conversation's number; none for a digest. */
+      number?: number;
       title: string;
+    };
+    /** For `digest`: the window of a watched repository's activity of the subject's kind it tells of (watchers past the first 100 are told once a window). */
+    digest?: {
+      /** The window's number (15-minute windows since the Unix epoch). */
+      window: number;
+      /** When the window starts, Unix time in milliseconds. */
+      starts_at: number;
+      /** When it ends, Unix time in milliseconds. */
+      ends_at: number;
     };
     /** The repository's restore generation `version` counts in: a newer generation's versions are newer, whatever their numbers. */
     epoch: number;
@@ -7886,7 +7906,7 @@ export interface Operations {
   "feed.list": { input: FeedListInput; output: FeedListOutput };
   /** Sync the activity feed. The feed's current state, to start from or start over: open P0 items, then P1 and P2 items of the last 7 days, newest first (500 at most), and the cursor to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. `complete` is false when more were left out, or when not every repository could be checked (at most 100 an answer): `head_cursor` then reads every repository from what the feed keeps of it. A complete sync's `head_cursor` follows on after it in the repositories it showed items of, and reads the others from what the feed keeps of them. */
   "feed.sync": { input: FeedSyncInput; output: FeedSyncOutput };
-  /** Acknowledge a feed item. Records that the feed's owner has seen an item at a version, its `epoch` and `version` (every reader of the feed shares it, and the item comes again in `GET /feed`). Versions order by epoch, then version. A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing. */
+  /** Acknowledge a feed item. Records that the feed's owner has seen an item at a version, its `epoch` and `version` (every reader of the feed shares it, and the item comes again in `GET /feed`). Versions order by epoch, then version. A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing. A digest is acknowledged at its own epoch and version only (422 `digest_version_inexact`). */
   "feed.ack": { input: FeedAckInput; output: FeedAckOutput };
   /** Get your quota. The authenticated user's quota: how many repositories it may have and how many bytes their pushes may store, and how much of each is used. A deleted repository's bytes are free again once its deletion finishes. */
   "quotas.user.get": { input: QuotasUserGetInput; output: QuotasUserGetOutput };

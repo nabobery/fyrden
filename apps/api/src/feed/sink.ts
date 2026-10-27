@@ -1,13 +1,21 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
   type DomainEvent,
+  digestThreadKey,
   eventKey,
   FEED_HORIZON_MS,
+  FEED_SUBJECT_KINDS,
   type FeedBlock,
   FeedBlockSchema,
   type FeedEntry,
+  type FeedRecipient,
+  type FeedSubjectKind,
+  MAX_FEED_AUDIENCE,
+  MAX_FEED_PAGE_BYTES,
+  MAX_FEED_PAGES,
 } from "@fyrden/domain";
 import { z } from "zod";
+import { DIGEST_EVENT, DIGEST_POLICY } from "../do/repo/digests.js";
 import { type FeedApplied, PURGE_REPOS } from "../do/user/feed.js";
 import { DISCRETIONARY_WINDOW_MS, type ResourceVector } from "../effects/discretionary.js";
 import type { BatchDelivery, Effect, EffectSink, PlannedEffect } from "../effects/journal.js";
@@ -39,6 +47,12 @@ import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
  * data (`resolutions`: blocks of at most 100 recipients, all they deliver
  * in them): an effect each, standing across a transfer of the repository,
  * since one who still reads it must not find a request open that ended.
+ *
+ * A repository's `repository.digest` (a window sealed for watchers past the
+ * pushed tier) becomes one discretionary effect per page of its members,
+ * admitted as watched entries are: delivering one reads the page from the
+ * repository and gives each member a digest item per kind it is told of.
+ * Nothing of the window's threads travels: a digest is read when shown.
  */
 
 /** Principals one purge effect names at most (an event names up to 100 recipients too). */
@@ -120,6 +134,21 @@ export function watchPrice(n: number): ResourceVector {
   };
 }
 
+/**
+ * The price of a digest page's effect: a watched entry's for each member
+ * (one call; at most two items, a kind's each, and no inbox thread) and
+ * the page's read from the repository (one call, its row).
+ */
+export function digestPrice(n: number): ResourceVector {
+  const price = watchPrice(n);
+  return {
+    ...price,
+    do_requests: price.do_requests + 1,
+    do_rows_read: price.do_rows_read + 1,
+    do_duration_ms: price.do_duration_ms + WATCH_PRICE.recipient.do_duration_ms,
+  };
+}
+
 /** What an event means for feeds, as its effect carries it. */
 interface PlannedFeed {
   readonly repoId: string;
@@ -140,6 +169,46 @@ interface PlannedPage extends Omit<PlannedFeed, "feed"> {
   readonly deadline: number;
   readonly page: { readonly n: number; readonly count: number; readonly bytes: number };
   readonly feed: Omit<FeedBlock, "audience" | "pages" | "deadline">;
+}
+
+/** A sealed window, as its event names it (see `RepoDO.#sealDigest`). */
+const DigestSchema = z.object({
+  key: z.string().min(1),
+  window: z.number().int().positive(),
+  epochGen: z.number().int().positive(),
+  ownerGen: z.number().int().nonnegative(),
+  subjects: z.array(z.enum(FEED_SUBJECT_KINDS)).min(1),
+  pages: z
+    .array(
+      z.object({
+        n: z.number().int().min(1),
+        count: z.number().int().min(1).max(MAX_FEED_AUDIENCE),
+        bytes: z.number().int().min(1).max(MAX_FEED_PAGE_BYTES),
+      }),
+    )
+    .min(1)
+    .max(MAX_FEED_PAGES),
+  deadline: z.number().int().positive(),
+});
+
+/** A page of a digest's members, as the repository keeps it. */
+const MembersSchema = z
+  .array(
+    z.object({
+      principal: z.string().min(1),
+      root: z.string().min(1),
+      kinds: z.array(z.enum(FEED_SUBJECT_KINDS)).min(1),
+    }),
+  )
+  .min(1)
+  .max(MAX_FEED_AUDIENCE);
+
+/** A page of a digest's members, as its effect carries it: the event, the digest, the page. */
+interface PlannedDigest {
+  readonly repoId: string;
+  readonly eventKey: string;
+  readonly digest: Omit<z.infer<typeof DigestSchema>, "pages">;
+  readonly page: { readonly n: number; readonly count: number; readonly bytes: number };
 }
 
 const RevokedSchema = z.object({
@@ -208,7 +277,8 @@ async function journalChildren(
   metrics?.count("d1.query", { db: "org", op: "feed_purge_children" }, statements.length);
   await db.batch(statements);
 }
-const isPage = (effect: Effect) => "page" in effect.payload;
+const isDigest = (effect: Effect) => "digest" in effect.payload;
+const isPage = (effect: Effect) => "page" in effect.payload && !isDigest(effect);
 
 /** An effect's entries to apply: the event, its block, and the recipients it names. */
 interface Entries {
@@ -321,10 +391,11 @@ async function purgeCalls(effects: readonly Effect[], env: Env): Promise<FeedCal
 }
 
 /**
- * The id of a page's effect or a settlement's (`effectId`: the event key,
- * the sink, the target `page:<n>` or `res:<n>`): up to 100 calls each.
+ * The id of a page's effect, a settlement's or a digest page's (`effectId`:
+ * the event key, the sink, the target `page:<n>`, `res:<n>` or
+ * `digest:<n>`): up to 100 calls each.
  */
-const PAGE_ID = /:feed:(page|res):\d+$/;
+const PAGE_ID = /:feed:(page|res|digest):\d+$/;
 
 export const feedSink: EffectSink = {
   name: "feed",
@@ -369,6 +440,7 @@ export const feedSink: EffectSink = {
           })),
       ).flat();
     }
+    if (event.type === DIGEST_EVENT) return digestEffects(event);
     // A block's further pages (`pages`) are read and delivered by later versions; this one
     // delivers the recipients the event carries, so it is no version to go back to once
     // events with pages are made.
@@ -443,14 +515,45 @@ export const feedSink: EffectSink = {
    * page's, one more to read it.
    */
   calls(planned: PlannedEffect): number {
-    const payload = planned.payload as unknown as PlannedFeed | PlannedPurge | PlannedPage;
+    const payload = planned.payload as unknown as
+      | PlannedFeed
+      | PlannedPurge
+      | PlannedPage
+      | PlannedDigest;
     // An earlier planner's purge of more repositories: its children's journal write only.
     if ("purge" in payload)
       return payload.purge.repos.length > PURGE_REPOS ? 1 : payload.purge.principals.length;
+    // A page's (an event's further recipients, or a digest's members): one more to read it.
     if ("page" in payload) return 1 + payload.page.count;
     return payload.feed.audience.length;
   },
 };
+
+/**
+ * A sealed window's effects: one a page of its members, discretionary
+ * (admitted as watched entries are, priced as one each and the page's
+ * read). An event whose data is not one (any other shape) is no effect.
+ */
+function digestEffects(event: DomainEvent): PlannedEffect[] {
+  const parsed = DigestSchema.safeParse(event.data?.digest);
+  if (!parsed.success) return [];
+  const { pages, ...digest } = parsed.data;
+  return pages.map((page) => ({
+    target: `digest:${page.n}`,
+    payload: {
+      repoId: event.id.sourceId,
+      eventKey: eventKey(event.id),
+      digest,
+      page,
+    } satisfies PlannedDigest,
+    admission: {
+      price: digestPrice(page.count),
+      maxAttempts: 1,
+      windowMs: DISCRETIONARY_WINDOW_MS,
+      warnMs: FEED_HORIZON_MS,
+    },
+  }));
+}
 
 /**
  * The effects of an event's settlements (`data.resolutions`), one a block,
@@ -496,17 +599,28 @@ async function deliverFeeds(
   const ended = new Map<string, string>();
   let error: unknown;
   const pageEffects = effects.filter(isPage);
+  const digestEffects = effects.filter(isDigest);
   let started = Date.now();
-  const pages = await readPages(pageEffects, env, now, failed, ended);
+  const [pages, digests] = await Promise.all([
+    readPages(pageEffects, env, now, failed, ended),
+    readDigests(digestEffects, env, now, failed, ended),
+  ]);
   const pagesMs = Date.now() - started;
-  if (pageEffects.length > 0) metrics?.count("feed.stage_ms", { stage: "pages" }, pagesMs);
+  if (pageEffects.length + digestEffects.length > 0)
+    metrics?.count("feed.stage_ms", { stage: "pages" }, pagesMs);
   error = [...failed.values()][0];
   const calls = entryCalls(
-    [...effects.filter((effect) => !isPurge(effect) && !isPage(effect)).map(entriesOf), ...pages],
+    [
+      ...effects
+        .filter((effect) => !isPurge(effect) && !isPage(effect) && !isDigest(effect))
+        .map(entriesOf),
+      ...pages,
+      ...digests,
+    ],
     env,
   );
-  // A watch effect any of whose entries came past its window: ended (its one attempt), whatever
-  // its other recipients' calls did.
+  // A watch or digest effect any of whose entries came past its window: ended (its one attempt),
+  // whatever its other recipients' calls did.
   const expired = new Set<string>();
   // A purge planned before purges named at most `PURGE_REPOS` repositories: delivered as its
   // children, journaled now (each then bounded); the parent is done once they are.
@@ -546,7 +660,13 @@ async function deliverFeeds(
     for (const id of call?.effects ?? []) if (!failed.has(id)) failed.set(id, result.reason);
   });
   for (const id of expired)
-    if (!failed.has(id)) ended.set(id, "expired: past its admission window");
+    if (!failed.has(id))
+      ended.set(
+        id,
+        isDigest(effects.find((effect) => effect.id === id) as Effect)
+          ? "expired: past its window, or ahead of its feed's clock"
+          : "expired: past its admission window",
+      );
   const callsMs = Date.now() - started;
   if (calls.length > 0) metrics?.count("feed.stage_ms", { stage: "calls" }, callsMs);
   createLogger({ op: "feed.deliver" }).info("feeds delivered", {
@@ -626,6 +746,102 @@ async function readPages(
       return;
     }
     read.push({ id: effect.id, event, feed, audience: answer.recipients });
+  });
+  return read;
+}
+
+/** A digest's item of a kind, as an entry's block (its version is its window). */
+function digestBlock(subject: FeedSubjectKind, digest: PlannedDigest["digest"]): Entries["feed"] {
+  return {
+    threadKey: digestThreadKey(subject, digest.window, digest.epochGen),
+    subject: { kind: subject, number: 0, title: "", version: digest.window },
+    action: "digest",
+    actorRoot: null,
+    actorTrust: "none",
+    member: null,
+    excerpt: null,
+  };
+}
+
+/**
+ * The digest page effects' members, read from their repositories several
+ * at once, as entries per kind: a digest item each member is told of,
+ * delivered until the earlier of its admission window's end and the
+ * digest's deadline. A page past the deadline is ended unread; one the
+ * repository no longer holds as the digest's (restored or transferred
+ * since, or gone) or that is not what the manifest names, ended; one that
+ * could not be read, failed (its one attempt spent).
+ */
+async function readDigests(
+  effects: readonly Effect[],
+  env: Env,
+  now: number,
+  failed: Map<string, unknown>,
+  ended: Map<string, string>,
+): Promise<Entries[]> {
+  const read: Entries[] = [];
+  const due = effects.filter((effect) => {
+    const { digest } = effect.payload as unknown as PlannedDigest;
+    if (now <= digest.deadline) return true;
+    ended.set(effect.id, "expired: past the digest's delivery deadline");
+    return false;
+  });
+  const results = await settledInPool(
+    due.map((effect) => async () => {
+      const { repoId, digest, page } = effect.payload as unknown as PlannedDigest;
+      return await env.REPO.getByName(repoId).feedAudiencePage({
+        eventKey: digest.key,
+        page: page.n,
+        epochGen: digest.epochGen,
+        ownerGen: digest.ownerGen,
+      });
+    }),
+    FEED_CALLS_IN_FLIGHT,
+  );
+  results.forEach((result, i) => {
+    const effect = due[i] as Effect;
+    const { repoId, eventKey, digest, page } = effect.payload as unknown as PlannedDigest;
+    if (result.status === "rejected") {
+      failed.set(effect.id, result.reason);
+      return;
+    }
+    const answer = result.value;
+    if ("missing" in answer) {
+      ended.set(
+        effect.id,
+        answer.missing === "absent"
+          ? "page missing: absent"
+          : `invalidated: page missing: its source was ${answer.missing}`,
+      );
+      return;
+    }
+    const members = MembersSchema.safeParse(answer.recipients);
+    if (!members.success || members.data.length !== page.count || answer.bytes !== page.bytes) {
+      ended.set(effect.id, "page missing: not the page its manifest names");
+      return;
+    }
+    const event = {
+      repoId,
+      eventKey,
+      occurredAt: (digest.window + 1) * DIGEST_POLICY.windowMs,
+      actor: null,
+      epochGen: digest.epochGen,
+    };
+    const until = Math.min(effect.deliverUntil ?? digest.deadline, digest.deadline);
+    for (const subject of digest.subjects) {
+      const audience: FeedRecipient[] = members.data
+        .filter((m) => m.kinds.includes(subject))
+        .map((m) => ({
+          principal: m.principal,
+          kind: "digest",
+          reasons: ["watching"],
+          priority: "P2",
+          state: "open",
+          silent: false,
+        }));
+      if (audience.length > 0)
+        read.push({ id: effect.id, event, feed: digestBlock(subject, digest), audience, until });
+    }
   });
   return read;
 }

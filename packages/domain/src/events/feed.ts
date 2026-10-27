@@ -8,7 +8,11 @@ import { z } from "zod";
  * repository, thread and kind; an event updates the items it names.
  */
 
-/** The kinds of feed item: things to act on, and the aggregated activity of a thread. */
+/**
+ * The kinds of feed item: things to act on, the aggregated activity of a
+ * thread, and a digest (a kind's threads in a repository's window, told to
+ * watchers past the pushed tier; never in an event's own recipients).
+ */
 export const FEED_KINDS = [
   "review_requested",
   "changes_requested",
@@ -17,12 +21,51 @@ export const FEED_KINDS = [
   "assigned",
   "mention",
   "activity",
+  "digest",
 ] as const;
 export type FeedKind = (typeof FEED_KINDS)[number];
 
 /** What a feed thread is about. */
 export const FEED_SUBJECT_KINDS = ["issue", "pull"] as const;
 export type FeedSubjectKind = (typeof FEED_SUBJECT_KINDS)[number];
+
+/**
+ * A digest item's thread key: a kind's digest of a repository's window
+ * (15-minute windows since the Unix epoch) in its restore generation.
+ */
+export const digestThreadKey = (subject: FeedSubjectKind, window: number, epoch: number) =>
+  `${subject}-digest/${window}.${epoch}`;
+
+/** What a feed thread key names: a conversation, or a kind's digest of a window. */
+export type FeedThread =
+  | { readonly subject: FeedSubjectKind; readonly number: number }
+  | {
+      readonly subject: FeedSubjectKind;
+      readonly digest: { readonly window: number; readonly epoch: number };
+    };
+
+const positive = (text: string) => {
+  const n = Number(text);
+  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+};
+
+/**
+ * What a thread key names (`issue/7`, `pull/12`, `issue-digest/<window>.<epoch>`);
+ * undefined for any other key.
+ */
+export function parseThreadKey(threadKey: string): FeedThread | undefined {
+  const thread = /^(issue|pull)\/([1-9][0-9]*)$/.exec(threadKey);
+  if (thread) {
+    const number = positive(thread[2] ?? "");
+    return number === undefined ? undefined : { subject: thread[1] as FeedSubjectKind, number };
+  }
+  const digest = /^(issue|pull)-digest\/([1-9][0-9]*)\.([1-9][0-9]*)$/.exec(threadKey);
+  const window = positive(digest?.[2] ?? "");
+  const epoch = positive(digest?.[3] ?? "");
+  return digest && window !== undefined && epoch !== undefined
+    ? { subject: digest[1] as FeedSubjectKind, digest: { window, epoch } }
+    : undefined;
+}
 
 /** P0: act on this; P1: a thread one takes part in; P2: activity in a repository one watches. */
 export const FEED_PRIORITIES = ["P0", "P1", "P2"] as const;
@@ -139,6 +182,10 @@ export const FeedBlockSchema = z
       block.audience.every((r) => r.priority !== "P2") &&
       (block.watchers ?? []).every((r) => r.priority === "P2"),
     { message: "watched entries go in watchers, and only they" },
+  )
+  .refine(
+    (block) => [...block.audience, ...(block.watchers ?? [])].every((r) => r.kind !== "digest"),
+    { message: "digests are told by digest events, never in an event's recipients" },
   );
 export type FeedBlock = z.infer<typeof FeedBlockSchema>;
 

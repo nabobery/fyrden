@@ -121,7 +121,8 @@ export class UserDO extends MigratingDO {
     const applied = this.ctx.storage.transactionSync(() => feed.apply(entries, gate));
     // Even with nothing shown changed: a tombstone may have been written.
     if (entries.length > 0) await this.#scheduleRetention(feed);
-    return expired.length > 0 ? { ...applied, expired } : applied;
+    const unapplied = [...new Set([...expired, ...(applied.expired ?? [])])];
+    return unapplied.length > 0 ? { ...applied, expired: unapplied } : applied;
   }
 
   /** A page of the inbox's threads, within `budget` rows read (see `Inbox.page`); none when retired. */
