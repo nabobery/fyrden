@@ -25,7 +25,7 @@ CREATE TABLE feed_evictions (
         event_at INTEGER NOT NULL, subject TEXT NOT NULL DEFAULT '',
         PRIMARY KEY (repo_id, thread_key, kind)
       ) STRICT, WITHOUT ROWID;
-CREATE TABLE feed_items (
+CREATE TABLE "feed_items" (
         repo_id TEXT NOT NULL,
         thread_key TEXT NOT NULL,
         kind TEXT NOT NULL,
@@ -34,7 +34,7 @@ CREATE TABLE feed_items (
         thread_epoch INTEGER NOT NULL,
         version INTEGER NOT NULL,
         state TEXT NOT NULL CHECK (state IN ('open', 'resolved')),
-        priority TEXT NOT NULL CHECK (priority IN ('P0', 'P1')),
+        priority TEXT NOT NULL CHECK (priority IN ('P0', 'P1', 'P2')),
         reasons TEXT NOT NULL,
         silent INTEGER NOT NULL CHECK (silent IN (0, 1)),
         action TEXT NOT NULL,
@@ -48,7 +48,9 @@ CREATE TABLE feed_items (
         acked_epoch INTEGER NOT NULL DEFAULT 0,
         acked_version INTEGER NOT NULL DEFAULT 0,
         feed_seq INTEGER UNIQUE,
-        seq_at INTEGER NOT NULL, subject TEXT NOT NULL DEFAULT '', order_at INTEGER NOT NULL DEFAULT 0,
+        seq_at INTEGER NOT NULL,
+        subject TEXT NOT NULL,
+        order_at INTEGER NOT NULL,
         PRIMARY KEY (repo_id, thread_key, kind)
       ) STRICT, WITHOUT ROWID;
 CREATE TABLE feed_meta (

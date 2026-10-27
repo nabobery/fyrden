@@ -91,6 +91,9 @@ export const METRICS = {
   // participants.
   "feed.audience_dropped": [],
   "feed.participants_overflow": [],
+  // Events whose preference audience (`kind` = watchers) had more than it may tell, after a
+  // repository restore (counted once an event).
+  "feed.preference_overflow": ["kind"],
   "code_owners.request_skipped": ["reason"],
   "d1.invocation_statements": ["where", "op"],
   // Wall time of one stage of making webhook deliveries, in ms: an event's

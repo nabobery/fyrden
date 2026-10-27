@@ -326,14 +326,21 @@ async function accounts(env: Env, job: Job, metrics: Metrics | undefined): Promi
 
 async function stars(env: Env, job: Job, metrics: Metrics | undefined): Promise<Progress> {
   metrics?.count("d1.query", { db: "directory", op: "user_deletion_stars" });
-  const removed = await env.DIRECTORY.prepare(
-    `DELETE FROM stars WHERE rowid IN (SELECT rowid FROM stars WHERE user_id IN ${SET} LIMIT ?2)`,
-  )
-    .bind(job.user_id, DELETION_RUN_POLICY.starsPerRun)
-    .run();
-  return (removed.meta.changes ?? 0) < DELETION_RUN_POLICY.starsPerRun
-    ? { step: "feeds", againInMs: 0 }
-    : { step: "stars", againInMs: 0 };
+  // And the set's watch levels (repositories clear their own rows of deleted principals when
+  // they next count their watchers).
+  const [starred, watched] = await env.DIRECTORY.batch([
+    env.DIRECTORY.prepare(
+      `DELETE FROM stars WHERE rowid IN (SELECT rowid FROM stars WHERE user_id IN ${SET} LIMIT ?2)`,
+    ).bind(job.user_id, DELETION_RUN_POLICY.starsPerRun),
+    env.DIRECTORY.prepare(
+      `DELETE FROM watch_preferences WHERE (principal_id, repo_id) IN
+         (SELECT principal_id, repo_id FROM watch_preferences WHERE principal_id IN ${SET} LIMIT ?2)`,
+    ).bind(job.user_id, DELETION_RUN_POLICY.starsPerRun),
+  ]);
+  const left = [starred, watched].some(
+    (r) => (r?.meta.changes ?? 0) >= DELETION_RUN_POLICY.starsPerRun,
+  );
+  return left ? { step: "stars", againInMs: 0 } : { step: "feeds", againInMs: 0 };
 }
 
 async function feeds(env: Env, job: Job): Promise<Progress> {

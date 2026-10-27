@@ -289,6 +289,9 @@ export interface ThreadVersion {
   readonly version: number;
 }
 
+/** The higher of two priorities (P0 the highest). */
+const higher = (a: FeedPriority, b: FeedPriority): FeedPriority => (a < b ? a : b);
+
 const newerThan = (a: ThreadVersion, b: ThreadVersion) =>
   a.epoch > b.epoch || (a.epoch === b.epoch && a.version > b.version);
 
@@ -571,7 +574,12 @@ export class Feed {
       epoch: before.thread_epoch,
       version: before.version,
     });
-    let after: State = newer ? { ...before, ...thread(entry) } : before;
+    // An item's priority is the highest any of its entries had, whatever their order (so it never
+    // falls: a participant's activity stays P1 whatever a watch entry says, P2).
+    let after: State = {
+      ...(newer ? { ...before, ...thread(entry) } : before),
+      priority: higher(before.priority, entry.recipient.priority),
+    };
     if (recipient.kind === "activity") {
       // Members count within the repository's restore generation: an older one's add none, and
       // a newer one's start the set again (a restored repository's ids may repeat older ones).
@@ -851,7 +859,8 @@ export class Feed {
         `SELECT * FROM (
            SELECT *, (priority = 'P0' AND state = 'open') AS open FROM feed_items
            WHERE feed_seq IS NOT NULL AND order_at >= ?1
-             AND ((priority = 'P0' AND state = 'open') OR (priority = 'P1' AND last_event_at >= ?1))
+             AND ((priority = 'P0' AND state = 'open')
+               OR (priority IN ('P1', 'P2') AND last_event_at >= ?1))
              AND (?2 IS NULL OR repo_id IN (SELECT value FROM json_each(?2)))
              ${bySubject(filter.subjects, 3)})
          WHERE (open, feed_seq) < (?4, ?5)

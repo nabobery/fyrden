@@ -53,7 +53,7 @@ export type OpResult =
 export class OperationError extends Error {
   override name = "OperationError";
   constructor(
-    readonly status: 400 | 401 | 403 | 404 | 405 | 409 | 410 | 422,
+    readonly status: 400 | 401 | 403 | 404 | 405 | 409 | 410 | 422 | 503,
     readonly code: string,
     detail: string,
     /** Where the client starts over (for an expired cursor). */

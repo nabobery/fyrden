@@ -254,9 +254,9 @@ describe("repository deletion cleanups", () => {
       if (await runCleanups(env, target, { pages: 1 })) break;
     }
     expect(await traces(repo.id)).toEqual(NONE);
-    // Settling: two pages; effects: two; deliveries: two; payloads: two; search: one; bodies:
-    // one listing of up to 1,000 keys.
-    expect(calls).toBe(10);
+    // Settling: two pages; effects: two; deliveries: two; payloads: two; search: one; watch
+    // preferences: one; bodies: one listing of up to 1,000 keys.
+    expect(calls).toBe(11);
     expect(await cleanupsDone(repo.id)).toEqual(REPO_CLEANUPS.map((c) => c.name).sort());
   });
 

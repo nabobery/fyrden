@@ -69,6 +69,7 @@ CREATE INDEX revision_imports_waiting ON revision_imports (requested_at, pr_numb
 CREATE UNIQUE INDEX rulesets_name ON rulesets (name);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);
 CREATE INDEX view_merged_into ON view_merged (into_pack_id, merged_at);
+CREATE INDEX watchers_level ON watchers (level, revision, principal);
 CREATE INDEX webhook_blobs_retain ON webhook_blobs (retain_until);
 CREATE TABLE acl_snapshot (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -525,6 +526,12 @@ CREATE TABLE pending_commits (
     signature TEXT,
     PRIMARY KEY (upload_id, oid)
   ) STRICT, WITHOUT ROWID;
+CREATE TABLE preference_recovery (
+        grp TEXT PRIMARY KEY CHECK (grp IN ('watches', 'issues', 'pulls')),
+        target_epoch INTEGER NOT NULL,
+        phase TEXT NOT NULL CHECK (phase IN ('clear', 'import')),
+        cursor TEXT
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE pull_heads (
         pr_number INTEGER NOT NULL,
         sha TEXT NOT NULL,
@@ -814,6 +821,14 @@ CREATE TABLE view_merged (
         pack_id TEXT PRIMARY KEY,
         into_pack_id TEXT NOT NULL,
         merged_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE watchers (
+        principal TEXT PRIMARY KEY,
+        root TEXT NOT NULL,
+        level TEXT NOT NULL CHECK (level IN ('participating', 'watching', 'ignoring')),
+        epoch_gen INTEGER NOT NULL,
+        revision INTEGER NOT NULL,
+        at INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;
 CREATE TABLE webhook_blobs (
         hash TEXT PRIMARY KEY,

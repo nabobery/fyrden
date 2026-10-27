@@ -25,7 +25,11 @@ export const FeedItem = z.object({
     .int()
     .describe("The thread's feed version the item is at; acknowledge with it and `epoch`."),
   state: z.enum(["open", "resolved"]).describe("`resolved`: nothing to act on any more."),
-  priority: z.enum(FEED_PRIORITIES).describe("P0: act on this; P1: a thread you take part in."),
+  priority: z
+    .enum(FEED_PRIORITIES)
+    .describe(
+      "P0: act on this; P1: a thread you take part in; P2: activity in a repository you watch. An item keeps the highest any of its changes had.",
+    ),
   reasons: z.array(z.string()).describe("Why it is in the feed: author, reviewer, mentioned, ..."),
   silent: z
     .boolean()
@@ -105,7 +109,7 @@ export const syncFeed = defineOperation({
   path: "/feed/sync",
   summary: "Sync the activity feed",
   description:
-    "The feed's current state, to start from or start over: open P0 items, then P1 items of the last 7 days, newest first (500 at most), and the cursor to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. `complete` is false when more were left out, or when not every repository could be checked (at most 100 an answer): `head_cursor` then reads every repository from what the feed keeps of it. A complete sync's `head_cursor` follows on after it in the repositories it showed items of, and reads the others from what the feed keeps of them.",
+    "The feed's current state, to start from or start over: open P0 items, then P1 and P2 items of the last 7 days, newest first (500 at most), and the cursor to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. `complete` is false when more were left out, or when not every repository could be checked (at most 100 an answer): `head_cursor` then reads every repository from what the feed keeps of it. A complete sync's `head_cursor` follows on after it in the repositories it showed items of, and reads the others from what the feed keeps of them.",
   input: z.object({}),
   output: z.object({
     items: z.array(FeedItem),

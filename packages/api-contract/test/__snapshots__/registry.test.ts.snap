@@ -543,6 +543,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "members:write",
                         "starring:read",
                         "starring:write",
+                        "watching:read",
+                        "watching:write",
                         "ssh_signing_keys:read",
                         "ssh_signing_keys:write",
                         "tokens:read",
@@ -1496,6 +1498,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "members:write",
                         "starring:read",
                         "starring:write",
+                        "watching:read",
+                        "watching:write",
                         "ssh_signing_keys:read",
                         "ssh_signing_keys:write",
                         "tokens:read",
@@ -1725,6 +1729,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               "enum": [
                 "P0",
                 "P1",
+                "P2",
               ],
               "type": "string",
             },
@@ -1850,10 +1855,11 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "boolean",
                           },
                           "priority": {
-                            "description": "P0: act on this; P1: a thread you take part in.",
+                            "description": "P0: act on this; P1: a thread you take part in; P2: activity in a repository you watch. An item keeps the highest any of its changes had.",
                             "enum": [
                               "P0",
                               "P1",
+                              "P2",
                             ],
                             "type": "string",
                           },
@@ -2123,7 +2129,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/feed/sync": {
       "get": {
-        "description": "The feed's current state, to start from or start over: open P0 items, then P1 items of the last 7 days, newest first (500 at most), and the cursor to follow with \`GET /feed\`. Items of repositories the caller cannot read now are left out. \`complete\` is false when more were left out, or when not every repository could be checked (at most 100 an answer): \`head_cursor\` then reads every repository from what the feed keeps of it. A complete sync's \`head_cursor\` follows on after it in the repositories it showed items of, and reads the others from what the feed keeps of them.",
+        "description": "The feed's current state, to start from or start over: open P0 items, then P1 and P2 items of the last 7 days, newest first (500 at most), and the cursor to follow with \`GET /feed\`. Items of repositories the caller cannot read now are left out. \`complete\` is false when more were left out, or when not every repository could be checked (at most 100 an answer): \`head_cursor\` then reads every repository from what the feed keeps of it. A complete sync's \`head_cursor\` follows on after it in the repositories it showed items of, and reads the others from what the feed keeps of them.",
         "operationId": "feed.sync",
         "responses": {
           "200": {
@@ -2230,10 +2236,11 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "boolean",
                           },
                           "priority": {
-                            "description": "P0: act on this; P1: a thread you take part in.",
+                            "description": "P0: act on this; P1: a thread you take part in; P2: activity in a repository you watch. An item keeps the highest any of its changes had.",
                             "enum": [
                               "P0",
                               "P1",
+                              "P2",
                             ],
                             "type": "string",
                           },
@@ -2605,6 +2612,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "members:write",
                         "starring:read",
                         "starring:write",
+                        "watching:read",
+                        "watching:write",
                         "ssh_signing_keys:read",
                         "ssh_signing_keys:write",
                         "tokens:read",
@@ -32268,6 +32277,280 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/subscription": {
+      "delete": {
+        "description": "Back to participating in a repository the caller can read (told only of the conversations it takes part in). While the deployment has not turned watch audiences on (\`FYRDEN_WATCH_AUDIENCES\`), the level is kept and reported but adds nothing to feeds.",
+        "operationId": "watching.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The repository's owner handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {},
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete a repository subscription",
+        "x-fyrden-permission": "watching:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "The caller's watch level for a repository it can read, as GitHub's: 404 when it only participates (the default). A repository restored from a backup answers 503 \`preferences_recovering\` while it takes its watchers back. While the deployment has not turned watch audiences on (\`FYRDEN_WATCH_AUDIENCES\`), the level is kept and reported but adds nothing to feeds.",
+        "operationId": "watching.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The repository's owner handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "When the level was set, ISO 8601.",
+                      "type": "string",
+                    },
+                    "ignored": {
+                      "description": "Ignoring: not to be notified of the repository (kept; it takes effect with the inbox).",
+                      "type": "boolean",
+                    },
+                    "reason": {
+                      "type": "null",
+                    },
+                    "repository_url": {
+                      "type": "string",
+                    },
+                    "subscribed": {
+                      "description": "Watching: told of every conversation of the repository.",
+                      "type": "boolean",
+                    },
+                    "url": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "subscribed",
+                    "ignored",
+                    "reason",
+                    "created_at",
+                    "url",
+                    "repository_url",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a repository subscription",
+        "x-fyrden-permission": "watching:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "put": {
+        "description": "Watches a repository the caller can read (\`subscribed: true\`: activity of every conversation comes to its feed, P2), or ignores it (\`ignored: true\`, which wins); neither: back to participating. At most 100 principals watch a repository (409 \`watchers_full\` past it). After a 503, repeat the request (with a new Idempotency-Key, or none): it sets a state. While the deployment has not turned watch audiences on (\`FYRDEN_WATCH_AUDIENCES\`), the level is kept and reported but adds nothing to feeds.",
+        "operationId": "watching.put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The repository's owner handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "ignored": {
+                    "description": "Ignore the repository (wins over \`subscribed\`).",
+                    "type": "boolean",
+                  },
+                  "subscribed": {
+                    "description": "Watch the repository.",
+                    "type": "boolean",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "When the level was set, ISO 8601.",
+                      "type": "string",
+                    },
+                    "ignored": {
+                      "description": "Ignoring: not to be notified of the repository (kept; it takes effect with the inbox).",
+                      "type": "boolean",
+                    },
+                    "reason": {
+                      "type": "null",
+                    },
+                    "repository_url": {
+                      "type": "string",
+                    },
+                    "subscribed": {
+                      "description": "Watching: told of every conversation of the repository.",
+                      "type": "boolean",
+                    },
+                    "url": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "subscribed",
+                    "ignored",
+                    "reason",
+                    "created_at",
+                    "url",
+                    "repository_url",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Set a repository subscription",
+        "x-fyrden-permission": "watching:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}/tags": {
       "get": {
         "description": "Lists a repository's tags by name, each with the commit it points to (annotated tags are peeled; tags of other objects are not listed).",
@@ -35158,6 +35441,223 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/user/subscriptions": {
+      "get": {
+        "description": "The repositories the caller watches and can read now, by repository id. A page reads at most 100 watched repositories, so it can hold fewer than \`per_page\`, even none, with a \`next_cursor\`: keep following it until it is null. A cursor belongs to the credential that got it and lasts an hour. Delegated tokens are refused (403 \`delegated_listing\`): list with the user's own credentials.",
+        "operationId": "watching.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 400,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "repos": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "default_branch": {
+                            "type": "string",
+                          },
+                          "description": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "expires_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "When it is deleted (Unix time in milliseconds); null to keep it.",
+                          },
+                          "fork": {
+                            "description": "Whether the repository was forked from another.",
+                            "type": "boolean",
+                          },
+                          "full_name": {
+                            "description": "owner/name",
+                            "type": "string",
+                          },
+                          "id": {
+                            "description": "Immutable repository id (rep_ prefix).",
+                            "type": "string",
+                          },
+                          "is_template": {
+                            "description": "Whether new repositories can be generated from it (\`/generate\`).",
+                            "type": "boolean",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "owner": {
+                            "description": "The owner's handle.",
+                            "type": "string",
+                          },
+                          "owner_type": {
+                            "description": "Fyrden (GitHub's \`owner.type\`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+                            "enum": [
+                              "User",
+                              "Organization",
+                            ],
+                            "type": "string",
+                          },
+                          "parent_id": {
+                            "description": "The id of the repository it was forked from.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "permissions": {
+                            "additionalProperties": false,
+                            "description": "Only from \`GET /repos/{owner}/{repo}\`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+                            "properties": {
+                              "admin": {
+                                "type": "boolean",
+                              },
+                              "maintain": {
+                                "type": "boolean",
+                              },
+                              "pull": {
+                                "type": "boolean",
+                              },
+                              "push": {
+                                "type": "boolean",
+                              },
+                              "triage": {
+                                "type": "boolean",
+                              },
+                            },
+                            "required": [
+                              "admin",
+                              "maintain",
+                              "push",
+                              "triage",
+                              "pull",
+                            ],
+                            "type": "object",
+                          },
+                          "source_id": {
+                            "description": "Only from \`GET /repos/{owner}/{repo}\`: for a fork, the id of the repository its fork network grew from (GitHub's \`source\`), when you can see it; null otherwise.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "stargazers_count": {
+                            "description": "How many users starred it.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "visibility": {
+                            "enum": [
+                              "public",
+                              "internal",
+                              "private",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "owner",
+                          "name",
+                          "full_name",
+                          "visibility",
+                          "description",
+                          "default_branch",
+                          "fork",
+                          "is_template",
+                          "stargazers_count",
+                          "expires_at",
+                          "parent_id",
+                          "created_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "repos",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List watched repositories",
+        "x-fyrden-permission": "watching:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/user/tokens": {
       "get": {
         "description": "Your personal access and git tokens, newest first; revoked and expired ones too.",
@@ -35343,6 +35843,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "members:write",
                         "starring:read",
                         "starring:write",
+                        "watching:read",
+                        "watching:write",
                         "ssh_signing_keys:read",
                         "ssh_signing_keys:write",
                         "tokens:read",

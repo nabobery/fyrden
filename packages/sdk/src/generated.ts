@@ -152,7 +152,7 @@ export type UsersTokensListOutput = {
 export type UsersTokensCreateInput = {
   type?: "pat" | "git";
   /** Permissions it is limited to (and what they imply). Empty: your token's. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -217,7 +217,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -373,7 +373,7 @@ export type AgentsTokensCreateInput = {
   agent: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -441,7 +441,7 @@ export type GrantsCreateInput = {
   /** The agent's handle. */
   agent: string;
   /** Permissions the agent may use for you (and what they imply). */
-  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
   repositories?: string[];
   expires_in_days?: number;
@@ -5391,6 +5391,113 @@ export type StarsListOutput = {
   next_cursor: string | null;
 };
 
+/** Input of `watching.get`: Get a repository subscription. */
+export type WatchingGetInput = {
+  /** The repository's owner handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+};
+
+/** Output of `watching.get`. */
+export type WatchingGetOutput = {
+  /** Watching: told of every conversation of the repository. */
+  subscribed: boolean;
+  /** Ignoring: not to be notified of the repository (kept; it takes effect with the inbox). */
+  ignored: boolean;
+  reason: null;
+  /** When the level was set, ISO 8601. */
+  created_at: string;
+  url: string;
+  repository_url: string;
+};
+
+/** Input of `watching.put`: Set a repository subscription. */
+export type WatchingPutInput = {
+  /** The repository's owner handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** Watch the repository. */
+  subscribed?: boolean;
+  /** Ignore the repository (wins over `subscribed`). */
+  ignored?: boolean;
+};
+
+/** Output of `watching.put`. */
+export type WatchingPutOutput = {
+  /** Watching: told of every conversation of the repository. */
+  subscribed: boolean;
+  /** Ignoring: not to be notified of the repository (kept; it takes effect with the inbox). */
+  ignored: boolean;
+  reason: null;
+  /** When the level was set, ISO 8601. */
+  created_at: string;
+  url: string;
+  repository_url: string;
+};
+
+/** Input of `watching.delete`: Delete a repository subscription. */
+export type WatchingDeleteInput = {
+  /** The repository's owner handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+};
+
+/** Output of `watching.delete`. */
+export type WatchingDeleteOutput = Record<string, never>;
+
+/** Input of `watching.list`: List watched repositories. */
+export type WatchingListInput = {
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `watching.list`. */
+export type WatchingListOutput = {
+  repos: ({
+    /** Immutable repository id (rep_ prefix). */
+    id: string;
+    /** The owner's handle. */
+    owner: string;
+    /** Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked. */
+    owner_type?: "User" | "Organization";
+    name: string;
+    /** owner/name */
+    full_name: string;
+    visibility: "public" | "internal" | "private";
+    description: string | null;
+    default_branch: string;
+    /** Whether the repository was forked from another. */
+    fork: boolean;
+    /** Whether new repositories can be generated from it (`/generate`). */
+    is_template: boolean;
+    /** How many users starred it. */
+    stargazers_count: number;
+    /** When it is deleted (Unix time in milliseconds); null to keep it. */
+    expires_at: number | null;
+    /** The id of the repository it was forked from. */
+    parent_id: string | null;
+    /** Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise. */
+    source_id?: string | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation. */
+    permissions?: {
+      admin: boolean;
+      maintain: boolean;
+      push: boolean;
+      triage: boolean;
+      pull: boolean;
+    };
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
 /** Input of `feed.list`: Get the activity feed. */
 export type FeedListInput = {
   /** A previous answer's `next_cursor`; from the start without. */
@@ -5398,7 +5505,7 @@ export type FeedListInput = {
   /** Page size, 1-100. */
   limit?: number;
   /** Only items of this priority. */
-  priority?: "P0" | "P1";
+  priority?: "P0" | "P1" | "P2";
   /** Only items of this kind. */
   kind?: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity";
 };
@@ -5427,8 +5534,8 @@ export type FeedListOutput = {
     version: number;
     /** `resolved`: nothing to act on any more. */
     state: "open" | "resolved";
-    /** P0: act on this; P1: a thread you take part in. */
-    priority: "P0" | "P1";
+    /** P0: act on this; P1: a thread you take part in; P2: activity in a repository you watch. An item keeps the highest any of its changes had. */
+    priority: "P0" | "P1" | "P2";
     /** Why it is in the feed: author, reviewer, mentioned, ... */
     reasons: string[];
     /** The last change was the owner's own action (or its agents'): no notification. */
@@ -5488,8 +5595,8 @@ export type FeedSyncOutput = {
     version: number;
     /** `resolved`: nothing to act on any more. */
     state: "open" | "resolved";
-    /** P0: act on this; P1: a thread you take part in. */
-    priority: "P0" | "P1";
+    /** P0: act on this; P1: a thread you take part in; P2: activity in a repository you watch. An item keeps the highest any of its changes had. */
+    priority: "P0" | "P1" | "P2";
     /** Why it is in the feed: author, reviewer, mentioned, ... */
     reasons: string[];
     /** The last change was the owner's own action (or its agents'): no notification. */
@@ -7115,6 +7222,10 @@ export const OPERATIONS = {
   "stars.put": { method: "PUT", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.delete": { method: "DELETE", path: "/user/starred/{owner}/{repo}", pathParams: ["owner","repo"], idempotent: true },
   "stars.list": { method: "GET", path: "/user/starred", pathParams: [], idempotent: false, items: "repos" },
+  "watching.get": { method: "GET", path: "/repos/{owner}/{repo}/subscription", pathParams: ["owner","repo"], idempotent: false },
+  "watching.put": { method: "PUT", path: "/repos/{owner}/{repo}/subscription", pathParams: ["owner","repo"], idempotent: true },
+  "watching.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/subscription", pathParams: ["owner","repo"], idempotent: true },
+  "watching.list": { method: "GET", path: "/user/subscriptions", pathParams: [], idempotent: false, items: "repos" },
   "feed.list": { method: "GET", path: "/feed", pathParams: [], idempotent: false },
   "feed.sync": { method: "GET", path: "/feed/sync", pathParams: [], idempotent: false },
   "feed.ack": { method: "POST", path: "/feed/ack", pathParams: [], idempotent: true },
@@ -7419,9 +7530,17 @@ export interface Operations {
   "stars.delete": { input: StarsDeleteInput; output: StarsDeleteOutput };
   /** List starred repositories. Lists the repositories the caller starred, most recently starred first. Repositories the caller or its token can no longer read are left out, so a page can hold fewer than `per_page`; keep following `next_cursor` until it is null. */
   "stars.list": { input: StarsListInput; output: StarsListOutput };
+  /** Get a repository subscription. The caller's watch level for a repository it can read, as GitHub's: 404 when it only participates (the default). A repository restored from a backup answers 503 `preferences_recovering` while it takes its watchers back. While the deployment has not turned watch audiences on (`FYRDEN_WATCH_AUDIENCES`), the level is kept and reported but adds nothing to feeds. */
+  "watching.get": { input: WatchingGetInput; output: WatchingGetOutput };
+  /** Set a repository subscription. Watches a repository the caller can read (`subscribed: true`: activity of every conversation comes to its feed, P2), or ignores it (`ignored: true`, which wins); neither: back to participating. At most 100 principals watch a repository (409 `watchers_full` past it). After a 503, repeat the request (with a new Idempotency-Key, or none): it sets a state. While the deployment has not turned watch audiences on (`FYRDEN_WATCH_AUDIENCES`), the level is kept and reported but adds nothing to feeds. */
+  "watching.put": { input: WatchingPutInput; output: WatchingPutOutput };
+  /** Delete a repository subscription. Back to participating in a repository the caller can read (told only of the conversations it takes part in). While the deployment has not turned watch audiences on (`FYRDEN_WATCH_AUDIENCES`), the level is kept and reported but adds nothing to feeds. */
+  "watching.delete": { input: WatchingDeleteInput; output: WatchingDeleteOutput };
+  /** List watched repositories. The repositories the caller watches and can read now, by repository id. A page reads at most 100 watched repositories, so it can hold fewer than `per_page`, even none, with a `next_cursor`: keep following it until it is null. A cursor belongs to the credential that got it and lasts an hour. Delegated tokens are refused (403 `delegated_listing`): list with the user's own credentials. */
+  "watching.list": { input: WatchingListInput; output: WatchingListOutput };
   /** Get the activity feed. The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's `next_cursor` as `since` for what changed after it; a changed item comes again, so keep the latest copy by `item_key`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short; a cursor records, per repository and kind of thread (issues, pull requests), only what the caller was shown, so nothing it cannot read moves or expires it. An answer checks at most 100 repositories and reads at most 1,000 items, so a page can end early, even empty, and items the caller cannot read ahead of its own can delay them; the items of repositories the feed's owner itself cannot read now are then forgotten, so a later answer gets past them. Poll by `poll_after_ms`: while nothing changes the wait grows to 30 minutes, and an answer that shows something brings it back to 30 seconds. A cursor belongs to the credential that got it and lasts a day (reading on with it renews it); one past that, of another credential or epoch, or behind what the feed keeps of a repository the caller can read (7 days, 500 items a repository and kind), is refused with 410 `cursor_expired`: start over from `GET /feed/sync`. The answer carries an ETag; with `If-None-Match` an unchanged one is 304. */
   "feed.list": { input: FeedListInput; output: FeedListOutput };
-  /** Sync the activity feed. The feed's current state, to start from or start over: open P0 items, then P1 items of the last 7 days, newest first (500 at most), and the cursor to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. `complete` is false when more were left out, or when not every repository could be checked (at most 100 an answer): `head_cursor` then reads every repository from what the feed keeps of it. A complete sync's `head_cursor` follows on after it in the repositories it showed items of, and reads the others from what the feed keeps of them. */
+  /** Sync the activity feed. The feed's current state, to start from or start over: open P0 items, then P1 and P2 items of the last 7 days, newest first (500 at most), and the cursor to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. `complete` is false when more were left out, or when not every repository could be checked (at most 100 an answer): `head_cursor` then reads every repository from what the feed keeps of it. A complete sync's `head_cursor` follows on after it in the repositories it showed items of, and reads the others from what the feed keeps of them. */
   "feed.sync": { input: FeedSyncInput; output: FeedSyncOutput };
   /** Acknowledge a feed item. Records that the feed's owner has seen an item at a version, its `epoch` and `version` (every reader of the feed shares it, and the item comes again in `GET /feed`). Versions order by epoch, then version. A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing. */
   "feed.ack": { input: FeedAckInput; output: FeedAckOutput };

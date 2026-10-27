@@ -48,6 +48,7 @@ describe("D1 directory schema", () => {
       "tokens",
       "user_deletions",
       "user_retirements",
+      "watch_preferences",
       "webauthn_challenges",
     ]);
   });

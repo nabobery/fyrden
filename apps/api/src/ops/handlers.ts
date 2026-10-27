@@ -207,6 +207,12 @@ import {
 import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "../repos/stars.js";
 import { transferRepoOperation } from "../repos/transfer.js";
 import { updateRepoOperation } from "../repos/update.js";
+import {
+  deleteRepoSubscriptionOperation,
+  getRepoSubscriptionOperation,
+  listSubscriptionsOperation,
+  setRepoSubscriptionOperation,
+} from "../repos/watching.js";
 import { backfillSearchOperation } from "../search/backfill.js";
 import { clock, newId } from "../services.js";
 import { platformKeys } from "../signing/platform-key.js";
@@ -527,6 +533,10 @@ export const handlers: Handlers = {
   "stars.put": starRepoOperation,
   "stars.delete": unstarRepoOperation,
   "stars.list": listStarredOperation,
+  "watching.get": getRepoSubscriptionOperation,
+  "watching.put": setRepoSubscriptionOperation,
+  "watching.delete": deleteRepoSubscriptionOperation,
+  "watching.list": listSubscriptionsOperation,
 
   // The caller's activity feed (feed/operations).
   "feed.list": getFeedOperation,

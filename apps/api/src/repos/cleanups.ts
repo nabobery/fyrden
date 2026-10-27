@@ -27,11 +27,11 @@ export const CLEANUP_POLICY = {
   /**
    * Pages one deletion call works through: each takes up to three internal
    * calls (D1 or R2), plus one to read what is done and one to record each
-   * cleanup finished: at most 25 calls a deletion, 250 for the cron's ten,
+   * cleanup finished: at most 29 calls a deletion, 290 for the cron's ten,
    * of an invocation's 1,000. One page of each cleanup: a repository with
    * little to clean up is cleaned up in one call.
    */
-  pagesPerCall: 6,
+  pagesPerCall: 7,
   /** Journaled effects deleted a page. */
   effectsPage: 500,
   /** Webhook deliveries (and their attempts) deleted a page. */
@@ -243,12 +243,32 @@ const webhookBodies: RepoCleanup = {
 };
 
 /** In order: effects first, so none makes a delivery while its deliveries are removed. */
+/**
+ * Its watchers' copy in the directory (`watch_preferences`), a page at a
+ * time: a held copy write finds the repository not active and writes none.
+ */
+const watchPreferences: RepoCleanup = {
+  name: "watch_preferences",
+  async page(env, { repoId }, metrics) {
+    metrics?.count("d1.query", { db: "directory", op: "cleanup_watch_preferences" });
+    const deleted = await env.DIRECTORY.prepare(
+      `DELETE FROM watch_preferences WHERE (principal_id, repo_id) IN
+         (SELECT principal_id, repo_id FROM watch_preferences INDEXED BY watch_preferences_repo
+          WHERE repo_id = ? LIMIT ?)`,
+    )
+      .bind(repoId, CLEANUP_POLICY.effectsPage)
+      .run();
+    return pageOutcome(deleted.meta.changes ?? 0, CLEANUP_POLICY.effectsPage);
+  },
+};
+
 export const REPO_CLEANUPS: readonly RepoCleanup[] = [
   webhookEffects,
   journaledEffects,
   webhookDeliveries,
   webhookPayloads,
   searchProjections,
+  watchPreferences,
   webhookBodies,
 ];
 

@@ -181,6 +181,12 @@ import {
 import { listStarred, starRepo, unstarRepo } from "../ops/stars.js";
 import { createGitToken, createUserToken, listUserTokens, revokeUserToken } from "../ops/tokens.js";
 import { abortUpload, completeUpload, createUpload, getUpload } from "../ops/uploads.js";
+import {
+  deleteRepoSubscription,
+  getRepoSubscription,
+  listSubscriptions,
+  setRepoSubscription,
+} from "../ops/watching.js";
 import { defineRegistry } from "./op.js";
 
 /** Every operation Fyrden exposes. Order is the order in OpenAPI and MCP listings. */
@@ -315,6 +321,10 @@ export const registry = defineRegistry([
   starRepo,
   unstarRepo,
   listStarred,
+  getRepoSubscription,
+  setRepoSubscription,
+  deleteRepoSubscription,
+  listSubscriptions,
   getFeed,
   syncFeed,
   ackFeedItem,

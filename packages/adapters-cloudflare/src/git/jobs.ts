@@ -35,6 +35,7 @@ export const JOB_KINDS = [
   "review_teams",
   "code_owners",
   "code_owner_requests",
+  "watch_recovery",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 

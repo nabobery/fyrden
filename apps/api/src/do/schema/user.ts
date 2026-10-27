@@ -180,34 +180,54 @@ export const userSchema: readonly DoMigration[] = [
     // greatest sequence number trimmed. Indexes are kept to what a write must,
     // each being a row written on Workers Free's daily allowance.
     name: "feed_streams",
-    // Drops indexes only this object's code reads, after it no longer does: the
-    // object migrates before it answers anything, and earlier code refuses a
-    // newer schema rather than reading it.
+    // Rebuilds `feed_items` (a CHECK cannot be altered: priorities gain P2,
+    // watched activity), dropping its indexes by time and kind with it: only
+    // this object's code reads them, the object migrates before it answers
+    // anything, and earlier code refuses a newer schema rather than reading it.
     contract: {
       safeSince: "the release adding feed streams",
-      reason: "feed_items' indexes by time and kind are replaced; only UserDO code reads them",
+      reason: "feed_items is rebuilt under its own name; only UserDO code reads it",
     },
     sql: `
-      ALTER TABLE feed_items ADD COLUMN subject TEXT NOT NULL DEFAULT '';
-      ALTER TABLE feed_items ADD COLUMN order_at INTEGER NOT NULL DEFAULT 0;
-      UPDATE feed_items SET subject = substr(thread_key, 1, instr(thread_key, '/') - 1);
-      CREATE TABLE feed_v6_order (
+      CREATE TABLE feed_items_v6 (
         repo_id TEXT NOT NULL,
         thread_key TEXT NOT NULL,
         kind TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        thread_epoch INTEGER NOT NULL,
+        version INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('open', 'resolved')),
+        priority TEXT NOT NULL CHECK (priority IN ('P0', 'P1', 'P2')),
+        reasons TEXT NOT NULL,
+        silent INTEGER NOT NULL CHECK (silent IN (0, 1)),
+        action TEXT NOT NULL,
+        actor TEXT,
+        actor_trust TEXT NOT NULL CHECK (actor_trust IN ('write', 'read', 'none')),
+        display_member TEXT,
+        members TEXT NOT NULL,
+        truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
+        last_event_key TEXT NOT NULL,
+        last_event_at INTEGER NOT NULL,
+        acked_epoch INTEGER NOT NULL DEFAULT 0,
+        acked_version INTEGER NOT NULL DEFAULT 0,
+        feed_seq INTEGER UNIQUE,
+        seq_at INTEGER NOT NULL,
+        subject TEXT NOT NULL,
         order_at INTEGER NOT NULL,
         PRIMARY KEY (repo_id, thread_key, kind)
       ) STRICT, WITHOUT ROWID;
-      INSERT INTO feed_v6_order
-        SELECT repo_id, thread_key, kind,
+      INSERT INTO feed_items_v6
+        SELECT repo_id, thread_key, kind, number, title, thread_epoch, version, state, priority,
+          reasons, silent, action, actor, actor_trust, display_member, members, truncated,
+          last_event_key, last_event_at, acked_epoch, acked_version, feed_seq, seq_at, subject,
           CASE WHEN feed_seq IS NULL THEN seq_at
             ELSE max(seq_at) OVER (PARTITION BY repo_id, subject, feed_seq IS NULL
               ORDER BY feed_seq ROWS UNBOUNDED PRECEDING) END
-        FROM feed_items;
-      UPDATE feed_items SET order_at = o.order_at FROM feed_v6_order o
-        WHERE o.repo_id = feed_items.repo_id AND o.thread_key = feed_items.thread_key
-          AND o.kind = feed_items.kind;
-      DROP TABLE feed_v6_order;
+        FROM (SELECT *, substr(thread_key, 1, instr(thread_key, '/') - 1) AS subject
+          FROM feed_items);
+      DROP TABLE feed_items;
+      ALTER TABLE feed_items_v6 RENAME TO feed_items;
 
       ALTER TABLE feed_evictions ADD COLUMN subject TEXT NOT NULL DEFAULT '';
       UPDATE feed_evictions SET subject = substr(thread_key, 1, instr(thread_key, '/') - 1);
@@ -259,9 +279,6 @@ export const userSchema: readonly DoMigration[] = [
       ALTER TABLE feed_meta ADD COLUMN legacy_head INTEGER NOT NULL DEFAULT 0;
       UPDATE feed_meta SET legacy_head = head_seq;
 
-      DROP INDEX feed_items_subject;
-      DROP INDEX feed_items_seq_at;
-      DROP INDEX feed_tombstones;
       CREATE INDEX feed_items_stream ON feed_items (repo_id, subject, feed_seq)
         WHERE feed_seq IS NOT NULL;
       CREATE INDEX feed_items_age ON feed_items (order_at);

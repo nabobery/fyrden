@@ -306,6 +306,9 @@ const SECONDARY: Record<string, { permission: string; input: Record<string, unkn
   "repos.generate": { permission: "contents:read", input: { name: "generated" } },
   "stars.put": { permission: "metadata:read", input: {} },
   "stars.delete": { permission: "metadata:read", input: {} },
+  "watching.get": { permission: "metadata:read", input: {} },
+  "watching.put": { permission: "metadata:read", input: { subscribed: true } },
+  "watching.delete": { permission: "metadata:read", input: {} },
 };
 // Organization operations on a repository (a team's) check the organization
 // first; their tests are with the organization's.

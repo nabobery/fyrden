@@ -239,6 +239,13 @@ import {
   templateTree,
 } from "./repo/template.js";
 import {
+  RepoWatching,
+  type WatchCommand,
+  type WatchLevel,
+  type WatchRow,
+  watchAudiencesOn,
+} from "./repo/watching.js";
+import {
   RepoWebhookBlobs,
   type WebhookBlobsAsk,
   type WebhookBlobsRead,
@@ -260,6 +267,10 @@ const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
 
 /** The job that prunes feed audience pages past their time, and how many a slice deletes. */
 const FEED_PAGES_JOB = "feed_pages_prune";
+/** The job that takes a restored repository's watchers back from the directory's copy. */
+const WATCH_RECOVERY_JOB = "watch_recovery";
+/** When a recovery step that could not read the directory tries again. Proposed. */
+const WATCH_RECOVERY_RETRY_MS = 60_000;
 const FEED_PAGES_PRUNE_BATCH = 500;
 const WEBHOOK_BLOBS_JOB = "webhook_blobs_prune";
 /** The job that settles team review requests no longer standing (see `RepoTeamRequests`). */
@@ -423,6 +434,9 @@ export class RepoDO extends MigratingDO {
   /** The repository's webhooks. */
   readonly hooks: RepoHooks;
   readonly feed: RepoFeed;
+  readonly watching: RepoWatching;
+  /** For tests: watch audiences on or off whatever the deployment's switch says. */
+  watchAudiences: boolean | undefined;
   readonly webhookBlobStore: RepoWebhookBlobs;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -475,8 +489,12 @@ export class RepoDO extends MigratingDO {
         this.codeOwners.restored();
         // Its owners asked of again, as after a transfer (an ownership repaired among them).
         this.#codeOwnerRequests.queueAll();
+        // Its watchers taken back from the directory's copy before anyone watches again.
+        this.watching.restored(this.events.epochGen());
+        this.git.jobs.ensure(WATCH_RECOVERY_JOB, WATCH_RECOVERY_JOB);
       },
     );
+    this.watching = new RepoWatching({ git: this.git, epochGen: () => this.events.epochGen() });
     this.changeLists = new ChangeLists(this.git);
     this.reactions = new RepoReactions({ git: this.git, events: this.events });
     this.references = new RepoReferences({
@@ -584,6 +602,8 @@ export class RepoDO extends MigratingDO {
       refreshAccess: () => this.acl.refresh(),
       resolveHandles: (handles) => this.#feedView.resolveHandles(handles),
       prepareTexts: (texts) => this.references.prepare(texts),
+      audiences: () => this.watchAudiences ?? watchAudiencesOn(this.env),
+      watchers: () => this.watching.candidates(),
       metrics: this.git.context.metrics,
     });
     this.webhookBlobStore = new RepoWebhookBlobs({
@@ -3201,6 +3221,25 @@ export class RepoDO extends MigratingDO {
             : { done: true };
         },
       },
+      [WATCH_RECOVERY_JOB]: {
+        runSlice: async () => {
+          await this.checkEpoch();
+          let more: boolean;
+          try {
+            more = await this.watching.recoverStep((after, limit) => this.#watchCopy(after, limit));
+          } catch (error) {
+            // The directory could not answer: tried again later however long that takes, never
+            // given up as a failed job (commands wait for it).
+            this.#log().warn("taking the watchers back failed", { error });
+            return { done: false, cursor: null, runAfterMs: WATCH_RECOVERY_RETRY_MS };
+          }
+          // A full page's step ends the invocation (its rows are written with no I/O to bound it
+          // otherwise); done only when no recovery is left, read with no await before the job
+          // records it (a restore meanwhile starts another).
+          if (more) return { done: false, cursor: null, endInvocation: true };
+          return this.watching.recovering() ? { done: false, cursor: null } : { done: true };
+        },
+      },
       feed_pages_prune: {
         runSlice: async () => {
           const now = this.git.context.now();
@@ -3358,6 +3397,133 @@ export class RepoDO extends MigratingDO {
     if (this.events.visibility() === "public") return true;
     const ceilings = await this.#authority.rolesPulled(principalId, null);
     return this.#authority.roleNow(principalId, ceilings) !== null;
+  }
+
+  /**
+   * `principal`'s watch level here (null: participating by default), or
+   * that the repository is gone or taking its watchers back after a restore.
+   */
+  async watchLevel(
+    principal: string,
+  ): Promise<{ status: "gone" | "recovering" } | { status: "ok"; row: WatchRow | null }> {
+    if (this.#gone()) return { status: "gone" };
+    await this.checkEpoch();
+    if (this.#refusesReads()) return { status: "gone" };
+    if (this.watching.recovering()) return { status: "recovering" };
+    return { status: "ok", row: this.watching.get(principal) ?? null };
+  }
+
+  /**
+   * For a listing of what `principal` (its own credentials) watches, in one
+   * call: whether it reads the repository now and whether it watches it,
+   * or that the repository is gone or taking its watchers back.
+   */
+  async watchedBy(
+    principal: string,
+  ): Promise<{ status: "gone" | "recovering" } | { status: "ok"; watching: boolean }> {
+    // Before the measured wrapper, which refuses a repository being erased outright.
+    if (this.#gone()) return { status: "gone" };
+    return this.#measured("watchedBy", async () => {
+      await this.checkEpoch();
+      if (this.#refusesReads()) return { status: "gone" as const };
+      const ceilings = await this.#authority.rolesPulled(principal, null);
+      const reads =
+        this.events.visibility() === "public" ||
+        this.#authority.roleNow(principal, ceilings) !== null;
+      if (!reads) return { status: "gone" as const };
+      if (this.watching.recovering()) return { status: "recovering" as const };
+      return {
+        status: "ok" as const,
+        watching: this.watching.get(principal)?.level === "watching",
+      };
+    });
+  }
+
+  /**
+   * Sets `principal`'s watch level (see `RepoWatching.set`), when it reads
+   * the repository now (its root identity worked out here, as a change's
+   * is). At the cap, the watchers among the counted whose principals are
+   * deleted for good are cleared first (one directory read), and the
+   * command tried again.
+   */
+  async setWatch(
+    principal: string,
+    grantId: string | null,
+    level: WatchLevel,
+  ): Promise<WatchCommand | { status: "gone" }> {
+    if (this.#gone()) return { status: "gone" };
+    return this.#measured("setWatch", async () => {
+      await this.checkEpoch();
+      if (this.#refusesReads()) return { status: "gone" as const };
+      const ceilings = await this.#authority.rolesPulled(principal, grantId);
+      const root = rootIdentity({ principalId: principal, grantId, ceilingIds: ceilings });
+      // Judged again right before each attempt, with no await between: an access lost or a
+      // deletion started while the directory was read writes nothing.
+      const command = (): WatchCommand | { status: "gone" } => {
+        const reads =
+          this.events.visibility() === "public" ||
+          this.#authority.roleNow(principal, ceilings) !== null;
+        if (this.#gone() || this.#refusesReads() || !reads) return { status: "gone" };
+        return this.ctx.storage.transactionSync(() => this.watching.set(principal, root, level));
+      };
+      const first = command();
+      if (first.status !== "full") return first;
+      const deleted = await this.#deletedPrincipals(first.watchers);
+      if (deleted.length > 0) this.ctx.storage.transactionSync(() => this.watching.forget(deleted));
+      return command();
+    });
+  }
+
+  /** Of `principals`, those being deleted or deleted (for good), from the directory's primary. */
+  async #deletedPrincipals(principals: readonly string[]): Promise<string[]> {
+    this.git.context.metrics.count("d1.query", { db: "directory", op: "watch_lifecycle" });
+    const { results } = await this.env.DIRECTORY.withSession("first-primary")
+      .prepare(
+        `SELECT id FROM principals WHERE id IN (SELECT value FROM json_each(?))
+           AND lifecycle IN ('deleting', 'deleted')`,
+      )
+      .bind(JSON.stringify(principals))
+      .all<{ id: string }>();
+    return results.map((r) => r.id);
+  }
+
+  /**
+   * A page of the directory's copy of this repository's watchers, after
+   * `after` in principal order, each saying whether its principal is still
+   * there (active or suspended: a suspension keeps its preferences).
+   */
+  async #watchCopy(
+    after: string | null,
+    limit: number,
+  ): Promise<(WatchRow & { active: boolean })[]> {
+    this.git.context.metrics.count("d1.query", { db: "directory", op: "watch_copy" });
+    const { results } = await this.env.DIRECTORY.withSession("first-primary")
+      .prepare(
+        `SELECT w.principal_id, w.root_id, w.level, w.revision, w.epoch_gen, w.at,
+           coalesce(p.lifecycle IN ('active', 'suspended'), 0) AS active
+         FROM watch_preferences w LEFT JOIN principals p ON p.id = w.principal_id
+         WHERE w.repo_id = ?1 AND w.principal_id > ?2
+         ORDER BY w.principal_id LIMIT ?3`,
+      )
+      .bind(this.#repoId(), after ?? "", limit)
+      .all<{
+        principal_id: string;
+        root_id: string;
+        level: WatchLevel;
+        revision: number;
+        epoch_gen: number;
+        at: number;
+        active: number;
+      }>();
+    return results.map((r) => ({
+      principal: r.principal_id,
+      root: r.root_id,
+      level: r.level,
+      revision: r.revision,
+      epochGen: r.epoch_gen,
+      at: r.at,
+      active: r.active === 1,
+    }));
   }
 
   /** Where branch `headRef` is, for a pull request's base. */

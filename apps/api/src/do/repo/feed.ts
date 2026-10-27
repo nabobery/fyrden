@@ -92,6 +92,16 @@ export interface RepoFeedDeps {
   readonly resolveHandles: (handles: readonly string[]) => Promise<Map<string, FeedPrincipal>>;
   /** Before a change, with the texts it writes: what else they need resolved (other repositories). */
   readonly prepareTexts?: (texts: readonly (string | null | undefined)[]) => Promise<void>;
+  /**
+   * Whether watching adds to audiences (the deployment's switch): watchers,
+   * and authors told of their subjects' state changes. Off: neither.
+   */
+  readonly audiences?: () => boolean;
+  /** The watchers an event may tell (see `RepoWatching.candidates`). */
+  readonly watchers?: () => {
+    readonly watchers: readonly FeedPrincipal[];
+    readonly overflow: boolean;
+  };
   readonly metrics: Metrics;
 }
 
@@ -119,6 +129,17 @@ const PARTICIPANTS_PER_PAGE = 200;
 /** A page of a thread's participants after a join sequence (through its index). */
 export const PARTICIPANTS_PAGE = `SELECT principal, root, reason, joined_seq FROM feed_participants
   WHERE number = ?1 AND joined_seq > ?2 ORDER BY joined_seq LIMIT ?3`;
+/** Events that open a thread: its repository's watchers hear of them too. */
+const OPENED: ReadonlySet<string> = new Set(["issue.opened", "pull_request.opened"]);
+
+/** Events that change a thread's state: its author hears of them, its own included (silently). */
+const STATE_CHANGES: ReadonlySet<string> = new Set([
+  "issue.closed",
+  "issue.reopened",
+  "pull_request.closed",
+  "pull_request.reopened",
+]);
+
 /** Kinds that are something to act on (the others: what happened). */
 const ACTION_KINDS: ReadonlySet<FeedKind> = new Set([
   "review_requested",
@@ -199,12 +220,13 @@ export class RepoFeed {
     const audience: FeedRecipient[] = [];
     // One entry per principal and kind (a participant mentioned hears of both).
     const named = new Set<string>();
-    const add = (r: Named, exact = false) => {
+    const add = (r: Named, exact = false, ownState = false) => {
       const self = exact
         ? r.principal === actor
         : r.principal === actor || r.principal === actorRoot || r.root === actorRoot;
-      // No one hears of their own activity; what their action changes of their items, silently.
-      if (self && !ACTION_KINDS.has(r.kind)) return;
+      // No one hears of their own activity; what their action changes of their items (an
+      // author's own state change included), silently.
+      if (self && !ACTION_KINDS.has(r.kind) && !ownState) return;
       const key = `${r.principal}|${r.kind}`;
       if (named.has(key)) return;
       // A request settled, or standing again, reaches everyone it asks, whether they still read
@@ -229,6 +251,23 @@ export class RepoFeed {
       });
       this.#join(plan.number, who, "mentioned", readers);
     }
+    const watching = this.deps.audiences?.() ?? false;
+    // Its author hears of its state changing, whatever the participants' cap, before them (so a
+    // participating author's entry says why).
+    if (watching && STATE_CHANGES.has(type) && row)
+      for (const who of authorsOf(row))
+        add(
+          {
+            principal: who.id,
+            root: who.root,
+            kind: "activity",
+            reasons: ["author"],
+            priority: "P1",
+            state: "open",
+          },
+          false,
+          true,
+        );
     if (plan.activity)
       for (const p of this.#participants(plan.number))
         add({
@@ -239,10 +278,25 @@ export class RepoFeed {
           priority: "P1",
           state: "open",
         });
+    // Watchers, after everyone told for another reason (a participant stays P1).
+    if (watching && (plan.activity || OPENED.has(type))) {
+      const { watchers, overflow } = this.deps.watchers?.() ?? { watchers: [], overflow: false };
+      for (const who of watchers)
+        add({
+          principal: who.id,
+          root: who.root,
+          kind: "activity",
+          reasons: ["watching"],
+          priority: "P2",
+          state: "open",
+        });
+      if (overflow) this.deps.metrics.count("feed.preference_overflow", { kind: "watchers" });
+    }
     for (const [who, reason] of plan.joins) this.#join(plan.number, who, reason, readers);
     if (audience.length === 0) return undefined;
-    // Things to act on first, when there are more than one event may name.
-    audience.sort((a, b) => (a.priority === b.priority ? 0 : a.priority === "P0" ? -1 : 1));
+    // Things to act on first, then threads taken part in, then watched ones, when there are more
+    // than one event may name (stable within each).
+    audience.sort((a, b) => (a.priority < b.priority ? -1 : a.priority > b.priority ? 1 : 0));
     const pages = this.#keepPages(audience.slice(MAX_FEED_AUDIENCE), event);
     const threadKey = `${subject.kind}/${plan.number}`;
     const version = this.#bump(threadKey);

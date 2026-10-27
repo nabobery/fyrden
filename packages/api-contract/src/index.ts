@@ -29,6 +29,7 @@ export * from "../ops/stars.js";
 export * from "../ops/subject-meta.js";
 export * from "../ops/tokens.js";
 export * from "../ops/uploads.js";
+export * from "../ops/watching.js";
 export * from "./mcp.js";
 export * from "./op.js";
 export * from "./openapi.js";

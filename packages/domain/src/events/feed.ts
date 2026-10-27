@@ -24,8 +24,8 @@ export type FeedKind = (typeof FEED_KINDS)[number];
 export const FEED_SUBJECT_KINDS = ["issue", "pull"] as const;
 export type FeedSubjectKind = (typeof FEED_SUBJECT_KINDS)[number];
 
-/** P0: act on this; P1: a thread one takes part in. */
-export const FEED_PRIORITIES = ["P0", "P1"] as const;
+/** P0: act on this; P1: a thread one takes part in; P2: activity in a repository one watches. */
+export const FEED_PRIORITIES = ["P0", "P1", "P2"] as const;
 export type FeedPriority = (typeof FEED_PRIORITIES)[number];
 
 /** Recipients an event carries itself at most (and each page of the rest). */

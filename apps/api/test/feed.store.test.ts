@@ -22,7 +22,7 @@ describe("applying entries", () => {
       ago: fc.integer({ min: 0, max: 60 * 60 * 1000 }),
       // Action items open and resolve in any interleaving.
       state: fc.constantFrom<"open" | "resolved">("open", "resolved"),
-      priority: fc.constantFrom<FeedPriority>("P0", "P1"),
+      priority: fc.constantFrom<FeedPriority>("P0", "P1", "P2"),
       silent: fc.boolean(),
     });
     // One event per version of a thread, as the repository numbers them.
@@ -420,6 +420,36 @@ describe("reading the feed", () => {
     });
     // Limited to some repositories: the others are not read at all.
     expect((await stub.syncStreams(null, 50, { repoIds: ["rep_other"] })).items).toEqual([]);
+  });
+});
+
+describe("watched activity (P2)", () => {
+  it("takes the highest priority any entry of an item had, in any order", async () => {
+    await inFeed((storage) => {
+      const { apply, rows } = feedIn(storage);
+      // A watch entry, then a participant's: P1. And the other order: P1 too.
+      apply([entry({ thread: 1, version: 1, priority: "P2" })]);
+      apply([entry({ thread: 1, version: 2, priority: "P1" })]);
+      apply([entry({ thread: 2, version: 2, priority: "P1" })]);
+      apply([entry({ thread: 2, version: 3, priority: "P2" })]);
+      apply([entry({ thread: 3, version: 1, priority: "P2" })]);
+      expect(rows("feed_seq IS NOT NULL").map((r) => [r.thread_key, r.priority])).toEqual([
+        ["pull/1", "P1"],
+        ["pull/2", "P1"],
+        ["pull/3", "P2"],
+      ]);
+    });
+  });
+
+  it("is synced with P1, latest first", async () => {
+    const stub = env.USER.getByName(uniqueId("usr"));
+    await stub.applyFeed([entry({ thread: 1, version: 1, priority: "P2" })]);
+    await stub.applyFeed([entry({ thread: 2, version: 1 })]);
+    const synced = await stub.syncStreams(null, 50, {});
+    expect(synced.items.map((i) => [i.threadKey, i.priority])).toEqual([
+      ["pull/2", "P1"],
+      ["pull/1", "P2"],
+    ]);
   });
 });
 

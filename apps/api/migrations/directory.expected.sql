@@ -329,6 +329,18 @@ CREATE TABLE user_retirements (
   PRIMARY KEY (user_id, principal_id)
 ) STRICT, WITHOUT ROWID;
 
+-- table watch_preferences
+CREATE TABLE watch_preferences (
+  principal_id TEXT NOT NULL,
+  repo_id TEXT NOT NULL,
+  root_id TEXT NOT NULL,
+  level TEXT NOT NULL CHECK (level IN ('participating', 'watching', 'ignoring')),
+  revision INTEGER NOT NULL,
+  epoch_gen INTEGER NOT NULL,
+  at INTEGER NOT NULL,
+  PRIMARY KEY (principal_id, repo_id)
+) STRICT;
+
 -- table webauthn_challenges
 CREATE TABLE webauthn_challenges (
   id TEXT PRIMARY KEY,
@@ -477,6 +489,12 @@ CREATE INDEX user_deletions_rearm ON user_deletions (rearm_after, user_id) WHERE
 
 -- index user_retirements_principal
 CREATE INDEX user_retirements_principal ON user_retirements (principal_id);
+
+-- index watch_preferences_listed
+CREATE INDEX watch_preferences_listed ON watch_preferences (principal_id, level, repo_id);
+
+-- index watch_preferences_repo
+CREATE INDEX watch_preferences_repo ON watch_preferences (repo_id, principal_id);
 
 -- index webauthn_challenges_expiry
 CREATE INDEX webauthn_challenges_expiry ON webauthn_challenges (expires_at);

@@ -1370,4 +1370,31 @@ export const repoSchema: readonly DoMigration[] = [
       ALTER TABLE issue_tombstones ADD COLUMN deleted_seq INTEGER;
     `,
   },
+  {
+    version: 46,
+    // Watching: each principal's level for the repository (`participating`,
+    // the default, `watching` or `ignoring`), with the command that set it
+    // (`epoch_gen`, `revision`: the order the directory's copy keeps); the
+    // index reads the watchers in a fixed order without sorting. And a
+    // restored repository's recovery of its preferences from that copy, per
+    // group (no row: ready).
+    name: "watchers",
+    sql: `
+      CREATE TABLE watchers (
+        principal TEXT PRIMARY KEY,
+        root TEXT NOT NULL,
+        level TEXT NOT NULL CHECK (level IN ('participating', 'watching', 'ignoring')),
+        epoch_gen INTEGER NOT NULL,
+        revision INTEGER NOT NULL,
+        at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX watchers_level ON watchers (level, revision, principal);
+      CREATE TABLE preference_recovery (
+        grp TEXT PRIMARY KEY CHECK (grp IN ('watches', 'issues', 'pulls')),
+        target_epoch INTEGER NOT NULL,
+        phase TEXT NOT NULL CHECK (phase IN ('clear', 'import')),
+        cursor TEXT
+      ) STRICT, WITHOUT ROWID;
+    `,
+  },
 ];

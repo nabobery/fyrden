@@ -80,6 +80,22 @@ export const PERMISSIONS = {
     implies: ["starring:read"],
     writes: true,
   },
+  "watching:read": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "See the repositories the user (or an agent, itself) watches or ignores.",
+    principals: ["user", "agent"],
+    implies: [],
+    writes: false,
+  },
+  "watching:write": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "Watch, ignore and stop watching repositories as the user (or an agent, itself).",
+    principals: ["user", "agent"],
+    implies: ["watching:read"],
+    writes: true,
+  },
   "ssh_signing_keys:read": {
     resource: "account",
     minAccountRole: "owner",
