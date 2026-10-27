@@ -42,7 +42,7 @@ import {
   getRootContents,
   getTree,
 } from "../ops/contents.js";
-import { ackFeedItem, getFeed, syncFeed } from "../ops/feed.js";
+import { ackFeedItem, getFeed, getFeedDigest, syncFeed } from "../ops/feed.js";
 import { createFileCommit, deleteContents, putContents } from "../ops/file-writes.js";
 import { createGrant, listGrants, revokeGrant } from "../ops/grants.js";
 import {
@@ -356,6 +356,7 @@ export const registry = defineRegistry([
   getFeed,
   syncFeed,
   ackFeedItem,
+  getFeedDigest,
   getUserQuota,
   getOrgQuota,
   setQuota,

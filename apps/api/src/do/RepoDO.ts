@@ -26,6 +26,7 @@ import {
   decideMetadataAction,
   type Envelope,
   FEED_HORIZON_MS,
+  type FeedSubjectKind,
   type LabelSpec,
   type LockReason,
   protectsBranch,
@@ -157,7 +158,13 @@ import {
   type TreeListing,
   treeListing,
 } from "./repo/contents.js";
-import { DIGEST_EVENT, DIGEST_POLICY, RepoDigests, windowOf } from "./repo/digests.js";
+import {
+  DIGEST_EVENT,
+  DIGEST_POLICY,
+  type DigestResolution,
+  RepoDigests,
+  windowOf,
+} from "./repo/digests.js";
 import { readDirectoryEpoch } from "./repo/epoch.js";
 import { type EraseOutcome, eraseRepository, recordNetwork } from "./repo/erase.js";
 import {
@@ -3708,6 +3715,57 @@ export class RepoDO extends MigratingDO {
         status: "ok" as const,
         watching: this.watching.get(principal)?.level === "watching",
       };
+    });
+  }
+
+  /**
+   * What a kind's digest of a window holds for `principal` (see
+   * `RepoDigests.resolve`), its root identity worked out here. The caller
+   * decided it may read the repository and the kind under `owner` (the
+   * account and ownership generation); judged again here, with no await
+   * before the answer: `gone` for a repository deleted, not to be read,
+   * owned otherwise now or not read by `principal`, or a digest that no
+   * longer shows; `recovering` while the kind's preferences are taken back
+   * after a restore.
+   */
+  async feedDigest(
+    principal: string,
+    grantId: string | null,
+    owner: { readonly accountId: string; readonly ownerGen: number },
+    ask: { readonly subject: FeedSubjectKind; readonly window: number; readonly epoch: number },
+    limit: number,
+  ): Promise<DigestResolution> {
+    if (this.#gone()) return { status: "gone" };
+    return this.#measured("feedDigest", async () => {
+      await this.checkEpoch();
+      const ceilings = await this.#authority.rolesPulled(principal, grantId);
+      const root = rootIdentity({ principalId: principal, grantId, ceilingIds: ceilings });
+      // No await from here: access, ownership and the window are judged as they stand.
+      const account = this.events.account();
+      if (
+        this.#gone() ||
+        this.#refusesReads() ||
+        account?.accountId !== owner.accountId ||
+        account.ownerGen !== owner.ownerGen ||
+        (this.events.visibility() !== "public" &&
+          this.#authority.roleNow(principal, ceilings) === null)
+      )
+        return { status: "gone" as const };
+      if (this.threads.recovering(ask.subject)) return { status: "recovering" as const };
+      const sql = this.git.context.storage.sql;
+      return this.digests.resolve(ask, { principal, root }, limit, (number) => {
+        const subject = this.threads.subjectOf(number);
+        if (!subject || subject.kind !== ask.subject) return undefined;
+        const [row] = sql
+          .exec<{ title: string }>(
+            ask.subject === "pull"
+              ? "SELECT title FROM pull_requests WHERE number = ?"
+              : "SELECT title FROM issues WHERE number = ?",
+            number,
+          )
+          .toArray();
+        return row ? { conversation: subject.conversation, title: row.title } : undefined;
+      });
     });
   }
 

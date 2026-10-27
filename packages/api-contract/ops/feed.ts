@@ -26,6 +26,7 @@ export const FeedItem = z.object({
         .describe("The window's number (15-minute windows since the Unix epoch)."),
       starts_at: z.number().int().describe("When the window starts, Unix time in milliseconds."),
       ends_at: z.number().int().describe("When it ends, Unix time in milliseconds."),
+      url: z.string().describe("Where its threads are read (`GET /feed/digests/...`)."),
     })
     .optional()
     .describe(
@@ -184,5 +185,55 @@ export const ackFeedItem = defineOperation({
     title: "Acknowledge a feed item",
     description: "Mark a feed item seen at a version (the item's `epoch` and `version`).",
     readOnly: false,
+  },
+});
+
+const Positive = z.coerce.number().int().positive();
+
+export const getFeedDigest = defineOperation({
+  id: "feed.digest",
+  method: "GET",
+  path: "/feed/digests/{repository_id}/{subject}/{window}/{epoch}",
+  summary: "Get what a feed digest holds",
+  description:
+    "The threads a digest item tells of (a watched repository's activity of one kind in one window, for watchers past the first 100), newest first: at most 50 the caller may see, each a conversation the repository still has, that the caller did not unsubscribe from, and that someone besides the caller (or its agents' owner) took part in. Decided now, as a feed item is: 404 when the caller cannot read the repository or the kind, or the digest no longer shows (its conversations deleted, the repository restored, or older than 16 days). `complete` is false when more threads are eligible, or when the window kept no more threads past 5,000 or was left incomplete by the deployment's daily allowance. A Fyrden extension.",
+  input: z.object({
+    repository_id: z.string().min(1).max(64),
+    subject: z.enum(FEED_SUBJECT_KINDS),
+    window: Positive,
+    epoch: Positive,
+  }),
+  output: z.object({
+    repo: z.object({ id: z.string(), full_name: z.string().describe("owner/name") }),
+    subject: z.enum(FEED_SUBJECT_KINDS),
+    window: z.number().int(),
+    starts_at: z.number().int().describe("When the window starts, Unix time in milliseconds."),
+    ends_at: z.number().int().describe("When it ends, Unix time in milliseconds."),
+    threads: z.array(
+      z.object({
+        number: z.number().int(),
+        title: z.string().describe("The conversation's title now."),
+        last_activity_at: z
+          .number()
+          .int()
+          .describe("When the window last saw activity on it, Unix time in milliseconds."),
+        actors: z
+          .array(z.string())
+          .describe("Who took part in the window (logins; `ghost` for an account deleted)."),
+        more_actors: z.boolean().describe("More took part than `actors` names."),
+      }),
+    ),
+    complete: z.boolean(),
+  }),
+  permission: AUTHENTICATED,
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "get_feed_digest",
+    title: "Get a feed digest",
+    description:
+      "Read the threads a digest item of your feed tells of (its repository id, subject kind, window and epoch).",
+    readOnly: true,
   },
 });

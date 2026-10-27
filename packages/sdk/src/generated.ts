@@ -5838,6 +5838,8 @@ export type FeedListOutput = {
       starts_at: number;
       /** When it ends, Unix time in milliseconds. */
       ends_at: number;
+      /** Where its threads are read (`GET /feed/digests/...`). */
+      url: string;
     };
     /** The repository's restore generation `version` counts in: a newer generation's versions are newer, whatever their numbers. */
     epoch: number;
@@ -5911,6 +5913,8 @@ export type FeedSyncOutput = {
       starts_at: number;
       /** When it ends, Unix time in milliseconds. */
       ends_at: number;
+      /** Where its threads are read (`GET /feed/digests/...`). */
+      url: string;
     };
     /** The repository's restore generation `version` counts in: a newer generation's versions are newer, whatever their numbers. */
     epoch: number;
@@ -5969,6 +5973,41 @@ export type FeedAckOutput = {
   version: number;
   acked_epoch: number;
   acked_version: number;
+};
+
+/** Input of `feed.digest`: Get what a feed digest holds. */
+export type FeedDigestInput = {
+  repository_id: string;
+  subject: "issue" | "pull";
+  window: number;
+  epoch: number;
+};
+
+/** Output of `feed.digest`. */
+export type FeedDigestOutput = {
+  repo: {
+    id: string;
+    /** owner/name */
+    full_name: string;
+  };
+  subject: "issue" | "pull";
+  window: number;
+  /** When the window starts, Unix time in milliseconds. */
+  starts_at: number;
+  /** When it ends, Unix time in milliseconds. */
+  ends_at: number;
+  threads: {
+    number: number;
+    /** The conversation's title now. */
+    title: string;
+    /** When the window last saw activity on it, Unix time in milliseconds. */
+    last_activity_at: number;
+    /** Who took part in the window (logins; `ghost` for an account deleted). */
+    actors: string[];
+    /** More took part than `actors` names. */
+    more_actors: boolean;
+  }[];
+  complete: boolean;
 };
 
 /** Input of `quotas.user.get`: Get your quota. */
@@ -7567,6 +7606,7 @@ export const OPERATIONS = {
   "feed.list": { method: "GET", path: "/feed", pathParams: [], idempotent: false },
   "feed.sync": { method: "GET", path: "/feed/sync", pathParams: [], idempotent: false },
   "feed.ack": { method: "POST", path: "/feed/ack", pathParams: [], idempotent: true },
+  "feed.digest": { method: "GET", path: "/feed/digests/{repository_id}/{subject}/{window}/{epoch}", pathParams: ["repository_id","subject","window","epoch"], idempotent: false },
   "quotas.user.get": { method: "GET", path: "/user/quota", pathParams: [], idempotent: false },
   "quotas.org.get": { method: "GET", path: "/orgs/{org}/quota", pathParams: ["org"], idempotent: false },
   "admin.quotas.set": { method: "PUT", path: "/admin/accounts/{account}/quota", pathParams: ["account"], idempotent: true },
@@ -7908,6 +7948,8 @@ export interface Operations {
   "feed.sync": { input: FeedSyncInput; output: FeedSyncOutput };
   /** Acknowledge a feed item. Records that the feed's owner has seen an item at a version, its `epoch` and `version` (every reader of the feed shares it, and the item comes again in `GET /feed`). Versions order by epoch, then version. A version the item does not have yet is refused (409); an older one than already acknowledged changes nothing. A digest is acknowledged at its own epoch and version only (422 `digest_version_inexact`). */
   "feed.ack": { input: FeedAckInput; output: FeedAckOutput };
+  /** Get what a feed digest holds. The threads a digest item tells of (a watched repository's activity of one kind in one window, for watchers past the first 100), newest first: at most 50 the caller may see, each a conversation the repository still has, that the caller did not unsubscribe from, and that someone besides the caller (or its agents' owner) took part in. Decided now, as a feed item is: 404 when the caller cannot read the repository or the kind, or the digest no longer shows (its conversations deleted, the repository restored, or older than 16 days). `complete` is false when more threads are eligible, or when the window kept no more threads past 5,000 or was left incomplete by the deployment's daily allowance. A Fyrden extension. */
+  "feed.digest": { input: FeedDigestInput; output: FeedDigestOutput };
   /** Get your quota. The authenticated user's quota: how many repositories it may have and how many bytes their pushes may store, and how much of each is used. A deleted repository's bytes are free again once its deletion finishes. */
   "quotas.user.get": { input: QuotasUserGetInput; output: QuotasUserGetOutput };
   /** Get an organization's quota. An organization's quota and its use, for its members. */

@@ -139,6 +139,7 @@ describe("generated artifacts", () => {
       "feed.list",
       "feed.sync",
       "feed.ack",
+      "feed.digest",
     ]);
     for (const op of registry) {
       if (anyCaller.has(op.id)) continue;

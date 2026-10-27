@@ -1837,6 +1837,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "minimum": -9007199254740991,
                                 "type": "integer",
                               },
+                              "url": {
+                                "description": "Where its threads are read (\`GET /feed/digests/...\`).",
+                                "type": "string",
+                              },
                               "window": {
                                 "description": "The window's number (15-minute windows since the Unix epoch).",
                                 "maximum": 9007199254740991,
@@ -1848,6 +1852,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "window",
                               "starts_at",
                               "ends_at",
+                              "url",
                             ],
                             "type": "object",
                           },
@@ -2172,6 +2177,187 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/feed/digests/{repository_id}/{subject}/{window}/{epoch}": {
+      "get": {
+        "description": "The threads a digest item tells of (a watched repository's activity of one kind in one window, for watchers past the first 100), newest first: at most 50 the caller may see, each a conversation the repository still has, that the caller did not unsubscribe from, and that someone besides the caller (or its agents' owner) took part in. Decided now, as a feed item is: 404 when the caller cannot read the repository or the kind, or the digest no longer shows (its conversations deleted, the repository restored, or older than 16 days). \`complete\` is false when more threads are eligible, or when the window kept no more threads past 5,000 or was left incomplete by the deployment's daily allowance. A Fyrden extension.",
+        "operationId": "feed.digest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "subject",
+            "required": true,
+            "schema": {
+              "enum": [
+                "issue",
+                "pull",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "window",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "path",
+            "name": "epoch",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "complete": {
+                      "type": "boolean",
+                    },
+                    "ends_at": {
+                      "description": "When it ends, Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "repo": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "full_name": {
+                          "description": "owner/name",
+                          "type": "string",
+                        },
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                        "full_name",
+                      ],
+                      "type": "object",
+                    },
+                    "starts_at": {
+                      "description": "When the window starts, Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "subject": {
+                      "enum": [
+                        "issue",
+                        "pull",
+                      ],
+                      "type": "string",
+                    },
+                    "threads": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actors": {
+                            "description": "Who took part in the window (logins; \`ghost\` for an account deleted).",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "last_activity_at": {
+                            "description": "When the window last saw activity on it, Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "more_actors": {
+                            "description": "More took part than \`actors\` names.",
+                            "type": "boolean",
+                          },
+                          "number": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "title": {
+                            "description": "The conversation's title now.",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "number",
+                          "title",
+                          "last_activity_at",
+                          "actors",
+                          "more_actors",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "window": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "repo",
+                    "subject",
+                    "window",
+                    "starts_at",
+                    "ends_at",
+                    "threads",
+                    "complete",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get what a feed digest holds",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/feed/sync": {
       "get": {
         "description": "The feed's current state, to start from or start over: open P0 items, then P1 and P2 items of the last 7 days, newest first (500 at most), and the cursor to follow with \`GET /feed\`. Items of repositories the caller cannot read now are left out. \`complete\` is false when more were left out, or when not every repository could be checked (at most 100 an answer): \`head_cursor\` then reads every repository from what the feed keeps of it. A complete sync's \`head_cursor\` follows on after it in the repositories it showed items of, and reads the others from what the feed keeps of them.",
@@ -2258,6 +2444,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                 "minimum": -9007199254740991,
                                 "type": "integer",
                               },
+                              "url": {
+                                "description": "Where its threads are read (\`GET /feed/digests/...\`).",
+                                "type": "string",
+                              },
                               "window": {
                                 "description": "The window's number (15-minute windows since the Unix epoch).",
                                 "maximum": 9007199254740991,
@@ -2269,6 +2459,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "window",
                               "starts_at",
                               "ends_at",
+                              "url",
                             ],
                             "type": "object",
                           },

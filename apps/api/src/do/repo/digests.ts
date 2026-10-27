@@ -97,6 +97,30 @@ export type DigestBucket = {
   readonly sealed: number;
 };
 
+/** A thread a digest holds, as a reader is answered (its actors as root identities). */
+export interface DigestThread {
+  readonly number: number;
+  readonly title: string;
+  readonly lastAt: number;
+  readonly actors: readonly string[];
+  /** More took part than `actors` names. */
+  readonly many: boolean;
+}
+
+/**
+ * What a digest holds for a reader (see `RepoDigests.resolve`); `gone`
+ * when it no longer shows or the reader may not read it, `recovering`
+ * while the repository takes the kind's preferences back after a restore.
+ */
+export type DigestResolution =
+  | { readonly status: "gone" }
+  | { readonly status: "recovering" }
+  | {
+      readonly status: "ok";
+      readonly threads: readonly DigestThread[];
+      readonly complete: boolean;
+    };
+
 /** A credit request to make of the ledger. */
 export interface CreditAsk {
   readonly subject: FeedSubjectKind;
@@ -406,7 +430,7 @@ export class RepoDigests {
         `SELECT * FROM digest_windows b WHERE win = ?1 AND epoch_gen = ?2 AND sealed = 0
            AND live > 0 AND EXISTS (SELECT 1 FROM digest_threads t
              WHERE t.win = b.win AND t.epoch_gen = b.epoch_gen AND t.subject = b.subject
-               AND t.conversation NOT IN (SELECT conversation FROM digest_forgets))`,
+               AND NOT EXISTS (SELECT 1 FROM digest_forgets f WHERE f.conversation = t.conversation))`,
         window,
         this.deps.epochGen(),
       )
@@ -428,13 +452,87 @@ export class RepoDigests {
           `SELECT 1 FROM digest_windows b WHERE win = ? AND epoch_gen = ? AND subject = ?
              AND sealed = 1 AND live > 0 AND EXISTS (SELECT 1 FROM digest_threads t
                WHERE t.win = b.win AND t.epoch_gen = b.epoch_gen AND t.subject = b.subject
-                 AND t.conversation NOT IN (SELECT conversation FROM digest_forgets))`,
+                 AND NOT EXISTS (SELECT 1 FROM digest_forgets f WHERE f.conversation = t.conversation))`,
           window,
           epoch,
           subject,
         )
         .toArray().length > 0
     );
+  }
+
+  /**
+   * What a kind's digest of a window holds for a reader, newest first: at
+   * most `limit` threads that are eligible (the repository still has the
+   * conversation, as `current` finds it now, and none of it is being
+   * deleted; the reader did not unsubscribe from it; someone besides the
+   * reader's root took part), and whether that is all (`complete`: no
+   * other eligible thread, and the window was neither truncated nor
+   * incomplete). Nothing ineligible decides what or how much is answered.
+   * Reads at most the window's threads of the kind, and the reader's
+   * unsubscriptions of the kind (at most their caps). `gone` when the
+   * digest no longer shows (see `shows`).
+   */
+  resolve(
+    ask: { readonly subject: FeedSubjectKind; readonly window: number; readonly epoch: number },
+    reader: { readonly principal: string; readonly root: string },
+    limit: number,
+    current: (number: number) => { conversation: string; title: string } | undefined,
+  ): DigestResolution {
+    if (!this.shows(ask.subject, ask.window, ask.epoch)) return { status: "gone" };
+    const bucket = this.#bucket(ask.window, ask.epoch, ask.subject);
+    const unsubscribed = new Set(
+      this.#sql
+        .exec<{ conversation: string }>(
+          `SELECT conversation FROM thread_preferences INDEXED BY thread_preferences_kind
+           WHERE kind = ? AND principal = ? AND state = 'unsubscribed'`,
+          ask.subject,
+          reader.principal,
+        )
+        .toArray()
+        .map((r) => r.conversation),
+    );
+    const threads: DigestThread[] = [];
+    let more = false;
+    const rows = this.#sql.exec<{
+      conversation: string;
+      number: number;
+      last_at: number;
+      actors: string;
+      many: number;
+    }>(
+      `SELECT conversation, number, last_at, actors, many
+       FROM digest_threads t INDEXED BY digest_threads_newest
+       WHERE win = ? AND epoch_gen = ? AND subject = ?
+         AND NOT EXISTS (SELECT 1 FROM digest_forgets f WHERE f.conversation = t.conversation)
+       ORDER BY last_at DESC, conversation DESC`,
+      ask.window,
+      ask.epoch,
+      ask.subject,
+    );
+    for (const row of rows) {
+      if (unsubscribed.has(row.conversation)) continue;
+      const actors = JSON.parse(row.actors) as string[];
+      if (row.many === 0 && actors.length > 0 && actors.every((a) => a === reader.root)) continue;
+      const now = current(row.number);
+      if (now?.conversation !== row.conversation) continue;
+      if (threads.length === limit) {
+        more = true;
+        break;
+      }
+      threads.push({
+        number: row.number,
+        title: now.title,
+        lastAt: row.last_at,
+        actors,
+        many: row.many === 1,
+      });
+    }
+    return {
+      status: "ok",
+      threads,
+      complete: !more && bucket?.truncated === 0 && bucket.incomplete === 0,
+    };
   }
 
   /** Marks a window's buckets sealed (published, or with nothing to publish); call within a transaction. */
@@ -454,9 +552,9 @@ export class RepoDigests {
     return this.#sql
       .exec<{ revision: number; principal: string }>(
         `SELECT floor_revision AS revision, floor_principal AS principal
-         FROM digest_threads INDEXED BY digest_threads_floor
+         FROM digest_threads t INDEXED BY digest_threads_floor
          WHERE win = ? AND epoch_gen = ? AND subject = ?
-           AND conversation NOT IN (SELECT conversation FROM digest_forgets)
+           AND NOT EXISTS (SELECT 1 FROM digest_forgets f WHERE f.conversation = t.conversation)
          ORDER BY floor_revision, floor_principal LIMIT 1`,
         bucket.win,
         bucket.epoch_gen,

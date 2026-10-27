@@ -47,7 +47,7 @@ type Item = {
   thread_key: string;
   kind: string;
   subject: { kind: string; number?: number; title: string };
-  digest?: { window: number; starts_at: number; ends_at: number };
+  digest?: { window: number; starts_at: number; ends_at: number; url: string };
   priority: string;
   epoch: number;
   version: number;
@@ -188,6 +188,9 @@ describe("a digest", () => {
         window,
         starts_at: window * DIGEST_POLICY.windowMs,
         ends_at: (window + 1) * DIGEST_POLICY.windowMs,
+        url: expect.stringMatching(
+          new RegExp(`/api/feed/digests/${repo.id}/issue/${window}/${epoch}$`),
+        ),
       },
       priority: "P2",
       epoch,

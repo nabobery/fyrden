@@ -56,7 +56,12 @@ import {
   mintAs,
   revokeUserTokenOperation,
 } from "../accounts/tokens.js";
-import { ackFeedItemOperation, getFeedOperation, syncFeedOperation } from "../feed/operations.js";
+import {
+  ackFeedItemOperation,
+  getFeedDigestOperation,
+  getFeedOperation,
+  syncFeedOperation,
+} from "../feed/operations.js";
 import {
   abortUploadSession,
   completeUploadSession,
@@ -572,6 +577,7 @@ export const handlers: Handlers = {
   "feed.list": getFeedOperation,
   "feed.sync": syncFeedOperation,
   "feed.ack": ackFeedItemOperation,
+  "feed.digest": getFeedDigestOperation,
 
   // Quotas live in each account's object (accounts/quotas).
   "quotas.user.get": getUserQuotaOperation,

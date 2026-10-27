@@ -1,6 +1,14 @@
-import type { ackFeedItem, getFeed, Input, Output, syncFeed } from "@fyrden/api-contract";
+import type {
+  ackFeedItem,
+  getFeed,
+  getFeedDigest,
+  Input,
+  Output,
+  syncFeed,
+} from "@fyrden/api-contract";
 import type { RepoPermission } from "@fyrden/domain";
 import {
+  digestThreadKey,
   FEED_KINDS,
   FEED_SUBJECT_KINDS,
   type FeedKind,
@@ -11,6 +19,7 @@ import {
   type RepoRole,
   scopesAllow,
 } from "@fyrden/domain";
+import { GHOST_LOGIN, SHOWN_HANDLE } from "../accounts/handles.js";
 import { DIGEST_POLICY } from "../do/repo/digests.js";
 import { type FeedMember, type FeedViewDenial, memberKey } from "../do/repo/feed-view.js";
 import {
@@ -30,6 +39,7 @@ import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { decodeBytesCursor, encodeBytesCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError, reverified } from "../ops/execute.js";
 import { allowedWithRole, findReposById, type RepoEntry } from "../repos/directory.js";
+import { recovering } from "../repos/watching.js";
 import { FreshAccess, type FreshDecision } from "./access.js";
 
 /*
@@ -111,6 +121,12 @@ const READ = { issue: "issues:read", pull: "pull_requests:read" } as const;
  */
 function subjectOf(threadKey: string): FeedSubjectKind | undefined {
   return parseThreadKey(threadKey)?.subject;
+}
+
+/** Whether a thread key names a digest. */
+function isDigest(threadKey: string): boolean {
+  const named = parseThreadKey(threadKey);
+  return named !== undefined && "digest" in named;
 }
 
 /**
@@ -510,12 +526,23 @@ export class Visibility {
     // An issue's thread or a digest not checked (past the budget): not known whether it is gone.
     if (checked(item.threadKey) && !this.#checkedThreads.has(thread)) return undefined;
     // Gone in the generation it was checked in: an item told in a later one (a restore gave its
-    // number to a new conversation) is not known yet, so the scan stops before it.
+    // number to a new conversation) is not known yet, so the scan stops before it. A digest's key
+    // names its generation: gone is final.
     const goneIn = this.#gone.get(thread);
-    if (goneIn !== undefined) return item.epoch > goneIn ? undefined : "hidden";
+    if (goneIn !== undefined)
+      return item.epoch > goneIn && !isDigest(item.threadKey) ? undefined : "hidden";
     return allowedWithRole(this.ctx.auth, decided.entry, READ[subject], decided.role)
       ? decided.entry
       : "hidden";
+  }
+
+  /**
+   * The account and ownership generation a repository shown was decided
+   * under (a later call of its must be judged under them); undefined when
+   * not decided readable.
+   */
+  ownership(repoId: string): { readonly accountId: string; readonly ownerGen: number } | undefined {
+    return this.#pinned.get(repoId);
   }
 
   /**
@@ -643,7 +670,12 @@ async function scan<P>(
   return { shown, more: true };
 }
 
-function itemOutput(item: FeedItem, repo: RepoEntry, excerpt: string | null): FeedItemOutput {
+function itemOutput(
+  ctx: OpContext,
+  item: FeedItem,
+  repo: RepoEntry,
+  excerpt: string | null,
+): FeedItemOutput {
   // Shown items have a thread of a known kind (`of` hides any other).
   const named = parseThreadKey(item.threadKey) as FeedThread;
   return {
@@ -661,6 +693,7 @@ function itemOutput(item: FeedItem, repo: RepoEntry, excerpt: string | null): Fe
         window: named.digest.window,
         starts_at: named.digest.window * DIGEST_POLICY.windowMs,
         ends_at: (named.digest.window + 1) * DIGEST_POLICY.windowMs,
+        url: `${ctx.requestOrigin}/api/feed/digests/${item.repoId}/${named.subject}/${named.digest.window}/${named.digest.epoch}`,
       },
     }),
     epoch: item.epoch,
@@ -844,7 +877,7 @@ export async function getFeedOperation(
     quiet,
   );
   return {
-    items: given.map(({ item, repo }) => itemOutput(item, repo, visibility.excerpt(item))),
+    items: given.map(({ item, repo }) => itemOutput(ctx, item, repo, visibility.excerpt(item))),
     next_cursor: next,
     head_cursor: next,
     coverage: partial || state.positions.length >= FEED_POLICY.coverage ? "partial" : "full",
@@ -902,7 +935,7 @@ export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof s
     ? await feed.saveCursor(ctx.auth.id, { positions: [], base: null })
     : await feed.syncCursor(ctx.auth.id, [...streams.values()], bound);
   return {
-    items: items.map(({ item, repo }) => itemOutput(item, repo, visibility.excerpt(item))),
+    items: items.map(({ item, repo }) => itemOutput(ctx, item, repo, visibility.excerpt(item))),
     complete: !more,
     head_cursor: encodeFeedCursor(epoch, id),
     coverage: "full",
@@ -963,4 +996,73 @@ export async function ackFeedItemOperation(
     acked_epoch: acked.item.ackedEpoch,
     acked_version: acked.item.ackedVersion,
   };
+}
+
+/** Threads a digest's answer gives at most. */
+const DIGEST_THREADS = 50;
+
+/**
+ * The `feed.digest` operation: decided as its feed item is (the caller
+ * reads the repository and the kind now, and the digest still shows), then
+ * resolved by the repository for the caller (see `RepoDigests.resolve`).
+ */
+export async function getFeedDigestOperation(
+  ctx: OpContext,
+  input: Input<typeof getFeedDigest>,
+): Promise<Output<typeof getFeedDigest>> {
+  ctx = await freshly(ctx);
+  const notFound = new OperationError(404, "feed_digest_not_found", "The feed has no such digest.");
+  const named = {
+    repoId: input.repository_id,
+    threadKey: digestThreadKey(input.subject, input.window, input.epoch),
+    epoch: input.epoch,
+  };
+  const visibility = new Visibility(ctx);
+  await visibility.decide([{ ...named, member: null }]);
+  const repo = visibility.of(named);
+  if (repo === undefined)
+    throw new OperationError(503, "unavailable", "The digest's repository could not be checked.");
+  if (repo === "hidden") throw notFound;
+  const owner = visibility.ownership(repo.id);
+  if (!owner)
+    throw new OperationError(503, "unavailable", "The digest's repository could not be checked.");
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "feedDigest" });
+  const answer = await viewOf(ctx.env, repo.id).feedDigest(
+    ctx.auth.principalId,
+    ctx.auth.grantId,
+    owner,
+    { subject: input.subject, window: input.window, epoch: input.epoch },
+    DIGEST_THREADS,
+  );
+  if (answer.status === "gone") throw notFound;
+  if (answer.status === "recovering") throw recovering();
+  const logins = await loginsOf(ctx, [...new Set(answer.threads.flatMap((t) => t.actors))]);
+  return {
+    repo: { id: repo.id, full_name: `${repo.ownerHandle}/${repo.name}` },
+    subject: input.subject,
+    window: input.window,
+    starts_at: input.window * DIGEST_POLICY.windowMs,
+    ends_at: (input.window + 1) * DIGEST_POLICY.windowMs,
+    threads: answer.threads.map((t) => ({
+      number: t.number,
+      title: t.title,
+      last_activity_at: t.lastAt,
+      actors: t.actors.map((id) => logins.get(id) ?? GHOST_LOGIN),
+      more_actors: t.many,
+    })),
+    complete: answer.complete,
+  };
+}
+
+/** Logins of principals (`ghost` for one being deleted, deleted or unknown). */
+async function loginsOf(ctx: OpContext, ids: readonly string[]): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  ctx.metrics.count("d1.query", { db: "directory", op: "digest_actors" });
+  const { results } = await ctx.env.DIRECTORY.prepare(
+    `SELECT p.id, ${SHOWN_HANDLE} AS handle FROM principals p
+     WHERE p.id IN (SELECT value FROM json_each(?))`,
+  )
+    .bind(JSON.stringify(ids))
+    .all<{ id: string; handle: string }>();
+  return new Map(results.map((r) => [r.id, r.handle]));
 }
