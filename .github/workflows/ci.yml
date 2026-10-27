@@ -61,8 +61,11 @@ jobs:
   check:
     name: Lint, typecheck, test, dry-run
     runs-on: ubuntu-latest
-    # About 16 minutes as a rule; room for the browser's install to recover (up to 14).
-    timeout-minutes: 32
+    # About 16 minutes as a rule; room for the browser's install to recover (up to 14) and for
+    # the pinned git to build when its cache misses (about 4).
+    timeout-minutes: 36
+    env:
+      GIT_VERSION: "2.53.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -79,6 +82,28 @@ jobs:
         run: pnpm lint:ci
       - name: Typecheck (and generated Worker types are current)
         run: pnpm turbo run typecheck
+      # Tests that ask git itself (git fsck as an oracle, fixtures) use the
+      # pinned git, not the runner image's, which changes under them: the
+      # interop job's build, from the same cache.
+      - name: Runner image (part of the git build's cache key)
+        id: image
+        run: echo "os=$ImageOS" >> "$GITHUB_OUTPUT"
+      - name: Cached git build
+        id: git-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fyrden-git/${{ env.GIT_VERSION }}
+          key: git-${{ env.GIT_VERSION }}-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ hashFiles('tools/ci/interop/git-versions.txt', 'tools/ci/interop/build-git.sh') }}
+      - name: Build git from its checked release tarball
+        if: steps.git-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libcurl4-openssl-dev zlib1g-dev
+          tools/ci/interop/build-git.sh "$GIT_VERSION" "$HOME/.cache/fyrden-git/$GIT_VERSION"
+      - name: The pinned git for the tests
+        run: |
+          echo "FYRDEN_GIT_BINARY=$HOME/.cache/fyrden-git/$GIT_VERSION/bin/git" >> "$GITHUB_ENV"
+          "$HOME/.cache/fyrden-git/$GIT_VERSION/bin/git" --version
       # Every package runs to the end, so one run reports every failure.
       - name: Unit and workerd integration tests with Istanbul coverage
         run: pnpm turbo run test:coverage --continue=dependencies-successful
