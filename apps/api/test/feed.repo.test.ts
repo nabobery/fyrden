@@ -155,6 +155,9 @@ describe("feed blocks", () => {
     const settled = (settling?.data?.resolutions ?? []) as FeedBlock[];
     expect(settled.map(told)).toEqual([[`${writer.principalId}:review_requested:resolved:silent`]]);
     expect(settled[0]?.subject.version).toBeGreaterThan(requested?.subject.version as number);
+    // A settlement names the conversation as the event's own block does.
+    expect(settled[0]?.subject.conversation).toBe(review?.subject.conversation);
+    expect(review?.subject.conversation).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it("keep changes requested open until that reviewer's latest review is not one", async () => {

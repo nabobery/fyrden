@@ -22,6 +22,7 @@ import {
   type SyncPage,
   type ThreadVersion,
 } from "./user/feed.js";
+import { type Gate, OPEN_GATE } from "./user/inbox.js";
 
 /** When an alarm that could not reach the directory, or a step that failed, tries again. Proposed. */
 const EPOCH_RETRY_MS = 60_000;
@@ -38,8 +39,31 @@ const ALARM_STEPS = 4;
 const KINDS = ["retire", "retain", "cursors"] as const;
 type Kind = (typeof KINDS)[number];
 
+/** The feed's restore generation and its principal's lifecycle (bound: the source, the principal). */
+export const EPOCH_READ = `SELECT (SELECT epoch_gen FROM source_epochs WHERE source_id = ?1) AS epoch_gen,
+  (SELECT lifecycle FROM principals WHERE id = ?2) AS lifecycle`;
+
+/**
+ * A principal's acknowledged preferences that keep entries from notifying
+ * (bound: the principal, a JSON array of repository ids, a JSON array of
+ * [repository id, conversation] pairs): the repositories it ignores, and
+ * the conversations it unsubscribed from, each found by its key.
+ */
+export const PREFERENCE_GATE = `SELECT repo_id, NULL AS conversation FROM watch_preferences
+  WHERE principal_id = ?1 AND repo_id IN (SELECT value FROM json_each(?2))
+    AND level = 'ignoring'
+  UNION ALL
+  SELECT t.repo_id, t.conversation FROM json_each(?3) j
+    -- The requested conversations drive full-key lookups (not the principal's whole set).
+    CROSS JOIN thread_preferences t
+  WHERE t.principal_id = ?1 AND t.repo_id = j.value ->> 0 AND t.conversation = j.value ->> 1
+    AND t.state = 'unsubscribed'`;
+
 /** Hooks into the feed's directory read. For tests. */
-export const feedHooks: { beforeEpochRead?: () => Promise<void> } = {};
+export const feedHooks: {
+  beforeEpochRead?: () => Promise<void>;
+  beforePreferenceRead?: () => Promise<void>;
+} = {};
 
 /** Refuses a purge of more repositories than one call takes (see `PURGE_REPOS`). */
 function bounded(repos: number): void {
@@ -70,23 +94,58 @@ export class UserDO extends MigratingDO {
 
   /**
    * Applies one batch of the principal's feed entries, in one transaction
-   * (see `Feed.apply`). A watched entry past its admission window is
-   * dropped, decided once the object is ready (its epoch read), right
-   * before the transaction: discretionary work writes only within the
-   * window it was admitted in; such entries' events are answered.
+   * (see `Feed.apply`), its inbox notified as the principal's acknowledged
+   * preferences allow (see `#gate`; a failed read fails the call, retried
+   * as any failed delivery). A watched entry past its admission window is
+   * dropped, decided once the object is ready (its epoch and preferences
+   * read), right before the transaction: discretionary work writes only
+   * within the window it was admitted in; such entries' events are
+   * answered.
    */
   async applyFeed(all: readonly FeedEntry[]): Promise<FeedApplied> {
     await this.#checkEpoch();
+    const gate = await this.#gate(all);
+    // No await from here to the transaction: a retirement or a window passed meanwhile counts.
     if (this.#retired()) return NOTHING_APPLIED;
     const now = Date.now();
     const late = (e: FeedEntry) => e.until !== undefined && e.until <= now;
     const entries = all.filter((e) => !late(e));
     const expired = [...new Set(all.filter(late).map((e) => e.eventKey))];
     const feed = this.#feed();
-    const applied = this.ctx.storage.transactionSync(() => feed.apply(entries));
+    const applied = this.ctx.storage.transactionSync(() => feed.apply(entries, gate));
     // Even with nothing shown changed: a tombstone may have been written.
     if (entries.length > 0) await this.#scheduleRetention(feed);
     return expired.length > 0 ? { ...applied, expired } : applied;
+  }
+
+  /**
+   * The principal's acknowledged preferences for what `entries` may notify
+   * of, from the directory's copy (a command answers success only once its
+   * copy is committed there): the repositories it ignores, and the
+   * conversations it unsubscribed from. One query, and only when an entry
+   * may notify (not silent, of a stamped conversation).
+   */
+  async #gate(entries: readonly FeedEntry[]): Promise<Gate> {
+    const principalId = this.ctx.id.name;
+    const candidates = entries.filter(
+      (e) => !e.recipient.silent && e.feed.subject.conversation !== undefined,
+    );
+    if (principalId === undefined || candidates.length === 0) return OPEN_GATE;
+    await feedHooks.beforePreferenceRead?.();
+    const repos = [...new Set(candidates.map((e) => e.repoId))];
+    const threads = [
+      ...new Set(candidates.map((e) => JSON.stringify([e.repoId, e.feed.subject.conversation]))),
+    ].map((key) => JSON.parse(key) as [string, string]);
+    const { results } = await this.env.DIRECTORY.withSession("first-primary")
+      .prepare(PREFERENCE_GATE)
+      .bind(principalId, JSON.stringify(repos), JSON.stringify(threads))
+      .all<{ repo_id: string; conversation: string | null }>();
+    const ignored = new Set<string>();
+    const unsubscribed = new Set<string>();
+    for (const row of results)
+      if (row.conversation === null) ignored.add(row.repo_id);
+      else unsubscribed.add(`${row.repo_id}\n${row.conversation}`);
+    return { ignored, unsubscribed };
   }
 
   /**
@@ -346,10 +405,7 @@ export class UserDO extends MigratingDO {
     if (principalId !== undefined) {
       await feedHooks.beforeEpochRead?.();
       const row = await this.env.DIRECTORY.withSession("first-primary")
-        .prepare(
-          `SELECT (SELECT epoch_gen FROM source_epochs WHERE source_id = ?1) AS epoch_gen,
-             (SELECT lifecycle FROM principals WHERE id = ?2) AS lifecycle`,
-        )
+        .prepare(EPOCH_READ)
         .bind(feedEpochSource(principalId), principalId)
         .first<{ epoch_gen: number | null; lifecycle: string | null }>();
       if (row?.epoch_gen) this.#feed().takeEpoch(row.epoch_gen);

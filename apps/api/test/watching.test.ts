@@ -208,6 +208,10 @@ describe("watch audiences", () => {
       [watcher.principalId],
       [watcher.principalId],
     ]);
+    // Each names its conversation by identity, the same for both.
+    const conversation = blocks[0]?.subject.conversation;
+    expect(conversation).toMatch(/^[0-9a-f-]{36}$/);
+    expect(blocks.map((b) => b.subject.conversation)).toEqual([conversation, conversation]);
     expect(await told(repo.id, from)).toEqual(
       expect.arrayContaining([
         `issue.opened ${watcher.principalId} activity P2 watching`,

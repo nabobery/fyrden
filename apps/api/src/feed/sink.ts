@@ -82,12 +82,15 @@ export async function settledInPool<T>(
 /**
  * A watched entry's worst case, priced when its effect is admitted
  * (Proposed; measured locally, 2026-10-27). Per recipient: its feed's call
- * (a new item at its stream's cap: 122 rows read, 15 written; a fresh
- * feed's creation: 33 read, 24 written; the epoch's adoption and the
- * alarm a few more), the item's later deletion, half a second of the
- * object's time, and its cold read of the directory (two rows). Per
- * effect: its journal row's life at its worst (inserted, sent, sent again
- * by the effects cron, claimed and given back, ended, pruned, with their
+ * (a new item at its stream's cap and a new inbox thread at its inbox
+ * stream's cap, both with eviction, fence and fence trim: 237 rows read,
+ * 27 written; a fresh feed: 18 read, 15 written, besides its schema; the
+ * epoch's adoption and the alarm a few more), the item's and thread's
+ * later deletion, half a second of the object's time, and its directory
+ * reads (its cold epoch read, 2 rows, and its preference read, 3 to 5,
+ * measured locally: 7, priced 8). Per effect: its
+ * journal row's life at its worst (inserted, sent, sent again by the
+ * effects cron, claimed and given back, ended, pruned, with their
  * indexes: 53 rows read and 20 written, measured locally; its admission
  * reads up to 26 hours' rows more), and a queue message and one sent
  * again by the effects cron, whether it goes inline or not.
@@ -95,10 +98,10 @@ export async function settledInPool<T>(
 export const WATCH_PRICE = {
   recipient: {
     do_requests: 1,
-    do_rows_read: 170,
-    do_rows_written: 34,
+    do_rows_read: 300,
+    do_rows_written: 45,
     do_duration_ms: 500,
-    d1_rows_read: 2,
+    d1_rows_read: 8,
   },
   effect: { d1_rows_read: 100, d1_rows_written: 24, queue_ops: 6 },
 } as const;

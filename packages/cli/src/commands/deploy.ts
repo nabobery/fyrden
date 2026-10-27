@@ -60,6 +60,9 @@ export interface DeployResult {
 /** The deploy config wrangler uses: the committed config plus this account's resource ids. */
 export const API_DEPLOY_CONFIG = "wrangler.deploy.jsonc";
 
+/** The queue of the API's events, paused while the API deploys. */
+const EVENTS_QUEUE = "fyrden-events";
+
 /** Internal calls an invocation makes without `--internal-calls` (Free's, measured). */
 const DEFAULT_INTERNAL_CALLS = 1_000;
 
@@ -235,10 +238,19 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
     deployArgs.push("--secrets-file", file);
   }
   let apiUrl: string | undefined;
+  // The events queue's consumers stop while the new version goes out, so no Worker of the version
+  // before it reads an event this one makes (what it would not know it drops); events wait in the
+  // queue meanwhile.
   try {
-    apiUrl = workersDevUrl(await wrangler(runner, deployArgs, { cwd: apiDir }));
-    // Reported the moment it is installed, before anything else can fail.
-    if (generated) deps.onSecretGenerated(generated);
+    try {
+      await wrangler(runner, ["queues", "pause-delivery", EVENTS_QUEUE]);
+      apiUrl = workersDevUrl(await wrangler(runner, deployArgs, { cwd: apiDir }));
+      // Reported the moment it is installed, before anything else can fail.
+      if (generated) deps.onSecretGenerated(generated);
+    } finally {
+      // Also after a failed pause: its answer may be what failed, the pause applied.
+      await wrangler(runner, ["queues", "resume-delivery", EVENTS_QUEUE]);
+    }
   } finally {
     if (secretsDir) await rm(secretsDir, { recursive: true, force: true });
   }

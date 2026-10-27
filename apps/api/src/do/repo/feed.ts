@@ -17,6 +17,7 @@ import {
   newMentions,
   type RepoRole,
 } from "@fyrden/domain";
+import { IDENTITY } from "./thread-preferences.js";
 
 /*
  * What the repository's events mean for principals' activity feeds,
@@ -332,6 +333,7 @@ export class RepoFeed {
         number: plan.number,
         title: String(subject.title ?? "").slice(0, MAX_FEED_TITLE),
         version,
+        conversation: String(subject.conversation),
       },
       action: plan.action,
       actorRoot,
@@ -479,6 +481,7 @@ export class RepoFeed {
           number,
           title: String(subject.title ?? "").slice(0, MAX_FEED_TITLE),
           version,
+          conversation: String(subject.conversation),
         },
         action,
         actorRoot,
@@ -781,10 +784,12 @@ export class RepoFeed {
   #subject(number: number): (Row & { kind: "issue" | "pull" }) | undefined {
     return this.#exec<Record<string, SqlStorageValue> & { kind: "issue" | "pull" }>(
       "feed.read",
-      `SELECT 'issue' AS kind, number, title, author_id AS authorId, author_root AS authorRoot
+      `SELECT 'issue' AS kind, number, title, author_id AS authorId, author_root AS authorRoot,
+         ${IDENTITY} AS conversation
        FROM issues WHERE number = ?1
        UNION ALL
-       SELECT 'pull', number, title, author_id, author_root FROM pull_requests WHERE number = ?1`,
+       SELECT 'pull', number, title, author_id, author_root, ${IDENTITY}
+       FROM pull_requests WHERE number = ?1`,
       number,
     )[0];
   }

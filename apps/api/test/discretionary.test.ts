@@ -544,8 +544,16 @@ describe("a feed given watched entries", () => {
         }
       });
     const at = (thread: number, priority: "P1" | "P2" = "P2") =>
-      byHand({ version: 1, thread, priority, repoId: "rep_watched" });
-    // A stream at its cap, with its fences: a new watched item evicts the oldest.
+      byHand({
+        version: 1,
+        thread,
+        priority,
+        repoId: "rep_watched",
+        conversation: `c${thread}`,
+        ...(priority === "P2" && { reasons: ["watching"] }),
+      });
+    // A stream and its inbox at their caps, with their fences: a new watched item and thread evict
+    // the oldest.
     const full = env.USER.getByName(newId("usr"));
     await full.applyFeed(
       Array.from({ length: FEED_POLICY.streamItems + FEED_POLICY.streamFences + 20 }, (_, i) =>
@@ -650,7 +658,10 @@ describe("a watch effect's price", () => {
     };
     expect(watch.written).toBeGreaterThan(5);
     expect(watch.written).toBeLessThanOrEqual(watchPrice(2).d1_rows_written);
-    expect(watch.read).toBeLessThanOrEqual(watchPrice(2).d1_rows_read - 2 * 2);
+    // The recipients' own D1 rows (their feeds' directory reads) are not this test's.
+    expect(watch.read).toBeLessThanOrEqual(
+      watchPrice(2).d1_rows_read - 2 * WATCH_PRICE.recipient.d1_rows_read,
+    );
   });
 
   it("covers its item's later deletion in a feed", async () => {
@@ -659,7 +670,15 @@ describe("a watch effect's price", () => {
     const t0 = Date.now();
     await stub.applyFeed(
       Array.from({ length: count }, (_, i) =>
-        byHand({ version: 1, thread: i + 1, priority: "P2", repoId: "rep_gone", occurredAt: t0 }),
+        byHand({
+          version: 1,
+          thread: i + 1,
+          priority: "P2",
+          reasons: ["watching"],
+          repoId: "rep_gone",
+          conversation: `c${i + 1}`,
+          occurredAt: t0,
+        }),
       ),
     );
     const deleted = await runInDurableObject(stub, (_: UserDO, state) => {
@@ -670,10 +689,10 @@ describe("a watch effect's price", () => {
     });
     // The rest of a recipient's price: its call at its worst (measured above) and the alarm.
     expect(Math.ceil(deleted.written / count)).toBeLessThanOrEqual(
-      WATCH_PRICE.recipient.do_rows_written - 15 - 1,
+      WATCH_PRICE.recipient.do_rows_written - 27 - 1,
     );
     expect(Math.ceil(deleted.read / count)).toBeLessThanOrEqual(
-      WATCH_PRICE.recipient.do_rows_read - 122,
+      WATCH_PRICE.recipient.do_rows_read - 237,
     );
   });
 });

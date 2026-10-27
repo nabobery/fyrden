@@ -1,4 +1,5 @@
 import { FEED_HORIZON_MS, type FeedEntry, type FeedKind, type FeedPriority } from "@fyrden/domain";
+import { type Gate, Inbox, OPEN_GATE } from "./inbox.js";
 
 /*
  * A principal's activity feed: one item per repository, thread and kind,
@@ -79,10 +80,10 @@ export const FEED_POLICY = {
 
 /**
  * Gone threads one `forgetGoneThreads` call forgets at most: each at most
- * one item a kind (seven), so a call deletes under 500 rows (see
- * `FEED_POLICY.sliceRows`).
+ * one item a kind (seven) and `GONE_IDENTITIES` inbox threads, so a call
+ * deletes under 500 rows (see `FEED_POLICY.sliceRows`).
  */
-export const MAX_GONE_THREADS = 70;
+export const MAX_GONE_THREADS = 50;
 
 /**
  * Repositories one purge call (`purge`, `forgetRepos`) takes at most, each
@@ -523,10 +524,15 @@ function withMember(state: State, entry: FeedEntry): State {
 }
 
 export class Feed {
+  /** The thread inbox, kept with the feed in its transactions. */
+  readonly inbox: Inbox;
+
   constructor(
     private readonly sql: SqlStorage,
     private readonly now: () => number,
-  ) {}
+  ) {
+    this.inbox = new Inbox(sql, now);
+  }
 
   /**
    * Applies entries (call within a transaction). Within one call an item's
@@ -538,7 +544,7 @@ export class Feed {
    * opens it (see `#applyOne`). A duplicate, or an older version that adds
    * nothing, writes nothing.
    */
-  apply(entries: readonly FeedEntry[]): FeedApplied {
+  apply(entries: readonly FeedEntry[], gate: Gate = OPEN_GATE): FeedApplied {
     const now = this.now();
     let changed = 0;
     let notified = 0;
@@ -554,8 +560,12 @@ export class Feed {
       if (entry.occurredAt < now - FEED_POLICY.retentionMs) continue;
       const until = purgedUntil(entry.repoId);
       if (until !== null && entry.occurredAt <= until) continue;
-      if (this.#evicted(entry)) continue;
-      if (!this.#applyOne(entry, now)) continue;
+      const applied = !this.#evicted(entry) && this.#applyOne(entry, now);
+      // The inbox takes what is neither too old nor purged (its threads have their own caps),
+      // each entry judged by what the feed knows of its thread once it applied that entry (not the
+      // call's later ones).
+      this.inbox.take(entry, gate);
+      if (!applied) continue;
       changed++;
       if (!entry.recipient.silent) notified++;
     }
@@ -1062,6 +1072,7 @@ export class Feed {
         )
         .toArray();
       deleted += this.#forgot(gone, false);
+      this.inbox.purge(repoId, purge.until);
       for (const row of this.sql
         .exec<Row>("SELECT * FROM feed_items WHERE repo_id = ? AND kind = 'activity'", repoId)
         .toArray()) {
@@ -1107,7 +1118,9 @@ export class Feed {
     // Only what was told in the generation the thread was found gone in, or before: a restore
     // can give its number to a new conversation, whose items stay. A caller of the earlier shape
     // (no generation, while a deploy rolls out) binds null, which matches nothing.
-    for (const { repoId, threadKey, epoch } of threads)
+    for (const { repoId, threadKey, epoch } of threads) {
+      const [subject, number] = threadKey.split("/");
+      this.inbox.forgetNumber(repoId, String(subject), Number(number), epoch ?? null);
       deleted += this.#forgot(
         this.sql
           .exec<Deleted>(
@@ -1120,6 +1133,7 @@ export class Feed {
           .toArray(),
         false,
       );
+    }
     return deleted;
   }
 
@@ -1174,7 +1188,8 @@ export class Feed {
         slice,
       )
       .toArray().length;
-    return gone.length >= slice || marks >= slice || fences >= slice;
+    const inbox = this.inbox.retainStep(FEED_POLICY.retentionMs, slice);
+    return gone.length >= slice || marks >= slice || fences >= slice || inbox;
   }
 
   /**
@@ -1184,12 +1199,16 @@ export class Feed {
    */
   retireStep(): boolean {
     const slice = FEED_POLICY.sliceRows;
+    // The inbox's threads through the inbox, which keeps its streams' counts.
+    if (this.inbox.retireStep(slice)) return true;
     for (const [table, key] of [
       ["feed_items", "repo_id, thread_key, kind"],
       ["purge_marks", "repo_id"],
       ["feed_evictions", "repo_id, thread_key, kind"],
       ["feed_streams", "repo_id, subject"],
       ["feed_cursors", "id"],
+      ["inbox_evictions", "repo_id, conversation"],
+      ["inbox_streams", "repo_id, subject"],
     ] as const) {
       const n = this.sql
         .exec(
@@ -1216,7 +1235,7 @@ export class Feed {
            (SELECT min(event_at) FROM feed_evictions) AS fence`,
       )
       .one();
-    const oldest = [item, mark, fence].filter((at) => at !== null);
+    const oldest = [item, mark, fence, this.inbox.oldest()].filter((at) => at !== null);
     return oldest.length === 0 ? null : Math.min(...oldest) + FEED_POLICY.retentionMs;
   }
 
@@ -1381,10 +1400,11 @@ export class Feed {
     if (evicted.length === 0) return;
     for (const row of evicted)
       this.sql.exec(
-        `INSERT INTO feed_evictions (repo_id, thread_key, kind, subject, thread_epoch, version, event_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO feed_evictions (repo_id, thread_key, kind, subject, thread_epoch, version, event_at,
+           event_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (repo_id, thread_key, kind) DO UPDATE SET thread_epoch = excluded.thread_epoch,
-           version = excluded.version, event_at = excluded.event_at`,
+           version = excluded.version, event_at = excluded.event_at, event_key = excluded.event_key`,
         row.repo_id,
         row.thread_key,
         row.kind,
@@ -1392,6 +1412,7 @@ export class Feed {
         row.thread_epoch,
         row.version,
         row.last_event_at,
+        row.last_event_key,
       );
     this.sql.exec(
       `DELETE FROM feed_evictions WHERE (repo_id, thread_key, kind) IN

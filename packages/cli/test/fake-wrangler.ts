@@ -36,6 +36,8 @@ export function fakeWrangler() {
     /** Lifecycle rules per bucket: name to its flags. */
     r2Lifecycle: new Map<string, Map<string, string[]>>(),
     queues: new Set<string>(),
+    /** Queues whose delivery is paused. */
+    paused: new Set<string>(),
     /** Queue name to the Workers consuming it. */
     consumers: new Map<string, Set<string>>(),
     /**
@@ -47,6 +49,10 @@ export function fakeWrangler() {
     deployed: [] as string[],
     migrated: [] as string[],
     tailAttached: false,
+    /** The next deploy of fyrden-api fails (once). */
+    failApiDeploy: false,
+    /** The next pause of a queue's delivery fails (once), before it applies or after. */
+    failPause: false as false | "before" | "after",
     loggedIn: true,
     accounts: [{ id: "acct-1", name: "Test account" }] as { id: string; name: string }[],
   };
@@ -106,6 +112,18 @@ export function fakeWrangler() {
         return state.queues.has(args[2] as string)
           ? ok()
           : fail(`Queue "${args[2]}" does not exist. [code: 11000]`);
+      }
+      if (args[0] === "queues" && (args[1] === "pause-delivery" || args[1] === "resume-delivery")) {
+        if (!state.queues.has(args[2] as string))
+          return fail(`Queue "${args[2]}" does not exist. [code: 11000]`);
+        if (args[1] === "pause-delivery" && state.failPause) {
+          if (state.failPause === "after") state.paused.add(args[2] as string);
+          state.failPause = false;
+          return fail("A request to the Cloudflare API failed. [code: 10013]");
+        }
+        if (args[1] === "pause-delivery") state.paused.add(args[2] as string);
+        else state.paused.delete(args[2] as string);
+        return ok();
       }
       if (args[0] === "queues" && args[1] === "create") {
         state.queues.add(args[2] as string);
@@ -233,6 +251,10 @@ export function fakeWrangler() {
             string
           >;
           for (const [k, v] of Object.entries(secrets)) state.secrets.set(k, v);
+        }
+        if (worker === "fyrden-api" && state.failApiDeploy) {
+          state.failApiDeploy = false;
+          return fail("A request to the Cloudflare API failed. [code: 10013]");
         }
         if (worker === "fyrden-api" && !state.secrets.has("BOOTSTRAP_SECRET")) {
           return fail("The following required secrets have not been set: BOOTSTRAP_SECRET");

@@ -65,7 +65,7 @@ const VERSIONS = { issue: "issues_version", pull: "pulls_version" } as const;
 const KINDS = ["issue", "pull"] as const;
 
 /** A conversation's identity: its own, or, made before identities, its number and creation time. */
-const IDENTITY = "coalesce(conversation_id, 'legacy:' || number || ':' || created_at)";
+export const IDENTITY = "coalesce(conversation_id, 'legacy:' || number || ':' || created_at)";
 
 type Stored = {
   principal: string;

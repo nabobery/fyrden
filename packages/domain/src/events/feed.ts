@@ -86,6 +86,11 @@ export const FeedBlockSchema = z
       title: z.string().max(MAX_FEED_TITLE),
       /** The thread's feed version, bumped by every change of it that has a feed block. */
       version: z.number().int().positive(),
+      /**
+       * The conversation's identity, which a number reused after a restore
+       * does not share (absent from blocks made before it was stamped).
+       */
+      conversation: z.string().min(1).max(128).optional(),
     }),
     /** What happened, e.g. `comment`, `review_requested`, `merged`. */
     action: z

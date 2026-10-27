@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import { userSchema } from "../src/do/schema/user.js";
 import type { UserDO } from "../src/do/UserDO.js";
 import { FEED_POLICY, Feed, MAX_GONE_THREADS } from "../src/do/user/feed.js";
+import { GONE_IDENTITIES } from "../src/do/user/inbox.js";
 import userV4 from "./fixtures/do-schemas/UserDO/v4.sql?raw";
 import {
   DAY,
@@ -311,13 +312,15 @@ describe("forgetting gone threads", () => {
     }));
     // Asked inside the object: a refusal across RPC is also reported as unhandled there.
     await runInDurableObject(stub, async (instance: UserDO) => {
-      await expect(instance.forgetGoneThreads(threads)).rejects.toThrow(/at most 70/);
+      await expect(instance.forgetGoneThreads(threads)).rejects.toThrow(
+        new RegExp(`at most ${MAX_GONE_THREADS}`),
+      );
       expect(await instance.forgetGoneThreads(threads.slice(0, MAX_GONE_THREADS))).toEqual({
         deleted: 0,
       });
     });
-    // Seven kinds a thread: a call deletes fewer rows than a step.
-    expect(MAX_GONE_THREADS * 7).toBeLessThan(FEED_POLICY.sliceRows);
+    // Seven kinds a thread, and its inbox threads: a call deletes fewer rows than a step.
+    expect(MAX_GONE_THREADS * (7 + GONE_IDENTITIES)).toBeLessThan(FEED_POLICY.sliceRows);
   });
 });
 

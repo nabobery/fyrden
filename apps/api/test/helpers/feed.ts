@@ -32,6 +32,12 @@ export interface EntryInit {
   actor?: string;
   actorTrust?: "write" | "read" | "none";
   epochGen?: number;
+  /** The conversation's identity (none: an entry made before it was stamped). */
+  conversation?: string;
+  /** The event (its key), when not the version's own. */
+  eventKey?: string;
+  /** Why its recipient hears of it (a participant's `commenter` unless said). */
+  reasons?: string[];
 }
 
 /** One recipient's entry, built by hand as the repository would send it. */
@@ -40,7 +46,7 @@ export function entry(init: EntryInit): FeedEntry {
   const kind = init.kind ?? "activity";
   const subject = init.subject ?? "pull";
   return {
-    eventKey: `rep_test:${init.epochGen ?? 1}:${init.version}`,
+    eventKey: init.eventKey ?? `rep_test:${init.epochGen ?? 1}:${init.version}`,
     repoId: init.repoId ?? "rep_test",
     occurredAt: init.occurredAt ?? Date.now(),
     actor: init.actor ?? "usr_actor",
@@ -52,6 +58,7 @@ export function entry(init: EntryInit): FeedEntry {
         number: thread,
         title: `${subject === "pull" ? "Pull" : "Issue"} ${thread}`,
         version: init.version,
+        ...(init.conversation !== undefined && { conversation: init.conversation }),
       },
       action: init.action ?? (kind === "activity" ? "comment" : kind),
       actorRoot: "usr_actor",
@@ -67,7 +74,7 @@ export function entry(init: EntryInit): FeedEntry {
     recipient: {
       principal: init.principal ?? "usr_reader",
       kind,
-      reasons: ["commenter"],
+      reasons: init.reasons ?? ["commenter"],
       priority: init.priority ?? "P1",
       state: init.state ?? "open",
       silent: init.silent ?? false,

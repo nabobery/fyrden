@@ -1,4 +1,14 @@
-import { chmod, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -242,6 +252,47 @@ describe("fyrden deploy", () => {
     generated = await generatedConfig();
     expect(generated.vars).toMatchObject({ FYRDEN_INTERNAL_CALLS: "1000" });
     expect(generated).not.toHaveProperty("limits");
+  });
+
+  it("pauses the events queue's delivery around the API's deploy, resuming it after, failed or not", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    const steps = fake.calls
+      .map((call) => call.args.slice(0, 3).join(" "))
+      .filter((step) => /^(queues (pause|resume)-delivery|deploy -c)/.test(step));
+    // (The first Paid deploy's second one, attaching the Tail Worker, is the same version.)
+    expect(steps.slice(0, 3)).toEqual([
+      "queues pause-delivery fyrden-events",
+      `deploy -c ${steps[1]?.split(" ")[2]}`,
+      "queues resume-delivery fyrden-events",
+    ]);
+    expect(fake.state.paused.size).toBe(0);
+    // A failed deploy resumes it too.
+    fake.state.failApiDeploy = true;
+    await expect(deploy(deps(fake.runner).d)).rejects.toThrow();
+    expect(fake.state.paused.size).toBe(0);
+  });
+
+  it("deletes the secrets it wrote and resumes delivery when pausing the queue fails, deploying nothing", async () => {
+    const fake = fakeWrangler();
+    // A temporary directory of its own, so no other test's secrets show.
+    const own = await mkdtemp(join(tmpdir(), "fyrden-deploy-tmp-"));
+    const previous = process.env.TMPDIR;
+    process.env.TMPDIR = own;
+    try {
+      for (const when of ["before", "after"] as const) {
+        fake.state.failPause = when;
+        await expect(deploy(deps(fake.runner).d)).rejects.toThrow();
+        expect(fake.state.deployed).toEqual([]);
+        expect(await readdir(own)).toEqual([]);
+        // A pause whose answer was lost is resumed too.
+        expect(fake.state.paused.size, when).toBe(0);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previous;
+      await rm(own, { recursive: true, force: true });
+    }
   });
 
   it("sets the discretionary allowance when given, and leaves it unset (the plan's default) when not", async () => {

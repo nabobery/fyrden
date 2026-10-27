@@ -8,6 +8,12 @@ CREATE INDEX feed_items_stream ON feed_items (repo_id, subject, feed_seq)
 CREATE INDEX feed_streams_live ON feed_streams (repo_id, subject) WHERE items > 0;
 CREATE INDEX feed_tombstones_stream ON feed_items (repo_id, subject, order_at)
         WHERE feed_seq IS NULL;
+CREATE INDEX inbox_evictions_age ON inbox_evictions (event_at);
+CREATE INDEX inbox_evictions_stream ON inbox_evictions (repo_id, subject, event_at);
+CREATE UNIQUE INDEX inbox_threads_conversation ON inbox_threads (repo_id, conversation);
+CREATE INDEX inbox_threads_kind ON inbox_threads (subject, updated_at, id);
+CREATE INDEX inbox_threads_stream ON inbox_threads (repo_id, subject, updated_at, id);
+CREATE INDEX inbox_threads_unread ON inbox_threads (subject, unread, updated_at, id);
 CREATE INDEX purge_marks_until ON purge_marks (until_at);
 CREATE TABLE feed_cursors (
         id TEXT PRIMARY KEY,
@@ -22,7 +28,7 @@ CREATE TABLE feed_evictions (
         kind TEXT NOT NULL,
         thread_epoch INTEGER NOT NULL,
         version INTEGER NOT NULL,
-        event_at INTEGER NOT NULL, subject TEXT NOT NULL DEFAULT '',
+        event_at INTEGER NOT NULL, subject TEXT NOT NULL DEFAULT '', event_key TEXT NOT NULL DEFAULT '',
         PRIMARY KEY (repo_id, thread_key, kind)
       ) STRICT, WITHOUT ROWID;
 CREATE TABLE "feed_items" (
@@ -72,6 +78,43 @@ CREATE TABLE feed_streams (
         items INTEGER NOT NULL,
         tombstones INTEGER NOT NULL,
         PRIMARY KEY (repo_id, subject)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE inbox_evictions (
+        repo_id TEXT NOT NULL,
+        conversation TEXT NOT NULL,
+        subject TEXT NOT NULL CHECK (subject IN ('issue', 'pull')),
+        nt_epoch INTEGER NOT NULL,
+        nt_version INTEGER NOT NULL,
+        nt_event TEXT NOT NULL,
+        event_at INTEGER NOT NULL,
+        PRIMARY KEY (repo_id, conversation)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE inbox_streams (
+        repo_id TEXT NOT NULL,
+        subject TEXT NOT NULL CHECK (subject IN ('issue', 'pull')),
+        threads INTEGER NOT NULL,
+        PRIMARY KEY (repo_id, subject)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE inbox_threads (
+        id TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
+        conversation TEXT NOT NULL,
+        subject TEXT NOT NULL CHECK (subject IN ('issue', 'pull')),
+        number INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        unread INTEGER NOT NULL CHECK (unread IN (0, 1)),
+        updated_at INTEGER NOT NULL,
+        last_read_at INTEGER,
+        nt_epoch INTEGER NOT NULL,
+        nt_version INTEGER NOT NULL,
+        nt_event TEXT NOT NULL,
+        rd_epoch INTEGER,
+        rd_version INTEGER,
+        rd_event TEXT,
+        dn_epoch INTEGER,
+        dn_version INTEGER,
+        dn_event TEXT
       ) STRICT, WITHOUT ROWID;
 CREATE TABLE purge_marks (
         repo_id TEXT PRIMARY KEY,

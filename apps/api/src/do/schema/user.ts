@@ -298,4 +298,68 @@ export const userSchema: readonly DoMigration[] = [
       CREATE INDEX feed_cursors_age ON feed_cursors (created_at);
     `,
   },
+  {
+    version: 7,
+    name: "inbox",
+    // The thread inbox: one row a repository and conversation that notified
+    // the principal, apart from feed items and agents' acknowledgements. Its
+    // id names the repository and conversation (the GitHub thread id); its
+    // frontiers are (epoch, version, event) of the feed's thread: the event
+    // that last notified (`nt_`), and where it was read (`rd_`) and marked
+    // done (`dn_`, null while not done). What a thread has seen is the
+    // feed's (its items and fences, a fence now keeping the event that
+    // made it), kept by the feed's own rules. At most
+    // 250 a repository and kind (counted in `inbox_streams`); an evicted one
+    // leaves the event that last notified it as a fence, at most 100 a
+    // stream, so another contribution of that event does not make it again.
+    sql: `
+      CREATE TABLE inbox_threads (
+        id TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
+        conversation TEXT NOT NULL,
+        subject TEXT NOT NULL CHECK (subject IN ('issue', 'pull')),
+        number INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        unread INTEGER NOT NULL CHECK (unread IN (0, 1)),
+        updated_at INTEGER NOT NULL,
+        last_read_at INTEGER,
+        nt_epoch INTEGER NOT NULL,
+        nt_version INTEGER NOT NULL,
+        nt_event TEXT NOT NULL,
+        rd_epoch INTEGER,
+        rd_version INTEGER,
+        rd_event TEXT,
+        dn_epoch INTEGER,
+        dn_version INTEGER,
+        dn_event TEXT
+      ) STRICT, WITHOUT ROWID;
+      CREATE UNIQUE INDEX inbox_threads_conversation ON inbox_threads (repo_id, conversation);
+      CREATE INDEX inbox_threads_stream ON inbox_threads (repo_id, subject, updated_at, id);
+      CREATE INDEX inbox_threads_kind ON inbox_threads (subject, updated_at, id);
+      CREATE INDEX inbox_threads_unread ON inbox_threads (subject, unread, updated_at, id);
+
+      CREATE TABLE inbox_streams (
+        repo_id TEXT NOT NULL,
+        subject TEXT NOT NULL CHECK (subject IN ('issue', 'pull')),
+        threads INTEGER NOT NULL,
+        PRIMARY KEY (repo_id, subject)
+      ) STRICT, WITHOUT ROWID;
+
+      CREATE TABLE inbox_evictions (
+        repo_id TEXT NOT NULL,
+        conversation TEXT NOT NULL,
+        subject TEXT NOT NULL CHECK (subject IN ('issue', 'pull')),
+        nt_epoch INTEGER NOT NULL,
+        nt_version INTEGER NOT NULL,
+        nt_event TEXT NOT NULL,
+        event_at INTEGER NOT NULL,
+        PRIMARY KEY (repo_id, conversation)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX inbox_evictions_stream ON inbox_evictions (repo_id, subject, event_at);
+      CREATE INDEX inbox_evictions_age ON inbox_evictions (event_at);
+
+      ALTER TABLE feed_evictions ADD COLUMN event_key TEXT NOT NULL DEFAULT '';
+    `,
+  },
 ];
