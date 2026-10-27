@@ -17,6 +17,13 @@ import {
 } from "../accounts/delegation.js";
 import { deleteUserOperation } from "../accounts/deletion.js";
 import {
+  addUserEmailsOperation,
+  confirmUserEmailOperation,
+  deleteUserEmailsOperation,
+  listUserEmailsOperation,
+  requestUserEmailConfirmationOperation,
+} from "../accounts/emails.js";
+import {
   createTeamOperation,
   listCollaboratorsOperation,
   listTeamsOperation,
@@ -578,6 +585,11 @@ export const handlers: Handlers = {
   "feed.sync": syncFeedOperation,
   "feed.ack": ackFeedItemOperation,
   "feed.digest": getFeedDigestOperation,
+  "users.emails.list": listUserEmailsOperation,
+  "users.emails.add": addUserEmailsOperation,
+  "users.emails.delete": deleteUserEmailsOperation,
+  "users.emails.confirm": confirmUserEmailOperation,
+  "users.emails.confirmation": requestUserEmailConfirmationOperation,
 
   // Quotas live in each account's object (accounts/quotas).
   "quotas.user.get": getUserQuotaOperation,

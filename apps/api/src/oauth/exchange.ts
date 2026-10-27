@@ -1,5 +1,5 @@
 import { delegationOf, MintRefusedError, readGrantLinks } from "@fyrden/adapters-cloudflare/auth";
-import { isPermission, scopesAllow } from "@fyrden/domain";
+import { isScope, scopesAllow } from "@fyrden/domain";
 import { grantById } from "../accounts/delegation.js";
 import { clock, tokenStore } from "../services.js";
 import { tokenRequestProof } from "./issue.js";
@@ -109,9 +109,7 @@ export async function tokenExchange(
   const scopes = scopeParam === undefined ? grantScopes : scopeParam.split(" ").filter(Boolean);
   if (
     scopes.length === 0 ||
-    !scopes.every(
-      (s) => isPermission(s) && scopesAllow(grantScopes, s) && scopesAllow(agent.scopes, s),
-    )
+    !scopes.every((s) => isScope(s) && scopesAllow(grantScopes, s) && scopesAllow(agent.scopes, s))
   )
     return refuse(c, "invalid_scope", "The scopes exceed the grant's or the agent token's.");
   const grantRepos = grant.repo_ids === null ? null : (JSON.parse(grant.repo_ids) as string[]);

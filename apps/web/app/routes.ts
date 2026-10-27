@@ -6,6 +6,7 @@ export default [
   route("sign-out", "routes/sign-out.ts"),
   route("settings/tokens", "routes/settings.tokens.tsx"),
   route("settings/agents", "routes/settings.agents.tsx"),
+  route("settings/emails/confirm", "routes/settings.emails.confirm.tsx"),
   route(":owner/:repo", "routes/repo.tsx"),
   route(":owner/:repo/tree/:ref/*", "routes/repo.tree.tsx"),
   route(":owner/:repo/blob/:ref/*", "routes/repo.blob.tsx"),

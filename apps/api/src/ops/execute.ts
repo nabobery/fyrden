@@ -9,7 +9,7 @@ import {
   type Problem,
   type ProblemInit,
 } from "@fyrden/api-contract";
-import { checkOperation } from "@fyrden/domain";
+import { checkOperation, isPermission, permissionDef } from "@fyrden/domain";
 import type { AuthState } from "../middleware/auth.js";
 import {
   type Claim,
@@ -55,13 +55,15 @@ export type OpResult =
 export class OperationError extends Error {
   override name = "OperationError";
   constructor(
-    readonly status: 400 | 401 | 403 | 404 | 405 | 409 | 410 | 422 | 503,
+    readonly status: 400 | 401 | 403 | 404 | 405 | 409 | 410 | 422 | 429 | 503,
     readonly code: string,
     detail: string,
     /** Where the client starts over (for an expired cursor). */
     readonly resync?: string,
     /** For `stale`: the version it is at now. */
     readonly currentVersion?: number,
+    /** With a 429: seconds to wait before trying again. */
+    readonly retryAfter?: number,
   ) {
     super(detail);
   }
@@ -72,11 +74,28 @@ function fail(
   status: number,
   code: string,
   detail: string,
-  extra: Pick<ProblemInit, "missingPermission" | "resync" | "currentVersion"> = {},
+  extra: Pick<ProblemInit, "missingPermission" | "resync" | "currentVersion" | "retryAfter"> = {},
 ): OpResult {
   return {
     ok: false,
     problem: makeProblem({ status, code, detail, requestId: ctx.requestId, ...extra }),
+  };
+}
+
+/**
+ * Why an operation refuses a credential before anything else: its
+ * permission is a web session's only and the credential is not one.
+ * Undefined when it does not.
+ */
+export function sessionRefusal(
+  op: OperationDef,
+  auth: Pick<TokenRecord, "type">,
+): { code: string; detail: string } | undefined {
+  if (!isPermission(op.permission) || permissionDef(op.permission).sessionOnly !== true) return;
+  if (auth.type === "ses") return;
+  return {
+    code: "session_required",
+    detail: `${op.id} is done from Fyrden's web pages, signed in, with no token.`,
   };
 }
 
@@ -145,6 +164,10 @@ export async function executeOperation(
 ): Promise<OpResult> {
   // Limited by token (or its source) id, which a re-verification cannot change; checked
   // first so a flood of writes cannot drive D1 primary lookups.
+  // A web session's only operation refuses every other credential before anything else.
+  const refused = sessionRefusal(op, ctx.auth);
+  if (refused) return fail(ctx, 403, refused.code, refused.detail);
+
   const limiter = op.rateLimit === "read" ? ctx.env.RATE_LIMIT_READ : ctx.env.RATE_LIMIT_WRITE;
   if (!(await limiter.limit({ key: rateLimitKey(ctx.auth) })).success) {
     return fail(ctx, 429, "rate_limited", "Too many requests for this token.");
@@ -221,6 +244,7 @@ export async function executeOperation(
     result = fail(ctx, error.status, error.code, error.message, {
       ...(error.resync !== undefined && { resync: error.resync }),
       ...(error.currentVersion !== undefined && { currentVersion: error.currentVersion }),
+      ...(error.retryAfter !== undefined && { retryAfter: error.retryAfter }),
     });
   }
   if (claim) await finishIdempotent(ctx.env, claim, outcomeOf(op, result), ctx.metrics);

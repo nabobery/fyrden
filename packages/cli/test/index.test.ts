@@ -104,6 +104,40 @@ describe("envDeployOptions", () => {
     expect(envDeployOptions({ CLOUDFLARE_ACCOUNT_ID: "a1" }).envAccountId).toBe("a1");
   });
 
+  it("takes an email provider whole, or none", () => {
+    const email = ["--email", "resend", "--email-from", "Fyrden <n@notify.example>"];
+    expect(parseDeployArgs([...email, "--email-secrets-file", "/s.json"])).toEqual({
+      plan: "paid",
+      email: { provider: "resend", from: "Fyrden <n@notify.example>", secretsFile: "/s.json" },
+    });
+    expect(
+      parseDeployArgs([
+        "--email",
+        "resend",
+        "--email-from",
+        "n@notify.example",
+        "--email-secrets-file",
+        "s",
+      ]),
+    ).toMatchObject({ email: { from: "n@notify.example" } });
+    // In part, another provider, or a sending address that is not one: no deploy.
+    expect(parseDeployArgs(email)).toBeUndefined();
+    expect(parseDeployArgs(["--email-secrets-file", "/s.json"])).toBeUndefined();
+    expect(
+      parseDeployArgs([
+        "--email",
+        "smtp",
+        "--email-from",
+        "n@x.example",
+        "--email-secrets-file",
+        "s",
+      ]),
+    ).toBeUndefined();
+    expect(
+      parseDeployArgs(["--email", "resend", "--email-from", "nobody", "--email-secrets-file", "s"]),
+    ).toBeUndefined();
+  });
+
   it("accepts a daily allowance for discretionary work, resource by resource, on either plan", () => {
     expect(
       parseDeployArgs(["--plan", "free", "--discretionary", "do_rows_written=5000,queue_ops=500"]),

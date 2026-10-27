@@ -28,6 +28,15 @@ export interface DeployDeps {
    * default (each deploy sets the variables, so leaving it out goes back).
    */
   discretionary?: string | undefined;
+  /**
+   * The email provider, set as `FYRDEN_EMAIL_PROVIDER` and
+   * `FYRDEN_EMAIL_FROM`, its key uploaded as the secret `RESEND_API_KEY`
+   * (each deploy given it uploads it again: a new value rotates it); left
+   * out, the variables are not set and the deployment sends no email.
+   * Sending itself stays off (`FYRDEN_EMAIL_SENDING`) until its safeguards
+   * exist.
+   */
+  email?: { provider: "resend"; from: string; apiKey: string } | undefined;
   runner: WranglerRunner;
   /** Builds fyrden-web (react-router build). */
   buildWeb: () => Promise<void>;
@@ -158,6 +167,10 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
       ...(deps.discretionary !== undefined && {
         FYRDEN_DISCRETIONARY_DAILY: deps.discretionary,
       }),
+      ...(deps.email && {
+        FYRDEN_EMAIL_PROVIDER: deps.email.provider,
+        FYRDEN_EMAIL_FROM: deps.email.from,
+      }),
     },
     d1_databases: (config.d1_databases ?? []).map((d) => ({
       ...d,
@@ -231,6 +244,8 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   // The key webhook secrets are sealed with: made once, never shown; replace
   // it only as docs/operations/webhooks.md says, or every hook's secret is lost.
   if (!existing?.has("WEBHOOKS_KEY")) upload.WEBHOOKS_KEY = signingKey();
+  // The email provider's key, whenever one is given (a new one replaces it).
+  if (deps.email) upload.RESEND_API_KEY = deps.email.apiKey;
   if (Object.keys(upload).length > 0) {
     secretsDir = await mkdtemp(join(tmpdir(), "fyrden-secrets-"));
     const file = join(secretsDir, "secrets.json");

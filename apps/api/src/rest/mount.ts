@@ -5,7 +5,13 @@ import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
 import { NO_STORE, notModified } from "../http/cache.js";
 import { problem, problemResponse } from "../http/problem.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
-import { executeOperation, type OpContext, type OpHandler, type OpResult } from "../ops/execute.js";
+import {
+  executeOperation,
+  type OpContext,
+  type OpHandler,
+  type OpResult,
+  sessionRefusal,
+} from "../ops/execute.js";
 import { handlers } from "../ops/handlers.js";
 import { IDEMPOTENCY_KEY } from "./idempotency.js";
 
@@ -158,6 +164,9 @@ export function mountRest(app: Hono<{ Bindings: Env; Variables: AuthVariables }>
     const path =
       API_PREFIX + op.path.replace(/\{([a-z_]+)\+\}/g, ":$1{.+}").replace(/\{([a-z_]+)\}/g, ":$1");
     app.on(op.method, path, requireAuth("by-method", "api", gitTransport(op)), async (c) => {
+      // Before the body or its key are looked at (as the executor would, after them).
+      const refused = sessionRefusal(op, c.get("auth"));
+      if (refused) return problem(c, 403, refused.code, refused.detail);
       const read = await readInput(c, op);
       if (!read.ok) return problem(c, read.status, read.code, read.detail);
       const key = op.idempotency === "key" ? c.req.header("Idempotency-Key") : undefined;

@@ -12,7 +12,7 @@ import type {
   Output,
   revokeUserToken,
 } from "@fyrden/api-contract";
-import { isPermission, scopesAllow } from "@fyrden/domain";
+import { isScope, scopesAllow } from "@fyrden/domain";
 import { decodeSeekCursor, encodeSeekCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { tokenStore } from "../services.js";
@@ -98,7 +98,7 @@ export async function createUserTokenOperation(
   // Never wider than the token (or session) making it.
   const own = ctx.auth.scopes;
   const scopes = input.scopes.length === 0 ? own : input.scopes;
-  if (!scopes.every((scope) => isPermission(scope) && scopesAllow(own, scope)))
+  if (!scopes.every((scope) => isScope(scope) && scopesAllow(own, scope)))
     throw new OperationError(403, "scope_exceeds_token", "The scopes exceed your token's.");
   const minted = await mintAs(
     ctx,

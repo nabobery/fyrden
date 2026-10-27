@@ -42,6 +42,13 @@ import {
   getRootContents,
   getTree,
 } from "../ops/contents.js";
+import {
+  addUserEmails,
+  confirmUserEmail,
+  deleteUserEmails,
+  listUserEmails,
+  requestUserEmailConfirmation,
+} from "../ops/emails.js";
 import { ackFeedItem, getFeed, getFeedDigest, syncFeed } from "../ops/feed.js";
 import { createFileCommit, deleteContents, putContents } from "../ops/file-writes.js";
 import { createGrant, listGrants, revokeGrant } from "../ops/grants.js";
@@ -357,6 +364,11 @@ export const registry = defineRegistry([
   syncFeed,
   ackFeedItem,
   getFeedDigest,
+  listUserEmails,
+  addUserEmails,
+  deleteUserEmails,
+  confirmUserEmail,
+  requestUserEmailConfirmation,
   getUserQuota,
   getOrgQuota,
   setQuota,

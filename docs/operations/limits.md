@@ -950,6 +950,20 @@ Watched activity (P2 entries) is the work a deployment may leave out: on Workers
 | Reported | `GET /feed`, `GET /feed/sync` and their MCP tools answer `delivery: "degraded"` from the day's first refusal until the next midnight plus the feeds' retention (7 days: what a refused entry would have shown may be missing that long), whatever the allowance is now, else `complete`: the same for every caller. Read from the read model at most once a minute an isolate (a minute's staleness; two isolates can briefly differ); a quiet poll adds that read when its isolate's copy is older |
 | Enforced, and estimated | Enforced: a UTC day's admissions stay within its allowance at their price, and their entries are written only within their hour, so whatever starts on a day was admitted in that day's window. Estimated, not enforced (measured on Free before watching is switched on): an object's active time (a pending call has no platform limit; priced at half a second a call); the later deletion of what watched entries made (priced at admission, done when retention, a purge or retirement reaches it: later, and later still after an outage); a feed object's one-time migration when a watched entry is the first to wake it; queue traffic past one send and one recovery |
 
+## Email (not yet sent)
+
+A user's notification addresses, managed from Fyrden's web pages signed in: `GET`, `POST` and `DELETE /user/emails` (GitHub's shapes) and `POST /user/emails/confirm` and `/user/emails/confirmation` (Fyrden's). No email is sent yet: while the deployment's sending is off, adding an address or asking for a confirmation answers 503 `email_unavailable`.
+
+| What | Value |
+|---|---|
+| Who | Web sessions only (`emails:read`, `emails:write`: no token, OAuth client, agent or delegation carries them, and any other credential gets 403). An unrestricted personal access token is the user's full authority and can start a session, so its holder can manage addresses through one, as it can add a passkey |
+| Addresses | At most 10 live a user (422 `too_many_emails`); one at most 254 bytes, one `@`, a domain with a dot, nothing more checked; the same address in another case is the same mailbox. An address added again after its removal is a new one (its id is its generation): nothing of the earlier one applies to it |
+| Confirming | Each address added is mailed a link (32 random bytes, kept as their SHA-256) to the web page `/settings/emails/confirm`, which confirms only on its form's post from Fyrden's own origin, by the signed-in account that added the address, once, within a day. A link of another account, used, expired, replaced by a newer one, or of an address removed answers 404, the same for all, and is not used up. A mailbox is verified on one account at a time: confirming one another account holds verified answers 409 `email_taken` (the link used up), and a verification, or the removal of a verified address, makes every outstanding link of that mailbox stale |
+| Limits | Confirmation emails: 5 a user an hour, 3 a mailbox a day whoever asks; a request needing more is refused whole (429 `confirmation_rate_limited` with `Retry-After`, nothing added or counted) |
+| Primary | `primary` is the address notifications will go to: the earliest verified. GitHub's other deviations: no pagination, `visibility` always null |
+| Cleanup | Links go a day after their expiry or use, counters after their period, addresses 30 days after their removal, a mailbox a day after no live address names it: by indexes, 1,000 rows of each a maintenance run. A user's deletion removes their addresses with its other rows |
+| Provider | Resend (`FYRDEN_EMAIL_PROVIDER=resend`): a message is accepted only when Resend answers with its id; refused when it answers that the request is at fault (never sent again) or limited for now; any other outcome (a server error, no answer, an answer without an id) is unknown and never sent again. Each message carries an idempotency key |
+
 ## Search (not yet served)
 
 Search's projections of issues, pull requests, labels and milestones are kept in the org read model; nothing reads them yet. Writing and repairing them waits for the deployment setting `search_indexing` (`deployment_settings` in the directory database, off until an operation turns it on).
@@ -999,6 +1013,8 @@ and the default applies.
 | `FYRDEN_PLAN` | unset (Free) | | `paid` selects Paid serving; anything else is Free. `fyrden deploy --plan` sets it |
 | `FYRDEN_INTERNAL_CALLS` | 1,000 | 1,000 | Paid only (ignored on Free): calls to D1, R2, Durable Objects and queues one invocation may make, up to 10,000,000. `fyrden deploy --plan paid --internal-calls` sets it (see Subrequest budgets) |
 | `FYRDEN_DISCRETIONARY_DAILY` | Free: a fifth of each daily limit; Paid: uncapped | | The daily allowance of watched activity, `resource=n,…` (see Discretionary work). `fyrden deploy --discretionary` sets it |
+| `FYRDEN_EMAIL_PROVIDER`, `FYRDEN_EMAIL_FROM` | unset | | The email provider (`resend`) and the address mail is sent from, with the secret `RESEND_API_KEY`; all three or none (see Email). `fyrden deploy --email resend --email-from ADDRESS --email-secrets-file PATH` sets them (the file a JSON object `{ "RESEND_API_KEY": "re_…" }`); passed on every deploy, as `--discretionary` is |
+| `FYRDEN_EMAIL_SENDING` | unset (off) | | `on` lets the deployment send email with its provider. Not settable yet: sending waits for callbacks, suppression and spending |
 | `FYRDEN_OWN_HOSTS` | unset | | Extra hostnames of this deployment (comma separated), refused as import sources |
 | `GIT_PUSH_MAX_BODY_BYTES` | 104,857,600 | 0 | Largest push request the Worker accepts |
 | `GIT_PUSH_MAX_GZIP_BODY_BYTES` | 33,554,432 (32 MiB) | 0 | Largest inflated size of a compressed push request |

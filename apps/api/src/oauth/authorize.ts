@@ -1,4 +1,4 @@
-import { isPermission, PERMISSIONS } from "@fyrden/domain";
+import { isScope, PERMISSIONS } from "@fyrden/domain";
 import { clock } from "../services.js";
 import { clientById, matchesRedirect, type OAuthClient } from "./clients.js";
 import { formParams, type OAuthContext, originOf, randomSecret, sha256Hex } from "./params.js";
@@ -136,7 +136,7 @@ export async function authorizeRequest(c: OAuthContext): Promise<Response> {
   if (dpopJkt !== null && !/^[A-Za-z0-9_-]{43}$/.test(dpopJkt))
     return fail("invalid_request", "dpop_jkt is not a SHA-256 JWK thumbprint.");
   const scopes = [...new Set((q.get("scope") ?? "").split(" ").filter(Boolean))];
-  if (scopes.length === 0 || !scopes.every(isPermission))
+  if (scopes.length === 0 || !scopes.every(isScope))
     return fail("invalid_scope", "scope must name one or more Fyrden permissions.");
 
   const id = randomSecret();

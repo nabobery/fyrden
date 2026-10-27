@@ -7,7 +7,7 @@ import type {
   Output,
   revokeGrant,
 } from "@fyrden/api-contract";
-import { isPermission, scopesAllow } from "@fyrden/domain";
+import { isScope, scopesAllow } from "@fyrden/domain";
 import { decodeSeekCursor, encodeSeekCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { authorize, resolveRepo } from "../repos/directory.js";
@@ -133,7 +133,7 @@ async function repoIdsOf(
  * one); an empty `limit` (a token's full rights) bounds nothing.
  */
 function within(scopes: readonly string[], limit: readonly string[]): boolean {
-  return scopes.every((s) => isPermission(s) && scopesAllow(limit, s));
+  return scopes.every((s) => isScope(s) && scopesAllow(limit, s));
 }
 
 /** Whether `repoIds` (null: every one) stay within `limit` (null: every one). */

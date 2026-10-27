@@ -1,3 +1,4 @@
+import { isPermission, permissionDef } from "@fyrden/domain";
 import { z } from "zod";
 import { answersNothing, type OperationDef, openApiPath, pathParams, type Registry } from "./op.js";
 import { Problem } from "./problem.js";
@@ -67,11 +68,16 @@ function operationObject(op: OperationDef): JsonSchema {
         content: { "application/problem+json": { schema: problem } },
       },
     },
-    security: [{ bearer: [] }],
+    // A web session's only (account security): its cookie and the header no other page sends.
+    security: sessionOnly(op) ? [{ session: [], sessionHeader: [] }] : [{ bearer: [] }],
     "x-fyrden-permission": op.permission,
     "x-fyrden-principals": op.principals,
   };
 }
+
+/** Whether an operation is a web session's only (its permission is). */
+const sessionOnly = (op: OperationDef) =>
+  isPermission(op.permission) && permissionDef(op.permission).sessionOnly === true;
 
 /** OpenAPI 3.1 document for the REST API, served at /api/openapi.json. */
 export function openApiDocument(
@@ -93,7 +99,16 @@ export function openApiDocument(
     ...(info.serverUrl && { servers: [{ url: info.serverUrl }] }),
     paths,
     components: {
-      securitySchemes: { bearer: { type: "http", scheme: "bearer" } },
+      securitySchemes: {
+        bearer: { type: "http", scheme: "bearer" },
+        session: { type: "apiKey", in: "cookie", name: "__Host-fyrden_session" },
+        sessionHeader: {
+          type: "apiKey",
+          in: "header",
+          name: "X-Fyrden-Session",
+          description: "`1`, with the session's cookie: what Fyrden's own web pages send.",
+        },
+      },
       schemas: { Problem: stripMeta(toSchema(Problem, "output")) },
     },
   };

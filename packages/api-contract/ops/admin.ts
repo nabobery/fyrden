@@ -1,9 +1,4 @@
-import {
-  HANDLE_SHAPE,
-  isReservedHandle,
-  MAX_HANDLE_LENGTH,
-  PERMISSION_NAMES,
-} from "@fyrden/domain";
+import { HANDLE_SHAPE, isReservedHandle, MAX_HANDLE_LENGTH, SCOPE_NAMES } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation, INSTANCE_ADMIN, NoContent } from "../src/op.js";
 
@@ -71,7 +66,7 @@ export const createToken = defineOperation({
     user_id: z.string().min(1),
     type: z.enum(["pat", "git"]).default("pat"),
     scopes: z
-      .array(z.enum(PERMISSION_NAMES))
+      .array(z.enum(SCOPE_NAMES))
       .max(32)
       .default([])
       .describe(

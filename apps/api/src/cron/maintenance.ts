@@ -1,4 +1,5 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { reapEmails } from "../accounts/emails.js";
 import { reapOAuth } from "../oauth/reaper.js";
 import { pruneFailedEvents } from "../queues/events-dlq.js";
 import { advanceDeletions } from "../repos/deletion.js";
@@ -41,6 +42,7 @@ export async function runMaintenance(env: Env, metrics: Metrics): Promise<void> 
     reapIdempotencyKeys(env, { now: Date.now(), metrics }),
     advanceTransfers(env, { metrics }),
     reapOAuth(env, { now: Date.now(), metrics }),
+    reapEmails(env, { now: Date.now(), metrics }),
     pruneFailedEvents(env, { now: Date.now(), metrics }),
   ]);
   const failed = results.filter((r) => r.status === "rejected");

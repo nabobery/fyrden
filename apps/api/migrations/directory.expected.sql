@@ -37,6 +37,39 @@ CREATE TABLE dpop_proofs (
   PRIMARY KEY (jkt, jti)
 ) STRICT;
 
+-- table email_admissions
+CREATE TABLE email_admissions (
+  nonce TEXT PRIMARY KEY,
+  at INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+
+-- table email_confirmations
+CREATE TABLE email_confirmations (
+  token_hash TEXT PRIMARY KEY CHECK (length(token_hash) = 64),
+  email_id TEXT NOT NULL,
+  address_key TEXT NOT NULL,
+  claim TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER,
+  reap_at INTEGER NOT NULL
+) STRICT;
+
+-- table email_counters
+CREATE TABLE email_counters (
+  scope TEXT NOT NULL CHECK (scope IN ('user_hour', 'mailbox_day')),
+  key TEXT NOT NULL,
+  period INTEGER NOT NULL,
+  sent INTEGER NOT NULL,
+  PRIMARY KEY (scope, key, period)
+) STRICT, WITHOUT ROWID;
+
+-- table email_mailboxes
+CREATE TABLE email_mailboxes (
+  address_key TEXT PRIMARY KEY,
+  claim TEXT NOT NULL,
+  idle_since INTEGER
+) STRICT, WITHOUT ROWID;
+
 -- table grants
 CREATE TABLE grants (
   id TEXT PRIMARY KEY,
@@ -336,6 +369,17 @@ CREATE TABLE user_deletions (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+-- table user_emails
+CREATE TABLE user_emails (
+  id TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL REFERENCES principals (id),
+  address TEXT NOT NULL CHECK (length(address) <= 254),
+  address_key TEXT NOT NULL,
+  verified_at INTEGER,
+  created_at INTEGER NOT NULL,
+  removed_at INTEGER
+) STRICT;
+
 -- table user_retirements
 CREATE TABLE user_retirements (
   user_id TEXT NOT NULL REFERENCES user_deletions (user_id),
@@ -387,6 +431,21 @@ CREATE INDEX audit_segments_to ON audit_segments (to_seq);
 
 -- index dpop_proofs_expiry
 CREATE INDEX dpop_proofs_expiry ON dpop_proofs (expires_at);
+
+-- index email_admissions_at
+CREATE INDEX email_admissions_at ON email_admissions (at);
+
+-- index email_confirmations_email
+CREATE INDEX email_confirmations_email ON email_confirmations (email_id);
+
+-- index email_confirmations_reap
+CREATE INDEX email_confirmations_reap ON email_confirmations (reap_at);
+
+-- index email_counters_period
+CREATE INDEX email_counters_period ON email_counters (scope, period);
+
+-- index email_mailboxes_idle
+CREATE INDEX email_mailboxes_idle ON email_mailboxes (idle_since) WHERE idle_since IS NOT NULL;
 
 -- index grants_agent
 CREATE INDEX grants_agent ON grants (agent_id);
@@ -505,6 +564,19 @@ CREATE INDEX tokens_principal ON tokens (principal_id);
 
 -- index user_deletions_rearm
 CREATE INDEX user_deletions_rearm ON user_deletions (rearm_after, user_id) WHERE step <> 'done';
+
+-- index user_emails_live
+CREATE UNIQUE INDEX user_emails_live ON user_emails (principal_id, address_key)
+  WHERE removed_at IS NULL;
+
+-- index user_emails_mailbox
+CREATE INDEX user_emails_mailbox ON user_emails (address_key);
+
+-- index user_emails_principal
+CREATE INDEX user_emails_principal ON user_emails (principal_id);
+
+-- index user_emails_removed
+CREATE INDEX user_emails_removed ON user_emails (removed_at, id) WHERE removed_at IS NOT NULL;
 
 -- index user_retirements_principal
 CREATE INDEX user_retirements_principal ON user_retirements (principal_id);

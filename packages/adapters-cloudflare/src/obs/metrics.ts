@@ -97,6 +97,10 @@ export const METRICS = {
   // tell, after a repository restore (counted once an event).
   "feed.preference_overflow": ["kind"],
   "code_owners.request_skipped": ["reason"],
+  // Emails handed to the provider (`kind` = confirmation), and those it did not accept
+  // (`status` = refused | unknown).
+  "email.send": ["kind"],
+  "email.not_sent": ["kind", "status"],
   "d1.invocation_statements": ["where", "op"],
   // Wall time of one stage of making webhook deliveries, in ms: an event's
   // rows, body, claim and hooks once per event; post and record once per

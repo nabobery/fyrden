@@ -5,6 +5,7 @@ export * from "../ops/archives.js";
 export * from "../ops/browse.js";
 export * from "../ops/comments.js";
 export * from "../ops/contents.js";
+export * from "../ops/emails.js";
 export * from "../ops/feed.js";
 export * from "../ops/file-writes.js";
 export * from "../ops/grants.js";

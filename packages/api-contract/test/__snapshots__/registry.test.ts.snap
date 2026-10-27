@@ -30,6 +30,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "description": "Where to start over when a cursor expired (\`cursor_expired\`): a REST path.",
             "type": "string",
           },
+          "retry_after": {
+            "description": "With a 429: seconds to wait before trying again (also the \`Retry-After\` header).",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer",
+          },
           "status": {
             "maximum": 9007199254740991,
             "minimum": -9007199254740991,
@@ -53,6 +59,17 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
       "bearer": {
         "scheme": "bearer",
         "type": "http",
+      },
+      "session": {
+        "in": "cookie",
+        "name": "__Host-fyrden_session",
+        "type": "apiKey",
+      },
+      "sessionHeader": {
+        "description": "\`1\`, with the session's cookie: what Fyrden's own web pages send.",
+        "in": "header",
+        "name": "X-Fyrden-Session",
+        "type": "apiKey",
       },
     },
   },
@@ -35781,6 +35798,352 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "agent",
           "installation",
         ],
+      },
+    },
+    "/user/emails": {
+      "delete": {
+        "description": "Removes notification addresses of yours (one not yours, or already removed, changes nothing); their confirmation links stop working. Web sessions only.",
+        "operationId": "users.emails.delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "emails": {
+                    "items": {
+                      "maxLength": 254,
+                      "minLength": 3,
+                      "type": "string",
+                    },
+                    "maxItems": 10,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                },
+                "required": [
+                  "emails",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "session": [],
+            "sessionHeader": [],
+          },
+        ],
+        "summary": "Remove email addresses",
+        "x-fyrden-permission": "emails:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "Your notification addresses (at most 10), verified or not. Web sessions only (any other credential: 403).",
+        "operationId": "users.emails.list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "email": {
+                        "type": "string",
+                      },
+                      "primary": {
+                        "description": "The address notifications go to: the earliest one verified (Fyrden's meaning).",
+                        "type": "boolean",
+                      },
+                      "verified": {
+                        "type": "boolean",
+                      },
+                      "visibility": {
+                        "description": "Always null: Fyrden shows no address publicly.",
+                        "type": "null",
+                      },
+                    },
+                    "required": [
+                      "email",
+                      "primary",
+                      "verified",
+                      "visibility",
+                    ],
+                    "type": "object",
+                  },
+                  "type": "array",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "session": [],
+            "sessionHeader": [],
+          },
+        ],
+        "summary": "List your email addresses",
+        "x-fyrden-permission": "emails:read",
+        "x-fyrden-principals": [
+          "user",
+        ],
+      },
+      "post": {
+        "description": "Adds notification addresses (at most 10 in all; 422 \`too_many_emails\`), each sent a link to confirm it (good for a day). One already yours is kept as it is. A user is sent at most 5 confirmation emails an hour and a mailbox at most 3 a day, whoever asks (429 \`confirmation_rate_limited\`, nothing added). While the deployment sends no email: 503 \`email_unavailable\`. Web sessions only.",
+        "operationId": "users.emails.add",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "emails": {
+                    "items": {
+                      "maxLength": 254,
+                      "minLength": 3,
+                      "type": "string",
+                    },
+                    "maxItems": 10,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                },
+                "required": [
+                  "emails",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "email": {
+                        "type": "string",
+                      },
+                      "primary": {
+                        "description": "The address notifications go to: the earliest one verified (Fyrden's meaning).",
+                        "type": "boolean",
+                      },
+                      "verified": {
+                        "type": "boolean",
+                      },
+                      "visibility": {
+                        "description": "Always null: Fyrden shows no address publicly.",
+                        "type": "null",
+                      },
+                    },
+                    "required": [
+                      "email",
+                      "primary",
+                      "verified",
+                      "visibility",
+                    ],
+                    "type": "object",
+                  },
+                  "type": "array",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "session": [],
+            "sessionHeader": [],
+          },
+        ],
+        "summary": "Add email addresses",
+        "x-fyrden-permission": "emails:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/user/emails/confirm": {
+      "post": {
+        "description": "Confirms one of your addresses with the token its link carried (once, within a day, by the account that added it). 404 \`confirmation_not_found\` for a token unknown, used, expired, of another account or of an address removed; 409 \`email_taken\` when another account has confirmed the mailbox first (the token is used up). Web sessions only. A Fyrden extension.",
+        "operationId": "users.emails.confirm",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "token": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "token",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "email": {
+                      "type": "string",
+                    },
+                    "primary": {
+                      "description": "The address notifications go to: the earliest one verified (Fyrden's meaning).",
+                      "type": "boolean",
+                    },
+                    "verified": {
+                      "type": "boolean",
+                    },
+                    "visibility": {
+                      "description": "Always null: Fyrden shows no address publicly.",
+                      "type": "null",
+                    },
+                  },
+                  "required": [
+                    "email",
+                    "primary",
+                    "verified",
+                    "visibility",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "session": [],
+            "sessionHeader": [],
+          },
+        ],
+        "summary": "Confirm an email address",
+        "x-fyrden-permission": "emails:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/user/emails/confirmation": {
+      "post": {
+        "description": "Sends a new link to confirm an unverified address of yours (earlier links stop working), under the same limits as adding one. 404 \`email_not_found\` for an address not yours, removed or already verified. Web sessions only. A Fyrden extension.",
+        "operationId": "users.emails.confirmation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "email": {
+                    "maxLength": 254,
+                    "minLength": 3,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "email",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "session": [],
+            "sessionHeader": [],
+          },
+        ],
+        "summary": "Send a new confirmation link",
+        "x-fyrden-permission": "emails:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
       },
     },
     "/user/git-tokens": {

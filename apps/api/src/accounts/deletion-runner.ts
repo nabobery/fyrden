@@ -327,8 +327,11 @@ async function accounts(env: Env, job: Job, metrics: Metrics | undefined): Promi
 async function stars(env: Env, job: Job, metrics: Metrics | undefined): Promise<Progress> {
   metrics?.count("d1.query", { db: "directory", op: "user_deletion_stars" });
   // And the set's watch levels and thread preferences (repositories clear their own rows of
-  // deleted principals when they next count those of a cap).
-  const [starred, watched, threads] = await env.DIRECTORY.batch([
+  // deleted principals when they next count those of a cap), and its email addresses: a
+  // verified claim given up makes its mailbox's outstanding proofs stale, a mailbox no one
+  // else names goes idle (reaped later), then the confirmations and addresses go.
+  const now = Date.now();
+  const [starred, watched, threads, , , confirmations, addresses] = await env.DIRECTORY.batch([
     env.DIRECTORY.prepare(
       `DELETE FROM stars WHERE rowid IN (SELECT rowid FROM stars WHERE user_id IN ${SET} LIMIT ?2)`,
     ).bind(job.user_id, DELETION_RUN_POLICY.starsPerRun),
@@ -341,8 +344,32 @@ async function stars(env: Env, job: Job, metrics: Metrics | undefined): Promise<
          (SELECT principal_id, repo_id, conversation FROM thread_preferences
           WHERE principal_id IN ${SET} LIMIT ?2)`,
     ).bind(job.user_id, DELETION_RUN_POLICY.starsPerRun),
+    env.DIRECTORY.prepare(
+      `UPDATE email_mailboxes SET claim = lower(hex(randomblob(16)))
+       WHERE address_key IN (SELECT address_key FROM user_emails WHERE principal_id IN ${SET}
+         AND removed_at IS NULL AND verified_at IS NOT NULL)`,
+    ).bind(job.user_id),
+    env.DIRECTORY.prepare(
+      `UPDATE email_mailboxes SET idle_since = ?2
+       WHERE idle_since IS NULL AND address_key IN (SELECT address_key FROM user_emails
+           WHERE principal_id IN ${SET} AND removed_at IS NULL)
+         AND NOT EXISTS (SELECT 1 FROM user_emails o WHERE o.address_key = email_mailboxes.address_key
+           AND o.removed_at IS NULL AND o.principal_id NOT IN ${SET})`,
+    ).bind(job.user_id, now),
+    env.DIRECTORY.prepare(
+      `DELETE FROM email_confirmations WHERE token_hash IN (SELECT c.token_hash
+         FROM email_confirmations c JOIN user_emails e ON e.id = c.email_id
+         WHERE e.principal_id IN ${SET} LIMIT ?2)`,
+    ).bind(job.user_id, DELETION_RUN_POLICY.starsPerRun),
+    // An address after its confirmations (found through it), so none is left behind.
+    env.DIRECTORY.prepare(
+      `DELETE FROM user_emails WHERE id IN (SELECT id FROM user_emails e
+         WHERE principal_id IN ${SET}
+           AND NOT EXISTS (SELECT 1 FROM email_confirmations c WHERE c.email_id = e.id)
+         LIMIT ?2)`,
+    ).bind(job.user_id, DELETION_RUN_POLICY.starsPerRun),
   ]);
-  const left = [starred, watched, threads].some(
+  const left = [starred, watched, threads, confirmations, addresses].some(
     (r) => (r?.meta.changes ?? 0) >= DELETION_RUN_POLICY.starsPerRun,
   );
   return left ? { step: "stars", againInMs: 0 } : { step: "feeds", againInMs: 0 };

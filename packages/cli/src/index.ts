@@ -2,6 +2,7 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { type DeployDeps, deploy, type Plan } from "./commands/deploy.ts";
@@ -15,6 +16,7 @@ import { nodeWranglerRunner } from "./wrangler.ts";
 
 const USAGE = `usage:
   fyrden deploy [--plan free|paid] [--internal-calls N] [--discretionary resource=n,...]
+                [--email resend --email-from ADDRESS --email-secrets-file PATH]
                                      create resources, migrate and deploy both Workers;
                                      Paid: N calls to D1, R2 and Durable Objects an invocation
                                      (1,000 to 10,000,000; default 1,000);
@@ -58,33 +60,73 @@ export function envDeployOptions(
 
 const HELP_FLAGS = new Set(["--help", "-h"]);
 
+/** The email provider a deploy configures (passed on every deploy: left out, email is off). */
+export interface EmailArgs {
+  provider: "resend";
+  from: string;
+  /** Where the provider's key is: a JSON object `{ "RESEND_API_KEY": "re_…" }`. */
+  secretsFile: string;
+}
+
 /**
- * The deploy's plan (Paid by default), internal calls and discretionary
- * allowance if `args` are exactly what `deploy` accepts; undefined
- * otherwise. Anything unknown (a typo, `--help`, a flag twice, internal
- * calls on Free, which cannot raise its 1,000, an allowance the API would
- * not read whole) must never start a deploy.
+ * The deploy's plan (Paid by default), internal calls, discretionary
+ * allowance and email provider if `args` are exactly what `deploy`
+ * accepts; undefined otherwise. Anything unknown (a typo, `--help`, a flag
+ * twice, internal calls on Free, which cannot raise its 1,000, an
+ * allowance the API would not read whole, an email provider given in part)
+ * must never start a deploy.
  */
 export function parseDeployArgs(
   args: readonly string[],
-): { plan: Plan; internalCalls?: number; discretionary?: string } | undefined {
+): { plan: Plan; internalCalls?: number; discretionary?: string; email?: EmailArgs } | undefined {
   const given = new Map<string, string>();
+  const flags = [
+    "--plan",
+    "--internal-calls",
+    "--discretionary",
+    "--email",
+    "--email-from",
+    "--email-secrets-file",
+  ];
   for (let i = 0; i < args.length; i += 2) {
     const [flag, value] = [args[i] as string, args[i + 1]];
     if (value === undefined || given.has(flag)) return undefined;
-    if (!["--plan", "--internal-calls", "--discretionary"].includes(flag)) return undefined;
+    if (!flags.includes(flag)) return undefined;
     given.set(flag, value);
   }
   const plan = given.get("--plan") ?? "paid";
   if (plan !== "free" && plan !== "paid") return undefined;
   const discretionary = given.get("--discretionary");
   if (discretionary !== undefined && !validAllowance(discretionary)) return undefined;
-  const extra = discretionary === undefined ? {} : { discretionary };
+  const email = emailArgs(given);
+  if (email === null) return undefined;
+  const extra = {
+    ...(discretionary !== undefined && { discretionary }),
+    ...(email !== undefined && { email }),
+  };
   const calls = given.get("--internal-calls");
   if (calls === undefined) return { plan, ...extra };
   const internalCalls = /^\d+$/.test(calls) ? Number(calls) : Number.NaN;
   if (plan !== "paid" || !(internalCalls >= 1_000 && internalCalls <= 10_000_000)) return undefined;
   return { plan, internalCalls, ...extra };
+}
+
+/**
+ * The email flags: all three or none (undefined); null for anything else
+ * (a provider but Resend, a sending address that is not one).
+ */
+function emailArgs(given: ReadonlyMap<string, string>): EmailArgs | undefined | null {
+  const [provider, from, secretsFile] = [
+    given.get("--email"),
+    given.get("--email-from"),
+    given.get("--email-secrets-file"),
+  ];
+  if (provider === undefined && from === undefined && secretsFile === undefined) return undefined;
+  if (provider !== "resend" || !from || !secretsFile) return null;
+  // `Name <address>` or a bare address.
+  if (!/^(?:[^<>]+ <[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>|[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+)$/.test(from))
+    return null;
+  return { provider, from, secretsFile };
 }
 
 /** The resources a discretionary allowance names (as the API's `FYRDEN_DISCRETIONARY_DAILY`). */
@@ -187,16 +229,22 @@ export async function main(argv: string[]): Promise<number> {
     });
     return result.complete ? 0 : 1;
   }
-  const { plan, internalCalls, discretionary } = parseDeployArgs(rest) as {
+  const { plan, internalCalls, discretionary, email } = parseDeployArgs(rest) as {
     plan: Plan;
     internalCalls?: number;
     discretionary?: string;
+    email?: EmailArgs;
   };
   const result = await deploy({
     repoRoot,
     plan,
     internalCalls,
     discretionary,
+    email: email && {
+      provider: email.provider,
+      from: email.from,
+      apiKey: await emailKey(email.secretsFile),
+    },
     runner,
     buildWeb: async () => {
       await promisify(execFile)("pnpm", ["--filter", "@fyrden/web", "build"], { cwd: repoRoot });
@@ -223,4 +271,27 @@ if (import.meta.main) {
       process.exit(1);
     },
   );
+}
+
+/** The provider's key from its secrets file, checked before anything is provisioned. */
+async function emailKey(path: string): Promise<string> {
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    throw new Error(
+      `--email-secrets-file ${path}: not readable (${(error as { code?: string }).code ?? "error"})`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // Never the parser's message: it quotes the file, a secret.
+    throw new Error(`--email-secrets-file ${path}: not a JSON object`);
+  }
+  const key = (parsed as { RESEND_API_KEY?: unknown } | null)?.RESEND_API_KEY;
+  if (typeof key !== "string" || !/^re_[A-Za-z0-9_-]{8,}$/.test(key))
+    throw new Error(`--email-secrets-file ${path}: RESEND_API_KEY is missing or not a Resend key`);
+  return key;
 }

@@ -305,6 +305,31 @@ describe("fyrden deploy", () => {
     expect(generated.vars).not.toHaveProperty("FYRDEN_DISCRETIONARY_DAILY");
   });
 
+  it("configures the email provider when given, uploading its key each time, and leaves email off when not", async () => {
+    const fake = fakeWrangler();
+    const email = {
+      provider: "resend" as const,
+      from: "Fyrden <n@notify.example>",
+      apiKey: "re_first0001",
+    };
+    await deploy(deps(fake.runner, { email }).d);
+    let generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({
+      FYRDEN_EMAIL_PROVIDER: "resend",
+      FYRDEN_EMAIL_FROM: "Fyrden <n@notify.example>",
+    });
+    expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_SENDING");
+    expect(fake.state.secrets.get("RESEND_API_KEY")).toBe("re_first0001");
+    // A new key rotates it.
+    await deploy(deps(fake.runner, { email: { ...email, apiKey: "re_second002" } }).d);
+    expect(fake.state.secrets.get("RESEND_API_KEY")).toBe("re_second002");
+    // Left out: no provider (the key stays, unused).
+    await deploy(deps(fake.runner).d);
+    generated = await generatedConfig();
+    expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_PROVIDER");
+    expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_FROM");
+  });
+
   it("raises a committed subrequest limit below the internal calls asked, keeping its other limits", async () => {
     const path = join(repoRoot, "apps/api/wrangler.jsonc");
     const committed = parseJsonc<Record<string, unknown>>(await readFile(path, "utf8"));

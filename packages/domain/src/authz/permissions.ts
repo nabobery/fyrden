@@ -15,6 +15,11 @@ interface PermissionBase {
   implies: readonly string[];
   /** Granting it lets the holder change state, so checks for it read the primary. */
   writes: boolean;
+  /**
+   * Held only through a web session (the user's account security): no
+   * token scope may name it, and its operations refuse other credentials.
+   */
+  sessionOnly?: true;
 }
 
 /** Who holds a permission depends on the resource it is checked against. */
@@ -143,6 +148,25 @@ export const PERMISSIONS = {
     principals: ["user"],
     implies: ["tokens:read"],
     writes: true,
+  },
+  "emails:read": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "See the user's own notification email addresses (web sessions only).",
+    principals: ["user"],
+    implies: [],
+    writes: false,
+    sessionOnly: true,
+  },
+  "emails:write": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary:
+      "Add, confirm and remove the user's own notification email addresses (web sessions only).",
+    principals: ["user"],
+    implies: ["emails:read"],
+    writes: true,
+    sessionOnly: true,
   },
   "agents:read": {
     resource: "account",
@@ -273,8 +297,18 @@ export type RepoPermission = {
 
 export const PERMISSION_NAMES = Object.keys(PERMISSIONS) as Permission[];
 
+/** The permissions a token may carry as scopes (every one but a web session's only). */
+export const SCOPE_NAMES = PERMISSION_NAMES.filter(
+  (name) => (PERMISSIONS[name] as PermissionDef).sessionOnly !== true,
+) as [Permission, ...Permission[]];
+
 export function isPermission(name: string): name is Permission {
   return Object.hasOwn(PERMISSIONS, name);
+}
+
+/** Whether a token may carry `name` as a scope: a permission, and not a session's only. */
+export function isScope(name: string): name is Permission {
+  return isPermission(name) && permissionDef(name).sessionOnly !== true;
 }
 
 /** The definition, typed as the union so callers can narrow on `resource`. */

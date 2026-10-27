@@ -6010,6 +6010,65 @@ export type FeedDigestOutput = {
   complete: boolean;
 };
 
+/** Input of `users.emails.list`: List your email addresses. */
+export type UsersEmailsListInput = Record<string, never>;
+
+/** Output of `users.emails.list`. */
+export type UsersEmailsListOutput = {
+  email: string;
+  /** The address notifications go to: the earliest one verified (Fyrden's meaning). */
+  primary: boolean;
+  verified: boolean;
+  /** Always null: Fyrden shows no address publicly. */
+  visibility: null;
+}[];
+
+/** Input of `users.emails.add`: Add email addresses. */
+export type UsersEmailsAddInput = {
+  emails: string[];
+};
+
+/** Output of `users.emails.add`. */
+export type UsersEmailsAddOutput = {
+  email: string;
+  /** The address notifications go to: the earliest one verified (Fyrden's meaning). */
+  primary: boolean;
+  verified: boolean;
+  /** Always null: Fyrden shows no address publicly. */
+  visibility: null;
+}[];
+
+/** Input of `users.emails.delete`: Remove email addresses. */
+export type UsersEmailsDeleteInput = {
+  emails: string[];
+};
+
+/** Output of `users.emails.delete`. */
+export type UsersEmailsDeleteOutput = null;
+
+/** Input of `users.emails.confirm`: Confirm an email address. */
+export type UsersEmailsConfirmInput = {
+  token: string;
+};
+
+/** Output of `users.emails.confirm`. */
+export type UsersEmailsConfirmOutput = {
+  email: string;
+  /** The address notifications go to: the earliest one verified (Fyrden's meaning). */
+  primary: boolean;
+  verified: boolean;
+  /** Always null: Fyrden shows no address publicly. */
+  visibility: null;
+};
+
+/** Input of `users.emails.confirmation`: Send a new confirmation link. */
+export type UsersEmailsConfirmationInput = {
+  email: string;
+};
+
+/** Output of `users.emails.confirmation`. */
+export type UsersEmailsConfirmationOutput = null;
+
 /** Input of `quotas.user.get`: Get your quota. */
 export type QuotasUserGetInput = Record<string, never>;
 
@@ -7607,6 +7666,11 @@ export const OPERATIONS = {
   "feed.sync": { method: "GET", path: "/feed/sync", pathParams: [], idempotent: false },
   "feed.ack": { method: "POST", path: "/feed/ack", pathParams: [], idempotent: true },
   "feed.digest": { method: "GET", path: "/feed/digests/{repository_id}/{subject}/{window}/{epoch}", pathParams: ["repository_id","subject","window","epoch"], idempotent: false },
+  "users.emails.list": { method: "GET", path: "/user/emails", pathParams: [], idempotent: false },
+  "users.emails.add": { method: "POST", path: "/user/emails", pathParams: [], idempotent: true },
+  "users.emails.delete": { method: "DELETE", path: "/user/emails", pathParams: [], idempotent: true },
+  "users.emails.confirm": { method: "POST", path: "/user/emails/confirm", pathParams: [], idempotent: true },
+  "users.emails.confirmation": { method: "POST", path: "/user/emails/confirmation", pathParams: [], idempotent: true },
   "quotas.user.get": { method: "GET", path: "/user/quota", pathParams: [], idempotent: false },
   "quotas.org.get": { method: "GET", path: "/orgs/{org}/quota", pathParams: ["org"], idempotent: false },
   "admin.quotas.set": { method: "PUT", path: "/admin/accounts/{account}/quota", pathParams: ["account"], idempotent: true },
@@ -7950,6 +8014,16 @@ export interface Operations {
   "feed.ack": { input: FeedAckInput; output: FeedAckOutput };
   /** Get what a feed digest holds. The threads a digest item tells of (a watched repository's activity of one kind in one window, for watchers past the first 100), newest first: at most 50 the caller may see, each a conversation the repository still has, that the caller did not unsubscribe from, and that someone besides the caller (or its agents' owner) took part in. Decided now, as a feed item is: 404 when the caller cannot read the repository or the kind, or the digest no longer shows (its conversations deleted, the repository restored, or older than 16 days). `complete` is false when more threads are eligible, or when the window kept no more threads past 5,000 or was left incomplete by the deployment's daily allowance. A Fyrden extension. */
   "feed.digest": { input: FeedDigestInput; output: FeedDigestOutput };
+  /** List your email addresses. Your notification addresses (at most 10), verified or not. Web sessions only (any other credential: 403). */
+  "users.emails.list": { input: UsersEmailsListInput; output: UsersEmailsListOutput };
+  /** Add email addresses. Adds notification addresses (at most 10 in all; 422 `too_many_emails`), each sent a link to confirm it (good for a day). One already yours is kept as it is. A user is sent at most 5 confirmation emails an hour and a mailbox at most 3 a day, whoever asks (429 `confirmation_rate_limited`, nothing added). While the deployment sends no email: 503 `email_unavailable`. Web sessions only. */
+  "users.emails.add": { input: UsersEmailsAddInput; output: UsersEmailsAddOutput };
+  /** Remove email addresses. Removes notification addresses of yours (one not yours, or already removed, changes nothing); their confirmation links stop working. Web sessions only. */
+  "users.emails.delete": { input: UsersEmailsDeleteInput; output: UsersEmailsDeleteOutput };
+  /** Confirm an email address. Confirms one of your addresses with the token its link carried (once, within a day, by the account that added it). 404 `confirmation_not_found` for a token unknown, used, expired, of another account or of an address removed; 409 `email_taken` when another account has confirmed the mailbox first (the token is used up). Web sessions only. A Fyrden extension. */
+  "users.emails.confirm": { input: UsersEmailsConfirmInput; output: UsersEmailsConfirmOutput };
+  /** Send a new confirmation link. Sends a new link to confirm an unverified address of yours (earlier links stop working), under the same limits as adding one. 404 `email_not_found` for an address not yours, removed or already verified. Web sessions only. A Fyrden extension. */
+  "users.emails.confirmation": { input: UsersEmailsConfirmationInput; output: UsersEmailsConfirmationOutput };
   /** Get your quota. The authenticated user's quota: how many repositories it may have and how many bytes their pushes may store, and how much of each is used. A deleted repository's bytes are free again once its deletion finishes. */
   "quotas.user.get": { input: QuotasUserGetInput; output: QuotasUserGetOutput };
   /** Get an organization's quota. An organization's quota and its use, for its members. */
