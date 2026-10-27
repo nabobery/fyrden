@@ -205,6 +205,11 @@ import {
   updateRulesetOperation,
 } from "../repos/rulesets.js";
 import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "../repos/stars.js";
+import {
+  deleteThreadSubscriptionOperation,
+  getThreadSubscriptionOperation,
+  setThreadSubscriptionOperation,
+} from "../repos/thread-subscriptions.js";
 import { transferRepoOperation } from "../repos/transfer.js";
 import { updateRepoOperation } from "../repos/update.js";
 import {
@@ -537,6 +542,9 @@ export const handlers: Handlers = {
   "watching.put": setRepoSubscriptionOperation,
   "watching.delete": deleteRepoSubscriptionOperation,
   "watching.list": listSubscriptionsOperation,
+  "watching.thread_get": getThreadSubscriptionOperation,
+  "watching.thread_put": setThreadSubscriptionOperation,
+  "watching.thread_delete": deleteThreadSubscriptionOperation,
 
   // The caller's activity feed (feed/operations).
   "feed.list": getFeedOperation,

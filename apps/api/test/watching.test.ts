@@ -258,7 +258,7 @@ describe("a restored repository", () => {
         state.storage.sql.exec("DELETE FROM watchers");
         instance.watching.set(unacknowledged.principalId, unacknowledged.principalId, "watching");
         instance.watching.restored(instance.events.epochGen());
-        instance.git.jobs.ensure("watch_recovery", "watch_recovery");
+        instance.git.jobs.ensure("preference_recovery", "preference_recovery");
       });
     });
     expect(await subscription(kept, repo.fullName)).toMatchObject({
@@ -295,7 +295,7 @@ describe("a restored repository's recovery", () => {
     await runInDurableObject(stub, (instance: RepoDO, state) => {
       state.storage.transactionSync(() => {
         instance.watching.restored(instance.events.epochGen());
-        instance.git.jobs.ensure("watch_recovery", "watch_recovery");
+        instance.git.jobs.ensure("preference_recovery", "preference_recovery");
       });
     });
     while (await runInDurableObject(stub, (instance: RepoDO) => instance.watching.recovering()))
@@ -331,7 +331,7 @@ describe("a restored repository's recovery", () => {
     await runInDurableObject(stub, (instance: RepoDO, state) => {
       state.storage.transactionSync(() => {
         instance.watching.restored(instance.events.epochGen());
-        instance.git.jobs.ensure("watch_recovery", "watch_recovery");
+        instance.git.jobs.ensure("preference_recovery", "preference_recovery");
       });
     });
     // An alarm ends after a full page of 200: clearing (nothing to clear) with the first import
@@ -418,7 +418,7 @@ describe("a preference command's copy", () => {
     await env.DIRECTORY.prepare("UPDATE repos SET state = 'deleting' WHERE id = ?")
       .bind(repo.id)
       .run();
-    const cleanup = REPO_CLEANUPS.find((c) => c.name === "watch_preferences");
+    const cleanup = REPO_CLEANUPS.find((c) => c.name === "preferences");
     if (!cleanup) throw new Error("no such cleanup");
     while ((await cleanup.page(env, { repoId: repo.id, shard: "", gen: 1 })) !== "done");
     expect(await copied(reader.principalId, repo.id)).toBeNull();

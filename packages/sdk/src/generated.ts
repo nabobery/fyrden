@@ -5498,6 +5498,71 @@ export type WatchingListOutput = {
   next_cursor: string | null;
 };
 
+/** Input of `watching.thread_get`: Get a thread subscription. */
+export type WatchingThreadGetInput = {
+  /** The repository's owner handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+};
+
+/** Output of `watching.thread_get`. */
+export type WatchingThreadGetOutput = {
+  /** Subscribed: told of the conversation's activity as a participant is. */
+  subscribed: boolean;
+  /** Unsubscribed: not to be notified of the conversation (kept; it takes effect with the inbox). */
+  ignored: boolean;
+  reason: null;
+  /** When the preference was set, ISO 8601. */
+  created_at: string;
+  url: string;
+  issue_url: string;
+  repository_url: string;
+};
+
+/** Input of `watching.thread_put`: Set a thread subscription. */
+export type WatchingThreadPutInput = {
+  /** The repository's owner handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+  /** Subscribe (the default). */
+  subscribed?: boolean;
+  /** Unsubscribe (wins over `subscribed`). */
+  ignored?: boolean;
+};
+
+/** Output of `watching.thread_put`. */
+export type WatchingThreadPutOutput = {
+  /** Subscribed: told of the conversation's activity as a participant is. */
+  subscribed: boolean;
+  /** Unsubscribed: not to be notified of the conversation (kept; it takes effect with the inbox). */
+  ignored: boolean;
+  reason: null;
+  /** When the preference was set, ISO 8601. */
+  created_at: string;
+  url: string;
+  issue_url: string;
+  repository_url: string;
+};
+
+/** Input of `watching.thread_delete`: Delete a thread subscription. */
+export type WatchingThreadDeleteInput = {
+  /** The repository's owner handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The issue's number (or a pull request's: they share one sequence). */
+  issue_number: number;
+};
+
+/** Output of `watching.thread_delete`. */
+export type WatchingThreadDeleteOutput = Record<string, never>;
+
 /** Input of `feed.list`: Get the activity feed. */
 export type FeedListInput = {
   /** A previous answer's `next_cursor`; from the start without. */
@@ -7226,6 +7291,9 @@ export const OPERATIONS = {
   "watching.put": { method: "PUT", path: "/repos/{owner}/{repo}/subscription", pathParams: ["owner","repo"], idempotent: true },
   "watching.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/subscription", pathParams: ["owner","repo"], idempotent: true },
   "watching.list": { method: "GET", path: "/user/subscriptions", pathParams: [], idempotent: false, items: "repos" },
+  "watching.thread_get": { method: "GET", path: "/repos/{owner}/{repo}/issues/{issue_number}/subscription", pathParams: ["owner","repo","issue_number"], idempotent: false },
+  "watching.thread_put": { method: "PUT", path: "/repos/{owner}/{repo}/issues/{issue_number}/subscription", pathParams: ["owner","repo","issue_number"], idempotent: true },
+  "watching.thread_delete": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/subscription", pathParams: ["owner","repo","issue_number"], idempotent: true },
   "feed.list": { method: "GET", path: "/feed", pathParams: [], idempotent: false },
   "feed.sync": { method: "GET", path: "/feed/sync", pathParams: [], idempotent: false },
   "feed.ack": { method: "POST", path: "/feed/ack", pathParams: [], idempotent: true },
@@ -7538,6 +7606,12 @@ export interface Operations {
   "watching.delete": { input: WatchingDeleteInput; output: WatchingDeleteOutput };
   /** List watched repositories. The repositories the caller watches and can read now, by repository id. A page reads at most 100 watched repositories, so it can hold fewer than `per_page`, even none, with a `next_cursor`: keep following it until it is null. A cursor belongs to the credential that got it and lasts an hour. Delegated tokens are refused (403 `delegated_listing`): list with the user's own credentials. */
   "watching.list": { input: WatchingListInput; output: WatchingListOutput };
+  /** Get a thread subscription. The caller's preference for one conversation: 404 `subscription_not_found` without one. A Fyrden extension at Gitea's route, for the caller itself, on an issue or pull request it may read (`issues:read` or `pull_requests:read` by its kind; any other, or none, answers 404 `issue_not_found`). A repository restored from a backup answers 503 `preferences_recovering` while it takes its preferences back. While the deployment has not turned watch audiences on (`FYRDEN_WATCH_AUDIENCES`), the level is kept and reported but adds nothing to feeds. */
+  "watching.thread_get": { input: WatchingThreadGetInput; output: WatchingThreadGetOutput };
+  /** Set a thread subscription. Subscribes the caller to one conversation (`subscribed`, the default: its activity comes to the caller's feed as a participant's, P1), or unsubscribes it (`ignored: true`, which wins); `subscribed: false` without `ignored` deletes the preference. A principal keeps at most 1,000 preferences of each kind (issues, pull requests) a repository (409 `thread_subscriptions_full`), and a conversation at most 1,000 subscribed and 1,000 unsubscribed (409 `thread_subscribers_full`). After a 503, repeat the request (with a new Idempotency-Key, or none): it sets a state, on the conversation the number names then. A Fyrden extension at Gitea's route, for the caller itself, on an issue or pull request it may read (`issues:read` or `pull_requests:read` by its kind; any other, or none, answers 404 `issue_not_found`). A repository restored from a backup answers 503 `preferences_recovering` while it takes its preferences back. While the deployment has not turned watch audiences on (`FYRDEN_WATCH_AUDIENCES`), the level is kept and reported but adds nothing to feeds. */
+  "watching.thread_put": { input: WatchingThreadPutInput; output: WatchingThreadPutOutput };
+  /** Delete a thread subscription. Deletes the caller's preference for one conversation: told of it again only as a participant. A Fyrden extension at Gitea's route, for the caller itself, on an issue or pull request it may read (`issues:read` or `pull_requests:read` by its kind; any other, or none, answers 404 `issue_not_found`). A repository restored from a backup answers 503 `preferences_recovering` while it takes its preferences back. While the deployment has not turned watch audiences on (`FYRDEN_WATCH_AUDIENCES`), the level is kept and reported but adds nothing to feeds. */
+  "watching.thread_delete": { input: WatchingThreadDeleteInput; output: WatchingThreadDeleteOutput };
   /** Get the activity feed. The caller's activity feed: pull requests that need it or that it takes part in, one item per repository, thread and kind, in the order they last changed. Pass a previous answer's `next_cursor` as `since` for what changed after it; a changed item comes again, so keep the latest copy by `item_key`. An agent's own token reads the agent's feed; a delegated token reads the user's, limited to the grant's repositories. Items of repositories the caller cannot read now are left out, so a page can be short; a cursor records, per repository and kind of thread (issues, pull requests), only what the caller was shown, so nothing it cannot read moves or expires it. An answer checks at most 100 repositories and reads at most 1,000 items, so a page can end early, even empty, and items the caller cannot read ahead of its own can delay them; the items of repositories the feed's owner itself cannot read now are then forgotten, so a later answer gets past them. Poll by `poll_after_ms`: while nothing changes the wait grows to 30 minutes, and an answer that shows something brings it back to 30 seconds. A cursor belongs to the credential that got it and lasts a day (reading on with it renews it); one past that, of another credential or epoch, or behind what the feed keeps of a repository the caller can read (7 days, 500 items a repository and kind), is refused with 410 `cursor_expired`: start over from `GET /feed/sync`. The answer carries an ETag; with `If-None-Match` an unchanged one is 304. */
   "feed.list": { input: FeedListInput; output: FeedListOutput };
   /** Sync the activity feed. The feed's current state, to start from or start over: open P0 items, then P1 and P2 items of the last 7 days, newest first (500 at most), and the cursor to follow with `GET /feed`. Items of repositories the caller cannot read now are left out. `complete` is false when more were left out, or when not every repository could be checked (at most 100 an answer): `head_cursor` then reads every repository from what the feed keeps of it. A complete sync's `head_cursor` follows on after it in the repositories it showed items of, and reads the others from what the feed keeps of them. */

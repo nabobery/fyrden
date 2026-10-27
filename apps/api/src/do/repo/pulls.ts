@@ -614,8 +614,8 @@ export class RepoPulls {
           `INSERT INTO pull_requests (number, title, body, state, draft, author_id, author_root,
              author_act, base_ref, base_sha, head_ref, head_sha, last_pusher, last_pusher_grant,
              last_push_at, created_at, updated_at, head_repo_id, head_ref_version,
-             maintainer_can_modify)
-           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+             maintainer_can_modify, conversation_id)
+           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
           number,
           input.title,
           input.body,
@@ -636,6 +636,8 @@ export class RepoPulls {
           input.headRefVersion ?? null,
           // Only a head branch in another repository is the base's maintainers' to write.
           input.headRepoId && input.maintainerCanModify ? 1 : 0,
+          // Its identity: preferences name it, never the number a restore can give to another.
+          crypto.randomUUID(),
         );
         opened = record(row as Row);
         this.#emit("opened", opened, caller.actor);

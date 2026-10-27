@@ -112,3 +112,91 @@ export const listSubscriptions = defineOperation({
   idempotency: "none",
   mcp: false,
 });
+
+const IssueNumber = z.coerce
+  .number()
+  .int()
+  .positive()
+  .describe("The issue's number (or a pull request's: they share one sequence).");
+
+const ThreadSubscription = z.object({
+  subscribed: z
+    .boolean()
+    .describe("Subscribed: told of the conversation's activity as a participant is."),
+  ignored: z
+    .boolean()
+    .describe(
+      "Unsubscribed: not to be notified of the conversation (kept; it takes effect with the inbox).",
+    ),
+  reason: z.null(),
+  created_at: z.string().describe("When the preference was set, ISO 8601."),
+  url: z.string(),
+  issue_url: z.string(),
+  repository_url: z.string(),
+});
+
+const THREAD =
+  " A Fyrden extension at Gitea's route, for the caller itself, on an issue or pull request it may read (`issues:read` or `pull_requests:read` by its kind; any other, or none, answers 404 `issue_not_found`). A repository restored from a backup answers 503 `preferences_recovering` while it takes its preferences back.";
+
+export const getThreadSubscription = defineOperation({
+  id: "watching.thread_get",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/issues/{issue_number}/subscription",
+  summary: "Get a thread subscription",
+  description: `The caller's preference for one conversation: 404 \`subscription_not_found\` without one.${THREAD}${DORMANT}`,
+  input: z.object({ owner: Owner, repo: RepoName, issue_number: IssueNumber }),
+  output: ThreadSubscription,
+  permission: "watching:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: false,
+});
+
+export const setThreadSubscription = defineOperation({
+  id: "watching.thread_put",
+  method: "PUT",
+  path: "/repos/{owner}/{repo}/issues/{issue_number}/subscription",
+  summary: "Set a thread subscription",
+  description: `Subscribes the caller to one conversation (\`subscribed\`, the default: its activity comes to the caller's feed as a participant's, P1), or unsubscribes it (\`ignored: true\`, which wins); \`subscribed: false\` without \`ignored\` deletes the preference. A principal keeps at most 1,000 preferences of each kind (issues, pull requests) a repository (409 \`thread_subscriptions_full\`), and a conversation at most 1,000 subscribed and 1,000 unsubscribed (409 \`thread_subscribers_full\`). After a 503, repeat the request (with a new Idempotency-Key, or none): it sets a state, on the conversation the number names then.${THREAD}${DORMANT}`,
+  input: z.object({
+    owner: Owner,
+    repo: RepoName,
+    issue_number: IssueNumber,
+    subscribed: z.boolean().optional().describe("Subscribe (the default)."),
+    ignored: z.boolean().optional().describe("Unsubscribe (wins over `subscribed`)."),
+  }),
+  output: ThreadSubscription,
+  permission: "watching:write",
+  principals: ["user", "agent"],
+  rateLimit: "write",
+  idempotency: "key",
+  mcp: {
+    tool: "subscribe_to_thread",
+    title: "Subscribe to an issue or pull request",
+    description:
+      "Subscribe to one issue or pull request (its activity comes to your feed) or unsubscribe from it (`ignored: true`).",
+    readOnly: false,
+  },
+});
+
+export const deleteThreadSubscription = defineOperation({
+  id: "watching.thread_delete",
+  method: "DELETE",
+  path: "/repos/{owner}/{repo}/issues/{issue_number}/subscription",
+  summary: "Delete a thread subscription",
+  description: `Deletes the caller's preference for one conversation: told of it again only as a participant.${THREAD}${DORMANT}`,
+  input: z.object({ owner: Owner, repo: RepoName, issue_number: IssueNumber }),
+  output: z.object({}),
+  permission: "watching:write",
+  principals: ["user", "agent"],
+  rateLimit: "write",
+  idempotency: "key",
+  mcp: {
+    tool: "clear_thread_subscription",
+    title: "Clear a thread subscription",
+    description:
+      "Delete your subscription to (or unsubscription from) an issue or pull request: told of it only as a participant.",
+    readOnly: false,
+  },
+});

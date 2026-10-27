@@ -45,6 +45,7 @@ describe("D1 directory schema", () => {
       "source_epochs",
       "ssh_signing_keys",
       "stars",
+      "thread_preferences",
       "tokens",
       "user_deletions",
       "user_retirements",

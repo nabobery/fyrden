@@ -58,18 +58,18 @@ function subscriptionOf(ctx: OpContext, owner: string, name: string, row: WatchR
   };
 }
 
-const recovering = () =>
+export const recovering = () =>
   new OperationError(
     503,
     "preferences_recovering",
-    "The repository is taking its watchers back after a restore: try again shortly.",
+    "The repository is taking its preferences back after a restore: try again shortly.",
   );
 
 const unavailable = () =>
   new OperationError(
     503,
     "preferences_unavailable",
-    "The level was set but could not be recorded yet: repeat the request.",
+    "The preference was set but could not be recorded yet: repeat the request.",
   );
 
 const notWatched = () =>
@@ -139,58 +139,83 @@ async function setLevel(ctx: OpContext, owner: string, repo: string, level: Watc
  * the principal are active, of the repository's current restore generation,
  * and newer than what the copy holds. Not written for the generation: 503.
  */
-export async function copyWatch(ctx: OpContext, repoId: string, row: WatchRow): Promise<void> {
-  try {
-    await copyOnce(ctx, repoId, row);
-  } catch (error) {
-    if (error instanceof OperationError) throw error;
-    // The directory could not take it: the repository's change is kept; the request repeated
-    // sets the same state and copies it.
-    throw unavailable();
-  }
+export function copyWatch(ctx: OpContext, repoId: string, row: WatchRow): Promise<void> {
+  return copyPreference(
+    row,
+    async () => {
+      ctx.metrics.count("d1.query", { db: "directory", op: "watch_copy_put" });
+      const written = await ctx.env.DIRECTORY.prepare(
+        `INSERT INTO watch_preferences (principal_id, repo_id, root_id, level, revision, epoch_gen, at)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+         WHERE ${COPY_FENCE}
+         ON CONFLICT (principal_id, repo_id) DO UPDATE SET root_id = excluded.root_id,
+           level = excluded.level, revision = excluded.revision, epoch_gen = excluded.epoch_gen,
+           at = excluded.at
+         WHERE (excluded.epoch_gen, excluded.revision)
+           > (watch_preferences.epoch_gen, watch_preferences.revision)`,
+      )
+        .bind(row.principal, repoId, row.root, row.level, row.revision, row.epochGen, row.at)
+        .run();
+      return written.meta.changes;
+    },
+    () => {
+      ctx.metrics.count("d1.query", { db: "directory", op: "watch_copy_check" });
+      return ctx.env.DIRECTORY.prepare(
+        `SELECT (SELECT epoch_gen FROM source_epochs WHERE source_id = ?2) AS epoch_gen,
+           c.epoch_gen AS copied_epoch, c.revision AS copied_revision
+         FROM (SELECT 1) LEFT JOIN watch_preferences c
+           ON c.principal_id = ?1 AND c.repo_id = ?2`,
+      )
+        .bind(row.principal, repoId)
+        .first<CopyState>();
+    },
+  );
 }
 
-async function copyOnce(ctx: OpContext, repoId: string, row: WatchRow): Promise<void> {
-  ctx.metrics.count("d1.query", { db: "directory", op: "watch_copy_put" });
-  const written = await ctx.env.DIRECTORY.prepare(
-    `INSERT INTO watch_preferences (principal_id, repo_id, root_id, level, revision, epoch_gen, at)
-     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
-     WHERE ?6 >= coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ?2), 0)
-       AND EXISTS (SELECT 1 FROM repos WHERE id = ?2 AND state = 'active')
-       AND EXISTS (SELECT 1 FROM principals WHERE id = ?1 AND lifecycle = 'active')
-     ON CONFLICT (principal_id, repo_id) DO UPDATE SET root_id = excluded.root_id,
-       level = excluded.level, revision = excluded.revision, epoch_gen = excluded.epoch_gen,
-       at = excluded.at
-     WHERE (excluded.epoch_gen, excluded.revision)
-       > (watch_preferences.epoch_gen, watch_preferences.revision)`,
-  )
-    .bind(row.principal, repoId, row.root, row.level, row.revision, row.epochGen, row.at)
-    .run();
-  if (written.meta.changes > 0) return;
-  // Nothing written: copied already (this command or a newer one: done), a restore since (the
-  // repository is taking its watchers back), or the repository or the principal not active now
-  // (not recorded: answered as unavailable, never as done).
-  ctx.metrics.count("d1.query", { db: "directory", op: "watch_copy_check" });
-  const state = await ctx.env.DIRECTORY.prepare(
-    `SELECT (SELECT epoch_gen FROM source_epochs WHERE source_id = ?2) AS epoch_gen,
-       (SELECT epoch_gen FROM watch_preferences WHERE principal_id = ?1 AND repo_id = ?2)
-         AS copied_epoch,
-       (SELECT revision FROM watch_preferences WHERE principal_id = ?1 AND repo_id = ?2)
-         AS copied_revision`,
-  )
-    .bind(row.principal, repoId)
-    .first<{
-      epoch_gen: number | null;
-      copied_epoch: number | null;
-      copied_revision: number | null;
-    }>();
-  if (state?.epoch_gen != null && state.epoch_gen > row.epochGen) throw recovering();
-  const copied =
-    state?.copied_epoch != null &&
-    state.copied_revision != null &&
-    (state.copied_epoch > row.epochGen ||
-      (state.copied_epoch === row.epochGen && state.copied_revision >= row.revision));
-  if (!copied) throw unavailable();
+/**
+ * What a copy write (its `?1` the principal, `?2` the repository, `?6` the
+ * command's generation) requires: the repository's current restore
+ * generation, the repository and the principal active.
+ */
+export const COPY_FENCE = `?6 >= coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ?2), 0)
+  AND EXISTS (SELECT 1 FROM repos WHERE id = ?2 AND state = 'active')
+  AND EXISTS (SELECT 1 FROM principals WHERE id = ?1 AND lifecycle = 'active')`;
+
+/** After a copy write wrote nothing: the repository's generation, and the command the copy holds. */
+export interface CopyState {
+  readonly epoch_gen: number | null;
+  readonly copied_epoch: number | null;
+  readonly copied_revision: number | null;
+}
+
+/**
+ * Writes a preference command to its directory copy (`write`, fenced as
+ * `COPY_FENCE` and by command order, answering the rows written). When it
+ * wrote nothing: done if the copy holds this command or a newer one; the
+ * repository restored since: 503 `preferences_recovering`; otherwise (the
+ * repository or the principal not active now) 503, never answered as done.
+ * A directory that could not take it: 503 too, the repository's change
+ * kept; the request repeated sets the same state and copies it.
+ */
+export async function copyPreference(
+  row: { readonly epochGen: number; readonly revision: number },
+  write: () => Promise<number>,
+  read: () => Promise<CopyState | null>,
+): Promise<void> {
+  try {
+    if ((await write()) > 0) return;
+    const state = await read();
+    if (state?.epoch_gen != null && state.epoch_gen > row.epochGen) throw recovering();
+    const copied =
+      state?.copied_epoch != null &&
+      state.copied_revision != null &&
+      (state.copied_epoch > row.epochGen ||
+        (state.copied_epoch === row.epochGen && state.copied_revision >= row.revision));
+    if (!copied) throw unavailable();
+  } catch (error) {
+    if (error instanceof OperationError) throw error;
+    throw unavailable();
+  }
 }
 
 /** A listing's continuation: sealed, bound to its listing, principal, credential and page size. */

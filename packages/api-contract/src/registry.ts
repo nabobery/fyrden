@@ -183,9 +183,12 @@ import { createGitToken, createUserToken, listUserTokens, revokeUserToken } from
 import { abortUpload, completeUpload, createUpload, getUpload } from "../ops/uploads.js";
 import {
   deleteRepoSubscription,
+  deleteThreadSubscription,
   getRepoSubscription,
+  getThreadSubscription,
   listSubscriptions,
   setRepoSubscription,
+  setThreadSubscription,
 } from "../ops/watching.js";
 import { defineRegistry } from "./op.js";
 
@@ -325,6 +328,9 @@ export const registry = defineRegistry([
   setRepoSubscription,
   deleteRepoSubscription,
   listSubscriptions,
+  getThreadSubscription,
+  setThreadSubscription,
+  deleteThreadSubscription,
   getFeed,
   syncFeed,
   ackFeedItem,

@@ -903,3 +903,30 @@ CREATE TABLE watchers (
         phase TEXT NOT NULL CHECK (phase IN ('clear', 'import')),
         cursor TEXT
       ) STRICT, WITHOUT ROWID;
+      ALTER TABLE issues ADD COLUMN conversation_id TEXT;
+      ALTER TABLE pull_requests ADD COLUMN conversation_id TEXT;
+      CREATE TABLE thread_preferences (
+        principal TEXT NOT NULL,
+        conversation TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('issue', 'pull')),
+        root TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('subscribed', 'unsubscribed')),
+        epoch_gen INTEGER NOT NULL,
+        revision INTEGER NOT NULL,
+        at INTEGER NOT NULL,
+        PRIMARY KEY (principal, conversation)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX thread_preferences_thread
+        ON thread_preferences (conversation, state, revision, principal);
+      CREATE INDEX thread_preferences_kind ON thread_preferences (kind, principal, conversation);
+      CREATE TABLE preference_versions (
+        principal TEXT PRIMARY KEY,
+        issues_version INTEGER NOT NULL DEFAULT 0,
+        pulls_version INTEGER NOT NULL DEFAULT 0,
+        ignore_version INTEGER NOT NULL DEFAULT 0
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE thread_forgets (
+        conversation TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('issue', 'pull'))
+      ) STRICT, WITHOUT ROWID;

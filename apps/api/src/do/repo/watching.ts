@@ -1,5 +1,6 @@
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import type { FeedPrincipal } from "./feed.js";
+import { bumpIgnoreVersion } from "./thread-preferences.js";
 
 /*
  * Who watches the repository: each principal's level (`participating`, the
@@ -128,6 +129,8 @@ export class RepoWatching {
       row.revision,
       row.at,
     );
+    if ((before?.level === "ignoring") !== (level === "ignoring"))
+      bumpIgnoreVersion(this.#sql, principal);
     return { status: "set", row };
   }
 
@@ -187,13 +190,16 @@ export class RepoWatching {
     if (!state) return false;
     const page = WATCH_POLICY.recoveryPage;
     if (state.phase === "clear") {
-      const cleared = this.#sql
-        .exec(
+      const removed = this.#sql
+        .exec<{ principal: string; level: WatchLevel }>(
           `DELETE FROM watchers WHERE principal IN
-             (SELECT principal FROM watchers ORDER BY principal LIMIT ?) RETURNING 1`,
+             (SELECT principal FROM watchers ORDER BY principal LIMIT ?) RETURNING principal, level`,
           page,
         )
-        .toArray().length;
+        .toArray();
+      for (const r of removed)
+        if (r.level === "ignoring") bumpIgnoreVersion(this.#sql, r.principal);
+      const cleared = removed.length;
       // A full page cleared: more may be left, for another step.
       if (cleared >= page) return true;
       // The last of it: the import starts in this same step (a repository with little to take
@@ -229,6 +235,8 @@ export class RepoWatching {
           row.revision,
           row.at,
         );
+      for (const row of rows)
+        if (row.active && row.level === "ignoring") bumpIgnoreVersion(this.#sql, row.principal);
       if (rows.length < page)
         this.#sql.exec("DELETE FROM preference_recovery WHERE grp = 'watches'");
       else

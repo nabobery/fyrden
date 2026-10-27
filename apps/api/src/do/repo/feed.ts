@@ -94,12 +94,18 @@ export interface RepoFeedDeps {
   readonly prepareTexts?: (texts: readonly (string | null | undefined)[]) => Promise<void>;
   /**
    * Whether watching adds to audiences (the deployment's switch): watchers,
-   * and authors told of their subjects' state changes. Off: neither.
+   * thread subscribers, and authors told of their subjects' state changes.
+   * Off: none of them.
    */
   readonly audiences?: () => boolean;
   /** The watchers an event may tell (see `RepoWatching.candidates`). */
   readonly watchers?: () => {
     readonly watchers: readonly FeedPrincipal[];
+    readonly overflow: boolean;
+  };
+  /** The subscribers an event of a thread may tell (see `RepoThreadPreferences.subscribers`). */
+  readonly subscribers?: (number: number) => {
+    readonly subscribers: readonly FeedPrincipal[];
     readonly overflow: boolean;
   };
   readonly metrics: Metrics;
@@ -278,6 +284,23 @@ export class RepoFeed {
           priority: "P1",
           state: "open",
         });
+    // Its subscribers, as participants (a participant keeps its reason).
+    if (watching && plan.activity) {
+      const { subscribers, overflow } = this.deps.subscribers?.(plan.number) ?? {
+        subscribers: [],
+        overflow: false,
+      };
+      for (const who of subscribers)
+        add({
+          principal: who.id,
+          root: who.root,
+          kind: "activity",
+          reasons: ["subscribed"],
+          priority: "P1",
+          state: "open",
+        });
+      if (overflow) this.deps.metrics.count("feed.preference_overflow", { kind: "subscribers" });
+    }
     // Watchers, after everyone told for another reason (a participant stays P1).
     if (watching && (plan.activity || OPENED.has(type))) {
       const { watchers, overflow } = this.deps.watchers?.() ?? { watchers: [], overflow: false };

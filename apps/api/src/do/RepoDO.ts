@@ -239,6 +239,12 @@ import {
   templateTree,
 } from "./repo/template.js";
 import {
+  RepoThreadPreferences,
+  type ThreadCommand,
+  type ThreadRow,
+  type ThreadState,
+} from "./repo/thread-preferences.js";
+import {
   RepoWatching,
   type WatchCommand,
   type WatchLevel,
@@ -267,10 +273,12 @@ const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
 
 /** The job that prunes feed audience pages past their time, and how many a slice deletes. */
 const FEED_PAGES_JOB = "feed_pages_prune";
-/** The job that takes a restored repository's watchers back from the directory's copy. */
-const WATCH_RECOVERY_JOB = "watch_recovery";
+/** The job that takes a restored repository's preferences back from the directory's copies. */
+const PREFERENCE_RECOVERY_JOB = "preference_recovery";
 /** When a recovery step that could not read the directory tries again. Proposed. */
-const WATCH_RECOVERY_RETRY_MS = 60_000;
+const PREFERENCE_RECOVERY_RETRY_MS = 60_000;
+/** The job that deletes what deleted conversations' deletions left of their preferences. */
+const PREFERENCE_CLEANUP_JOB = "preference_cleanup";
 const FEED_PAGES_PRUNE_BATCH = 500;
 const WEBHOOK_BLOBS_JOB = "webhook_blobs_prune";
 /** The job that settles team review requests no longer standing (see `RepoTeamRequests`). */
@@ -435,6 +443,7 @@ export class RepoDO extends MigratingDO {
   readonly hooks: RepoHooks;
   readonly feed: RepoFeed;
   readonly watching: RepoWatching;
+  readonly threads: RepoThreadPreferences;
   /** For tests: watch audiences on or off whatever the deployment's switch says. */
   watchAudiences: boolean | undefined;
   readonly webhookBlobStore: RepoWebhookBlobs;
@@ -489,12 +498,18 @@ export class RepoDO extends MigratingDO {
         this.codeOwners.restored();
         // Its owners asked of again, as after a transfer (an ownership repaired among them).
         this.#codeOwnerRequests.queueAll();
-        // Its watchers taken back from the directory's copy before anyone watches again.
+        // Its watchers and thread preferences taken back from the directory's copies before
+        // anyone sets one again.
         this.watching.restored(this.events.epochGen());
-        this.git.jobs.ensure(WATCH_RECOVERY_JOB, WATCH_RECOVERY_JOB);
+        this.threads.restored(this.events.epochGen());
+        this.git.jobs.ensure(PREFERENCE_RECOVERY_JOB, PREFERENCE_RECOVERY_JOB);
       },
     );
     this.watching = new RepoWatching({ git: this.git, epochGen: () => this.events.epochGen() });
+    this.threads = new RepoThreadPreferences({
+      git: this.git,
+      epochGen: () => this.events.epochGen(),
+    });
     this.changeLists = new ChangeLists(this.git);
     this.reactions = new RepoReactions({ git: this.git, events: this.events });
     this.references = new RepoReferences({
@@ -604,6 +619,7 @@ export class RepoDO extends MigratingDO {
       prepareTexts: (texts) => this.references.prepare(texts),
       audiences: () => this.watchAudiences ?? watchAudiencesOn(this.env),
       watchers: () => this.watching.candidates(),
+      subscribers: (number) => this.threads.subscribers(number),
       metrics: this.git.context.metrics,
     });
     this.webhookBlobStore = new RepoWebhookBlobs({
@@ -672,6 +688,10 @@ export class RepoDO extends MigratingDO {
         snapshot: (number) => this.subjectMeta.snapshot(number),
         forget: (number) => this.subjectMeta.forget(number),
         forgetReactions: (number) => this.reactions.forgetSubject(number),
+        forgetPreferences: (number) => {
+          if (this.threads.forgetConversation(number))
+            this.git.jobs.ensure(PREFERENCE_CLEANUP_JOB, PREFERENCE_CLEANUP_JOB);
+        },
         described: (number, body, actor) =>
           this.references.sync({ kind: "issue", number, comment: 0 }, body, actor),
         forgetReferences: (number, actor) => this.references.forgetSubject(number, actor),
@@ -3221,23 +3241,37 @@ export class RepoDO extends MigratingDO {
             : { done: true };
         },
       },
-      [WATCH_RECOVERY_JOB]: {
+      [PREFERENCE_CLEANUP_JOB]: {
+        // A page an invocation: its rows are written with no I/O to bound it otherwise.
+        runSlice: async () =>
+          this.threads.forgetStep()
+            ? { done: false, cursor: null, endInvocation: true }
+            : { done: true },
+      },
+      [PREFERENCE_RECOVERY_JOB]: {
         runSlice: async () => {
           await this.checkEpoch();
           let more: boolean;
           try {
-            more = await this.watching.recoverStep((after, limit) => this.#watchCopy(after, limit));
+            // Watchers first, then issue preferences, then pull requests'.
+            more = this.watching.recovering()
+              ? await this.watching.recoverStep((after, limit) => this.#watchCopy(after, limit))
+              : await this.threads.recoverStep((kind, after, limit) =>
+                  this.#threadCopy(kind, after, limit),
+                );
           } catch (error) {
             // The directory could not answer: tried again later however long that takes, never
             // given up as a failed job (commands wait for it).
-            this.#log().warn("taking the watchers back failed", { error });
-            return { done: false, cursor: null, runAfterMs: WATCH_RECOVERY_RETRY_MS };
+            this.#log().warn("taking the preferences back failed", { error });
+            return { done: false, cursor: null, runAfterMs: PREFERENCE_RECOVERY_RETRY_MS };
           }
           // A full page's step ends the invocation (its rows are written with no I/O to bound it
           // otherwise); done only when no recovery is left, read with no await before the job
           // records it (a restore meanwhile starts another).
           if (more) return { done: false, cursor: null, endInvocation: true };
-          return this.watching.recovering() ? { done: false, cursor: null } : { done: true };
+          return this.watching.recovering() || this.threads.recovering()
+            ? { done: false, cursor: null }
+            : { done: true };
         },
       },
       feed_pages_prune: {
@@ -3519,6 +3553,124 @@ export class RepoDO extends MigratingDO {
       principal: r.principal_id,
       root: r.root_id,
       level: r.level,
+      revision: r.revision,
+      epochGen: r.epoch_gen,
+      at: r.at,
+      active: r.active === 1,
+    }));
+  }
+
+  /**
+   * `principal`'s preference for conversation `number` (null: none), when
+   * it is of `kinds` (those the caller may read; any other answers as no
+   * conversation), or that the repository is gone or taking the kind's
+   * preferences back after a restore.
+   */
+  async threadPreference(
+    principal: string,
+    number: number,
+    kinds: readonly SubjectKind[],
+  ): Promise<
+    { status: "gone" | "not_found" | "recovering" } | { status: "ok"; row: ThreadRow | null }
+  > {
+    if (this.#gone()) return { status: "gone" };
+    await this.checkEpoch();
+    if (this.#refusesReads()) return { status: "gone" };
+    const subject = this.threads.subjectOf(number);
+    if (!subject || !kinds.includes(subject.kind)) return { status: "not_found" };
+    if (this.threads.recovering(subject.kind)) return { status: "recovering" };
+    return { status: "ok", row: this.threads.get(principal, subject.conversation) ?? null };
+  }
+
+  /**
+   * Sets `principal`'s preference for conversation `number` of `kinds`
+   * (null: deletes it; see `RepoThreadPreferences.set`), when it reads the
+   * repository now. At a conversation's cap, its counted principals that
+   * are deleted for good are cleared first (one directory read), and the
+   * command tried again on the same conversation.
+   */
+  async setThreadPreference(
+    principal: string,
+    grantId: string | null,
+    number: number,
+    kinds: readonly SubjectKind[],
+    state: ThreadState | null,
+  ): Promise<ThreadCommand | { status: "gone" | "not_found" }> {
+    if (this.#gone()) return { status: "gone" };
+    return this.#measured("setThreadPreference", async () => {
+      await this.checkEpoch();
+      if (this.#refusesReads()) return { status: "gone" as const };
+      const ceilings = await this.#authority.rolesPulled(principal, grantId);
+      const root = rootIdentity({ principalId: principal, grantId, ceilingIds: ceilings });
+      // The conversation the first attempt found: the second sets that one only (the number given
+      // to another meanwhile answers as none).
+      let pinned: string | undefined;
+      // Judged again right before each attempt, with no await between.
+      const command = (): ThreadCommand | { status: "gone" | "not_found" } => {
+        const reads =
+          this.events.visibility() === "public" ||
+          this.#authority.roleNow(principal, ceilings) !== null;
+        if (this.#gone() || this.#refusesReads() || !reads) return { status: "gone" };
+        const subject = this.threads.subjectOf(number);
+        if (
+          !subject ||
+          !kinds.includes(subject.kind) ||
+          (pinned !== undefined && subject.conversation !== pinned)
+        )
+          return { status: "not_found" };
+        pinned = subject.conversation;
+        return this.ctx.storage.transactionSync(() =>
+          this.threads.set(principal, root, subject, state),
+        );
+      };
+      const first = command();
+      if (first.status !== "full" || first.cap !== "thread" || pinned === undefined) return first;
+      const [conversation, deleted] = [pinned, await this.#deletedPrincipals(first.principals)];
+      if (deleted.length > 0)
+        this.ctx.storage.transactionSync(() => this.threads.forget(conversation, deleted));
+      return command();
+    });
+  }
+
+  /**
+   * A page of the directory's copy of this repository's preferences of
+   * conversations of `kind`, after `after` in `(principal, conversation)`
+   * order, each saying whether its principal is still there.
+   */
+  async #threadCopy(
+    kind: SubjectKind,
+    after: readonly [string, string] | null,
+    limit: number,
+  ): Promise<(ThreadRow & { active: boolean })[]> {
+    this.git.context.metrics.count("d1.query", { db: "directory", op: "thread_copy" });
+    const { results } = await this.env.DIRECTORY.withSession("first-primary")
+      .prepare(
+        `SELECT t.principal_id, t.conversation, t.number, t.root_id, t.state, t.revision,
+           t.epoch_gen, t.at, coalesce(p.lifecycle IN ('active', 'suspended'), 0) AS active
+         FROM thread_preferences t INDEXED BY thread_preferences_repo
+           LEFT JOIN principals p ON p.id = t.principal_id
+         WHERE t.repo_id = ?1 AND t.kind = ?2 AND (t.principal_id, t.conversation) > (?3, ?4)
+         ORDER BY t.principal_id, t.conversation LIMIT ?5`,
+      )
+      .bind(this.#repoId(), kind, after?.[0] ?? "", after?.[1] ?? "", limit)
+      .all<{
+        principal_id: string;
+        conversation: string;
+        number: number;
+        root_id: string;
+        state: ThreadRow["state"];
+        revision: number;
+        epoch_gen: number;
+        at: number;
+        active: number;
+      }>();
+    return results.map((r) => ({
+      principal: r.principal_id,
+      root: r.root_id,
+      conversation: r.conversation,
+      number: r.number,
+      kind,
+      state: r.state,
       revision: r.revision,
       epochGen: r.epoch_gen,
       at: r.at,

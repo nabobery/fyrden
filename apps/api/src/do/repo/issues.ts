@@ -163,6 +163,8 @@ export class RepoIssues {
         readonly forgetReactions: (number: number) => void;
         /** In a change's transaction: its body now, for what it refers to. */
         readonly described: (number: number, body: string | null, actor: RefActor | null) => void;
+        /** In its deletion, before its row goes: the preferences for it go (see `RepoThreadPreferences`). */
+        readonly forgetPreferences: (number: number) => void;
         /** In its deletion: what it and its comments refer to, and what refers to it, go. */
         readonly forgetReferences: (number: number, actor: RefActor) => void;
         readonly ofMany: (subjects: readonly MetaSubject[]) => Map<number, SubjectMeta>;
@@ -299,8 +301,8 @@ export class RepoIssues {
       storage.sql.exec("UPDATE repo_meta SET next_number = ? WHERE id = 1", number + 1);
       const [row] = this.#rows(
         `INSERT INTO issues (number, title, body, state, author_id, author_root, author_act,
-           created_at, updated_at)
-         VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?) RETURNING *`,
+           created_at, updated_at, conversation_id)
+         VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?) RETURNING *`,
         number,
         input.title,
         input.body,
@@ -309,6 +311,8 @@ export class RepoIssues {
         caller.actor.actChain?.length ? JSON.stringify(caller.actor.actChain) : null,
         now,
         now,
+        // Its identity: preferences name it, never the number a restore can give to another.
+        crypto.randomUUID(),
       );
       meta?.(number).apply(false);
       const opened = this.#record(row as Row);
@@ -530,6 +534,7 @@ export class RepoIssues {
       this.#exec("DELETE FROM comments WHERE number = ?", number);
       this.#exec("DELETE FROM feed_participants WHERE number = ?", number);
       this.#exec("DELETE FROM feed_participation WHERE number = ?", number);
+      this.deps.meta.forgetPreferences(number);
       this.deps.meta.forget(number);
       this.#exec("DELETE FROM issues WHERE number = ?", number);
       this.#exec(

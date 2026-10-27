@@ -281,6 +281,21 @@ CREATE TABLE stars (
   PRIMARY KEY (user_id, repo_id)
 ) STRICT;
 
+-- table thread_preferences
+CREATE TABLE thread_preferences (
+  principal_id TEXT NOT NULL,
+  repo_id TEXT NOT NULL,
+  conversation TEXT NOT NULL,
+  number INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('issue', 'pull')),
+  root_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('subscribed', 'unsubscribed', 'none')),
+  revision INTEGER NOT NULL,
+  epoch_gen INTEGER NOT NULL,
+  at INTEGER NOT NULL,
+  PRIMARY KEY (principal_id, repo_id, conversation)
+) STRICT;
+
 -- table tokens
 CREATE TABLE "tokens" (
   id TEXT PRIMARY KEY,
@@ -471,6 +486,10 @@ CREATE INDEX stars_repo ON stars (repo_id);
 
 -- index stars_user
 CREATE INDEX stars_user ON stars (user_id, created_at, repo_id);
+
+-- index thread_preferences_repo
+CREATE INDEX thread_preferences_repo
+  ON thread_preferences (repo_id, kind, principal_id, conversation);
 
 -- index tokens_family
 CREATE INDEX tokens_family ON tokens (family_id) WHERE family_id IS NOT NULL;

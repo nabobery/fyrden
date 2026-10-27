@@ -1375,9 +1375,18 @@ export const repoSchema: readonly DoMigration[] = [
     // Watching: each principal's level for the repository (`participating`,
     // the default, `watching` or `ignoring`), with the command that set it
     // (`epoch_gen`, `revision`: the order the directory's copy keeps); the
-    // index reads the watchers in a fixed order without sorting. And a
-    // restored repository's recovery of its preferences from that copy, per
-    // group (no row: ready).
+    // index reads the watchers in a fixed order without sorting. Thread
+    // subscriptions: each principal's preference for one conversation, keyed
+    // by the conversation's identity (`conversation_id`, set when it is
+    // created; one created before is `legacy:<number>:<created_at>`), so a
+    // number a restore gives to a new conversation takes none of them; the
+    // indexes read a thread's subscribers in a fixed order and a principal's
+    // preferences of a kind. Each principal's command versions per kind
+    // (`preference_versions`), the order thread commands take; deleted
+    // conversations whose preferences, more than their caps after a
+    // restore, are still being deleted (`thread_forgets`). And a
+    // restored repository's recovery of its preferences from the
+    // directory's copies, per group (no row: ready).
     name: "watchers",
     sql: `
       CREATE TABLE watchers (
@@ -1394,6 +1403,33 @@ export const repoSchema: readonly DoMigration[] = [
         target_epoch INTEGER NOT NULL,
         phase TEXT NOT NULL CHECK (phase IN ('clear', 'import')),
         cursor TEXT
+      ) STRICT, WITHOUT ROWID;
+      ALTER TABLE issues ADD COLUMN conversation_id TEXT;
+      ALTER TABLE pull_requests ADD COLUMN conversation_id TEXT;
+      CREATE TABLE thread_preferences (
+        principal TEXT NOT NULL,
+        conversation TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('issue', 'pull')),
+        root TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('subscribed', 'unsubscribed')),
+        epoch_gen INTEGER NOT NULL,
+        revision INTEGER NOT NULL,
+        at INTEGER NOT NULL,
+        PRIMARY KEY (principal, conversation)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX thread_preferences_thread
+        ON thread_preferences (conversation, state, revision, principal);
+      CREATE INDEX thread_preferences_kind ON thread_preferences (kind, principal, conversation);
+      CREATE TABLE preference_versions (
+        principal TEXT PRIMARY KEY,
+        issues_version INTEGER NOT NULL DEFAULT 0,
+        pulls_version INTEGER NOT NULL DEFAULT 0,
+        ignore_version INTEGER NOT NULL DEFAULT 0
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE thread_forgets (
+        conversation TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('issue', 'pull'))
       ) STRICT, WITHOUT ROWID;
     `,
   },

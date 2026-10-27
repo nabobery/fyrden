@@ -242,33 +242,43 @@ const webhookBodies: RepoCleanup = {
   },
 };
 
-/** In order: effects first, so none makes a delivery while its deliveries are removed. */
 /**
- * Its watchers' copy in the directory (`watch_preferences`), a page at a
- * time: a held copy write finds the repository not active and writes none.
+ * Its preferences' copies in the directory (`watch_preferences`,
+ * `thread_preferences`), a page of each at a time in one call: a held copy
+ * write finds the repository not active and writes none.
  */
-const watchPreferences: RepoCleanup = {
-  name: "watch_preferences",
+const preferences: RepoCleanup = {
+  name: "preferences",
   async page(env, { repoId }, metrics) {
-    metrics?.count("d1.query", { db: "directory", op: "cleanup_watch_preferences" });
-    const deleted = await env.DIRECTORY.prepare(
-      `DELETE FROM watch_preferences WHERE (principal_id, repo_id) IN
-         (SELECT principal_id, repo_id FROM watch_preferences INDEXED BY watch_preferences_repo
-          WHERE repo_id = ? LIMIT ?)`,
-    )
-      .bind(repoId, CLEANUP_POLICY.effectsPage)
-      .run();
-    return pageOutcome(deleted.meta.changes ?? 0, CLEANUP_POLICY.effectsPage);
+    metrics?.count("d1.query", { db: "directory", op: "cleanup_preferences" });
+    const [watches, threads] = await env.DIRECTORY.batch([
+      env.DIRECTORY.prepare(
+        `DELETE FROM watch_preferences WHERE (principal_id, repo_id) IN
+           (SELECT principal_id, repo_id FROM watch_preferences INDEXED BY watch_preferences_repo
+            WHERE repo_id = ? LIMIT ?)`,
+      ).bind(repoId, CLEANUP_POLICY.effectsPage),
+      env.DIRECTORY.prepare(
+        `DELETE FROM thread_preferences WHERE (principal_id, repo_id, conversation) IN
+           (SELECT principal_id, repo_id, conversation FROM thread_preferences
+              INDEXED BY thread_preferences_repo
+            WHERE repo_id = ? LIMIT ?)`,
+      ).bind(repoId, CLEANUP_POLICY.effectsPage),
+    ]);
+    return pageOutcome(
+      Math.max(watches?.meta.changes ?? 0, threads?.meta.changes ?? 0),
+      CLEANUP_POLICY.effectsPage,
+    );
   },
 };
 
+/** In order: effects first, so none makes a delivery while its deliveries are removed. */
 export const REPO_CLEANUPS: readonly RepoCleanup[] = [
   webhookEffects,
   journaledEffects,
   webhookDeliveries,
   webhookPayloads,
   searchProjections,
-  watchPreferences,
+  preferences,
   webhookBodies,
 ];
 

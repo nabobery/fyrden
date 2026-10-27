@@ -34,8 +34,9 @@ export const MAX_FEED_AUDIENCE = 100;
  * Pages of further recipients an event may name, beyond those it carries:
  * the recipients one event can have past the first 100. The most is a
  * close or reopening of a pull request asking teams: its requested teams'
- * members (10,000 at most), a thread's 1,000 participants, the 50 it may
- * mention and those it names directly, under 11,100 in all.
+ * members (10,000 at most), a thread's 1,000 participants and 1,000
+ * subscribers, the repository's 100 watchers, the 50 it may mention and
+ * those it names directly, under 12,200 in all.
  */
 export const MAX_FEED_PAGES = 128;
 /** Bytes of one page of recipients, as JSON, at most. */

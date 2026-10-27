@@ -67,6 +67,9 @@ CREATE INDEX reviews_standing_head
         WHERE dismissed_at IS NULL;
 CREATE INDEX revision_imports_waiting ON revision_imports (requested_at, pr_number);
 CREATE UNIQUE INDEX rulesets_name ON rulesets (name);
+CREATE INDEX thread_preferences_kind ON thread_preferences (kind, principal, conversation);
+CREATE INDEX thread_preferences_thread
+        ON thread_preferences (conversation, state, revision, principal);
 CREATE INDEX uploads_expiry ON uploads (state, expires_at);
 CREATE INDEX view_merged_into ON view_merged (into_pack_id, merged_at);
 CREATE INDEX watchers_level ON watchers (level, revision, principal);
@@ -354,7 +357,7 @@ CREATE TABLE issues (
         closed_by TEXT,
         version INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL, milestone INTEGER,
+        updated_at INTEGER NOT NULL, milestone INTEGER, conversation_id TEXT,
         CHECK ((duplicate_of IS NOT NULL) = (state = 'closed' AND state_reason = 'duplicate')),
         CHECK ((state = 'closed') = (closed_at IS NOT NULL))
       ) STRICT;
@@ -532,6 +535,12 @@ CREATE TABLE preference_recovery (
         phase TEXT NOT NULL CHECK (phase IN ('clear', 'import')),
         cursor TEXT
       ) STRICT, WITHOUT ROWID;
+CREATE TABLE preference_versions (
+        principal TEXT PRIMARY KEY,
+        issues_version INTEGER NOT NULL DEFAULT 0,
+        pulls_version INTEGER NOT NULL DEFAULT 0,
+        ignore_version INTEGER NOT NULL DEFAULT 0
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE pull_heads (
         pr_number INTEGER NOT NULL,
         sha TEXT NOT NULL,
@@ -565,7 +574,7 @@ CREATE TABLE pull_requests (
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       , last_pusher TEXT, last_pusher_grant TEXT, last_push_at INTEGER, merge_commit_sha TEXT, merged_by TEXT, merged_at INTEGER, head_repo_id TEXT, head_ref_version INTEGER, maintainer_can_modify INTEGER NOT NULL DEFAULT 0, approvals_after INTEGER NOT NULL DEFAULT 0, reviews_revision INTEGER NOT NULL DEFAULT 0, locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)), lock_reason TEXT
-        CHECK (lock_reason IN ('off-topic', 'too heated', 'resolved', 'spam')), milestone INTEGER) STRICT;
+        CHECK (lock_reason IN ('off-topic', 'too heated', 'resolved', 'spam')), milestone INTEGER, conversation_id TEXT) STRICT;
 CREATE TABLE reaction_counts (
         target TEXT NOT NULL,
         target_id INTEGER NOT NULL,
@@ -797,6 +806,22 @@ CREATE TABLE subject_labels (
         number INTEGER NOT NULL,
         label_id INTEGER NOT NULL,
         PRIMARY KEY (number, label_id)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE thread_forgets (
+        conversation TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('issue', 'pull'))
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE thread_preferences (
+        principal TEXT NOT NULL,
+        conversation TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('issue', 'pull')),
+        root TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('subscribed', 'unsubscribed')),
+        epoch_gen INTEGER NOT NULL,
+        revision INTEGER NOT NULL,
+        at INTEGER NOT NULL,
+        PRIMARY KEY (principal, conversation)
       ) STRICT, WITHOUT ROWID;
 CREATE TABLE uploads (
     upload_id TEXT PRIMARY KEY,

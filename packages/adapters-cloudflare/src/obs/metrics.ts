@@ -91,8 +91,8 @@ export const METRICS = {
   // participants.
   "feed.audience_dropped": [],
   "feed.participants_overflow": [],
-  // Events whose preference audience (`kind` = watchers) had more than it may tell, after a
-  // repository restore (counted once an event).
+  // Events whose preference audience (`kind` = watchers or subscribers) had more than it may
+  // tell, after a repository restore (counted once an event).
   "feed.preference_overflow": ["kind"],
   "code_owners.request_skipped": ["reason"],
   "d1.invocation_statements": ["where", "op"],
