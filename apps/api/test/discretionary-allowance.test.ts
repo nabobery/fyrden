@@ -12,7 +12,7 @@ describe("the discretionary allowance", () => {
       do_requests: 20_000,
       do_rows_read: 1_000_000,
       do_rows_written: 20_000,
-      do_duration_ms: 20_800_000,
+      do_duration_ms: 20_312_500,
       d1_rows_read: 1_000_000,
       d1_rows_written: 20_000,
       queue_ops: 2_000,

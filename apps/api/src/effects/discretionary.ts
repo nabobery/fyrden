@@ -27,13 +27,14 @@ export type ResourceVector = Readonly<Record<DiscretionaryResource, number>>;
 /**
  * Workers Free's daily limits, per account, reset at 00:00 UTC (Durable
  * Objects, D1 and Queues pricing pages, read 2026-10-27): duration is
- * 13,000 GB-s, in milliseconds at the 128 MB an object is billed for.
+ * 13,000 GB-s, in milliseconds at the 128 MB an object is billed for
+ * (decimal: 0.128 GB, as the pricing page's examples convert it).
  */
 export const FREE_DAILY: ResourceVector = {
   do_requests: 100_000,
   do_rows_read: 5_000_000,
   do_rows_written: 100_000,
-  do_duration_ms: 104_000_000,
+  do_duration_ms: 101_562_500,
   d1_rows_read: 5_000_000,
   d1_rows_written: 100_000,
   queue_ops: 10_000,
