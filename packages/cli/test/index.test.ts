@@ -299,6 +299,15 @@ describe("envDeployOptions", () => {
     await rm(dir, { recursive: true });
   });
 
+  it("adds watchers to events' audiences only when asked", () => {
+    expect(parseDeployArgs(["--watch-audiences", "on"])).toEqual({
+      plan: "paid",
+      watchAudiences: true,
+    });
+    expect(parseDeployArgs(["--watch-audiences", "off"])).toEqual({ plan: "paid" });
+    expect(parseDeployArgs(["--watch-audiences", "yes"])).toBeUndefined();
+  });
+
   it("turns live hints on only when asked, with a socket allowance that fits", () => {
     expect(parseDeployArgs(["--live", "on"])).toEqual({ plan: "paid", live: {} });
     expect(parseDeployArgs(["--live", "on", "--live-sockets", "500"])).toEqual({

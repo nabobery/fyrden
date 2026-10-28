@@ -16,7 +16,7 @@ import { nodeWranglerRunner } from "./wrangler.ts";
 
 const USAGE = `usage:
   fyrden deploy [--plan free|paid] [--internal-calls N] [--discretionary resource=n,...]
-                [--live on|off [--live-sockets N]]
+                [--watch-audiences on|off] [--live on|off [--live-sockets N]]
                 [--email resend --email-from ADDRESS --email-secrets-file PATH
                                  [--email-sending on|off] [--email-daily-limit N]
                                  [--email-monthly-limit N] [--email-reserve N]
@@ -28,6 +28,8 @@ const USAGE = `usage:
                                      (do_requests, do_rows_read, do_rows_written, do_duration_ms,
                                      d1_rows_read, d1_rows_written, queue_ops; Free: a fifth of
                                      each of its limits unless set, Paid: uncapped unless set);
+                                     watchers, thread subscribers and authors told of events
+                                     only with --watch-audiences on (limits.md says when);
                                      email sent only with --email-sending on (its secrets file
                                      also holding the webhook's RESEND_WEBHOOK_SECRET, its key
                                      full-access), at most the daily and monthly limits (default
@@ -140,6 +142,7 @@ export function parseDeployArgs(args: readonly string[]):
       discretionary?: string;
       email?: EmailArgs;
       live?: LiveArgs;
+      watchAudiences?: true;
     }
   | undefined {
   const given = new Map<string, string>();
@@ -147,6 +150,7 @@ export function parseDeployArgs(args: readonly string[]):
     "--plan",
     "--internal-calls",
     "--discretionary",
+    "--watch-audiences",
     "--live",
     "--live-sockets",
     "--email",
@@ -168,12 +172,15 @@ export function parseDeployArgs(args: readonly string[]):
   if (plan !== "free" && plan !== "paid") return undefined;
   const discretionary = given.get("--discretionary");
   if (discretionary !== undefined && !validAllowance(discretionary)) return undefined;
+  const watch = given.get("--watch-audiences");
+  if (watch !== undefined && watch !== "on" && watch !== "off") return undefined;
   const live = liveArgs(given);
   if (live === null) return undefined;
   const email = emailArgs(given);
   if (email === null) return undefined;
   const extra = {
     ...(discretionary !== undefined && { discretionary }),
+    ...(watch === "on" && { watchAudiences: true as const }),
     ...(live !== undefined && { live }),
     ...(email !== undefined && { email }),
   };
@@ -364,18 +371,22 @@ export async function main(argv: string[]): Promise<number> {
     });
     return result.complete ? 0 : 1;
   }
-  const { plan, internalCalls, discretionary, email, live } = parseDeployArgs(rest) as {
+  const { plan, internalCalls, discretionary, email, live, watchAudiences } = parseDeployArgs(
+    rest,
+  ) as {
     plan: Plan;
     internalCalls?: number;
     discretionary?: string;
     email?: EmailArgs;
     live?: LiveArgs;
+    watchAudiences?: true;
   };
   const result = await deploy({
     repoRoot,
     plan,
     internalCalls,
     discretionary,
+    watchAudiences,
     live,
     email: email && (await emailDeploy(email)),
     runner,

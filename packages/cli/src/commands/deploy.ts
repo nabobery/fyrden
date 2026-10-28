@@ -29,6 +29,12 @@ export interface DeployDeps {
    */
   discretionary?: string | undefined;
   /**
+   * Watchers, thread subscribers and authors added to events' audiences
+   * (`FYRDEN_WATCH_AUDIENCES=on`); left out, not (each deploy sets the
+   * variables). limits.md says when a deployment may turn it on.
+   */
+  watchAudiences?: true | undefined;
+  /**
    * Live notification hints, on (`FYRDEN_LIVE=on`, and `FYRDEN_LIVE_SOCKETS`
    * when given); left out, off (each deploy sets the variables).
    */
@@ -189,6 +195,7 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
       ...(deps.discretionary !== undefined && {
         FYRDEN_DISCRETIONARY_DAILY: deps.discretionary,
       }),
+      ...(deps.watchAudiences && { FYRDEN_WATCH_AUDIENCES: "on" }),
       ...(deps.live && { FYRDEN_LIVE: "on" }),
       ...(deps.live?.sockets !== undefined && { FYRDEN_LIVE_SOCKETS: String(deps.live.sockets) }),
       ...(deps.email && {

@@ -401,6 +401,14 @@ describe("fyrden deploy", () => {
     expect(origins().slice(5)).toEqual([undefined]);
   });
 
+  it("adds watchers to audiences when given, and stops when a later deploy leaves it out", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner, { watchAudiences: true }).d);
+    expect((await generatedConfig()).vars).toMatchObject({ FYRDEN_WATCH_AUDIENCES: "on" });
+    await deploy(deps(fake.runner).d);
+    expect((await generatedConfig()).vars).not.toHaveProperty("FYRDEN_WATCH_AUDIENCES");
+  });
+
   it("turns live hints on when given, and off again when a later deploy leaves them out", async () => {
     const fake = fakeWrangler();
     await deploy(deps(fake.runner).d);
