@@ -409,6 +409,31 @@ describe("fyrden deploy", () => {
     expect((await generatedConfig()).vars).not.toHaveProperty("FYRDEN_WATCH_AUDIENCES");
   });
 
+  it("never keeps a switch it owns from the committed configuration's variables", async () => {
+    const path = join(repoRoot, "apps/api/wrangler.jsonc");
+    const committed = parseJsonc<Record<string, unknown>>(await readFile(path, "utf8"));
+    const owned = {
+      FYRDEN_WATCH_AUDIENCES: "on",
+      FYRDEN_LIVE: "on",
+      FYRDEN_LIVE_SOCKETS: "9",
+      FYRDEN_EMAIL_SENDING: "on",
+      FYRDEN_EMAIL_PROVIDER: "resend",
+      FYRDEN_DISCRETIONARY_DAILY: "queue_ops=1",
+    };
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...committed,
+        vars: { ...(committed.vars as object), ...owned, KEEP: "1" },
+      }),
+    );
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    const vars = (await generatedConfig()).vars as Record<string, string>;
+    for (const name of Object.keys(owned)) expect(vars, name).not.toHaveProperty(name);
+    expect(vars.KEEP).toBe("1");
+  });
+
   it("turns live hints on when given, and off again when a later deploy leaves them out", async () => {
     const fake = fakeWrangler();
     await deploy(deps(fake.runner).d);

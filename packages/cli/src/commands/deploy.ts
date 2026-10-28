@@ -154,6 +154,21 @@ export async function workerSecrets(
  * platform's commit signing key (SIGNING_KEY) are uploaded with the first
  * API deploy that lacks them, from a 0600 file that is removed after.
  */
+/** The variables `deploy` sets from its flags on every run (left out: unset). */
+const DEPLOY_SWITCHES = new Set([
+  "FYRDEN_INTERNAL_CALLS",
+  "FYRDEN_DISCRETIONARY_DAILY",
+  "FYRDEN_WATCH_AUDIENCES",
+  "FYRDEN_LIVE",
+  "FYRDEN_LIVE_SOCKETS",
+  "FYRDEN_EMAIL_PROVIDER",
+  "FYRDEN_EMAIL_FROM",
+  "FYRDEN_EMAIL_SENDING",
+  "FYRDEN_EMAIL_DAILY_LIMIT",
+  "FYRDEN_EMAIL_MONTHLY_LIMIT",
+  "FYRDEN_EMAIL_RESERVE",
+]);
+
 export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   const { log } = deps;
   const apiDir = join(deps.repoRoot, "apps", "api");
@@ -184,11 +199,18 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   for (const r of resources.created) log(`created ${r}`);
 
   const internalCalls = deps.internalCalls ?? DEFAULT_INTERNAL_CALLS;
+  // The switches each deploy sets: never kept from the committed configuration, so leaving one
+  // out turns it off whatever that file says.
+  const committedVars = Object.fromEntries(
+    Object.entries((config.vars as Record<string, string> | undefined) ?? {}).filter(
+      ([name]) => !DEPLOY_SWITCHES.has(name),
+    ),
+  );
   const deployConfig: Record<string, unknown> = {
     ...config,
     account_id: account.id,
     vars: {
-      ...((config.vars as Record<string, string> | undefined) ?? {}),
+      ...committedVars,
       FYRDEN_PLAN: deps.plan,
       FYRDEN_COMMIT: commitLabel(deps.source),
       ...(deps.plan === "paid" && { FYRDEN_INTERNAL_CALLS: String(internalCalls) }),
