@@ -69,6 +69,7 @@ function SiteHeader() {
         {user && (
           <>
             <Link to="/">Repositories</Link>
+            <Link to="/notifications">Inbox</Link>
             <Link to="/settings/tokens">Tokens</Link>
             <Link to="/settings/agents">Agents</Link>
             <Link to="/settings/notifications">Notifications</Link>

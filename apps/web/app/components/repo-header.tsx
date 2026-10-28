@@ -10,7 +10,7 @@ export function RepoHeader({
 }: {
   repo: Repo;
   origin: string;
-  active: "code" | "commits" | "issues" | "pulls" | "settings";
+  active: "code" | "commits" | "issues" | "pulls" | "settings" | "watching";
 }) {
   const cloneUrl = `${origin}/${repo.owner}/${repo.name}.git`;
   const [copied, setCopied] = useState(false);
@@ -33,6 +33,9 @@ export function RepoHeader({
         </Link>
         <Link to={`${base}/pulls`} aria-current={active === "pulls" ? "page" : undefined}>
           Pull requests
+        </Link>
+        <Link to={`${base}/watching`} aria-current={active === "watching" ? "page" : undefined}>
+          Watch
         </Link>
         <Link to={`${base}/settings`} aria-current={active === "settings" ? "page" : undefined}>
           Settings

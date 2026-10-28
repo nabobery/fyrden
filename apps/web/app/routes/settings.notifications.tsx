@@ -7,6 +7,7 @@ import {
   signedInUser,
   signInUrl,
 } from "../lib/api.server.js";
+import { OTHER_VIEWER, sameViewer } from "../lib/viewer.server.js";
 import type { Route } from "./+types/settings.notifications";
 
 /*
@@ -34,12 +35,13 @@ interface Settings {
 }
 
 export async function loader({ request, context }: Route.LoaderArgs) {
-  if (!(await signedInUser(context, request))) throw redirect(signInUrl(request));
+  const viewer = await signedInUser(context, request);
+  if (!viewer) throw redirect(signInUrl(request));
   const [addresses, settings] = await Promise.all([
     apiGet<Address[]>(context, request, "/user/emails"),
     apiGet<Settings>(context, request, "/user/notification-settings"),
   ]);
-  return { addresses, settings: settings.email };
+  return { addresses, settings: settings.email, viewer: viewer.id };
 }
 
 type Answer = { status: number; body: { detail?: string; code?: string } | null };
@@ -53,6 +55,7 @@ export async function action({ request, context }: Route.ActionArgs) {
   assertSameOrigin(request);
   const form = await readForm(request);
   const intent = String(form.get("intent") ?? "");
+  if (!(await sameViewer(context, request, form))) return { error: OTHER_VIEWER };
   const email = String(form.get("email") ?? "").trim();
   switch (intent) {
     case "add": {
@@ -131,7 +134,8 @@ function stateOf(address: Address): string {
 
 export default function Notifications({ loaderData }: Route.ComponentProps) {
   const result = useActionData<typeof action>();
-  const { addresses, settings } = loaderData;
+  const { addresses, settings, viewer } = loaderData;
+  const viewerField = <input type="hidden" name="viewer" value={viewer} />;
   // One change at a time: a second click while one is sent would spend another link.
   const busy = useNavigation().state !== "idle";
   return (
@@ -164,7 +168,8 @@ export default function Notifications({ loaderData }: Route.ComponentProps) {
                   <td>{a.email}</td>
                   <td>{stateOf(a)}</td>
                   <td>
-                    <Form method="post">
+                    <Form method="post" key={viewer}>
+                      {viewerField}
                       <input type="hidden" name="email" value={a.email} />
                       {!a.verified && a.deliverable && (
                         <button type="submit" name="intent" value="resend" disabled={busy}>
@@ -188,7 +193,8 @@ export default function Notifications({ loaderData }: Route.ComponentProps) {
             </tbody>
           </table>
         )}
-        <Form method="post">
+        <Form method="post" key={viewer}>
+          {viewerField}
           <label htmlFor="new-email">Add an address</label>
           <input id="new-email" name="email" type="email" autoComplete="email" maxLength={254} />
           <p>
@@ -204,7 +210,8 @@ export default function Notifications({ loaderData }: Route.ComponentProps) {
           Sent to your first confirmed address that is deliverable. Every email also has a link to
           stop its kind for that address.
         </p>
-        <Form method="post">
+        <Form method="post" key={viewer}>
+          {viewerField}
           <fieldset>
             <legend>Email me about</legend>
             {CATEGORIES.map((c) => (

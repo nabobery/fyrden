@@ -9,7 +9,16 @@ import { fakeApi, formPost, json } from "./helpers/context.js";
 
 const ORIGIN = "https://fyrden.test";
 
-const session = json({ user: { id: "usr_1", handle: "ada" } });
+const session = () => json({ user: { id: "usr_1", handle: "ada" } });
+
+/** The API answering `answer`, and the session as usr_1's. */
+const api = (answer: (req: Request) => Response) =>
+  fakeApi((req) => (new URL(req.url).pathname === "/auth/session" ? session() : answer(req)));
+const post = (path: string, fields: Record<string, string>) =>
+  formPost(path, { viewer: "usr_1", ...fields });
+/** The API calls made, the session checks left out. */
+const apiCalls = (calls: Request[]) =>
+  calls.filter((c) => new URL(c.url).pathname !== "/auth/session");
 
 describe("the notification settings page", () => {
   it("shows the addresses and settings, in three calls", async () => {
@@ -19,7 +28,7 @@ describe("the notification settings page", () => {
     const settings = { email: { direct: true, participating: false, watching: false } };
     const { context, calls } = fakeApi((req) => {
       const path = new URL(req.url).pathname;
-      if (path === "/auth/session") return session;
+      if (path === "/auth/session") return session();
       if (path === "/api/user/emails") return json(addresses);
       return json(settings);
     });
@@ -29,6 +38,7 @@ describe("the notification settings page", () => {
     expect(await loader({ request, context, params: {} } as never)).toEqual({
       addresses,
       settings: settings.email,
+      viewer: "usr_1",
     });
     expect(calls.map((c) => new URL(c.url).pathname).sort()).toEqual([
       "/api/user/emails",
@@ -90,25 +100,25 @@ describe("the notification settings page", () => {
       { done: expect.stringMatching(/saved/) },
     ],
   ])("does %o with one call", async (fields, call, sent, status, shown) => {
-    const { context, calls } = fakeApi(() =>
+    const { context, calls } = api(() =>
       status === 204 ? new Response(null, { status }) : json({}, status),
     );
     const result = await action({
-      request: formPost("/settings/notifications", fields),
+      request: post("/settings/notifications", fields),
       context,
       params: {},
     } as never);
     expect(result).toEqual(shown);
-    expect(calls.map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual([call]);
-    expect(await calls[0]?.json()).toEqual(sent);
+    expect(apiCalls(calls).map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual([call]);
+    expect(await apiCalls(calls)[0]?.json()).toEqual(sent);
   });
 
   it("says an address confirmed already was only kept", async () => {
-    const { context } = fakeApi(() =>
+    const { context } = api(() =>
       json([{ email: "a@example.com", primary: true, verified: true, deliverable: true }], 201),
     );
     const result = await action({
-      request: formPost("/settings/notifications", { intent: "add", email: "a@example.com" }),
+      request: post("/settings/notifications", { intent: "add", email: "a@example.com" }),
       context,
       params: {},
     } as never);
@@ -120,9 +130,9 @@ describe("the notification settings page", () => {
     [422, { code: "email_undeliverable", detail: "The email provider suppresses this mailbox." }],
     [503, { code: "email_unavailable", detail: "This deployment sends no email." }],
   ])("says why the API refused (%i)", async (status, body) => {
-    const { context } = fakeApi(() => json(body, status));
+    const { context } = api(() => json(body, status));
     const result = await action({
-      request: formPost("/settings/notifications", { intent: "add", email: "a@example.com" }),
+      request: post("/settings/notifications", { intent: "add", email: "a@example.com" }),
       context,
       params: {},
     } as never);
@@ -130,10 +140,10 @@ describe("the notification settings page", () => {
   });
 
   it("asks for an address before adding one, and refuses an unknown intent", async () => {
-    const { context, calls } = fakeApi(() => json({}));
+    const { context, calls } = api(() => json({}));
     const ask = (fields: Record<string, string>) =>
       action({
-        request: formPost("/settings/notifications", fields),
+        request: post("/settings/notifications", fields),
         context,
         params: {},
       } as never);
@@ -141,6 +151,21 @@ describe("the notification settings page", () => {
     expect(await ask({ intent: "drop" })).toEqual({
       error: "That is not something this page does.",
     });
-    expect(calls).toEqual([]);
+    expect(apiCalls(calls)).toEqual([]);
+  });
+
+  it("refuses a form drawn for another account, changing nothing", async () => {
+    const { context, calls } = api(() => json({}, 201));
+    const result = await action({
+      request: formPost("/settings/notifications", {
+        viewer: "usr_other",
+        intent: "add",
+        email: "a@example.com",
+      }),
+      context,
+      params: {},
+    } as never);
+    expect(result).toEqual({ error: expect.stringMatching(/another account/) });
+    expect(apiCalls(calls)).toEqual([]);
   });
 });

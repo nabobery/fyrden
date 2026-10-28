@@ -150,6 +150,12 @@ export function SubjectSidebar({
           </p>
         )}
       </section>
+      <section aria-labelledby="sidebar-notifications">
+        <h3 id="sidebar-notifications">Notifications</h3>
+        <p>
+          <Link to={`${picker}/subscription`}>How you hear of it</Link>
+        </p>
+      </section>
       <section aria-labelledby="sidebar-references">
         <h3 id="sidebar-references">Referenced by</h3>
         <p>
