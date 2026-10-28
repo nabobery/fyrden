@@ -21,3 +21,19 @@ export const backfillSearch = defineOperation({
   idempotency: "key",
   mcp: false,
 });
+
+export const setSearchIndexing = defineOperation({
+  id: "admin.search.indexing",
+  method: "PUT",
+  path: "/admin/search/indexing",
+  summary: "Turn search indexing on or off",
+  description:
+    "Fyrden: turns the deployment's search indexing on (`enabled: true`: events project issues, pull requests, labels and milestones into search, and the five-minute maintenance repairs them within search's daily allowance) or off (nothing more is projected or repaired, though an event batch or repair run already past its check may finish; what is projected stays). Projections miss what happens while it is off: after turning it on, ask for a backfill (`POST /admin/search/backfill`). Setting the state it is in changes nothing. Instance administrators only.",
+  input: z.object({ enabled: z.boolean() }),
+  output: z.object({ enabled: z.boolean() }),
+  permission: INSTANCE_ADMIN,
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  mcp: false,
+});

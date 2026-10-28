@@ -245,7 +245,7 @@ import {
   listSubscriptionsOperation,
   setRepoSubscriptionOperation,
 } from "../repos/watching.js";
-import { backfillSearchOperation } from "../search/backfill.js";
+import { backfillSearchOperation, setSearchIndexingOperation } from "../search/backfill.js";
 import { clock, newId } from "../services.js";
 import { platformKeys } from "../signing/platform-key.js";
 import { type Handlers, OperationError } from "./execute.js";
@@ -604,6 +604,7 @@ export const handlers: Handlers = {
 
   // Search's projections, populated by reconciliation (search/backfill).
   "admin.search.backfill": backfillSearchOperation,
+  "admin.search.indexing": setSearchIndexingOperation,
 
   // Branches, tags, commits and comparisons (repos/browse).
   "repos.branches.list": listBranchesOperation,

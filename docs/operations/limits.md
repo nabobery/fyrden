@@ -993,7 +993,7 @@ A WebSocket that hints which of the caller's feed and inbox streams changed, so 
 
 ## Search (not yet served)
 
-Search's projections of issues, pull requests, labels and milestones are kept in the org read model; nothing reads them yet. Writing and repairing them waits for the deployment setting `search_indexing` (`deployment_settings` in the directory database, off until an operation turns it on).
+Search's projections of issues, pull requests, labels and milestones are kept in the org read model; nothing reads them yet. Writing and repairing them waits for the deployment setting `search_indexing` (`deployment_settings` in the directory database), off until an instance administrator turns it on with `PUT /admin/search/indexing` (`{"enabled": true}`; `false` turns it off again, keeping what was projected). Projections miss what happens while it is off, so turning it on is followed by a backfill (`POST /admin/search/backfill`).
 
 | What | Value |
 |---|---|

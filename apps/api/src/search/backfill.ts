@@ -1,4 +1,4 @@
-import type { backfillSearch, Input, Output } from "@fyrden/api-contract";
+import type { backfillSearch, Input, Output, setSearchIndexing } from "@fyrden/api-contract";
 import { readModelFor } from "../events/read-model.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock } from "../services.js";
@@ -56,4 +56,23 @@ export async function backfillSearchOperation(
     requested,
     next_cursor: results.length === BACKFILL_REPOS ? (results.at(-1)?.id ?? null) : null,
   };
+}
+
+/**
+ * The `admin.search.indexing` operation (instance administrators): sets
+ * the deployment's `search_indexing` setting, which the events consumer,
+ * the repair job and the backfill each read when they run.
+ */
+export async function setSearchIndexingOperation(
+  ctx: OpContext,
+  input: Input<typeof setSearchIndexing>,
+): Promise<Output<typeof setSearchIndexing>> {
+  ctx.metrics.count("d1.query", { db: "directory", op: "search_indexing_set" });
+  await ctx.env.DIRECTORY.prepare(
+    `INSERT INTO deployment_settings (name, value, updated_at) VALUES ('search_indexing', ?1, ?2)
+     ON CONFLICT (name) DO UPDATE SET value = ?1, updated_at = ?2 WHERE value <> ?1`,
+  )
+    .bind(input.enabled ? "on" : "off", clock())
+    .run();
+  return { enabled: input.enabled };
 }
