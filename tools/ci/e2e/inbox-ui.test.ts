@@ -1,8 +1,9 @@
 // The inbox and how one hears of a repository or a thread, in a real
-// browser against both Workers: the inbox opens from the header, a
-// repository is watched and the choice read back, a thread unsubscribed
-// and read back, each page checked with axe for WCAG 2.x A and AA. Needs
-// `pnpm --filter @fyrden/web build` first (turbo does it).
+// browser against both Workers: the inbox opens from the header and its
+// digests from its tabs, a repository is watched and the choice read
+// back, a thread unsubscribed and read back, each page checked with axe
+// for WCAG 2.x A and AA. Needs `pnpm --filter @fyrden/web build` first
+// (turbo does it).
 import { type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { accessible as axe, startWebStack, visit, type WebStack } from "./web-stack.js";
@@ -58,6 +59,18 @@ describe("the inbox and notification choices", () => {
     await page.getByRole("link", { name: "All" }).click();
     await see(page.getByRole("link", { name: "All" })).toHaveAttribute("aria-current", "page");
     await accessible("inbox");
+  });
+
+  it("opens the digests of watched repositories, and says when a digest no longer shows", async () => {
+    await visit(page, `${stack.origin}/notifications`);
+    await page.getByRole("link", { name: "Digests" }).click();
+    await see(page.getByRole("link", { name: "Digests" })).toHaveAttribute("aria-current", "page");
+    await see(page.getByText("Nothing here.")).toBeVisible();
+    await accessible("digests");
+    const { id } = await rest<{ id: string }>("GET", `/repos/${handle}/${name}`);
+    await visit(page, `${stack.origin}/notifications/digests/${id}/issue/1992491/1`);
+    await see(page.getByText("This digest no longer shows")).toBeVisible();
+    await accessible("a digest no longer shown");
   });
 
   it("shows a thread another person notified it of, inert, opens it, and marks it read and done", async () => {

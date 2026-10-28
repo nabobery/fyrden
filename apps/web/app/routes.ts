@@ -9,6 +9,8 @@ export default [
   route("settings/emails/confirm", "routes/settings.emails.confirm.tsx"),
   route("settings/notifications", "routes/settings.notifications.tsx"),
   route("notifications", "routes/notifications.tsx"),
+  route("notifications/digests", "routes/notifications.digests.tsx"),
+  route("notifications/digests/:repo/:subject/:window/:epoch", "routes/notifications.digest.tsx"),
   route(":owner/:repo", "routes/repo.tsx"),
   route(":owner/:repo/tree/:ref/*", "routes/repo.tree.tsx"),
   route(":owner/:repo/blob/:ref/*", "routes/repo.blob.tsx"),

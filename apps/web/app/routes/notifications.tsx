@@ -1,4 +1,5 @@
 import { Form, Link, redirect, useActionData, useNavigation } from "react-router";
+import { DegradedNote, InboxNav, type InboxTab } from "../components/inbox-nav.js";
 import { Pager } from "../components/pager.js";
 import {
   apiCall,
@@ -17,6 +18,8 @@ import type { Route } from "./+types/notifications";
  * notifications page shows them (Unread, All, Participating), newest
  * first, paged by the API's cursor. A thread is marked read or done here,
  * or every unread one read. Threads link to their issue or pull request.
+ * The digests of watched repositories are a page of their own beside the
+ * tabs (`notifications.digests`).
  */
 
 export function meta(): Route.MetaDescriptors {
@@ -38,23 +41,24 @@ interface Page {
   delivery: "complete" | "degraded";
 }
 
-const TABS = [
-  { tab: "unread", label: "Unread", query: "" },
-  { tab: "all", label: "All", query: "all=true" },
-  { tab: "participating", label: "Participating", query: "participating=true" },
-] as const;
+type Tab = Exclude<InboxTab, "digests">;
 
-type Tab = (typeof TABS)[number]["tab"];
+/** Each tab's listing query (the digests are a page of their own). */
+const QUERIES = {
+  unread: "",
+  all: "all=true",
+  participating: "participating=true",
+} as const satisfies Record<Tab, string>;
 
 const tabOf = (url: URL): Tab => {
   const asked = url.searchParams.get("tab");
-  return asked === "all" || asked === "participating" ? asked : "unread";
+  return asked !== null && Object.hasOwn(QUERIES, asked) ? (asked as Tab) : "unread";
 };
 
 export async function loader({ request, context }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const tab = tabOf(url);
-  const query = TABS.find((t) => t.tab === tab)?.query ?? "";
+  const query = QUERIES[tab];
   const [viewer, page] = await Promise.all([
     signedInUser(context, request),
     apiGet<Page>(
@@ -141,23 +145,8 @@ export default function Inbox({ loaderData }: Route.ComponentProps) {
   return (
     <main>
       <h1>Inbox</h1>
-      <nav aria-label="Inbox" className="row">
-        {TABS.map((t) => (
-          <Link
-            key={t.tab}
-            to={t.tab === "unread" ? "/notifications" : `/notifications?tab=${t.tab}`}
-            aria-current={tab === t.tab ? "page" : undefined}
-          >
-            {t.label}
-          </Link>
-        ))}
-      </nav>
-      {degraded && (
-        <p className="muted" role="note">
-          Activity in watched repositories may be missing: the deployment's allowance for it ran out
-          within the last week.
-        </p>
-      )}
+      <InboxNav current={tab} />
+      {degraded && <DegradedNote />}
       {result && "done" in result && <p role="status">{result.done}</p>}
       {result && "error" in result && (
         <p className="error" role="alert">
