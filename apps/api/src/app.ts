@@ -8,6 +8,7 @@ import { mountUnsubscribe } from "./email/unsubscribe.js";
 import { gitRouter } from "./git/router.js";
 import { deepHealth } from "./health.js";
 import { problem } from "./http/problem.js";
+import { mountLive } from "./live/routes.js";
 import { mountMcp } from "./mcp/mount.js";
 import type { AuthVariables } from "./middleware/auth.js";
 import { obs } from "./middleware/obs.js";
@@ -48,6 +49,7 @@ export function createApp() {
   mountEmailEvents(app);
   app.route("/auth", authRouter);
   app.route("/.well-known", wellKnownRouter);
+  mountLive(app);
   mountRest(app);
   mountRaw(app);
   mountArchives(app);

@@ -78,6 +78,7 @@ import {
   getUploadSession,
 } from "../git/chunked/operations.js";
 import { getRepoImport, startImport } from "../git/import/operations.js";
+import { issueLiveTicketOperation } from "../live/routes.js";
 import { forkRepoOperation, listForksOperation } from "../network/operations.js";
 import {
   deleteNotificationThreadSubscriptionOperation,
@@ -577,6 +578,7 @@ export const handlers: Handlers = {
   "notifications.thread_read": markNotificationThreadReadOperation,
   "notifications.thread_done": markNotificationThreadDoneOperation,
   "notifications.mark": markNotificationsReadOperation,
+  "notifications.live_ticket": issueLiveTicketOperation,
   "notifications.repo_mark": markRepoNotificationsReadOperation,
   "notifications.subscription_get": getNotificationThreadSubscriptionOperation,
   "notifications.subscription_put": setNotificationThreadSubscriptionOperation,

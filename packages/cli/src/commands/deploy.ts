@@ -29,6 +29,11 @@ export interface DeployDeps {
    */
   discretionary?: string | undefined;
   /**
+   * Live notification hints, on (`FYRDEN_LIVE=on`, and `FYRDEN_LIVE_SOCKETS`
+   * when given); left out, off (each deploy sets the variables).
+   */
+  live?: { sockets?: number } | undefined;
+  /**
    * The email provider, set as `FYRDEN_EMAIL_PROVIDER` and
    * `FYRDEN_EMAIL_FROM`, its key uploaded as the secret `RESEND_API_KEY`
    * and its webhook's signing secret, when given, as
@@ -184,6 +189,8 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
       ...(deps.discretionary !== undefined && {
         FYRDEN_DISCRETIONARY_DAILY: deps.discretionary,
       }),
+      ...(deps.live && { FYRDEN_LIVE: "on" }),
+      ...(deps.live?.sockets !== undefined && { FYRDEN_LIVE_SOCKETS: String(deps.live.sockets) }),
       ...(deps.email && {
         FYRDEN_EMAIL_PROVIDER: deps.email.provider,
         FYRDEN_EMAIL_FROM: deps.email.from,

@@ -49,6 +49,7 @@ export const ID_PREFIXES = [
   "cli",
   "ses",
   "eml",
+  "lsk",
 ] as const;
 export type IdPrefix = (typeof ID_PREFIXES)[number];
 

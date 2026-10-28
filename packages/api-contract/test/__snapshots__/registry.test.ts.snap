@@ -3631,6 +3631,67 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/notifications/live": {
+      "post": {
+        "description": "A single-use ticket (30 seconds) to open a WebSocket at \`url\` that hints which of the caller's feed and inbox streams changed (\`{"t":"changed","n":…,"streams":[{"repo":…,"kind":"issue"|"pull"}]}\`, or \`"refresh":true\`), only streams the credential may read; reread them through the feed and notifications APIs. Acknowledge each frame (\`{"t":"ack","n":…}\`, at most 8 unacknowledged) and renew every 10 minutes (\`{"t":"renew"}\`); a socket lasts at most 24 hours. The upgrade needs the same credential: the session's cookie from this origin, or the token in \`Authorization\`. The caller's own credentials only (a delegated token: 403 \`delegated_listing\`). While the deployment has not turned live hints on: 503 \`live_unavailable\`. A Fyrden extension.",
+        "operationId": "notifications.live_ticket",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "expires_in": {
+                      "description": "Seconds the ticket can be redeemed.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "ticket": {
+                      "type": "string",
+                    },
+                    "url": {
+                      "description": "Where to open the WebSocket (the ticket in its query).",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "ticket",
+                    "expires_in",
+                    "url",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a ticket for live notification hints",
+        "x-fyrden-permission": "notifications:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/notifications/threads/{thread_id}": {
       "delete": {
         "description": "Marks the thread done (and read) where it stands: a later event reopens it. 204, as GitHub's.",

@@ -284,6 +284,23 @@ describe("envDeployOptions", () => {
     await rm(dir, { recursive: true });
   });
 
+  it("turns live hints on only when asked, with a socket allowance that fits", () => {
+    expect(parseDeployArgs(["--live", "on"])).toEqual({ plan: "paid", live: {} });
+    expect(parseDeployArgs(["--live", "on", "--live-sockets", "500"])).toEqual({
+      plan: "paid",
+      live: { sockets: 500 },
+    });
+    expect(parseDeployArgs(["--live", "off"])).toEqual({ plan: "paid" });
+    for (const args of [
+      ["--live", "yes"],
+      ["--live-sockets", "10"],
+      ["--live", "off", "--live-sockets", "10"],
+      ["--live", "on", "--live-sockets", "0"],
+      ["--live", "on", "--live-sockets", "100001"],
+    ])
+      expect(parseDeployArgs(args), args.join(" ")).toBeUndefined();
+  });
+
   it("accepts a daily allowance for discretionary work, resource by resource, on either plan", () => {
     expect(
       parseDeployArgs(["--plan", "free", "--discretionary", "do_rows_written=5000,queue_ops=500"]),

@@ -5739,6 +5739,18 @@ export type NotificationsMarkOutput = {
   message: string;
 };
 
+/** Input of `notifications.live_ticket`: Get a ticket for live notification hints. */
+export type NotificationsLiveTicketInput = Record<string, never>;
+
+/** Output of `notifications.live_ticket`. */
+export type NotificationsLiveTicketOutput = {
+  ticket: string;
+  /** Seconds the ticket can be redeemed. */
+  expires_in: number;
+  /** Where to open the WebSocket (the ticket in its query). */
+  url: string;
+};
+
 /** Input of `notifications.repo_mark`: Mark repository notifications as read. */
 export type NotificationsRepoMarkInput = {
   /** The repository's owner handle. */
@@ -7700,6 +7712,7 @@ export const OPERATIONS = {
   "notifications.thread_read": { method: "PATCH", path: "/notifications/threads/{thread_id}", pathParams: ["thread_id"], idempotent: true },
   "notifications.thread_done": { method: "DELETE", path: "/notifications/threads/{thread_id}", pathParams: ["thread_id"], idempotent: true },
   "notifications.mark": { method: "PUT", path: "/notifications", pathParams: [], idempotent: true },
+  "notifications.live_ticket": { method: "POST", path: "/notifications/live", pathParams: [], idempotent: true },
   "notifications.repo_mark": { method: "PUT", path: "/repos/{owner}/{repo}/notifications", pathParams: ["owner","repo"], idempotent: true },
   "notifications.subscription_get": { method: "GET", path: "/notifications/threads/{thread_id}/subscription", pathParams: ["thread_id"], idempotent: false },
   "notifications.subscription_put": { method: "PUT", path: "/notifications/threads/{thread_id}/subscription", pathParams: ["thread_id"], idempotent: true },
@@ -8042,6 +8055,8 @@ export interface Operations {
   "notifications.thread_done": { input: NotificationsThreadDoneInput; output: NotificationsThreadDoneOutput };
   /** Mark notifications as read. Marks read up to 500 threads updated at or before `last_read_at` (default now; a later time counts as now), of up to 100 repositories and kinds the caller can read, decided now. It always answers 202 with what to do next: repeat the request (with the same `last_read_at`, and a new Idempotency-Key or none) until a list with `all=false` shows none left. GitHub keeps going itself and may answer 205. Delegated tokens are refused (403 `delegated_listing`). */
   "notifications.mark": { input: NotificationsMarkInput; output: NotificationsMarkOutput };
+  /** Get a ticket for live notification hints. A single-use ticket (30 seconds) to open a WebSocket at `url` that hints which of the caller's feed and inbox streams changed (`{"t":"changed","n":…,"streams":[{"repo":…,"kind":"issue"|"pull"}]}`, or `"refresh":true`), only streams the credential may read; reread them through the feed and notifications APIs. Acknowledge each frame (`{"t":"ack","n":…}`, at most 8 unacknowledged) and renew every 10 minutes (`{"t":"renew"}`); a socket lasts at most 24 hours. The upgrade needs the same credential: the session's cookie from this origin, or the token in `Authorization`. The caller's own credentials only (a delegated token: 403 `delegated_listing`). While the deployment has not turned live hints on: 503 `live_unavailable`. A Fyrden extension. */
+  "notifications.live_ticket": { input: NotificationsLiveTicketInput; output: NotificationsLiveTicketOutput };
   /** Mark repository notifications as read. Marks read up to 500 threads updated at or before `last_read_at` (default now; a later time counts as now), of up to 100 repositories and kinds the caller can read, decided now. It always answers 202 with what to do next: repeat the request (with the same `last_read_at`, and a new Idempotency-Key or none) until a list with `all=false` shows none left. GitHub keeps going itself and may answer 205. One repository's threads. Delegated tokens are refused (403 `delegated_listing`). */
   "notifications.repo_mark": { input: NotificationsRepoMarkInput; output: NotificationsRepoMarkOutput };
   /** Get a thread subscription for the authenticated user. The caller's preference for the thread's conversation (the same as `/repos/{owner}/{repo}/issues/{issue_number}/subscription`): 404 when the thread's number names another conversation now. A repository restored from a backup answers 503 `preferences_recovering` meanwhile. Without a preference: `subscribed: false`, `ignored: false`, `created_at: null`. */

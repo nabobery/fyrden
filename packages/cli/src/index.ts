@@ -16,6 +16,7 @@ import { nodeWranglerRunner } from "./wrangler.ts";
 
 const USAGE = `usage:
   fyrden deploy [--plan free|paid] [--internal-calls N] [--discretionary resource=n,...]
+                [--live on|off [--live-sockets N]]
                 [--email resend --email-from ADDRESS --email-secrets-file PATH
                                  [--email-sending on|off] [--email-daily-limit N]
                                  [--email-monthly-limit N] [--email-reserve N]
@@ -132,14 +133,22 @@ export function emailLimitsFit(limits: EmailLimitArgs): boolean {
  * allowance the API would not read whole, an email provider given in part)
  * must never start a deploy.
  */
-export function parseDeployArgs(
-  args: readonly string[],
-): { plan: Plan; internalCalls?: number; discretionary?: string; email?: EmailArgs } | undefined {
+export function parseDeployArgs(args: readonly string[]):
+  | {
+      plan: Plan;
+      internalCalls?: number;
+      discretionary?: string;
+      email?: EmailArgs;
+      live?: LiveArgs;
+    }
+  | undefined {
   const given = new Map<string, string>();
   const flags = [
     "--plan",
     "--internal-calls",
     "--discretionary",
+    "--live",
+    "--live-sockets",
     "--email",
     "--email-from",
     "--email-secrets-file",
@@ -159,10 +168,13 @@ export function parseDeployArgs(
   if (plan !== "free" && plan !== "paid") return undefined;
   const discretionary = given.get("--discretionary");
   if (discretionary !== undefined && !validAllowance(discretionary)) return undefined;
+  const live = liveArgs(given);
+  if (live === null) return undefined;
   const email = emailArgs(given);
   if (email === null) return undefined;
   const extra = {
     ...(discretionary !== undefined && { discretionary }),
+    ...(live !== undefined && { live }),
     ...(email !== undefined && { email }),
   };
   const calls = given.get("--internal-calls");
@@ -216,6 +228,26 @@ function emailArgs(given: ReadonlyMap<string, string>): EmailArgs | undefined | 
     limits,
     ...(publicOrigin !== undefined && { publicOrigin }),
   };
+}
+
+/** Live notification hints a deploy turns on (passed on every deploy: left out, they are off). */
+export interface LiveArgs {
+  /** Sockets the deployment admits at once (`FYRDEN_LIVE_SOCKETS`; left out: the API's 50). */
+  sockets?: number;
+}
+
+/**
+ * `--live on|off` and `--live-sockets N` (1 to 100,000, with `--live on`
+ * only): on (undefined when off or left out); null for anything else.
+ */
+function liveArgs(given: ReadonlyMap<string, string>): LiveArgs | undefined | null {
+  const [live, sockets] = [given.get("--live"), given.get("--live-sockets")];
+  if (live === undefined) return sockets === undefined ? undefined : null;
+  if (live === "off") return sockets === undefined ? undefined : null;
+  if (live !== "on") return null;
+  if (sockets === undefined) return {};
+  if (!/^[1-9]\d{0,5}$/.test(sockets) || Number(sockets) > 100_000) return null;
+  return { sockets: Number(sockets) };
 }
 
 /** The resources a discretionary allowance names (as the API's `FYRDEN_DISCRETIONARY_DAILY`). */
@@ -318,17 +350,19 @@ export async function main(argv: string[]): Promise<number> {
     });
     return result.complete ? 0 : 1;
   }
-  const { plan, internalCalls, discretionary, email } = parseDeployArgs(rest) as {
+  const { plan, internalCalls, discretionary, email, live } = parseDeployArgs(rest) as {
     plan: Plan;
     internalCalls?: number;
     discretionary?: string;
     email?: EmailArgs;
+    live?: LiveArgs;
   };
   const result = await deploy({
     repoRoot,
     plan,
     internalCalls,
     discretionary,
+    live,
     email: email && (await emailDeploy(email)),
     runner,
     buildWeb: async () => {

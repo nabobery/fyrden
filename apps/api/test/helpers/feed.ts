@@ -91,8 +91,11 @@ export const ids = (members: unknown) =>
 /** A feed on a fresh object's storage, with what the tests read from it. */
 export function feedIn(storage: Storage, now: () => number = Date.now) {
   const feed = new Feed(storage.sql, now);
-  const apply = (entries: readonly FeedEntry[]) =>
-    storage.transactionSync(() => feed.apply(entries));
+  /** What an apply changed (its live signals are the live tests' concern). */
+  const apply = (entries: readonly FeedEntry[]) => {
+    const { signals: _, ...applied } = storage.transactionSync(() => feed.apply(entries));
+    return applied;
+  };
   const head = () =>
     storage.sql.exec<{ head_seq: number }>("SELECT head_seq FROM feed_meta").one().head_seq;
   const rows = (where = "true") =>

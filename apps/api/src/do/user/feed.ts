@@ -7,7 +7,15 @@ import {
 } from "@fyrden/domain";
 import { forgetQueuedRepos } from "../../email/notifications.js";
 import { DIGEST_POLICY } from "../repo/digests.js";
-import { type Gate, Inbox, OPEN_GATE } from "./inbox.js";
+import {
+  allows,
+  type Gate,
+  Inbox,
+  notifiesThroughUnsubscribe,
+  OPEN_GATE,
+  reasonOf,
+} from "./inbox.js";
+import type { LiveSignal } from "./live.js";
 
 /*
  * A principal's activity feed: one item per repository, thread and kind,
@@ -537,6 +545,27 @@ function withMember(state: State, entry: FeedEntry): State {
   );
 }
 
+/**
+ * What a live socket hears of an entry that changed the feed or the inbox:
+ * its stream, unless it is the recipient's own action or the principal's
+ * acknowledged preferences keep it from notifying (an ignored repository; an
+ * unsubscribed conversation, but for what asks something of it).
+ */
+function signalOf(entry: FeedEntry, gate: Gate): LiveSignal | undefined {
+  if (entry.recipient.silent) return undefined;
+  const subject = entry.feed.subject.kind;
+  if (gate.ignored.has(entry.repoId)) return undefined;
+  const reason = reasonOf(entry.recipient.kind, entry.recipient.reasons);
+  const conversation = entry.feed.subject.conversation ?? null;
+  if (conversation !== null && !allows(gate, entry.repoId, conversation, reason)) return undefined;
+  return {
+    repoId: entry.repoId,
+    subject,
+    conversation,
+    direct: notifiesThroughUnsubscribe(reason),
+  };
+}
+
 export class Feed {
   /** The thread inbox, kept with the feed in its transactions. */
   readonly inbox: Inbox;
@@ -558,10 +587,14 @@ export class Feed {
    * opens it (see `#applyOne`). A duplicate, or an older version that adds
    * nothing, writes nothing.
    */
-  apply(entries: readonly FeedEntry[], gate: Gate = OPEN_GATE): FeedApplied {
+  apply(
+    entries: readonly FeedEntry[],
+    gate: Gate = OPEN_GATE,
+  ): FeedApplied & { readonly signals: readonly LiveSignal[] } {
     const now = this.now();
     let changed = 0;
     let notified = 0;
+    const signals: LiveSignal[] = [];
     const ahead = new Set<string>();
     const ordered = [...entries].sort(
       (a, b) => a.epochGen - b.epochGen || a.feed.subject.version - b.feed.subject.version,
@@ -586,12 +619,16 @@ export class Feed {
       // The inbox takes what is neither too old nor purged (its threads have their own caps),
       // each entry judged by what the feed knows of its thread once it applied that entry (not the
       // call's later ones); digests are the feed's only.
-      if (entry.recipient.kind !== "digest") this.inbox.take(entry, gate);
+      const took = entry.recipient.kind !== "digest" && this.inbox.take(entry, gate);
+      const signal = (applied || took) && signalOf(entry, gate);
+      if (signal) signals.push(signal);
       if (!applied) continue;
       changed++;
       if (!entry.recipient.silent) notified++;
     }
-    return ahead.size > 0 ? { changed, notified, expired: [...ahead] } : { changed, notified };
+    return ahead.size > 0
+      ? { changed, notified, expired: [...ahead], signals }
+      : { changed, notified, signals };
   }
 
   /**

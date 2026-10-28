@@ -15,7 +15,13 @@ import {
   sendsPerAlarm,
   type Turn,
 } from "../email/notifications.js";
+import { FreshAccess } from "../feed/access.js";
+import { liveCredential } from "../live/credential.js";
+import { confirm, release } from "../live/directory.js";
+import { randomSecret } from "../oauth/params.js";
+import { allowedWithRole, findReposById } from "../repos/directory.js";
 import { MigratingDO } from "./base/MigratingDO.js";
+import { MAX_READER_REPOS } from "./OrgDO.js";
 import { userSchema } from "./schema/user.js";
 import {
   FEED_POLICY,
@@ -45,6 +51,47 @@ import {
   parseThreadId,
   type SubjectKind,
 } from "./user/inbox.js";
+import {
+  CLOSE_EXPIRED,
+  CLOSE_RESYNC,
+  CLOSE_REVOKED,
+  type DirtyStream,
+  LIVE_POLICY,
+  Live,
+  type Candidate as LiveCandidate,
+  type LiveSignal,
+  type LiveSocket,
+  ticketHash,
+} from "./user/live.js";
+
+/** The header the Worker hands an admitted live socket's upgrade over in (internal). */
+export const LIVE_ADMITTED = "X-Fyrden-Live-Admitted";
+
+/** What the Worker admitted: the socket, its credential and its dependencies. */
+export interface LiveAdmitted {
+  readonly socketId: string;
+  readonly credentialId: string;
+  readonly expiresAt: number;
+  readonly scopes: readonly string[];
+  readonly repoIds: readonly string[] | null;
+  readonly dependencies: readonly string[];
+}
+
+/** Credentials a pump run serves at most, and repositories it decides for each (the rest wait). */
+const PUMP_CREDENTIALS = 4;
+const PUMP_REPOS = 200;
+
+/** How long an admission may take to be confirmed before its local state is forgotten. */
+const LIVE_CONFIRM_MS = 60_000;
+
+/** How long sockets whose run could not be done (an answer missing) wait to try again. */
+const LIVE_RETRY_MS = 60_000;
+
+/** A socket's id, from its attachment. */
+function socketIdOf(ws: WebSocket): string | undefined {
+  const attached = ws.deserializeAttachment() as { v?: number; id?: unknown } | null;
+  return attached?.v === 1 && typeof attached.id === "string" ? attached.id : undefined;
+}
 
 /** When an alarm that could not reach the directory, or a step that failed, tries again. Proposed. */
 const EPOCH_RETRY_MS = 60_000;
@@ -59,8 +106,11 @@ const ALARM_STEPS = 4;
  * again.
  */
 const KINDS = ["retire", "retain", "cursors"] as const;
-/** The alarm's kinds: the steps above, and notification email (sent after them, see `#sendEmails`). */
-type Kind = (typeof KINDS)[number] | "email";
+/**
+ * The alarm's kinds: the steps above, notification email (sent after them, see `#sendEmails`)
+ * and live sockets' pump (`#pump`).
+ */
+type Kind = (typeof KINDS)[number] | "email" | "live";
 
 /** The feed's restore generation and its principal's lifecycle (bound: the source, the principal). */
 export const EPOCH_READ = `SELECT (SELECT epoch_gen FROM source_epochs WHERE source_id = ?1) AS epoch_gen,
@@ -136,19 +186,23 @@ export class UserDO extends MigratingDO {
     const entries = all.filter((e) => !late(e));
     const expired = [...new Set(all.filter(late).map((e) => e.eventKey))];
     const feed = this.#feed();
-    const { applied, queued } = this.ctx.storage.transactionSync(() => {
-      const applied = feed.apply(entries, gate);
+    const live = this.#live();
+    const { applied, queued, signalled } = this.ctx.storage.transactionSync(() => {
+      const { signals, ...applied } = feed.apply(entries, gate);
+      // Live sockets hear of the streams changed, when the feed has any.
+      const signalled = live.counts("").feed > 0 && live.mark(signals);
       // The email an entry carries, whatever the inbox made of it, but not for a purged repository.
       const mailable = entries.filter(
         (e) => e.recipient.email && e.occurredAt > (feed.purgedThrough(e.repoId) ?? -1),
       );
       const queued =
         emailing.size > 0 ? queueCandidates(this.ctx.storage.sql, mailable, emailing, now) : 0;
-      return { applied, queued };
+      return { applied, queued, signalled };
     });
     // Even with nothing shown changed: a tombstone may have been written.
     if (entries.length > 0) await this.#scheduleRetention(feed);
     if (queued > 0) await this.#scheduleEmail();
+    if (signalled) await this.#scheduleLive();
     const unapplied = [...new Set([...expired, ...(applied.expired ?? [])])];
     return unapplied.length > 0 ? { ...applied, expired: unapplied } : applied;
   }
@@ -175,7 +229,14 @@ export class UserDO extends MigratingDO {
     await this.#checkEpoch();
     if (this.#retired()) return false;
     const inbox = this.#feed().inbox;
-    return this.ctx.storage.transactionSync(() => (done ? inbox.markDone(id) : inbox.markRead(id)));
+    const thread = inbox.thread(id);
+    const marked = this.ctx.storage.transactionSync(() => {
+      const marked = done ? inbox.markDone(id) : inbox.markRead(id);
+      if (marked && thread) this.#explicit([{ repoId: thread.repoId, subject: thread.subject }]);
+      return marked;
+    });
+    if (marked) await this.#scheduleLive();
+    return marked;
   }
 
   /** Streams holding unread threads up to `cutoff` (see `Inbox.unreadStreams`). */
@@ -199,7 +260,13 @@ export class UserDO extends MigratingDO {
     await this.#checkEpoch();
     if (this.#retired()) return 0;
     const inbox = this.#feed().inbox;
-    return this.ctx.storage.transactionSync(() => inbox.markReadBefore(streams, cutoff, limit));
+    const marked = this.ctx.storage.transactionSync(() => {
+      const marked = inbox.markReadBefore(streams, cutoff, limit);
+      if (marked > 0) this.#explicit(streams);
+      return marked;
+    });
+    if (marked > 0) await this.#scheduleLive();
+    return marked;
   }
 
   /** Forgets inbox threads a read found replaced (see `Inbox.forget`); at most 100 a call. */
@@ -237,6 +304,15 @@ export class UserDO extends MigratingDO {
     const threads = [
       ...new Set(candidates.map((e) => JSON.stringify([e.repoId, e.feed.subject.conversation]))),
     ].map((key) => JSON.parse(key) as [string, string]);
+    return this.#preferences(principalId, repos, threads);
+  }
+
+  /** The principal's acknowledged preferences for `repos` and `threads` (one query). */
+  async #preferences(
+    principalId: string,
+    repos: readonly string[],
+    threads: readonly (readonly [string, string])[],
+  ): Promise<Gate> {
     const { results } = await this.env.DIRECTORY.withSession("first-primary")
       .prepare(PREFERENCE_GATE)
       .bind(principalId, JSON.stringify(repos), JSON.stringify(threads))
@@ -403,7 +479,14 @@ export class UserDO extends MigratingDO {
     await this.#checkEpoch();
     if (this.#retired()) return { status: "missing" };
     const feed = this.#feed();
-    return this.ctx.storage.transactionSync(() => feed.ack(id, at));
+    const subject = /^(issue|pull)[/-]/.exec(id.threadKey)?.[1] as SubjectKind | undefined;
+    const acked = this.ctx.storage.transactionSync(() => {
+      const acked = feed.ack(id, at);
+      if (acked.status === "acked" && subject) this.#explicit([{ repoId: id.repoId, subject }]);
+      return acked;
+    });
+    if (acked.status === "acked" && subject) await this.#scheduleLive();
+    return acked;
   }
 
   /**
@@ -446,6 +529,22 @@ export class UserDO extends MigratingDO {
       }
     }
     if (this.#dueNow("email") && !this.#retired()) await this.#sendEmails();
+    if (this.#dueNow("live") && !this.#retired()) {
+      try {
+        await this.#pump();
+      } catch (error) {
+        createLogger({ op: "user.alarm", doClass: "UserDO" }).warn("the live pump failed", {
+          error,
+        });
+        // Not again at once: its open sockets try again a minute on.
+        this.#retryLater(
+          this.#live()
+            .sockets()
+            .filter((s) => s.phase === "open"),
+        );
+      }
+      this.#setDue("live", this.#live().nextDue(Date.now(), LIVE_CONFIRM_MS));
+    }
     // Exactly by the schedule as the steps left it: an alarm set earlier in this run (the epoch
     // check arms one) is moved to what is due now; calls made meanwhile left their rows.
     await this.#arm(true);
@@ -505,6 +604,445 @@ export class UserDO extends MigratingDO {
       });
     }
     this.#setDue("email", nextDue(sql));
+  }
+
+  #live(): Live {
+    return new Live(this.ctx.storage.sql);
+  }
+
+  /** Marks the principal's own changes to streams (other sockets refresh them). */
+  #explicit(streams: readonly { repoId: string; subject: SubjectKind }[]): void {
+    const live = this.#live();
+    if (live.counts("").feed === 0) return;
+    live.mark(
+      streams.map((s): LiveSignal => ({ repoId: s.repoId, subject: s.subject, explicit: true })),
+    );
+  }
+
+  /** The `live` kind due by what the pump has to do next. */
+  async #scheduleLive(): Promise<void> {
+    const at = this.#live().nextDue(Date.now(), LIVE_CONFIRM_MS);
+    if (at === null) return;
+    this.#schedule("live", at);
+    await this.#arm();
+  }
+
+  /**
+   * A ticket for one live socket of `credentialId` (single use, for
+   * `LIVE_POLICY.ticketMs`); null for a retired feed.
+   */
+  async liveTicket(credentialId: string): Promise<string | null> {
+    await this.#checkEpoch();
+    if (this.#retired()) return null;
+    const ticket = randomSecret(32);
+    const hash = await ticketHash(ticket);
+    const now = Date.now();
+    const live = this.#live();
+    this.ctx.storage.transactionSync(() => {
+      live.prune(now);
+      live.storeTicket(hash, credentialId, now + LIVE_POLICY.ticketMs);
+    });
+    return ticket;
+  }
+
+  /** Redeems a ticket once, for the credential it was issued to; whether it held. */
+  async liveRedeem(ticket: string, credentialId: string): Promise<boolean> {
+    await this.#checkEpoch();
+    if (this.#retired()) return false;
+    const hash = await ticketHash(ticket);
+    const live = this.#live();
+    return this.ctx.storage.transactionSync(() =>
+      live.redeemTicket(hash, credentialId, Date.now()),
+    );
+  }
+
+  /**
+   * An admitted live socket's upgrade, handed over by the Worker (the
+   * object is reached only through it): confirmed in the directory before
+   * anything is exposed, fenced against retirement and revocation after
+   * every await; refused, its lease is released.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    const admitted = JSON.parse(
+      request.headers.get(LIVE_ADMITTED) ?? "null",
+    ) as LiveAdmitted | null;
+    if (request.headers.get("Upgrade") !== "websocket" || !admitted)
+      return new Response(null, { status: 400 });
+    await this.#checkEpoch();
+    const live = this.#live();
+    const refuse = async (status: number) => {
+      this.ctx.storage.transactionSync(() => live.forget(admitted.socketId));
+      await release(this.env.DIRECTORY, [admitted.socketId]);
+      return new Response(null, { status });
+    };
+    if (this.#retired() || live.anyRevoked(admitted.dependencies)) return refuse(410);
+    const held = live.counts(admitted.credentialId);
+    if (held.feed >= LIVE_POLICY.perFeed || held.credential >= LIVE_POLICY.perCredential)
+      return refuse(429);
+    this.ctx.storage.transactionSync(() =>
+      live.addSocket(
+        {
+          id: admitted.socketId,
+          credentialId: admitted.credentialId,
+          expiresAt: admitted.expiresAt,
+          scopes: admitted.scopes,
+          repoIds: admitted.repoIds,
+        },
+        admitted.dependencies,
+        Date.now(),
+      ),
+    );
+    // Its recovery is due before anything is awaited: an object stopped mid-confirmation forgets it.
+    this.#schedule("live", Date.now() + LIVE_CONFIRM_MS);
+    await this.#arm();
+    const confirmed = await confirm(this.env.DIRECTORY, admitted.socketId, Date.now()).catch(
+      () => false,
+    );
+    // Retired, revoked or forgotten while it was confirmed: nothing is exposed.
+    if (
+      !confirmed ||
+      this.#retired() ||
+      live.anyRevoked(admitted.dependencies) ||
+      !live.socket(admitted.socketId)
+    )
+      return refuse(409);
+    const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
+    this.ctx.acceptWebSocket(server, [admitted.socketId]);
+    server.serializeAttachment({ v: 1, id: admitted.socketId });
+    this.ctx.storage.transactionSync(() => live.open(admitted.socketId));
+    await this.#scheduleLive();
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /**
+   * A socket's control message: an acknowledgement (`{"t":"ack","n":…}`)
+   * or a renewal (`{"t":"renew"}`), at most 1 KiB, 20 a minute and 200 in
+   * its life; anything else, or past a bound, closes it.
+   */
+  override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const id = socketIdOf(ws);
+    const live = this.#live();
+    const socket = id === undefined ? undefined : live.socket(id);
+    if (id === undefined || !socket || socket.phase !== "open") {
+      ws.close(CLOSE_EXPIRED, "unknown socket");
+      return;
+    }
+    const now = Date.now();
+    // Past its deadline or its life: closed, whatever it says.
+    if (socket.deadline <= now || socket.expires_at <= now)
+      return this.#closeSocket(id, CLOSE_EXPIRED, "expired: reconnect with a new ticket");
+    const fresh = now - socket.minute_start >= 60_000;
+    const minute = fresh ? 1 : socket.minute_count + 1;
+    const used = socket.controls_used + 1;
+    const size =
+      typeof message === "string" ? new TextEncoder().encode(message).length : message.byteLength;
+    if (
+      typeof message !== "string" ||
+      size > LIVE_POLICY.controlBytes ||
+      minute > LIVE_POLICY.controlsPerMinute ||
+      used > LIVE_POLICY.controlsLife
+    )
+      return this.#closeSocket(id, 1008, "control message refused");
+    this.ctx.storage.transactionSync(() =>
+      live.update(id, {
+        controls_used: used,
+        minute_count: minute,
+        ...(fresh && { minute_start: now }),
+      }),
+    );
+    let control: unknown;
+    try {
+      control = JSON.parse(message);
+    } catch {
+      return this.#closeSocket(id, 1008, "control message refused");
+    }
+    if (typeof control !== "object" || control === null || Array.isArray(control))
+      return this.#closeSocket(id, 1008, "control message refused");
+    const keys = Object.keys(control);
+    const { t, n } = control as { t?: unknown; n?: unknown };
+    if (t === "ack" && keys.length === 2 && Number.isSafeInteger(n)) {
+      const counter = n as number;
+      // Acknowledging what was not sent, or again: nothing.
+      if (counter <= socket.acked || counter > socket.sent) return;
+      this.ctx.storage.transactionSync(() =>
+        live.update(id, {
+          acked: counter,
+          ...(socket.sent - counter < LIVE_POLICY.window && { blocked_since: null }),
+        }),
+      );
+      await this.#scheduleLive();
+      return;
+    }
+    if (t === "renew" && keys.length === 1) return this.#renew(id, socket, now);
+    return this.#closeSocket(id, 1008, "control message refused");
+  }
+
+  /** A renewal: its credential checked again, its deadline moved (never past its expiry). */
+  async #renew(id: string, socket: LiveSocket, now: number): Promise<void> {
+    // Earlier than half its deadline: nothing.
+    if (now < socket.deadline - LIVE_POLICY.renewMs / 2) return;
+    const live = this.#live();
+    let credential: Awaited<ReturnType<typeof liveCredential>> | undefined;
+    try {
+      credential = await liveCredential(this.env.DIRECTORY, socket.credential_id, now);
+    } catch {
+      credential = undefined;
+    }
+    const current = live.socket(id);
+    if (!current) return;
+    // Its deadline or life passed while the credential was checked: closed, not renewed.
+    if (current.deadline <= Date.now() || current.expires_at <= Date.now())
+      return this.#closeSocket(id, CLOSE_EXPIRED, "expired: reconnect with a new ticket");
+    // Revoked, expired or disabled: closed; unanswered twice: closed.
+    if (
+      credential === null ||
+      live.anyRevoked(live.depsOf(id)) ||
+      (credential !== undefined && !sameDeps(credential.dependencies, live.depsOf(id)))
+    )
+      return this.#closeSocket(id, CLOSE_EXPIRED, "the credential no longer holds");
+    if (credential === undefined) {
+      if (current.renew_failures + 1 >= 2)
+        return this.#closeSocket(id, CLOSE_EXPIRED, "the credential could not be checked");
+      this.ctx.storage.transactionSync(() =>
+        live.update(id, { renew_failures: current.renew_failures + 1 }),
+      );
+      return;
+    }
+    const deadline = Math.min(now + LIVE_POLICY.renewMs, current.expires_at);
+    this.ctx.storage.transactionSync(() => live.update(id, { deadline, renew_failures: 0 }));
+    for (const ws of this.ctx.getWebSockets(id))
+      ws.send(JSON.stringify({ t: "renewed", until: deadline }));
+    await this.#scheduleLive();
+  }
+
+  override async webSocketClose(ws: WebSocket): Promise<void> {
+    const id = socketIdOf(ws);
+    if (id !== undefined) await this.#forgetSocket(id);
+  }
+
+  override async webSocketError(ws: WebSocket): Promise<void> {
+    const id = socketIdOf(ws);
+    if (id !== undefined) await this.#forgetSocket(id);
+  }
+
+  /** Closes a socket, forgets it and releases its lease. */
+  async #closeSocket(id: string, code: number, reason: string): Promise<void> {
+    for (const ws of this.ctx.getWebSockets(id)) ws.close(code, reason);
+    await this.#forgetSocket(id);
+  }
+
+  async #forgetSocket(id: string): Promise<void> {
+    const live = this.#live();
+    this.ctx.storage.transactionSync(() => live.forget(id));
+    await release(this.env.DIRECTORY, [id]);
+  }
+
+  /**
+   * Dependencies revoked (told by the directory's sweep): recorded, so no
+   * socket resting on one is admitted or renewed, and every open one
+   * resting on one closed; in any order, any number of times.
+   */
+  async revoked(dependencies: readonly string[]): Promise<void> {
+    await this.#checkEpoch();
+    const live = this.#live();
+    const ids = this.ctx.storage.transactionSync(() => live.revoke(dependencies, Date.now()));
+    for (const id of ids)
+      for (const ws of this.ctx.getWebSockets(id)) ws.close(CLOSE_REVOKED, "revoked");
+    this.ctx.storage.transactionSync(() => {
+      for (const id of ids) live.forget(id);
+    });
+    await release(this.env.DIRECTORY, ids);
+  }
+
+  /**
+   * One pump run: forgets admissions never confirmed and closes expired and
+   * slow sockets; then, for each credential (at most `PUMP_CREDENTIALS` a
+   * run, the furthest behind first), checks it again on the directory's
+   * primary (no longer holding: its sockets close) and decides afresh the
+   * repositories of the streams changed that its token may name (at most
+   * `PUMP_REPOS` a run, in calls of at most `MAX_READER_REPOS`); then sends
+   * each of its open sockets with room in its window one frame naming the
+   * streams it may read now with a cause its current preferences let
+   * through. A stream whose repository's answer is not known is passed
+   * over; one left undecided by the run's bounds waits for the next run
+   * (the socket's progress stops before it). Then prunes what every socket
+   * heard of.
+   */
+  async #pump(): Promise<void> {
+    const principalId = this.ctx.id.name;
+    if (principalId === undefined) return;
+    const live = this.#live();
+    const now = Date.now();
+    for (const s of live.sockets()) {
+      if (s.phase === "confirming") {
+        // A confirmation that never finished (the object restarted meanwhile).
+        if (s.minute_start <= now - LIVE_CONFIRM_MS) await this.#forgetSocket(s.socket_id);
+      } else if (s.expires_at <= now || s.deadline <= now)
+        await this.#closeSocket(s.socket_id, CLOSE_EXPIRED, "expired: renew in time or reconnect");
+      else if (s.blocked_since !== null && now - s.blocked_since >= LIVE_POLICY.slowMs)
+        await this.#closeSocket(s.socket_id, CLOSE_RESYNC, "slow consumer: reread everything");
+    }
+    const upTo = live.seq();
+    const open = live.sockets().filter((s) => s.phase === "open");
+    // A full window waits for acknowledgements (and starts the slow-consumer clock once).
+    for (const s of open)
+      if (s.sent - s.acked >= LIVE_POLICY.window && s.blocked_since === null)
+        this.ctx.storage.transactionSync(() =>
+          live.update(s.socket_id, { blocked_since: now, refresh_pending: 1 }),
+        );
+    // Sockets that can take a frame now, by credential, the furthest behind first.
+    const ready = open.filter((s) => s.sent - s.acked < LIVE_POLICY.window && s.retry_at <= now);
+    const byCredential = new Map<string, LiveSocket[]>();
+    for (const s of [...ready].sort((a, b) => a.delivered_seq - b.delivered_seq))
+      byCredential.set(s.credential_id, [...(byCredential.get(s.credential_id) ?? []), s]);
+    const serving = [...byCredential].slice(0, PUMP_CREDENTIALS);
+    if (serving.length === 0) {
+      this.ctx.storage.transactionSync(() => live.prune(Date.now()));
+      return;
+    }
+    const lowest = Math.min(
+      ...serving.flatMap(([, sockets]) => sockets.map((s) => s.delivered_seq)),
+    );
+    const dirty = live.dirtyAfter(lowest, upTo);
+    const candidates = new Map(
+      dirty.map((d) => [d.stream, live.candidatesAfter(d.stream, lowest)]),
+    );
+    // The principal's current preferences for what changed (one read); unanswered, the served
+    // sockets try again a minute on.
+    const repos = [...new Set(dirty.map((d) => d.repo_id))];
+    const threads = [...candidates.values()]
+      .flat()
+      .map((c) => [c.stream.split("\n")[0] as string, c.conversation] as const);
+    let gate: Gate = OPEN_GATE;
+    if (dirty.length > 0)
+      try {
+        gate = await this.#preferences(principalId, repos, threads);
+      } catch {
+        this.#retryLater(serving.flatMap(([, sockets]) => sockets));
+        return;
+      }
+    const metrics = createMetrics(this.env.METRICS);
+    for (const [credentialId, waiting] of serving) {
+      const holding = await liveCredential(this.env.DIRECTORY, credentialId, Date.now()).catch(
+        () => undefined,
+      );
+      // Not answered: its sockets try again a minute on.
+      if (holding === undefined) {
+        this.#retryLater(waiting);
+        continue;
+      }
+      // No longer holding: every socket of it closes; a socket of another authority (an
+      // ended lifecycle generation) closes alone.
+      const closing =
+        holding === null
+          ? live.sockets().filter((s) => s.credential_id === credentialId)
+          : waiting.filter((s) => !sameDeps(holding.dependencies, live.depsOf(s.socket_id)));
+      for (const s of closing)
+        await this.#closeSocket(s.socket_id, CLOSE_EXPIRED, "the credential no longer holds");
+      const sockets = waiting.filter((s) => !closing.some((c) => c.socket_id === s.socket_id));
+      if (sockets.length === 0) continue;
+      // Decided afresh: the repositories of the streams its sockets have not heard of that its
+      // token may name.
+      const from = Math.min(...sockets.map((s) => s.delivered_seq));
+      const named = [
+        ...new Set(
+          dirty
+            .filter((d) => d.seq > from && mayName(sockets[0] as LiveSocket, d.repo_id))
+            .map((d) => d.repo_id),
+        ),
+      ];
+      const deciding = named.slice(0, PUMP_REPOS);
+      const readable = new Map<string, boolean>();
+      for (let at = 0; at < deciding.length; at += MAX_READER_REPOS) {
+        const chunk = deciding.slice(at, at + MAX_READER_REPOS);
+        try {
+          const entries = await findReposById(this.env, chunk, metrics);
+          const answers = await new FreshAccess({ env: this.env, metrics }, {
+            principalId,
+            grantId: null,
+          } as never).decide(entries);
+          for (const repo of chunk) {
+            const answer = answers.get(repo);
+            // Gone: unreadable. Not known: passed over.
+            if (answer === "unknown") continue;
+            readable.set(repo, answer !== undefined && answer.held && answer.role !== null);
+          }
+        } catch {
+          // This chunk not known: passed over.
+        }
+      }
+      // A stream of a repository the run's bound left undecided stops the socket's progress.
+      const undecided = new Set(named.slice(PUMP_REPOS));
+      const stop = dirty.find((d) => d.seq > from && undecided.has(d.repo_id))?.seq;
+      const reach = stop === undefined ? upTo : stop - 1;
+      for (const s of sockets) {
+        const sent = this.#send(live, s, dirty, reach, readable, candidates, gate, Date.now());
+        if (sent === "expired")
+          await this.#closeSocket(
+            s.socket_id,
+            CLOSE_EXPIRED,
+            "expired: renew in time or reconnect",
+          );
+      }
+    }
+    // What a run's bounds left is due at once (the alarm sets it by `Live.nextDue`).
+    this.ctx.storage.transactionSync(() => live.prune(Date.now()));
+  }
+
+  /** Sockets whose run could not be done (an answer missing): tried again a minute on. */
+  #retryLater(sockets: readonly LiveSocket[]): void {
+    const live = this.#live();
+    const at = Date.now() + LIVE_RETRY_MS;
+    this.ctx.storage.transactionSync(() => {
+      for (const s of sockets) live.update(s.socket_id, { retry_at: at });
+    });
+  }
+
+  /** One socket's frame for a pump run (see `#pump`), its progress moved to `reach`. */
+  #send(
+    live: Live,
+    s: LiveSocket,
+    dirty: readonly DirtyStream[],
+    reach: number,
+    readable: ReadonlyMap<string, boolean>,
+    candidates: ReadonlyMap<string, readonly LiveCandidate[]>,
+    gate: Gate,
+    now: number,
+  ): "expired" | undefined {
+    const current = live.socket(s.socket_id);
+    if (!current || current.phase !== "open") return;
+    // Its deadline or life passed while the run was authorizing: nothing more is sent.
+    if (current.deadline <= now || current.expires_at <= now) return "expired";
+    if (current.sent - current.acked >= LIVE_POLICY.window) return;
+    const streams = dirty.filter(
+      (d) =>
+        d.seq > current.delivered_seq &&
+        d.seq <= reach &&
+        mayName(current, d.repo_id) &&
+        mayRead(current, d.subject) &&
+        readable.get(d.repo_id) === true &&
+        causes(d, current.delivered_seq, candidates.get(d.stream) ?? [], gate),
+    );
+    const frame =
+      streams.length === 0
+        ? null
+        : streams.length > LIVE_POLICY.streamsPerFrame
+          ? { t: "changed", n: current.sent + 1, refresh: true }
+          : {
+              t: "changed",
+              n: current.sent + 1,
+              streams: streams.map((d) => ({ repo: d.repo_id, kind: d.subject })),
+            };
+    if (frame) for (const ws of this.ctx.getWebSockets(s.socket_id)) ws.send(JSON.stringify(frame));
+    this.ctx.storage.transactionSync(() =>
+      live.update(s.socket_id, {
+        delivered_seq: Math.max(current.delivered_seq, reach),
+        ...(frame && { sent: current.sent + 1, refresh_pending: 0 }),
+        // The send that fills the window starts the slow-consumer clock.
+        ...(frame &&
+          current.sent + 1 - current.acked >= LIVE_POLICY.window && { blocked_since: now }),
+      }),
+    );
   }
 
   /** The `email` kind due by the queue's earliest. */
@@ -623,6 +1161,12 @@ export class UserDO extends MigratingDO {
         this.ctx.storage.sql.exec("DELETE FROM email_queue");
         this.#schedule("retire", Date.now());
       });
+    // Live sockets go with it: closed, their leases released, their state forgotten.
+    const live = this.#live();
+    const sockets = live.sockets().map((s) => s.socket_id);
+    for (const ws of this.ctx.getWebSockets()) ws.close(CLOSE_REVOKED, "retired");
+    this.ctx.storage.transactionSync(() => live.clear());
+    await release(this.env.DIRECTORY, sockets);
     await this.#arm();
   }
 
@@ -638,4 +1182,53 @@ export class UserDO extends MigratingDO {
     this.#schedule("retain", at);
     await this.#arm();
   }
+}
+
+/** Whether a socket's token may name a repository at all (its repository list). */
+function mayName(socket: LiveSocket, repoId: string): boolean {
+  if (socket.repo_ids === null) return true;
+  return (JSON.parse(socket.repo_ids) as string[]).includes(repoId);
+}
+
+/** Whether a socket's token may read a kind of subject (its scopes; none: all). */
+function mayRead(socket: LiveSocket, subject: "issue" | "pull"): boolean {
+  return allowedWithRole(
+    {
+      principalId: "",
+      principalType: "user",
+      scopes: JSON.parse(socket.scopes) as string[],
+      repoIds: null,
+    },
+    { id: "" },
+    subject === "issue" ? "issues:read" : "pull_requests:read",
+    "read",
+  );
+}
+
+/**
+ * Whether a dirty stream has a cause, after a socket's progress `p`, that the
+ * principal's current preferences let through: its own change; a change of
+ * no conversation or past the candidates kept, unless the repository is
+ * ignored; a conversation's change that asks something of it, unless the
+ * repository is ignored; another, unless the conversation is unsubscribed too.
+ */
+function causes(
+  d: DirtyStream,
+  p: number,
+  candidates: readonly { conversation: string; direct_seq: number; ordinary_seq: number }[],
+  gate: Gate,
+): boolean {
+  if (d.explicit_seq > p) return true;
+  if (gate.ignored.has(d.repo_id)) return false;
+  if (d.many_seq > p) return true;
+  return candidates.some(
+    (c) =>
+      c.direct_seq > p ||
+      (c.ordinary_seq > p && !gate.unsubscribed.has(`${d.repo_id}\n${c.conversation}`)),
+  );
+}
+
+/** Whether two dependency lists name the same dependencies. */
+function sameDeps(a: readonly string[], b: readonly string[]): boolean {
+  return [...new Set(a)].sort().join("\n") === [...new Set(b)].sort().join("\n");
 }

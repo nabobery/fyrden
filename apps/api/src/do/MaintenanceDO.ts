@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { runMaintenance } from "../cron/maintenance.js";
 import { recheckSuppressions } from "../email/suppressions.js";
+import { reaping, sweep } from "../live/directory.js";
 import { runSearchRepairs } from "../search/repairs.js";
 
 /**
@@ -14,6 +15,7 @@ export class MaintenanceDO extends DurableObject<Env> {
   #running: Promise<void> | null = null;
   #repairing: Promise<void> | null = null;
   #rechecking: Promise<void> | null = null;
+  #sweeping: Promise<void> | null = null;
 
   /**
    * Reconciles the search projections that need it (`runSearchRepairs`), in
@@ -48,6 +50,37 @@ export class MaintenanceDO extends DurableObject<Env> {
       this.#rechecking = null;
     });
     return this.#rechecking;
+  }
+
+  /**
+   * Tells feeds of revocations (`sweep`) and reaps live leases whose release
+   * was lost, in a request of its own: its calls to feed objects are an
+   * invocation's own.
+   */
+  sweepRevocations(): Promise<void> {
+    if (this.#sweeping) return this.#sweeping;
+    const metrics = createMetrics(this.env.METRICS);
+    this.#sweeping = measureInvocation(
+      metrics,
+      { where: "do", op: "sweepRevocations", doClass: "MaintenanceDO" },
+      async () => {
+        const now = Date.now();
+        metrics.count("d1.query", { db: "directory", op: "live_reap" }, 4);
+        await this.env.DIRECTORY.batch(reaping(this.env.DIRECTORY, now));
+        await sweep(
+          this.env.DIRECTORY,
+          (feed, dependencies) => {
+            metrics.count("do.request", { class: "UserDO", method: "revoked" });
+            return this.env.USER.getByName(feed).revoked(dependencies);
+          },
+          now,
+          metrics,
+        );
+      },
+    ).finally(() => {
+      this.#sweeping = null;
+    });
+    return this.#sweeping;
   }
 
   run(): Promise<void> {

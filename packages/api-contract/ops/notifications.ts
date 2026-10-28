@@ -296,3 +296,24 @@ export const deleteNotificationThreadSubscription = defineOperation({
   idempotency: "key",
   mcp: false,
 });
+
+export const issueLiveTicket = defineOperation({
+  id: "notifications.live_ticket",
+  method: "POST",
+  path: "/notifications/live",
+  summary: "Get a ticket for live notification hints",
+  description:
+    'A single-use ticket (30 seconds) to open a WebSocket at `url` that hints which of the caller\'s feed and inbox streams changed (`{"t":"changed","n":…,"streams":[{"repo":…,"kind":"issue"|"pull"}]}`, or `"refresh":true`), only streams the credential may read; reread them through the feed and notifications APIs. Acknowledge each frame (`{"t":"ack","n":…}`, at most 8 unacknowledged) and renew every 10 minutes (`{"t":"renew"}`); a socket lasts at most 24 hours. The upgrade needs the same credential: the session\'s cookie from this origin, or the token in `Authorization`. The caller\'s own credentials only (a delegated token: 403 `delegated_listing`). While the deployment has not turned live hints on: 503 `live_unavailable`. A Fyrden extension.',
+  input: z.object({}),
+  output: z.object({
+    ticket: z.string(),
+    expires_in: z.number().int().describe("Seconds the ticket can be redeemed."),
+    url: z.string().describe("Where to open the WebSocket (the ticket in its query)."),
+  }),
+  permission: "notifications:read",
+  principals: ["user", "agent"],
+  rateLimit: "write",
+  idempotency: "key",
+  secretResponse: true,
+  mcp: false,
+});

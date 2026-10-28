@@ -393,4 +393,77 @@ export const userSchema: readonly DoMigration[] = [
       CREATE INDEX email_queue_repo ON email_queue (repo_id, conversation);
     `,
   },
+  {
+    version: 9,
+    name: "live_sockets",
+    // Live sockets (src/do/user/live.ts): tickets (single use, 30 seconds), each socket's
+    // protocol state and dependencies (the attachment holds only its id, so everything enforced
+    // survives hibernation), the streams changed since
+    // sockets last heard (with their causes, by sequence), and the dependencies revoked.
+    sql: `
+      CREATE TABLE live_tickets (
+        ticket_hash TEXT PRIMARY KEY,
+        credential_id TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+
+      CREATE TABLE live_local (
+        socket_id TEXT PRIMARY KEY,
+        credential_id TEXT NOT NULL,
+        phase TEXT NOT NULL CHECK (phase IN ('confirming', 'open')),
+        expires_at INTEGER NOT NULL,
+        deadline INTEGER NOT NULL,
+        sent INTEGER NOT NULL,
+        acked INTEGER NOT NULL,
+        refresh_pending INTEGER NOT NULL,
+        blocked_since INTEGER,
+        renew_failures INTEGER NOT NULL,
+        controls_used INTEGER NOT NULL,
+        minute_start INTEGER NOT NULL,
+        minute_count INTEGER NOT NULL,
+        delivered_seq INTEGER NOT NULL,
+        retry_at INTEGER NOT NULL,
+        scopes TEXT NOT NULL,
+        repo_ids TEXT
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX live_local_credential ON live_local (credential_id);
+
+      CREATE TABLE live_local_deps (
+        socket_id TEXT NOT NULL,
+        dependency TEXT NOT NULL,
+        PRIMARY KEY (socket_id, dependency)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX live_local_deps_dependency ON live_local_deps (dependency);
+
+      CREATE TABLE live_dirty (
+        stream TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
+        subject TEXT NOT NULL CHECK (subject IN ('issue', 'pull')),
+        seq INTEGER NOT NULL,
+        explicit_seq INTEGER NOT NULL,
+        many_seq INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX live_dirty_seq ON live_dirty (seq);
+
+      CREATE TABLE live_candidates (
+        stream TEXT NOT NULL,
+        conversation TEXT NOT NULL,
+        direct_seq INTEGER NOT NULL,
+        ordinary_seq INTEGER NOT NULL,
+        PRIMARY KEY (stream, conversation)
+      ) STRICT, WITHOUT ROWID;
+
+      CREATE TABLE live_revoked (
+        dependency TEXT PRIMARY KEY,
+        at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX live_revoked_at ON live_revoked (at);
+
+      CREATE TABLE live_meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        seq INTEGER NOT NULL,
+        gen INTEGER NOT NULL
+      ) STRICT;
+    `,
+  },
 ];

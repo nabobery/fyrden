@@ -171,6 +171,32 @@ CREATE TABLE idempotency_keys (
   PRIMARY KEY (token_id, key)
 ) STRICT;
 
+-- table live_admissions
+CREATE TABLE live_admissions (
+  principal_id TEXT NOT NULL,
+  day INTEGER NOT NULL,
+  n INTEGER NOT NULL,
+  PRIMARY KEY (principal_id, day)
+) STRICT, WITHOUT ROWID;
+
+-- table live_socket_deps
+CREATE TABLE live_socket_deps (
+  dependency TEXT NOT NULL,
+  socket_id TEXT NOT NULL,
+  PRIMARY KEY (dependency, socket_id)
+) STRICT, WITHOUT ROWID;
+
+-- table live_sockets
+CREATE TABLE live_sockets (
+  socket_id TEXT PRIMARY KEY,
+  ticket_id TEXT NOT NULL UNIQUE,
+  feed TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'open')),
+  pending_until INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+) STRICT;
+
 -- table memberships
 CREATE TABLE memberships (
   org_id TEXT NOT NULL REFERENCES principals (id),
@@ -335,6 +361,24 @@ CREATE TABLE repos (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 , name_gen INTEGER NOT NULL DEFAULT 0, parent_id TEXT, is_template INTEGER NOT NULL DEFAULT 0 CHECK (is_template IN (0, 1)), generating_since INTEGER, created_by TEXT) STRICT;
+
+-- table revocation_targets
+CREATE TABLE revocation_targets (
+  seq INTEGER NOT NULL,
+  feed TEXT NOT NULL,
+  attempts INTEGER NOT NULL,
+  next_attempt_at INTEGER NOT NULL,
+  PRIMARY KEY (seq, feed)
+) STRICT, WITHOUT ROWID;
+
+-- table revocations
+CREATE TABLE revocations (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  subject TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  cursor TEXT,
+  expanded INTEGER NOT NULL DEFAULT 0 CHECK (expanded IN (0, 1))
+) STRICT;
 
 -- table sessions
 CREATE TABLE sessions (
@@ -522,6 +566,21 @@ CREATE INDEX grants_parent ON grants (parent_id) WHERE parent_id IS NOT NULL;
 -- index idempotency_keys_expiry
 CREATE INDEX idempotency_keys_expiry ON idempotency_keys (expires_at);
 
+-- index live_socket_deps_socket
+CREATE INDEX live_socket_deps_socket ON live_socket_deps (socket_id);
+
+-- index live_sockets_credential
+CREATE INDEX live_sockets_credential ON live_sockets (credential_id);
+
+-- index live_sockets_expiry
+CREATE INDEX live_sockets_expiry ON live_sockets (expires_at);
+
+-- index live_sockets_feed
+CREATE INDEX live_sockets_feed ON live_sockets (feed);
+
+-- index live_sockets_pending
+CREATE INDEX live_sockets_pending ON live_sockets (pending_until) WHERE state = 'pending';
+
 -- index memberships_principal
 CREATE INDEX memberships_principal ON memberships (principal_id);
 
@@ -591,6 +650,15 @@ CREATE INDEX repos_owner ON repos (owner_id, id);
 -- index repos_owner_name
 CREATE UNIQUE INDEX repos_owner_name ON repos (owner_id, name COLLATE NOCASE) WHERE state <> 'deleted';
 
+-- index revocation_targets_due
+CREATE INDEX revocation_targets_due ON revocation_targets (next_attempt_at, seq, feed);
+
+-- index revocations_at
+CREATE INDEX revocations_at ON revocations (at);
+
+-- index revocations_open
+CREATE INDEX revocations_open ON revocations (seq) WHERE expanded = 0;
+
 -- index sessions_expiry
 CREATE INDEX sessions_expiry ON sessions (expires_at);
 
@@ -653,6 +721,21 @@ CREATE INDEX watch_preferences_repo ON watch_preferences (repo_id, principal_id)
 -- index webauthn_challenges_expiry
 CREATE INDEX webauthn_challenges_expiry ON webauthn_challenges (expires_at);
 
+-- trigger grants_revoked
+CREATE TRIGGER grants_revoked AFTER UPDATE OF revoked_at ON grants
+WHEN OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+BEGIN
+  INSERT INTO revocations (subject, at) VALUES ('grant:' || NEW.id, NEW.revoked_at);
+END;
+
+-- trigger principals_disabled
+CREATE TRIGGER principals_disabled AFTER UPDATE OF disabled_at ON principals
+WHEN OLD.disabled_at IS NULL AND NEW.disabled_at IS NOT NULL
+BEGIN
+  INSERT INTO revocations (subject, at)
+  VALUES ('principal:' || NEW.id || ':' || OLD.lifecycle_gen, NEW.disabled_at);
+END;
+
 -- trigger principals_lifecycle_insert
 CREATE TRIGGER principals_lifecycle_insert BEFORE INSERT ON principals
 WHEN (NEW.lifecycle <> 'active' AND NEW.disabled_at IS NULL)
@@ -667,4 +750,18 @@ WHEN (NEW.lifecycle <> 'active' AND NEW.disabled_at IS NULL)
   OR (NEW.type = 'user' AND NEW.lifecycle = 'active' AND NEW.disabled_at IS NOT NULL)
 BEGIN
   SELECT RAISE(ABORT, 'a principal''s lifecycle and disabled_at disagree');
+END;
+
+-- trigger sessions_revoked
+CREATE TRIGGER sessions_revoked AFTER UPDATE OF revoked_at ON sessions
+WHEN OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+BEGIN
+  INSERT INTO revocations (subject, at) VALUES ('credential:' || NEW.id, NEW.revoked_at);
+END;
+
+-- trigger tokens_revoked
+CREATE TRIGGER tokens_revoked AFTER UPDATE OF revoked_at ON tokens
+WHEN OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+BEGIN
+  INSERT INTO revocations (subject, at) VALUES ('credential:' || NEW.id, NEW.revoked_at);
 END;

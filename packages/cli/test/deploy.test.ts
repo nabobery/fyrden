@@ -401,6 +401,20 @@ describe("fyrden deploy", () => {
     expect(origins().slice(5)).toEqual([undefined]);
   });
 
+  it("turns live hints on when given, and off again when a later deploy leaves them out", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    let generated = await generatedConfig();
+    expect(generated.vars).not.toHaveProperty("FYRDEN_LIVE");
+    await deploy(deps(fake.runner, { live: { sockets: 200 } }).d);
+    generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_LIVE: "on", FYRDEN_LIVE_SOCKETS: "200" });
+    await deploy(deps(fake.runner).d);
+    generated = await generatedConfig();
+    expect(generated.vars).not.toHaveProperty("FYRDEN_LIVE");
+    expect(generated.vars).not.toHaveProperty("FYRDEN_LIVE_SOCKETS");
+  });
+
   it("raises a committed subrequest limit below the internal calls asked, keeping its other limits", async () => {
     const path = join(repoRoot, "apps/api/wrangler.jsonc");
     const committed = parseJsonc<Record<string, unknown>>(await readFile(path, "utf8"));
