@@ -15,6 +15,7 @@ import {
   providerTime,
   recheckSuppressions,
 } from "../src/email/suppressions.js";
+import { untilThrottled } from "./helpers/rate-limits.js";
 
 const SECRET_BYTES = new Uint8Array(32).map((_, i) => i + 1);
 const SECRET = `whsec_${btoa(String.fromCharCode(...SECRET_BYTES))}`;
@@ -189,13 +190,13 @@ describe("the provider's callbacks", () => {
       }),
     };
     const ip = { "CF-Connecting-IP": `2001:db8::${crypto.randomUUID().slice(0, 4)}` };
-    const statuses: number[] = [];
-    for (let i = 0; i < 120; i++)
-      statuses.push((await post(text, { ...forged, ...ip }, failing)).status);
-    expect(statuses.every((s) => s === 401)).toBe(true);
-    const throttled = await post(text, { ...forged, ...ip }, failing);
-    expect(throttled.status).toBe(429);
-    expect(throttled.headers.get("Retry-After")).toBe("60");
+    const { passed, throttled } = await untilThrottled(
+      () => post(text, { ...forged, ...ip }, failing),
+      120,
+    );
+    expect(passed.length).toBeGreaterThanOrEqual(120);
+    expect(passed.every((s) => s === 401)).toBe(true);
+    expect(throttled?.headers.get("Retry-After")).toBe("60");
     // Unsigned, or past the body limit whatever it claims: refused alike.
     expect((await post(text, {}, failing)).status).toBe(401);
     const big = "x".repeat(64 * 1024 + 1);

@@ -172,6 +172,19 @@ describe("a live socket", () => {
     expect((await ticketFor(who.token, {})).status).toBe(503);
   });
 
+  it("is opened by an upgrade only: another request is answered 404, whether on or off", async () => {
+    const who = await user();
+    for (const vars of [{}, LIVE]) {
+      const plain = await call(
+        new Request(`${ORIGIN}/api/notifications/live?ticket=x`, {
+          headers: { Authorization: `Bearer ${who.token}` },
+        }),
+        vars,
+      );
+      expect(plain.status).toBe(404);
+    }
+  });
+
   it("hears that a stream it may read changed, and nothing of one it may not", async () => {
     const owner = await user();
     const [mine, hidden] = [await repoWithIssue(owner), await repoWithIssue(owner)];

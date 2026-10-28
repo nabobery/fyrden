@@ -73,10 +73,12 @@ async function presented(c: Context<AppEnv>): Promise<string | null> {
 
 /** Mounts `GET /api/notifications/live` (the WebSocket upgrade). */
 export function mountLive(app: Hono<AppEnv>): void {
-  app.get("/api/notifications/live", async (c) => {
+  app.get("/api/notifications/live", async (c, next) => {
+    // Only an upgrade is this route's: any other request goes on to the API, which has no
+    // `GET` there (404).
+    if (c.req.header("Upgrade") !== "websocket") return next();
     const allowance = liveAllowance(c.env);
     if (allowance === null) return c.text("This deployment sends no live hints.", 503);
-    if (c.req.header("Upgrade") !== "websocket") return c.text("A WebSocket upgrade only.", 426);
     const ticket = c.req.query("ticket") ?? "";
     // Nothing is looked up for a request that cannot hold a ticket, or past the client's limit.
     if (!/^[A-Za-z0-9_-]{20,100}$/.test(ticket)) return c.text("No ticket.", 401);

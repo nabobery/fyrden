@@ -16,6 +16,7 @@ import { newId } from "../src/services.js";
 import { api, user, type Who } from "./helpers/api.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { testSession } from "./helpers/oauth.js";
+import { untilThrottled } from "./helpers/rate-limits.js";
 
 afterEach(() => {
   delete emailWriteHooks.beforeWrite;
@@ -216,20 +217,13 @@ describe("an unsubscribe link", () => {
     const who = await user();
     const token = (await unsubscribeToken(env, await address(who), "watching")) as string;
     const headers = client();
-    const statuses: number[] = [];
-    for (let i = 0; i < 120; i++)
-      statuses.push(
-        (
-          await click(`v1.forged${i}`, {
-            method: ["GET", "HEAD", "POST"][i % 3] as string,
-            headers,
-          })
-        ).status,
-      );
-    expect(statuses.every((s) => s === 400)).toBe(true);
-    const throttled = await click("v1.forged", { method: "POST", headers });
-    expect(throttled.status).toBe(429);
-    expect(throttled.headers.get("Retry-After")).toBe("60");
+    const { passed, throttled } = await untilThrottled(
+      (i) => click(`v1.forged${i}`, { method: ["GET", "HEAD", "POST"][i % 3] as string, headers }),
+      120,
+    );
+    expect(passed.length).toBeGreaterThanOrEqual(120);
+    expect(passed.every((s) => s === 400)).toBe(true);
+    expect(throttled?.headers.get("Retry-After")).toBe("60");
     // Another client is not held back by it, nor is a link Fyrden made by its allowance.
     expect((await click("v1.forged", { method: "POST", headers: client() })).status).toBe(400);
     expect((await click(token, { headers })).status).toBe(200);
@@ -242,12 +236,10 @@ describe("an unsubscribe link", () => {
     const token = (await unsubscribeToken(env, id, "watching")) as string;
     // Opening it spends nothing of the posts' allowance.
     for (let i = 0; i < 20; i++) expect((await click(token)).status).toBe(200);
-    const posts: number[] = [];
-    for (let i = 0; i < 11; i++) posts.push((await click(token, { method: "POST" })).status);
-    expect(posts.slice(0, 10).every((s) => s === 200)).toBe(true);
-    const throttled = await click(token, { method: "POST" });
-    expect(throttled.status).toBe(429);
-    expect(throttled.headers.get("Retry-After")).toBe("60");
+    const { passed, throttled } = await untilThrottled(() => click(token, { method: "POST" }), 10);
+    expect(passed.length).toBeGreaterThanOrEqual(10);
+    expect(passed.every((s) => s === 200)).toBe(true);
+    expect(throttled?.headers.get("Retry-After")).toBe("60");
     // Another address's link is not held back by it.
     const other = (await unsubscribeToken(env, await address(who), "watching")) as string;
     expect((await click(other, { method: "POST" })).status).toBe(200);

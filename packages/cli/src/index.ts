@@ -184,6 +184,22 @@ export function parseDeployArgs(args: readonly string[]):
   return { plan, internalCalls, ...extra };
 }
 
+/** One `@`, a dot inside the domain, no spaces or angle brackets: checked without backtracking. */
+function bareAddress(text: string): boolean {
+  if (/[\s<>]/.test(text)) return false;
+  const at = text.indexOf("@");
+  const domain = text.slice(at + 1);
+  return at > 0 && !domain.includes("@") && domain.slice(1, -1).includes(".");
+}
+
+/** `Name <address>` or a bare address. */
+function senderAddress(from: string): boolean {
+  const open = from.indexOf(" <");
+  if (open > 0 && from.endsWith(">"))
+    return !/[<>]/.test(from.slice(0, open)) && bareAddress(from.slice(open + 2, -1));
+  return bareAddress(from);
+}
+
 /**
  * The email flags: the provider's three or none (undefined), the sending
  * switch and limits only with them; null for anything else (a provider but
@@ -209,9 +225,7 @@ function emailArgs(given: ReadonlyMap<string, string>): EmailArgs | undefined | 
   const publicOrigin = origin === undefined ? undefined : canonicalOrigin(origin);
   if (publicOrigin === null) return null;
   if (provider !== "resend" || !from || !secretsFile) return null;
-  // `Name <address>` or a bare address.
-  if (!/^(?:[^<>]+ <[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>|[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+)$/.test(from))
-    return null;
+  if (!senderAddress(from)) return null;
   if (sending !== undefined && sending !== "on" && sending !== "off") return null;
   const limits: EmailLimitArgs = {};
   for (const [name, text] of Object.entries(limitFlags) as [keyof EmailLimitArgs, string][]) {

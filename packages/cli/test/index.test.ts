@@ -149,9 +149,24 @@ describe("envDeployOptions", () => {
         "s",
       ]),
     ).toBeUndefined();
-    expect(
-      parseDeployArgs(["--email", "resend", "--email-from", "nobody", "--email-secrets-file", "s"]),
-    ).toBeUndefined();
+    for (const from of [
+      "nobody",
+      "n@example",
+      "n@.example",
+      "n@example.",
+      "n@a@b.example",
+      "Name<n@x.example>",
+      "<n@x.example>",
+      "N <a> <n@x.example>",
+      "Name <n@x.example",
+      "n x@y.example",
+      // Long and invalid at its end: refused at once (a backtracking pattern took polynomial time).
+      `n@${"!.".repeat(20_000)} `,
+    ])
+      expect(
+        parseDeployArgs(["--email", "resend", "--email-from", from, "--email-secrets-file", "s"]),
+        from.slice(0, 40),
+      ).toBeUndefined();
   });
 
   it("takes the sending switch and the allowance's limits only with a provider, when they fit", () => {
