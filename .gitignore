@@ -27,6 +27,8 @@ coverage/
 
 # Generated per account by `fyrden deploy`
 **/wrangler.deploy.jsonc
+# Written for a run by the e2e stack (removed when it stops)
+**/wrangler.e2e-*.jsonc
 
 # Written for a Schemathesis run (rate limits raised), removed after it
 **/wrangler.schemathesis-*.jsonc

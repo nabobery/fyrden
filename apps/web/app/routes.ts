@@ -10,6 +10,7 @@ export default [
   route("settings/notifications", "routes/settings.notifications.tsx"),
   route("notifications", "routes/notifications.tsx"),
   route("notifications/digests", "routes/notifications.digests.tsx"),
+  route("notifications/live-ticket", "routes/notifications.live-ticket.ts"),
   route("notifications/digests/:repo/:subject/:window/:epoch", "routes/notifications.digest.tsx"),
   route(":owner/:repo", "routes/repo.tsx"),
   route(":owner/:repo/tree/:ref/*", "routes/repo.tree.tsx"),

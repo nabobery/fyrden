@@ -3,7 +3,7 @@
 // what a browser test of the web UI starts from. Needs `pnpm --filter
 // @fyrden/web build` first (turbo does it).
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -63,6 +63,8 @@ export interface WebStackOptions {
   readonly signIn?: boolean;
   /** Browser permissions for the page's context (the clipboard, say). */
   readonly permissions?: string[];
+  /** fyrden-api's variables (`FYRDEN_LIVE`, say), set in a copy of its configuration. */
+  readonly vars?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -75,6 +77,10 @@ export async function startWebStack(
   options: WebStackOptions = {},
 ): Promise<WebStack> {
   const scratch = await mkdtemp(join(tmpdir(), "fyrden-web-stack-"));
+  // Beside the original, so its relative paths hold; removed on stop (and ignored by git).
+  const config = options.vars
+    ? join(root, `apps/api/wrangler.e2e-${crypto.randomUUID()}.jsonc`)
+    : apiConfig;
   let output = "";
   let server: WranglerDev | undefined;
   let browser: Browser | undefined;
@@ -84,6 +90,7 @@ export async function startWebStack(
       await server?.stop();
     } finally {
       await rm(scratch, { recursive: true, force: true });
+      if (config !== apiConfig) await rm(config, { force: true });
     }
   };
   try {
@@ -96,15 +103,21 @@ export async function startWebStack(
       envFile,
       `BOOTSTRAP_SECRET=${bootstrapSecret}\nSIGNING_KEY=${signingSeed}\nEMAIL_KEY=${emailKey}\n`,
     );
+    if (config !== apiConfig) {
+      const original = await readFile(apiConfig, "utf8");
+      // The configuration opens with its object and has no variables of its own to merge.
+      expect(original.startsWith("{") && !original.includes('"vars"')).toBe(true);
+      await writeFile(config, `{\n  "vars": ${JSON.stringify(options.vars)},${original.slice(1)}`);
+    }
     for (const db of ["DIRECTORY", "ORG_READ"]) {
       const migrated = await wrangler(
-        ["d1", "migrations", "apply", db, "--local", "--persist-to", persist, "-c", apiConfig],
+        ["d1", "migrations", "apply", db, "--local", "--persist-to", persist, "-c", config],
         join(root, "apps/api"),
       );
       expect(migrated.code, migrated.output).toBe(0);
     }
     server = await startWranglerDev({
-      args: ["-c", webConfig, "-c", apiConfig, "--persist-to", persist, "--env-file", envFile],
+      args: ["-c", webConfig, "-c", config, "--persist-to", persist, "--env-file", envFile],
       cwd: join(root, "apps/web"),
       onOutput: (text) => {
         output += text;
