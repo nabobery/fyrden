@@ -40,6 +40,10 @@ export const LIVE_POLICY = {
   decisionMs: 10 * 60_000,
   /** How long a revoked dependency is kept (a socket's longest life). */
   revokedMs: 24 * 60 * 60_000,
+  /** Dirty streams one pump unit reads at most (its progress stops at the page's end). */
+  dirtyPage: 20,
+  /** Rows of each kind one pruning or clearing step deletes at most. */
+  pruneRows: 500,
 } as const;
 
 /** Close codes: expired (renew or reconnect with a new ticket), resync (reread everything). */
@@ -322,21 +326,36 @@ export class Live {
     );
   }
 
-  /** The dirty streams after `progress`, up to `upTo`, oldest first. */
-  dirtyAfter(progress: number, upTo: number): DirtyStream[] {
-    return this.sql
-      .exec("SELECT * FROM live_dirty WHERE seq > ? AND seq <= ? ORDER BY seq", progress, upTo)
+  /**
+   * The dirty streams after `progress`, up to `upTo`, oldest first: a page
+   * of them, and how far the page reaches (its last stream's sequence while
+   * more may follow, else `upTo`): progress made from it stops there.
+   */
+  dirtyAfter(progress: number, upTo: number): { streams: DirtyStream[]; reach: number } {
+    const streams = this.sql
+      .exec(
+        "SELECT * FROM live_dirty WHERE seq > ? AND seq <= ? ORDER BY seq LIMIT ?",
+        progress,
+        upTo,
+        LIVE_POLICY.dirtyPage,
+      )
       .toArray() as unknown as DirtyStream[];
+    const last = streams.at(-1);
+    return {
+      streams,
+      reach: streams.length === LIVE_POLICY.dirtyPage && last ? last.seq : upTo,
+    };
   }
 
-  /** A stream's candidate conversations with causes after `progress`. */
+  /** A stream's candidate conversations with causes after `progress` (at most a stream's). */
   candidatesAfter(stream: string, progress: number): Candidate[] {
     return this.sql
       .exec(
-        `SELECT * FROM live_candidates WHERE stream = ?
-           AND (direct_seq > ?2 OR ordinary_seq > ?2)`,
+        `SELECT * FROM live_candidates WHERE stream = ?1
+           AND (direct_seq > ?2 OR ordinary_seq > ?2) LIMIT ?3`,
         stream,
         progress,
+        LIVE_POLICY.candidatesPerStream,
       )
       .toArray() as unknown as Candidate[];
   }
@@ -356,20 +375,53 @@ export class Live {
    * Deletes what every socket has heard of (dirty rows and causes at or
    * below the lowest progress, a socket being confirmed's included; all of
    * them with no socket), expired tickets, and revocations past a socket's
-   * longest life.
+   * longest life: a page of each kind, each through its index; whether a
+   * kind had more. A stream's causes are never newer than its dirty row
+   * (each change moves both), so causes whose row a page took go with a
+   * later page of their own (through their index), never kept for good.
    */
-  prune(now: number): void {
+  prune(now: number): boolean {
     const lowest =
       this.sql.exec<{ p: number | null }>("SELECT min(delivered_seq) AS p FROM live_local").one()
         .p ?? this.seq();
-    this.sql.exec("DELETE FROM live_dirty WHERE seq <= ?", lowest);
-    this.sql.exec(
-      `DELETE FROM live_candidates WHERE (direct_seq <= ?1 AND ordinary_seq <= ?1)
-         OR stream NOT IN (SELECT stream FROM live_dirty)`,
-      lowest,
-    );
-    this.sql.exec("DELETE FROM live_tickets WHERE expires_at <= ?", now);
-    this.sql.exec("DELETE FROM live_revoked WHERE at <= ?", now - LIVE_POLICY.revokedMs);
+    const page = LIVE_POLICY.pruneRows;
+    const deleted = [
+      this.sql
+        .exec(
+          `DELETE FROM live_dirty WHERE stream IN
+           (SELECT stream FROM live_dirty INDEXED BY live_dirty_seq WHERE seq <= ? ORDER BY seq LIMIT ?) RETURNING 1`,
+          lowest,
+          page,
+        )
+        .toArray().length,
+      this.sql
+        .exec(
+          `DELETE FROM live_candidates WHERE (stream, conversation) IN
+           (SELECT stream, conversation FROM live_candidates INDEXED BY live_candidates_last
+             WHERE max(direct_seq, ordinary_seq) <= ? LIMIT ?) RETURNING 1`,
+          lowest,
+          page,
+        )
+        .toArray().length,
+      this.sql
+        .exec(
+          `DELETE FROM live_tickets WHERE ticket_hash IN
+           (SELECT ticket_hash FROM live_tickets INDEXED BY live_tickets_expiry
+             WHERE expires_at <= ? LIMIT ?) RETURNING 1`,
+          now,
+          page,
+        )
+        .toArray().length,
+      this.sql
+        .exec(
+          `DELETE FROM live_revoked WHERE dependency IN
+           (SELECT dependency FROM live_revoked INDEXED BY live_revoked_at WHERE at <= ? LIMIT ?) RETURNING 1`,
+          now - LIVE_POLICY.revokedMs,
+          page,
+        )
+        .toArray().length,
+    ];
+    return deleted.some((n) => n >= page);
   }
 
   /**
@@ -381,9 +433,10 @@ export class Live {
   nextDue(now: number, confirmMs: number): number | null {
     const row = this.sql
       .exec<{ dirty: number; deadline: number | null }>(
-        `SELECT EXISTS (SELECT 1 FROM live_dirty d, live_local s
-             WHERE s.phase = 'open' AND d.seq > s.delivered_seq AND s.sent - s.acked < ?1
-               AND s.retry_at <= ?4) AS dirty,
+        `SELECT EXISTS (SELECT 1 FROM live_local s
+             WHERE s.phase = 'open' AND s.sent - s.acked < ?1 AND s.retry_at <= ?4
+               AND EXISTS (SELECT 1 FROM live_dirty INDEXED BY live_dirty_seq
+                 WHERE seq > s.delivered_seq)) AS dirty,
            (SELECT min(CASE WHEN phase = 'open'
                THEN min(deadline, expires_at, coalesce(blocked_since + ?2, expires_at),
                  CASE WHEN retry_at > ?4 THEN retry_at ELSE expires_at END)
@@ -399,16 +452,27 @@ export class Live {
     return row.deadline;
   }
 
-  /** Forgets everything live (a retired feed). */
-  clear(): void {
-    for (const table of [
-      "live_tickets",
-      "live_local",
-      "live_local_deps",
-      "live_dirty",
-      "live_candidates",
-      "live_revoked",
-    ])
-      this.sql.exec(`DELETE FROM ${table}`);
+  /**
+   * Forgets a page of everything live (a retired feed), the first table
+   * with rows left; whether it deleted any (more may be left).
+   */
+  clearStep(): boolean {
+    for (const [table, key] of [
+      ["live_local_deps", "socket_id, dependency"],
+      ["live_local", "socket_id"],
+      ["live_tickets", "ticket_hash"],
+      ["live_dirty", "stream"],
+      ["live_candidates", "stream, conversation"],
+      ["live_revoked", "dependency"],
+    ] as const) {
+      const n = this.sql
+        .exec(
+          `DELETE FROM ${table} WHERE (${key}) IN (SELECT ${key} FROM ${table} LIMIT ?) RETURNING 1`,
+          LIVE_POLICY.pruneRows,
+        )
+        .toArray().length;
+      if (n > 0) return true;
+    }
+    return false;
   }
 }

@@ -466,4 +466,14 @@ export const userSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 10,
+    name: "live_bounds",
+    // Indexes that keep live pruning to a page a step: expired tickets, and causes by their
+    // newest sequence.
+    sql: `
+      CREATE INDEX live_tickets_expiry ON live_tickets (expires_at, ticket_hash);
+      CREATE INDEX live_candidates_last ON live_candidates (max(direct_seq, ordinary_seq));
+    `,
+  },
 ];

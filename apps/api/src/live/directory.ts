@@ -131,22 +131,27 @@ export async function release(db: D1Database, socketIds: readonly string[]): Pro
 
 /**
  * Reaps leases whose release was lost (pending past its wait, or past its
- * expiry), with their dependency rows; told revocations past their keep;
- * admission counts before yesterday.
+ * expiry), with their dependency rows, at most a run's in all, the earliest
+ * due first; told revocations past their keep; admission counts before
+ * yesterday.
  */
 export function reaping(db: D1Database, now: number): D1PreparedStatement[] {
-  const stale = `SELECT socket_id FROM live_sockets INDEXED BY live_sockets_expiry
-    WHERE expires_at <= ?1 ORDER BY expires_at LIMIT ?2`;
-  const lapsed = `SELECT socket_id FROM live_sockets INDEXED BY live_sockets_pending
-    WHERE state = 'pending' AND pending_until <= ?1 ORDER BY pending_until LIMIT ?2`;
+  // Each kind read through its own index (a run's at most), then the earliest due of both: the
+  // same choice for both deletes (the dependency rows go first, the leases still there).
+  const due = `SELECT socket_id FROM (
+      SELECT * FROM (SELECT socket_id, expires_at AS due FROM live_sockets
+        INDEXED BY live_sockets_expiry WHERE expires_at <= ?1 ORDER BY expires_at LIMIT ?2)
+      UNION ALL
+      SELECT * FROM (SELECT socket_id, pending_until AS due FROM live_sockets
+        INDEXED BY live_sockets_pending WHERE state = 'pending' AND pending_until <= ?1
+        ORDER BY pending_until LIMIT ?2))
+    GROUP BY socket_id ORDER BY min(due), socket_id LIMIT ?2`;
   return [
     db
-      .prepare(
-        `DELETE FROM live_socket_deps WHERE socket_id IN (${stale}) OR socket_id IN (${lapsed})`,
-      )
+      .prepare(`DELETE FROM live_socket_deps WHERE socket_id IN (${due})`)
       .bind(now, LIVE_ADMISSION.reapRows),
     db
-      .prepare(`DELETE FROM live_sockets WHERE socket_id IN (${stale}) OR socket_id IN (${lapsed})`)
+      .prepare(`DELETE FROM live_sockets WHERE socket_id IN (${due})`)
       .bind(now, LIVE_ADMISSION.reapRows),
     db
       .prepare(

@@ -208,6 +208,21 @@ export const MAX_CONFIRMED_PRINCIPALS = 1_024;
 /** Most repositories, and principals, one confirmation of feed readers reads. Proposed. */
 export const MAX_READER_REPOS = 100;
 export const MAX_READER_PRINCIPALS = 16;
+/** Most team grants a live check reads on one repository; past them it answers "unknown". */
+export const LIVE_TEAM_GRANTS = 100;
+
+/** What `confirmReadersLive` answers: as `confirmReaders`, a role "unknown" past its bound. */
+export interface LiveReaderConfirmation extends Omit<ReaderConfirmation, "repos"> {
+  readonly repos: Readonly<
+    Record<
+      string,
+      {
+        readonly held: boolean;
+        readonly roles: Readonly<Record<string, RepoRole | null | "unknown">>;
+      }
+    >
+  >;
+}
 
 /** What `confirmReaders` answers: per repository, whether the account holds it, and the roles there. */
 export interface ReaderConfirmation {
@@ -502,6 +517,61 @@ export class OrgDO extends MigratingDO {
   }
 
   /**
+   * As `confirmReaders`, for live hints: every read bounded, each
+   * repository's team grants read at most `LIVE_TEAM_GRANTS` (then each
+   * principal's membership of them by its key); past that, its roles are
+   * "unknown", never a guess (the caller passes over what it cannot decide).
+   */
+  async confirmReadersLive(
+    repoIds: readonly string[],
+    principals: readonly string[],
+  ): Promise<LiveReaderConfirmation> {
+    const repos = [...new Set(repoIds)];
+    const unique = [...new Set(principals)];
+    if (repos.length > MAX_READER_REPOS)
+      throw new Error(`more than ${MAX_READER_REPOS} repositories to confirm`);
+    if (unique.length > MAX_READER_PRINCIPALS)
+      throw new Error(`more than ${MAX_READER_PRINCIPALS} principals to confirm`);
+    await this.#checkEpoch();
+    const meta = this.#meta();
+    const sql = this.ctx.storage.sql;
+    const answer: Record<string, LiveReaderConfirmation["repos"][string]> = {};
+    for (const repoId of repos) {
+      const held =
+        sql.exec("SELECT 1 FROM released_repos WHERE repo_id = ?", repoId).toArray().length === 0;
+      if (!held || !meta) {
+        answer[repoId] = { held, roles: {} };
+        continue;
+      }
+      // The repository's team grants read once for every principal asked.
+      const grants = sql
+        .exec<{ team_id: string; role: RepoRole }>(
+          "SELECT team_id, role FROM team_repos INDEXED BY team_repos_repo WHERE repo_id = ? LIMIT ?",
+          repoId,
+          LIVE_TEAM_GRANTS + 1,
+        )
+        .toArray();
+      answer[repoId] = {
+        held,
+        roles: Object.fromEntries(
+          unique.map((p) => [
+            p,
+            grants.length > LIVE_TEAM_GRANTS
+              ? "unknown"
+              : this.#roleWithGrants(repoId, p, meta, grants),
+          ]),
+        ),
+      };
+    }
+    return {
+      accountId: meta?.account_id ?? "",
+      epochGen: meta?.epoch_gen ?? 0,
+      version: meta?.acl_version ?? 0,
+      repos: answer,
+    };
+  }
+
+  /**
    * Each of `principals`' strongest role on repository `repoId` now (null
    * for none), as `snapshotFor` gives it, each of `teams`' role on it (null
    * for none, or no such team) and which of the `pairs` (`membershipKey`s)
@@ -756,6 +826,40 @@ export class OrgDO extends MigratingDO {
           : null
         : orgRepoRole(this.accountRole(principalId), BASE_ROLE),
       team === null ? null : (REPO_ROLES[team] as RepoRole),
+      this.#collaboratorRole(repoId, principalId),
+    ]);
+  }
+
+  /**
+   * `#roleOn` given the repository's team grants (read once, at most
+   * `LIVE_TEAM_GRANTS`), each probed for `principalId`'s membership by its
+   * key.
+   */
+  #roleWithGrants(
+    repoId: string,
+    principalId: string,
+    meta: Meta,
+    grants: readonly { team_id: string; role: RepoRole }[],
+  ): RepoRole | null {
+    const viaTeams = grants
+      .filter(
+        (g) =>
+          this.ctx.storage.sql
+            .exec(
+              "SELECT 1 FROM team_members WHERE team_id = ? AND principal_id = ?",
+              g.team_id,
+              principalId,
+            )
+            .toArray().length > 0,
+      )
+      .map((g) => g.role);
+    return strongestRole([
+      meta.kind === "user"
+        ? principalId === meta.account_id
+          ? "admin"
+          : null
+        : orgRepoRole(this.accountRole(principalId), BASE_ROLE),
+      ...viaTeams,
       this.#collaboratorRole(repoId, principalId),
     ]);
   }

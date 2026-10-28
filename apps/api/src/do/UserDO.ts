@@ -21,7 +21,6 @@ import { confirm, release } from "../live/directory.js";
 import { randomSecret } from "../oauth/params.js";
 import { allowedWithRole, findReposById } from "../repos/directory.js";
 import { MigratingDO } from "./base/MigratingDO.js";
-import { MAX_READER_REPOS } from "./OrgDO.js";
 import { userSchema } from "./schema/user.js";
 import {
   FEED_POLICY,
@@ -77,9 +76,8 @@ export interface LiveAdmitted {
   readonly dependencies: readonly string[];
 }
 
-/** Credentials a pump run serves at most, and repositories it decides for each (the rest wait). */
+/** Credentials a pump run serves at most (the rest wait). */
 const PUMP_CREDENTIALS = 4;
-const PUMP_REPOS = 200;
 
 /** How long an admission may take to be confirmed before its local state is forgotten. */
 const LIVE_CONFIRM_MS = 60_000;
@@ -506,7 +504,7 @@ export class UserDO extends MigratingDO {
     }
     const feed = this.#feed();
     const steps = {
-      retire: () => (feed.retireStep() ? Date.now() : null),
+      retire: () => (feed.retireStep() || this.#live().clearStep() ? Date.now() : null),
       retain: () => (feed.retainStep() ? Date.now() : feed.nextRetention()),
       cursors: () => (feed.expireCursorsStep() ? Date.now() : feed.nextCursorExpiry()),
     } satisfies Record<(typeof KINDS)[number], () => number | null>;
@@ -529,9 +527,12 @@ export class UserDO extends MigratingDO {
       }
     }
     if (this.#dueNow("email") && !this.#retired()) await this.#sendEmails();
+    // A retired feed has no live work: a row left by a run racing the retirement goes.
+    if (this.#dueNow("live") && this.#retired()) this.#setDue("live", null);
     if (this.#dueNow("live") && !this.#retired()) {
+      let more = false;
       try {
-        await this.#pump();
+        more = await this.#pump();
       } catch (error) {
         createLogger({ op: "user.alarm", doClass: "UserDO" }).warn("the live pump failed", {
           error,
@@ -543,7 +544,15 @@ export class UserDO extends MigratingDO {
             .filter((s) => s.phase === "open"),
         );
       }
-      this.#setDue("live", this.#live().nextDue(Date.now(), LIVE_CONFIRM_MS));
+      // Retired while the run awaited: nothing more is due.
+      this.#setDue(
+        "live",
+        this.#retired()
+          ? null
+          : more
+            ? Date.now()
+            : this.#live().nextDue(Date.now(), LIVE_CONFIRM_MS),
+      );
     }
     // Exactly by the schedule as the steps left it: an alarm set earlier in this run (the epoch
     // check arms one) is moved to what is due now; calls made meanwhile left their rows.
@@ -856,21 +865,22 @@ export class UserDO extends MigratingDO {
 
   /**
    * One pump run: forgets admissions never confirmed and closes expired and
-   * slow sockets; then, for each credential (at most `PUMP_CREDENTIALS` a
-   * run, the furthest behind first), checks it again on the directory's
-   * primary (no longer holding: its sockets close) and decides afresh the
-   * repositories of the streams changed that its token may name (at most
-   * `PUMP_REPOS` a run, in calls of at most `MAX_READER_REPOS`); then sends
-   * each of its open sockets with room in its window one frame naming the
-   * streams it may read now with a cause its current preferences let
-   * through. A stream whose repository's answer is not known is passed
-   * over; one left undecided by the run's bounds waits for the next run
-   * (the socket's progress stops before it). Then prunes what every socket
-   * heard of.
+   * slow sockets; then reads a page of the streams changed (`dirtyPage`)
+   * and, for each credential (at most `PUMP_CREDENTIALS` a run, the
+   * furthest behind first), checks it again on the directory's primary (no
+   * longer holding: its sockets close) and decides afresh, through one
+   * owning account's bounded check, the page's repositories of that account
+   * that its token may name; then sends each of its open sockets with room
+   * in its window one frame naming the streams it may read now with a
+   * cause its current preferences let through. A stream whose repository's
+   * answer is not known is passed over; one past the page, or of another
+   * account, waits for the next run (the socket's progress stops before
+   * it). Then prunes a page of what every socket heard of; whether more is
+   * left.
    */
-  async #pump(): Promise<void> {
+  async #pump(): Promise<boolean> {
     const principalId = this.ctx.id.name;
-    if (principalId === undefined) return;
+    if (principalId === undefined) return false;
     const live = this.#live();
     const now = Date.now();
     for (const s of live.sockets()) {
@@ -896,14 +906,12 @@ export class UserDO extends MigratingDO {
     for (const s of [...ready].sort((a, b) => a.delivered_seq - b.delivered_seq))
       byCredential.set(s.credential_id, [...(byCredential.get(s.credential_id) ?? []), s]);
     const serving = [...byCredential].slice(0, PUMP_CREDENTIALS);
-    if (serving.length === 0) {
-      this.ctx.storage.transactionSync(() => live.prune(Date.now()));
-      return;
-    }
+    if (serving.length === 0) return this.ctx.storage.transactionSync(() => live.prune(Date.now()));
     const lowest = Math.min(
       ...serving.flatMap(([, sockets]) => sockets.map((s) => s.delivered_seq)),
     );
-    const dirty = live.dirtyAfter(lowest, upTo);
+    // A page of what changed: every socket's progress stops at its end (the rest is due next).
+    const { streams: dirty, reach: pageReach } = live.dirtyAfter(lowest, upTo);
     const candidates = new Map(
       dirty.map((d) => [d.stream, live.candidatesAfter(d.stream, lowest)]),
     );
@@ -919,7 +927,7 @@ export class UserDO extends MigratingDO {
         gate = await this.#preferences(principalId, repos, threads);
       } catch {
         this.#retryLater(serving.flatMap(([, sockets]) => sockets));
-        return;
+        return false;
       }
     const metrics = createMetrics(this.env.METRICS);
     for (const [credentialId, waiting] of serving) {
@@ -941,8 +949,9 @@ export class UserDO extends MigratingDO {
         await this.#closeSocket(s.socket_id, CLOSE_EXPIRED, "the credential no longer holds");
       const sockets = waiting.filter((s) => !closing.some((c) => c.socket_id === s.socket_id));
       if (sockets.length === 0) continue;
-      // Decided afresh: the repositories of the streams its sockets have not heard of that its
-      // token may name.
+      // Decided afresh, one owning account a unit (that of the earliest stream its sockets have
+      // not heard of): the page's repositories of it that its token may name. A stream of
+      // another account's repository stops the sockets' progress; the next run takes it.
       const from = Math.min(...sockets.map((s) => s.delivered_seq));
       const named = [
         ...new Set(
@@ -951,30 +960,36 @@ export class UserDO extends MigratingDO {
             .map((d) => d.repo_id),
         ),
       ];
-      const deciding = named.slice(0, PUMP_REPOS);
+      let entries: Awaited<ReturnType<typeof findReposById>>;
+      try {
+        entries = await findReposById(this.env, named, metrics);
+      } catch {
+        // Not known which account holds what: tried again a minute on.
+        this.#retryLater(sockets);
+        continue;
+      }
+      const ownerOf = new Map(entries.map((e) => [e.id, e.ownerId]));
+      const account = ownerOf.get(
+        dirty.find((d) => d.seq > from && ownerOf.has(d.repo_id))?.repo_id ?? "",
+      );
       const readable = new Map<string, boolean>();
-      for (let at = 0; at < deciding.length; at += MAX_READER_REPOS) {
-        const chunk = deciding.slice(at, at + MAX_READER_REPOS);
-        try {
-          const entries = await findReposById(this.env, chunk, metrics);
-          const answers = await new FreshAccess({ env: this.env, metrics }, {
-            principalId,
-            grantId: null,
-          } as never).decide(entries);
-          for (const repo of chunk) {
-            const answer = answers.get(repo);
-            // Gone: unreadable. Not known: passed over.
-            if (answer === "unknown") continue;
-            readable.set(repo, answer !== undefined && answer.held && answer.role !== null);
-          }
-        } catch {
-          // This chunk not known: passed over.
+      if (account !== undefined) {
+        const deciding = entries.filter((e) => e.ownerId === account);
+        const answers = await new FreshAccess({ env: this.env, metrics }, {
+          principalId,
+          grantId: null,
+        } as never).decide(deciding, { live: true });
+        for (const entry of deciding) {
+          const answer = answers.get(entry.id);
+          // Gone: unreadable. Not known: passed over.
+          if (answer === "unknown") continue;
+          readable.set(entry.id, answer !== undefined && answer.held && answer.role !== null);
         }
       }
-      // A stream of a repository the run's bound left undecided stops the socket's progress.
-      const undecided = new Set(named.slice(PUMP_REPOS));
-      const stop = dirty.find((d) => d.seq > from && undecided.has(d.repo_id))?.seq;
-      const reach = stop === undefined ? upTo : stop - 1;
+      const stop = dirty.find(
+        (d) => d.seq > from && ownerOf.has(d.repo_id) && ownerOf.get(d.repo_id) !== account,
+      )?.seq;
+      const reach = stop === undefined ? pageReach : Math.min(pageReach, stop - 1);
       for (const s of sockets) {
         const sent = this.#send(live, s, dirty, reach, readable, candidates, gate, Date.now());
         if (sent === "expired")
@@ -986,7 +1001,7 @@ export class UserDO extends MigratingDO {
       }
     }
     // What a run's bounds left is due at once (the alarm sets it by `Live.nextDue`).
-    this.ctx.storage.transactionSync(() => live.prune(Date.now()));
+    return this.ctx.storage.transactionSync(() => live.prune(Date.now()));
   }
 
   /** Sockets whose run could not be done (an answer missing): tried again a minute on. */
@@ -1161,11 +1176,14 @@ export class UserDO extends MigratingDO {
         this.ctx.storage.sql.exec("DELETE FROM email_queue");
         this.#schedule("retire", Date.now());
       });
-    // Live sockets go with it: closed, their leases released, their state forgotten.
+    // Live sockets go with it: closed, their leases released, their state forgotten (sockets at
+    // once, at most a feed's; the rest a page a step of the retirement).
     const live = this.#live();
     const sockets = live.sockets().map((s) => s.socket_id);
     for (const ws of this.ctx.getWebSockets()) ws.close(CLOSE_REVOKED, "retired");
-    this.ctx.storage.transactionSync(() => live.clear());
+    this.ctx.storage.transactionSync(() => {
+      for (const id of sockets) live.forget(id);
+    });
     await release(this.env.DIRECTORY, sockets);
     await this.#arm();
   }

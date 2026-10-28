@@ -20,6 +20,7 @@ import userV6 from "./fixtures/do-schemas/UserDO/v6.sql?raw";
 import userV7 from "./fixtures/do-schemas/UserDO/v7.sql?raw";
 import userV8 from "./fixtures/do-schemas/UserDO/v8.sql?raw";
 import userV9 from "./fixtures/do-schemas/UserDO/v9.sql?raw";
+import userV10 from "./fixtures/do-schemas/UserDO/v10.sql?raw";
 
 const versions: Record<number, string> = {
   0: userV0,
@@ -31,6 +32,7 @@ const versions: Record<number, string> = {
   7: userV7,
   8: userV8,
   9: userV9,
+  10: userV10,
 };
 
 describe("UserDO schema", () => {

@@ -19,10 +19,12 @@ CREATE INDEX inbox_threads_open_stream ON inbox_threads (repo_id, subject, updat
         WHERE dn_event IS NULL;
 CREATE INDEX inbox_threads_stream ON inbox_threads (repo_id, subject, updated_at, id);
 CREATE INDEX inbox_threads_unread ON inbox_threads (subject, unread, updated_at, id);
+CREATE INDEX live_candidates_last ON live_candidates (max(direct_seq, ordinary_seq));
 CREATE INDEX live_dirty_seq ON live_dirty (seq);
 CREATE INDEX live_local_credential ON live_local (credential_id);
 CREATE INDEX live_local_deps_dependency ON live_local_deps (dependency);
 CREATE INDEX live_revoked_at ON live_revoked (at);
+CREATE INDEX live_tickets_expiry ON live_tickets (expires_at, ticket_hash);
 CREATE INDEX purge_marks_until ON purge_marks (until_at);
 CREATE TABLE email_queue (
         event_key TEXT PRIMARY KEY,

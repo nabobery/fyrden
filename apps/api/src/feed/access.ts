@@ -37,9 +37,15 @@ export class FreshAccess {
    * The reader's role on each of `entries`, one call to each owning
    * account's object (concurrently); `unknown` for those whose account
    * could not answer (an error, or an earlier object without the call
-   * while a deploy rolls out).
+   * while a deploy rolls out). `live`: the accounts one at a time, each
+   * through its bounded check (`confirmReadersLive`), a role it could not
+   * bound read as `unknown` (an object without the call: all `unknown`,
+   * never the unbounded check).
    */
-  async decide(entries: readonly RepoEntry[]): Promise<Map<string, FreshDecision>> {
+  async decide(
+    entries: readonly RepoEntry[],
+    options: { readonly live?: boolean } = {},
+  ): Promise<Map<string, FreshDecision>> {
     const decided = new Map<string, FreshDecision>();
     if (entries.length === 0) return decided;
     const byAccount = new Map<string, RepoEntry[]>();
@@ -53,36 +59,45 @@ export class FreshAccess {
       return decided;
     }
     const principal = this.auth.principalId;
-    await Promise.all(
-      [...byAccount].map(async ([accountId, repos]) => {
-        this.ctx.metrics.count("do.request", { class: "OrgDO", method: "confirmReaders" });
-        const answer = await this.ctx.env.ORG.getByName(accountId)
-          .confirmReaders(
-            repos.map((r) => r.id),
-            [principal, ...ceilings],
-          )
-          .catch(() => undefined);
-        for (const entry of repos) {
-          const repo = answer?.repos?.[entry.id];
-          if (!repo) {
-            decided.set(entry.id, "unknown");
-            continue;
-          }
-          if (!repo.held) {
-            decided.set(entry.id, { held: false, role: null, accountId });
-            continue;
-          }
-          // As the repository judges them: the account itself, and a user account's owner, administer.
-          const roleOf = (id: string): RepoRole | null =>
-            id === accountId || ownsUserAccount(id, accountId) ? "admin" : (repo.roles[id] ?? null);
-          decided.set(entry.id, {
-            held: true,
-            role: effectiveRole((id, min) => atLeast(roleOf(id), min), principal, ceilings),
-            accountId,
-          });
+    const decideAccount = async ([accountId, repos]: [string, RepoEntry[]]) => {
+      const ids = repos.map((r) => r.id);
+      const readers = [principal, ...ceilings];
+      const stub = this.ctx.env.ORG.getByName(accountId);
+      this.ctx.metrics.count("do.request", {
+        class: "OrgDO",
+        method: options.live ? "confirmReadersLive" : "confirmReaders",
+      });
+      const answer = await (options.live
+        ? stub.confirmReadersLive(ids, readers)
+        : stub.confirmReaders(ids, readers)
+      ).catch(() => undefined);
+      for (const entry of repos) {
+        const repo = answer?.repos?.[entry.id];
+        const roles = repo?.roles as
+          | Readonly<Record<string, RepoRole | null | "unknown">>
+          | undefined;
+        if (!repo || (roles && readers.some((id) => roles[id] === "unknown"))) {
+          decided.set(entry.id, "unknown");
+          continue;
         }
-      }),
-    );
+        if (!repo.held) {
+          decided.set(entry.id, { held: false, role: null, accountId });
+          continue;
+        }
+        // As the repository judges them: the account itself, and a user account's owner, administer.
+        const roleOf = (id: string): RepoRole | null =>
+          id === accountId || ownsUserAccount(id, accountId)
+            ? "admin"
+            : ((roles?.[id] as RepoRole | null | undefined) ?? null);
+        decided.set(entry.id, {
+          held: true,
+          role: effectiveRole((id, min) => atLeast(roleOf(id), min), principal, ceilings),
+          accountId,
+        });
+      }
+    };
+    if (options.live) for (const account of byAccount) await decideAccount(account);
+    else await Promise.all([...byAccount].map(decideAccount));
     return decided;
   }
 
