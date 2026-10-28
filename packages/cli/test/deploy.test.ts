@@ -377,6 +377,30 @@ describe("fyrden deploy", () => {
     expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_DAILY_LIMIT");
   });
 
+  it("points notification emails at the web Worker once it is deployed, or at the origin given", async () => {
+    const email = {
+      provider: "resend" as const,
+      from: "Fyrden <n@notify.example>",
+      apiKey: "re_first0001",
+      webhookSecret: "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+      sending: true,
+    };
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner, { email }).d);
+    // The API first without it, then again with the web Worker's URL.
+    const origins = () => fake.state.apiVersions.map((v) => v.vars.FYRDEN_PUBLIC_ORIGIN);
+    expect(origins()).toEqual([undefined, "https://fyrden-web.acct.workers.dev"]);
+    // Every deploy sending does so again (its configuration is rebuilt from the committed file).
+    await deploy(deps(fake.runner, { email }).d);
+    expect(origins().slice(2)).toEqual([undefined, "https://fyrden-web.acct.workers.dev"]);
+    // A custom origin: set with the first API deploy, no second one.
+    await deploy(deps(fake.runner, { email: { ...email, publicOrigin: "https://git.example" } }).d);
+    expect(origins().slice(4)).toEqual(["https://git.example"]);
+    // Not sending: none, and no second deploy.
+    await deploy(deps(fake.runner, { email: { ...email, sending: false } }).d);
+    expect(origins().slice(5)).toEqual([undefined]);
+  });
+
   it("raises a committed subrequest limit below the internal calls asked, keeping its other limits", async () => {
     const path = join(repoRoot, "apps/api/wrangler.jsonc");
     const committed = parseJsonc<Record<string, unknown>>(await readFile(path, "utf8"));

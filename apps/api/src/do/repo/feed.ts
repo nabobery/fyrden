@@ -17,6 +17,7 @@ import {
   newMentions,
   type RepoRole,
 } from "@fyrden/domain";
+import { emailMark } from "../../email/category.js";
 import type { DigestEntry, WatcherKey } from "./digests.js";
 import { IDENTITY } from "./thread-preferences.js";
 
@@ -338,6 +339,8 @@ export class RepoFeed {
     // Things to act on first, then threads taken part in, when there are more than one event may
     // name (stable within each).
     audience.sort((a, b) => (a.priority < b.priority ? -1 : a.priority > b.priority ? 1 : 0));
+    // Each recipient's email, from all its contributions, on its first entry, before any is paged.
+    markEmail(audience, plan.action);
     const pages = this.#keepPages(audience.slice(MAX_FEED_AUDIENCE), event);
     const threadKey = `${subject.kind}/${plan.number}`;
     const version = this.#bump(threadKey);
@@ -1051,6 +1054,26 @@ function settledAs(who: FeedPrincipal, kind: FeedKind, reason: string): Named {
 }
 
 /** Whether a recipient's entry settles a review request (reaching it whatever its access). */
+/**
+ * Marks each recipient's first entry in `audience` (in delivery order, so
+ * before any is paged) with the email the event makes for it, folded from
+ * all its entries (`emailMark`); the others carry none.
+ */
+export function markEmail(audience: FeedRecipient[], action: string): void {
+  const byPrincipal = new Map<string, number[]>();
+  audience.forEach((r, i) => {
+    byPrincipal.set(r.principal, [...(byPrincipal.get(r.principal) ?? []), i]);
+  });
+  for (const at of byPrincipal.values()) {
+    const mark = emailMark(
+      at.map((i) => audience[i] as FeedRecipient),
+      action,
+    );
+    const first = at[0] as number;
+    if (mark) audience[first] = { ...(audience[first] as FeedRecipient), email: mark };
+  }
+}
+
 function settlesRequest(r: Named): boolean {
   return r.kind === "review_requested" && r.state === "resolved";
 }

@@ -46,6 +46,12 @@ export interface DeployDeps {
         webhookSecret?: string;
         sending?: boolean;
         limits?: { daily?: number; monthly?: number; reserve?: number };
+        /**
+         * Where notification emails' links point (`FYRDEN_PUBLIC_ORIGIN`, a
+         * custom domain's origin); left out while sending, the web
+         * Worker's URL, set by deploying the API again once it is known.
+         */
+        publicOrigin?: string;
       }
     | undefined;
   runner: WranglerRunner;
@@ -191,6 +197,9 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
         ...(deps.email.limits?.reserve !== undefined && {
           FYRDEN_EMAIL_RESERVE: String(deps.email.limits.reserve),
         }),
+        ...(deps.email.publicOrigin !== undefined && {
+          FYRDEN_PUBLIC_ORIGIN: deps.email.publicOrigin,
+        }),
       }),
     },
     d1_databases: (config.d1_databases ?? []).map((d) => ({
@@ -301,10 +310,26 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   const webUrl = workersDevUrl(await wrangler(runner, ["deploy"], { cwd: webDir }));
   log(`deployed ${WEB_WORKER}${webUrl ? ` at ${webUrl}` : ""}`);
 
-  if (attachTailLater) {
-    await writeDeployConfig(apiDir, deployConfig);
+  // Sending with no origin given: notification emails' links point to the web Worker, known only
+  // now, so the API goes out again with it (every such deploy: its configuration is rebuilt from
+  // the committed file each time, so an earlier deploy's value is not carried forward).
+  const origin =
+    deps.email?.sending && deps.email.publicOrigin === undefined
+      ? webUrl?.replace(/\/$/, "")
+      : undefined;
+  if (deps.email?.sending && deps.email.publicOrigin === undefined && origin === undefined)
+    log(
+      `${WEB_WORKER} has no workers.dev URL: notification email stays off until --public-origin is given`,
+    );
+  if (attachTailLater || origin !== undefined) {
+    const vars = deployConfig.vars as Record<string, string>;
+    await writeDeployConfig(apiDir, {
+      ...deployConfig,
+      vars: { ...vars, ...(origin !== undefined && { FYRDEN_PUBLIC_ORIGIN: origin }) },
+    });
     await wrangler(runner, ["deploy", "-c", API_DEPLOY_CONFIG], { cwd: apiDir });
-    log(`attached ${WEB_WORKER} as the Tail Worker of ${config.name}`);
+    if (attachTailLater) log(`attached ${WEB_WORKER} as the Tail Worker of ${config.name}`);
+    if (origin !== undefined) log(`set FYRDEN_PUBLIC_ORIGIN to ${origin} on ${config.name}`);
   }
 
   return { created: resources.created, apiUrl, webUrl };

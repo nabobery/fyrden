@@ -194,7 +194,29 @@ describe("envDeployOptions", () => {
       ["--email-daily-limit", "1e3"],
     ])
       expect(parseDeployArgs([...email, ...extra]), extra.join(" ")).toBeUndefined();
+    expect(parseDeployArgs([...email, "--public-origin", "https://git.example"])).toMatchObject({
+      email: { publicOrigin: "https://git.example" },
+    });
+    // As the API reads it: canonical.
+    for (const [given, canonical] of [
+      ["https://Git.Example", "https://git.example"],
+      ["https://git.example:443", "https://git.example"],
+      ["https://git.example:8443", "https://git.example:8443"],
+      ["https://git.example/", "https://git.example"],
+    ] as const)
+      expect(parseDeployArgs([...email, "--public-origin", given])).toMatchObject({
+        email: { publicOrigin: canonical },
+      });
+    for (const bad of [
+      "http://git.example",
+      "https://git.example/x",
+      "https://git.example:99999",
+      "https://u:p@git.example",
+      "git",
+    ])
+      expect(parseDeployArgs([...email, "--public-origin", bad]), bad).toBeUndefined();
     // Without a provider: no deploy.
+    expect(parseDeployArgs(["--public-origin", "https://git.example"])).toBeUndefined();
     expect(parseDeployArgs(["--email-sending", "on"])).toBeUndefined();
     expect(parseDeployArgs(["--email-daily-limit", "10"])).toBeUndefined();
   });

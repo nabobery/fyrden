@@ -5,6 +5,7 @@ import {
   type FeedPriority,
   parseThreadKey,
 } from "@fyrden/domain";
+import { forgetQueuedRepos } from "../../email/notifications.js";
 import { DIGEST_POLICY } from "../repo/digests.js";
 import { type Gate, Inbox, OPEN_GATE } from "./inbox.js";
 
@@ -1100,6 +1101,7 @@ export class Feed {
         .toArray();
       deleted += this.#forgot(gone, false);
       this.inbox.purge(repoId, purge.until);
+      forgetQueuedRepos(this.sql, [repoId], purge.until);
       for (const row of this.sql
         .exec<Row>("SELECT * FROM feed_items WHERE repo_id = ? AND kind = 'activity'", repoId)
         .toArray()) {
@@ -1190,6 +1192,11 @@ export class Feed {
       );
     }
     return deleted;
+  }
+
+  /** What a purge of `repoId` forgot up to (its entries until then are dropped); null for none. */
+  purgedThrough(repoId: string): number | null {
+    return this.#purgedUntil(repoId);
   }
 
   #purgedUntil(repoId: string): number | null {

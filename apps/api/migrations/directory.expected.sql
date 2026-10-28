@@ -43,6 +43,12 @@ CREATE TABLE email_admissions (
   at INTEGER NOT NULL
 ) STRICT, WITHOUT ROWID;
 
+-- table email_attempts
+CREATE TABLE email_attempts (
+  day INTEGER PRIMARY KEY,
+  used INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+
 -- table email_confirmations
 CREATE TABLE email_confirmations (
   token_hash TEXT PRIMARY KEY CHECK (length(token_hash) = 64),
@@ -61,6 +67,19 @@ CREATE TABLE email_counters (
   period INTEGER NOT NULL,
   sent INTEGER NOT NULL,
   PRIMARY KEY (scope, key, period)
+) STRICT, WITHOUT ROWID;
+
+-- table email_deliveries
+CREATE TABLE email_deliveries (
+  principal_id TEXT NOT NULL,
+  event_key TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('sending', 'sent', 'unknown', 'refused', 'retry', 'exhausted')),
+  attempts INTEGER NOT NULL,
+  address_id TEXT NOT NULL,
+  provider_id TEXT,
+  next_attempt_at INTEGER,
+  at INTEGER NOT NULL,
+  PRIMARY KEY (principal_id, event_key)
 ) STRICT, WITHOUT ROWID;
 
 -- table email_mailboxes
@@ -480,6 +499,9 @@ CREATE INDEX email_confirmations_reap ON email_confirmations (reap_at);
 
 -- index email_counters_period
 CREATE INDEX email_counters_period ON email_counters (scope, period);
+
+-- index email_deliveries_at
+CREATE INDEX email_deliveries_at ON email_deliveries (at);
 
 -- index email_mailboxes_idle
 CREATE INDEX email_mailboxes_idle ON email_mailboxes (idle_since) WHERE idle_since IS NOT NULL;

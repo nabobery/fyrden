@@ -52,6 +52,13 @@ const strength = (reason: string) => {
 };
 const stronger = (a: string, b: string) => (strength(b) < strength(a) ? b : a);
 
+/** The stronger of two reasons. */
+export const strongestReason = (a: InboxReason, b: InboxReason): InboxReason =>
+  stronger(a, b) as InboxReason;
+
+/** Whether a thread unsubscribed by the principal still notifies for `reason`. */
+export const notifiesThroughUnsubscribe = (reason: InboxReason) => DIRECT.has(reason);
+
 /** The GitHub reason an entry notifies for, from its kind and why its recipient hears of it. */
 export function reasonOf(kind: FeedKind, reasons: readonly string[]): InboxReason {
   switch (kind) {

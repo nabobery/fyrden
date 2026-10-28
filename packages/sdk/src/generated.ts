@@ -6085,7 +6085,7 @@ export type UsersNotificationSettingsGetOutput = {
     direct: boolean;
     /** Activity on threads you take part in or subscribed to. Off unless set. */
     participating: boolean;
-    /** Activity in repositories you watch. Off unless set. */
+    /** Activity in repositories you watch. Off unless set. Saved, but not sent yet. */
     watching: boolean;
   };
 };
@@ -6106,7 +6106,7 @@ export type UsersNotificationSettingsPutOutput = {
     direct: boolean;
     /** Activity on threads you take part in or subscribed to. Off unless set. */
     participating: boolean;
-    /** Activity in repositories you watch. Off unless set. */
+    /** Activity in repositories you watch. Off unless set. Saved, but not sent yet. */
     watching: boolean;
   };
 };

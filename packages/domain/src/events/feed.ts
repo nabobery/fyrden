@@ -113,6 +113,17 @@ export const FeedRecipientSchema = z.strictObject({
   state: z.enum(["open", "resolved"]),
   /** The recipient's own action changed it: its state changes, without notifying it. */
   silent: z.boolean(),
+  /**
+   * The email the event makes for this recipient, on exactly one of its
+   * entries (decided by the producer from all of them): its category, and
+   * the inbox reason it is for. Absent: none (and on entries made before).
+   */
+  email: z
+    .strictObject({
+      category: z.enum(["direct", "participating"]),
+      reason: z.string().regex(/^[a-z_]{1,32}$/),
+    })
+    .optional(),
 });
 export type FeedRecipient = z.infer<typeof FeedRecipientSchema>;
 

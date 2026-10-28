@@ -1,3 +1,5 @@
+CREATE INDEX email_queue_due ON email_queue (due_at);
+CREATE INDEX email_queue_repo ON email_queue (repo_id, conversation);
 CREATE INDEX feed_cursors_age ON feed_cursors (created_at);
 CREATE INDEX feed_cursors_credential ON feed_cursors (credential, hash, created_at);
 CREATE INDEX feed_evictions_at ON feed_evictions (event_at);
@@ -18,6 +20,22 @@ CREATE INDEX inbox_threads_open_stream ON inbox_threads (repo_id, subject, updat
 CREATE INDEX inbox_threads_stream ON inbox_threads (repo_id, subject, updated_at, id);
 CREATE INDEX inbox_threads_unread ON inbox_threads (subject, unread, updated_at, id);
 CREATE INDEX purge_marks_until ON purge_marks (until_at);
+CREATE TABLE email_queue (
+        event_key TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
+        thread_key TEXT NOT NULL,
+        conversation TEXT NOT NULL,
+        epoch INTEGER NOT NULL,
+        member TEXT,
+        actor TEXT,
+        action TEXT NOT NULL,
+        category TEXT NOT NULL CHECK (category IN ('direct', 'participating')),
+        reason TEXT NOT NULL,
+        occurred_at INTEGER NOT NULL,
+        arrival INTEGER NOT NULL,
+        due_at INTEGER NOT NULL,
+        tries INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE feed_cursors (
         id TEXT PRIMARY KEY,
         credential TEXT NOT NULL,

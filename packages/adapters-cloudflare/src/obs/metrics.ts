@@ -97,8 +97,11 @@ export const METRICS = {
   // tell, after a repository restore (counted once an event).
   "feed.preference_overflow": ["kind"],
   "code_owners.request_skipped": ["reason"],
-  // Emails handed to the provider (`kind` = confirmation), and those not sent or not accepted
-  // (`status` = allowance | suppressed | gone, held back before the call; refused | unknown).
+  // Emails handed to the provider (`kind` = confirmation | notification), and those not sent or
+  // not accepted (`status`: a confirmation's allowance | suppressed | gone, held back before the
+  // call; a notification's expired | off | no_unsubscribe_key | attempts (the day's spent) |
+  // denied | unknown (access) | forgotten | delivered (sent already) | ineligible; either's
+  // refused | unknown, the provider's answer).
   "email.send": ["kind"],
   "email.not_sent": ["kind", "status"],
   // The provider's callbacks applied (`type` = suppression.added | suppression.removed, or

@@ -11,6 +11,7 @@ import type {
   requestUserEmailConfirmation,
   setNotificationSettings,
 } from "@fyrden/api-contract";
+import { reapingDeliveries } from "../email/notifications.js";
 import { emailProvider, emailSending } from "../email/provider.js";
 import {
   emailLimits,
@@ -776,9 +777,10 @@ export async function reapEmails(
 ): Promise<void> {
   const { now } = deps;
   const db = env.DIRECTORY;
-  deps.metrics?.count("d1.query", { db: "directory", op: "emails_reap" }, 8);
+  deps.metrics?.count("d1.query", { db: "directory", op: "emails_reap" }, 10);
   await db.batch([
     reapingSpend(db, now),
+    ...reapingDeliveries(db, now, REAP_ROWS),
     db
       .prepare(
         `DELETE FROM email_confirmations WHERE token_hash IN (SELECT token_hash

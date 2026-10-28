@@ -36280,7 +36280,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "boolean",
                         },
                         "watching": {
-                          "description": "Activity in repositories you watch. Off unless set.",
+                          "description": "Activity in repositories you watch. Off unless set. Saved, but not sent yet.",
                           "type": "boolean",
                         },
                       },
@@ -36376,7 +36376,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "boolean",
                         },
                         "watching": {
-                          "description": "Activity in repositories you watch. Off unless set.",
+                          "description": "Activity in repositories you watch. Off unless set. Saved, but not sent yet.",
                           "type": "boolean",
                         },
                       },

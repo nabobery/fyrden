@@ -18,7 +18,8 @@ const USAGE = `usage:
   fyrden deploy [--plan free|paid] [--internal-calls N] [--discretionary resource=n,...]
                 [--email resend --email-from ADDRESS --email-secrets-file PATH
                                  [--email-sending on|off] [--email-daily-limit N]
-                                 [--email-monthly-limit N] [--email-reserve N]]
+                                 [--email-monthly-limit N] [--email-reserve N]
+                                 [--public-origin https://HOST]]
                                      create resources, migrate and deploy both Workers;
                                      Paid: N calls to D1, R2 and Durable Objects an invocation
                                      (1,000 to 10,000,000; default 1,000);
@@ -30,7 +31,9 @@ const USAGE = `usage:
                                      also holding the webhook's RESEND_WEBHOOK_SECRET, its key
                                      full-access), at most the daily and monthly limits (default
                                      100 and 3,000: Resend Free's), notifications stopping the
-                                     reserve (default 10) short of them; a daily limit of 0: none
+                                     reserve (default 10) short of them; a daily limit of 0: none;
+                                     notification emails link to --public-origin, or else to
+                                     the web Worker's URL (the API deployed again with it)
   fyrden doctor                      check login, resources and D1 schemas without changing anything
   fyrden destroy [--yes]             list what deploy created; with --yes delete it all (data loss)
   ${REPAIR_USAGE}
@@ -80,12 +83,35 @@ export interface EmailArgs {
   sending: boolean;
   /** The allowance's limits given (each left out: its default). */
   limits: EmailLimitArgs;
+  /** Where notification emails' links point (`--public-origin`); left out: the web Worker's URL. */
+  publicOrigin?: string;
 }
 
 export interface EmailLimitArgs {
   daily?: number;
   monthly?: number;
   reserve?: number;
+}
+
+/**
+ * An `https` origin with no path, query or credentials, as the API reads
+ * `FYRDEN_PUBLIC_ORIGIN` (canonical: the host lower-cased, a default port
+ * dropped); null for anything else.
+ */
+export function canonicalOrigin(text: string): string | null {
+  try {
+    const url = new URL(text);
+    const bare =
+      url.protocol === "https:" &&
+      url.pathname === "/" &&
+      !url.search &&
+      !url.hash &&
+      !url.username &&
+      !url.password;
+    return bare ? url.origin : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The API's defaults for the email allowance (Resend Free's), and its rule for them. */
@@ -121,6 +147,7 @@ export function parseDeployArgs(
     "--email-daily-limit",
     "--email-monthly-limit",
     "--email-reserve",
+    "--public-origin",
   ];
   for (let i = 0; i < args.length; i += 2) {
     const [flag, value] = [args[i] as string, args[i + 1]];
@@ -163,9 +190,12 @@ function emailArgs(given: ReadonlyMap<string, string>): EmailArgs | undefined | 
     reserve: given.get("--email-reserve"),
   };
   const anyLimit = Object.values(limitFlags).some((v) => v !== undefined);
+  const origin = given.get("--public-origin");
   if (provider === undefined && from === undefined && secretsFile === undefined) {
-    return sending === undefined && !anyLimit ? undefined : null;
+    return sending === undefined && !anyLimit && origin === undefined ? undefined : null;
   }
+  const publicOrigin = origin === undefined ? undefined : canonicalOrigin(origin);
+  if (publicOrigin === null) return null;
   if (provider !== "resend" || !from || !secretsFile) return null;
   // `Name <address>` or a bare address.
   if (!/^(?:[^<>]+ <[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>|[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+)$/.test(from))
@@ -178,7 +208,14 @@ function emailArgs(given: ReadonlyMap<string, string>): EmailArgs | undefined | 
     limits[name] = Number(text);
   }
   if (!emailLimitsFit(limits)) return null;
-  return { provider, from, secretsFile, sending: sending === "on", limits };
+  return {
+    provider,
+    from,
+    secretsFile,
+    sending: sending === "on",
+    limits,
+    ...(publicOrigin !== undefined && { publicOrigin }),
+  };
 }
 
 /** The resources a discretionary allowance names (as the API's `FYRDEN_DISCRETIONARY_DAILY`). */
@@ -346,6 +383,7 @@ export async function emailDeploy(
     ...(secrets.webhookSecret !== undefined && { webhookSecret: secrets.webhookSecret }),
     sending: email.sending,
     limits: email.limits,
+    ...(email.publicOrigin !== undefined && { publicOrigin: email.publicOrigin }),
   };
 }
 

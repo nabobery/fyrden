@@ -366,4 +366,31 @@ export const userSchema: readonly DoMigration[] = [
       ALTER TABLE feed_evictions ADD COLUMN event_key TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    version: 8,
+    name: "email_queue",
+    // Notification emails waiting to be sent (src/email/notifications.ts): one an event, made
+    // from the entry the repository marked, what the message says of the event kept, what can
+    // change read again when it is sent. At most 200; due by `due_at` (the alarm's `email` kind).
+    sql: `
+      CREATE TABLE email_queue (
+        event_key TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
+        thread_key TEXT NOT NULL,
+        conversation TEXT NOT NULL,
+        epoch INTEGER NOT NULL,
+        member TEXT,
+        actor TEXT,
+        action TEXT NOT NULL,
+        category TEXT NOT NULL CHECK (category IN ('direct', 'participating')),
+        reason TEXT NOT NULL,
+        occurred_at INTEGER NOT NULL,
+        arrival INTEGER NOT NULL,
+        due_at INTEGER NOT NULL,
+        tries INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX email_queue_due ON email_queue (due_at);
+      CREATE INDEX email_queue_repo ON email_queue (repo_id, conversation);
+    `,
+  },
 ];

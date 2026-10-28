@@ -120,7 +120,9 @@ export const NotificationSettings = z.object({
     participating: z
       .boolean()
       .describe("Activity on threads you take part in or subscribed to. Off unless set."),
-    watching: z.boolean().describe("Activity in repositories you watch. Off unless set."),
+    watching: z
+      .boolean()
+      .describe("Activity in repositories you watch. Off unless set. Saved, but not sent yet."),
   }),
 });
 

@@ -1,5 +1,20 @@
-import { createLogger } from "@fyrden/adapters-cloudflare/obs";
+import { createLogger, createMetrics } from "@fyrden/adapters-cloudflare/obs";
 import type { FeedEntry } from "@fyrden/domain";
+import {
+  type Candidate,
+  eligibleCategories,
+  forgetQueuedConversations,
+  forgetQueuedGone,
+  logSendFailure,
+  NOTIFICATION_POLICY,
+  type NotificationCategory,
+  nextDue,
+  notificationsOn,
+  queueCandidates,
+  sendCandidate,
+  sendsPerAlarm,
+  type Turn,
+} from "../email/notifications.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { userSchema } from "./schema/user.js";
 import {
@@ -27,6 +42,7 @@ import {
   type InboxQuery,
   type InboxThread,
   OPEN_GATE,
+  parseThreadId,
   type SubjectKind,
 } from "./user/inbox.js";
 
@@ -43,7 +59,8 @@ const ALARM_STEPS = 4;
  * again.
  */
 const KINDS = ["retire", "retain", "cursors"] as const;
-type Kind = (typeof KINDS)[number];
+/** The alarm's kinds: the steps above, and notification email (sent after them, see `#sendEmails`). */
+type Kind = (typeof KINDS)[number] | "email";
 
 /** The feed's restore generation and its principal's lifecycle (bound: the source, the principal). */
 export const EPOCH_READ = `SELECT (SELECT epoch_gen FROM source_epochs WHERE source_id = ?1) AS epoch_gen,
@@ -111,6 +128,7 @@ export class UserDO extends MigratingDO {
   async applyFeed(all: readonly FeedEntry[]): Promise<FeedApplied> {
     await this.#checkEpoch();
     const gate = await this.#gate(all);
+    const emailing = await this.#emailing(all);
     // No await from here to the transaction: a retirement or a window passed meanwhile counts.
     if (this.#retired()) return NOTHING_APPLIED;
     const now = Date.now();
@@ -118,9 +136,19 @@ export class UserDO extends MigratingDO {
     const entries = all.filter((e) => !late(e));
     const expired = [...new Set(all.filter(late).map((e) => e.eventKey))];
     const feed = this.#feed();
-    const applied = this.ctx.storage.transactionSync(() => feed.apply(entries, gate));
+    const { applied, queued } = this.ctx.storage.transactionSync(() => {
+      const applied = feed.apply(entries, gate);
+      // The email an entry carries, whatever the inbox made of it, but not for a purged repository.
+      const mailable = entries.filter(
+        (e) => e.recipient.email && e.occurredAt > (feed.purgedThrough(e.repoId) ?? -1),
+      );
+      const queued =
+        emailing.size > 0 ? queueCandidates(this.ctx.storage.sql, mailable, emailing, now) : 0;
+      return { applied, queued };
+    });
     // Even with nothing shown changed: a tombstone may have been written.
     if (entries.length > 0) await this.#scheduleRetention(feed);
+    if (queued > 0) await this.#scheduleEmail();
     const unapplied = [...new Set([...expired, ...(applied.expired ?? [])])];
     return unapplied.length > 0 ? { ...applied, expired: unapplied } : applied;
   }
@@ -181,7 +209,14 @@ export class UserDO extends MigratingDO {
     await this.#checkEpoch();
     if (this.#retired()) return;
     const inbox = this.#feed().inbox;
-    this.ctx.storage.transactionSync(() => inbox.forget(threads));
+    const conversations = threads.flatMap(({ id, epoch }) => {
+      const parsed = parseThreadId(id);
+      return parsed ? [{ ...parsed, epoch }] : [];
+    });
+    this.ctx.storage.transactionSync(() => {
+      forgetQueuedConversations(this.ctx.storage.sql, conversations);
+      inbox.forget(threads);
+    });
   }
 
   /**
@@ -212,6 +247,18 @@ export class UserDO extends MigratingDO {
       if (row.conversation === null) ignored.add(row.repo_id);
       else unsubscribed.add(`${row.repo_id}\n${row.conversation}`);
     return { ignored, unsubscribed };
+  }
+
+  /**
+   * The email categories the principal gets now, when an entry carries an
+   * email and the deployment sends notification email (one directory
+   * read); none otherwise.
+   */
+  async #emailing(entries: readonly FeedEntry[]): Promise<ReadonlySet<NotificationCategory>> {
+    const principalId = this.ctx.id.name;
+    if (principalId === undefined || !entries.some((e) => e.recipient.email)) return new Set();
+    if (!notificationsOn(this.env)) return new Set();
+    return eligibleCategories(this.env, principalId);
   }
 
   /**
@@ -274,7 +321,12 @@ export class UserDO extends MigratingDO {
     await this.#checkEpoch();
     if (this.#retired()) return { deleted: 0 };
     const feed = this.#feed();
-    return { deleted: this.ctx.storage.transactionSync(() => feed.forgetThreads(threads)) };
+    return {
+      deleted: this.ctx.storage.transactionSync(() => {
+        forgetQueuedGone(this.ctx.storage.sql, threads);
+        return feed.forgetThreads(threads);
+      }),
+    };
   }
 
   /**
@@ -374,7 +426,7 @@ export class UserDO extends MigratingDO {
       retire: () => (feed.retireStep() ? Date.now() : null),
       retain: () => (feed.retainStep() ? Date.now() : feed.nextRetention()),
       cursors: () => (feed.expireCursorsStep() ? Date.now() : feed.nextCursorExpiry()),
-    } satisfies Record<Kind, () => number | null>;
+    } satisfies Record<(typeof KINDS)[number], () => number | null>;
     let ran = 0;
     for (let progress = true; progress && ran < ALARM_STEPS; ) {
       progress = false;
@@ -393,9 +445,74 @@ export class UserDO extends MigratingDO {
         }
       }
     }
+    if (this.#dueNow("email") && !this.#retired()) await this.#sendEmails();
     // Exactly by the schedule as the steps left it: an alarm set earlier in this run (the epoch
     // check arms one) is moved to what is due now; calls made meanwhile left their rows.
     await this.#arm(true);
+  }
+
+  /**
+   * Sends the notification emails due (see `sendCandidate`), a few a run,
+   * one at a time; each candidate's row then goes, or is due again. Rows
+   * read again after each send's awaits: a purge or retirement meanwhile
+   * stands.
+   */
+  async #sendEmails(): Promise<void> {
+    const principalId = this.ctx.id.name;
+    if (principalId === undefined) return;
+    const sql = this.ctx.storage.sql;
+    const due = sql
+      .exec<{ event_key: string }>(
+        "SELECT event_key FROM email_queue WHERE due_at <= ? ORDER BY due_at, arrival LIMIT ?",
+        Date.now(),
+        sendsPerAlarm(this.env),
+      )
+      .toArray();
+    const metrics = createMetrics(this.env.METRICS);
+    // A row as it is now: a purge, a forgetting or the retirement during an earlier send stands.
+    const queued = (key: string) =>
+      this.#retired()
+        ? undefined
+        : (sql.exec("SELECT * FROM email_queue WHERE event_key = ?", key).toArray()[0] as unknown as
+            | Candidate
+            | undefined);
+    for (const { event_key } of due) {
+      const candidate = queued(event_key);
+      if (!candidate) continue;
+      let turn: Turn;
+      try {
+        turn = await sendCandidate(this.env, principalId, candidate, metrics, () =>
+          Boolean(queued(event_key)),
+        );
+      } catch (error) {
+        logSendFailure(error);
+        turn = {
+          done: false,
+          due: Date.now() + NOTIFICATION_POLICY.backoffMs * 2 ** candidate.tries,
+          tried: true,
+        };
+      }
+      this.ctx.storage.transactionSync(() => {
+        if (turn.done || (turn.tried && candidate.tries + 1 >= NOTIFICATION_POLICY.maxAttempts))
+          sql.exec("DELETE FROM email_queue WHERE event_key = ?", candidate.event_key);
+        else
+          sql.exec(
+            "UPDATE email_queue SET due_at = ?, tries = tries + ? WHERE event_key = ?",
+            turn.due,
+            turn.tried ? 1 : 0,
+            candidate.event_key,
+          );
+      });
+    }
+    this.#setDue("email", nextDue(sql));
+  }
+
+  /** The `email` kind due by the queue's earliest. */
+  async #scheduleEmail(): Promise<void> {
+    const at = nextDue(this.ctx.storage.sql);
+    if (at === null) return;
+    this.#schedule("email", at);
+    await this.#arm();
   }
 
   /** Whether `kind`'s row is due now. */
@@ -503,6 +620,7 @@ export class UserDO extends MigratingDO {
           Date.now(),
         );
         this.ctx.storage.sql.exec("DELETE FROM user_schedule WHERE kind <> 'retire'");
+        this.ctx.storage.sql.exec("DELETE FROM email_queue");
         this.#schedule("retire", Date.now());
       });
     await this.#arm();
