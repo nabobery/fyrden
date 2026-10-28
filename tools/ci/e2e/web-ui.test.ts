@@ -315,6 +315,7 @@ describe("the web UI", () => {
     });
     expect(oneClick.status).toBe(200);
     const forged = await fetch(`${origin}/unsubscribe?t=v1.forged`, { method: "POST" });
-    expect(forged.status).toBe(400);
+    // On a wrong answer, what the Workers logged says why.
+    expect(forged.status, `${await forged.text()}\n${stack?.output().slice(-6000)}`).toBe(400);
   });
 });
