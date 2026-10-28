@@ -210,6 +210,7 @@ describe("the web UI", () => {
       ["/?index", { name: "evil" }],
       ["/settings/tokens", { type: "git", days: "30" }],
       ["/settings/agents", { intent: "create-agent", handle: "evil-bot" }],
+      ["/settings/notifications", { intent: "settings", watching: "on" }],
       ["/ada/demo/settings", { intent: "delete", confirm: "demo" }],
       ["/ada/demo/edit/main/README.md", { intent: "save", content: "pwned" }],
     ] as const) {
@@ -266,6 +267,23 @@ describe("the web UI", () => {
     await page.getByRole("button", { name: "Create agent" }).click();
     await see(page.getByRole("cell", { name: "ada-bot" })).toBeVisible();
     await accessible("agents");
+  });
+
+  it("sets what notification email is sent, and says the deployment sends none yet", async () => {
+    await page.goto(`${origin}/settings/notifications`);
+    await see(page.getByText("No address yet")).toBeVisible();
+    await page.getByLabel("Threads you take part in").check();
+    await page.getByRole("button", { name: "Save" }).click();
+    await see(page.getByRole("status")).toContainText("saved");
+    // Kept: read back from the API.
+    await page.goto(`${origin}/settings/notifications`);
+    await see(page.getByLabel("Threads you take part in")).toBeChecked();
+    await see(page.getByLabel("Repositories you watch")).not.toBeChecked();
+    // This stack sends no email: adding an address is refused, and the page says why.
+    await page.getByLabel("Add an address").fill("ada@example.com");
+    await page.getByRole("button", { name: "Add address" }).click();
+    await see(page.getByRole("alert")).toContainText("sends no email");
+    await accessible("notifications");
   });
 
   it("never had a script, style or image refused by the policy on any page", () => {

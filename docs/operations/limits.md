@@ -952,7 +952,7 @@ Watched activity (P2 entries) is the work a deployment may leave out: on Workers
 
 ## Email
 
-A user's notification addresses, managed from Fyrden's web pages signed in: `GET`, `POST` and `DELETE /user/emails` (GitHub's shapes) and `POST /user/emails/confirm` and `/user/emails/confirmation` (Fyrden's). Email is sent only while the deployment's sending is on (`fyrden deploy --email resend … --email-sending on`); while it is off, adding an address or asking for a confirmation answers 503 `email_unavailable`, and no notification email is queued. Notification email also needs the deployment's public origin (`FYRDEN_PUBLIC_ORIGIN`), and is to be turned on once the web settings page for addresses and notifications exists.
+A user's notification addresses, managed from Fyrden's web pages signed in: `GET`, `POST` and `DELETE /user/emails` (GitHub's shapes) and `POST /user/emails/confirm` and `/user/emails/confirmation` (Fyrden's). Email is sent only while the deployment's sending is on (`fyrden deploy --email resend … --email-sending on`); while it is off, adding an address or asking for a confirmation answers 503 `email_unavailable`, and no notification email is queued. Notification email also needs the deployment's public origin (`FYRDEN_PUBLIC_ORIGIN`). People manage their addresses (add, confirm, ask for a new link, remove) and which notification email they get on the web page `/settings/notifications`, which every notification email links to.
 
 | What | Value |
 |---|---|
