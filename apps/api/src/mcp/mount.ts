@@ -6,8 +6,10 @@ import {
   registry,
 } from "@fyrden/api-contract";
 import {
+  type AuthInfo,
   type CallToolResult,
   createMcpHandler,
+  isLegacyRequest,
   McpServer,
   ProtocolError,
   type ReadResourceResult,
@@ -15,13 +17,26 @@ import {
   ResourceTemplate,
   type StandardSchemaWithJSON,
 } from "@modelcontextprotocol/server";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
+import { LIVE_POLICY } from "../do/user/live.js";
 import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
 import { NO_STORE } from "../http/cache.js";
 import { problem } from "../http/problem.js";
+import { liveCredential } from "../live/credential.js";
+import { liveAllowance } from "../live/directory.js";
+import { openLiveSocket } from "../live/routes.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
-import { executeOperation, type OpContext } from "../ops/execute.js";
+import { executeOperation, type OpContext, rateLimitKey } from "../ops/execute.js";
 import { API_VERSION, opContext, operationHandler } from "../rest/mount.js";
+import { clock, newId } from "../services.js";
+import {
+  FEED_RESOURCE_TEMPLATE,
+  feedResourceUri,
+  LISTEN_POLICY,
+  type ListenId,
+  ListenStream,
+  listenRequest,
+} from "./listen.js";
 
 export const MCP_PATH = "/mcp";
 
@@ -147,17 +162,46 @@ async function readFileResource(
  * answered generically.
  */
 async function readResource(
+  read: typeof readFileResource,
+  operation: string,
   ctx: OpContext,
   uri: URL,
   variables: Record<string, string | string[]>,
 ): Promise<ReadResourceResult> {
   try {
-    return await readFileResource(ctx, uri, variables);
+    return await read(ctx, uri, variables);
   } catch (error) {
     if (error instanceof ProtocolError || error instanceof ResourceNotFoundError) throw error;
-    ctx.log.error("unhandled error", { error, operation: "repos.contents.get" });
+    ctx.log.error("unhandled error", { error, operation });
     throw new ProtocolError(-32603, "An unexpected error occurred.");
   }
+}
+
+const syncFeedOp = (registry as readonly OperationDef[]).find((op) => op.id === "feed.sync");
+
+/**
+ * Reads the caller's feed resource: a sync of it (`feed.sync`, authorized
+ * as the tool is). Another principal's feed is not found, as a missing one.
+ */
+async function readFeedResource(
+  ctx: OpContext,
+  uri: URL,
+  variables: Record<string, string | string[]>,
+): Promise<ReadResourceResult> {
+  if (
+    variables.principal !== ctx.auth.principalId ||
+    uri.href !== feedResourceUri(ctx.auth.principalId)
+  )
+    throw new ResourceNotFoundError(uri.href);
+  if (!syncFeedOp) throw new Error("feed.sync is not registered");
+  const result = await executeOperation(syncFeedOp, operationHandler(syncFeedOp), ctx, {});
+  if (!result.ok)
+    throw new ProtocolError(-32603, result.problem.detail ?? "The feed could not be read.");
+  return {
+    contents: [
+      { uri: uri.href, mimeType: "application/json", text: JSON.stringify(result.output) },
+    ],
+  };
 }
 
 type JsonSchemaOf = StandardSchemaWithJSON["~standard"]["jsonSchema"]["input"];
@@ -207,13 +251,21 @@ export function withConvertedJsonSchema(schema: StandardSchemaWithJSON): Standar
   return wrapped;
 }
 
-/** One MCP server per request (stateless Streamable HTTP), with a tool per registry operation. */
-function buildServer(ctx: OpContext): McpServer {
+/**
+ * One MCP server per request (stateless Streamable HTTP), with a tool per
+ * registry operation. Resources are subscribed to only on 2026-07-28 (its
+ * `subscriptions/listen`; the 2025 revisions' subscriptions need a session)
+ * and while the deployment sends live hints.
+ */
+function buildServer(ctx: OpContext, era: "modern" | "legacy"): McpServer {
   // The tools and resources are the registry's: they never change while a client is connected.
-  const server = new McpServer(
-    { name: "fyrden", version: API_VERSION },
-    { capabilities: { tools: { listChanged: false }, resources: { listChanged: false } } },
-  );
+  const subscribe = era === "modern" && liveAllowance(ctx.env) !== null;
+  const server = new McpServer(SERVER_INFO, {
+    capabilities: {
+      tools: { listChanged: false },
+      resources: { listChanged: false, ...(subscribe && { subscribe: true }) },
+    },
+  });
   // Repository files as resources (not enumerable: a client names the file it wants).
   server.registerResource(
     "repository-file",
@@ -223,7 +275,7 @@ function buildServer(ctx: OpContext): McpServer {
       description:
         "A file (or a directory's entries) on a repository's default branch: fyrden://repos/{owner}/{repo}/files/{path}.",
     },
-    (uri, variables) => readResource(ctx, uri, variables),
+    (uri, variables) => readResource(readFileResource, "repos.contents.get", ctx, uri, variables),
   );
   server.registerResource(
     "repository-file-at-ref",
@@ -233,7 +285,24 @@ function buildServer(ctx: OpContext): McpServer {
       description:
         "A file (or a directory's entries) at a branch, tag or commit: fyrden://repos/{owner}/{repo}/refs/{ref}/files/{path} (a branch's slashes as %2F; a commit's never changes).",
     },
-    (uri, variables) => readResource(ctx, uri, variables),
+    (uri, variables) => readResource(readFileResource, "repos.contents.get", ctx, uri, variables),
+  );
+  // The caller's feed: listed (it is the caller's only one), read as a sync, and subscribed to
+  // through `subscriptions/listen` where the deployment sends live hints.
+  server.registerResource(
+    "feed",
+    new ResourceTemplate(FEED_RESOURCE_TEMPLATE, {
+      list: async () => ({
+        resources: [{ uri: feedResourceUri(ctx.auth.principalId), name: "Activity feed" }],
+      }),
+    }),
+    {
+      title: "Activity feed",
+      description:
+        "Your activity feed (fyrden://feed/{your principal id}), read as sync_feed answers. Listen to it with subscriptions/listen: subscribe first, then read it, and read it again (or get_feed with the cursor) on each notifications/resources/updated.",
+      mimeType: "application/json",
+    },
+    (uri, variables) => readResource(readFeedResource, "feed.sync", ctx, uri, variables),
   );
   for (const op of registry as readonly OperationDef[]) {
     if (!op.mcp) continue;
@@ -250,6 +319,146 @@ function buildServer(ctx: OpContext): McpServer {
     );
   }
   return server;
+}
+
+function parseJson(body: Uint8Array | ArrayBuffer | string): unknown {
+  try {
+    return JSON.parse(typeof body === "string" ? body : new TextDecoder().decode(body));
+  } catch {
+    return undefined;
+  }
+}
+
+/** The server's identity, as the SDK names it on results. */
+const SERVER_INFO = { name: "fyrden", version: API_VERSION } as const;
+
+/** A server with only what a listen request's validation reads: its capabilities. */
+const listenServer = () =>
+  new McpServer(SERVER_INFO, { capabilities: { resources: { subscribe: true } } });
+
+/** A listen refusal: a JSON-RPC error, its code the HTTP status, its data the problem. */
+function listenRefusal(
+  ctx: OpContext,
+  id: ListenId,
+  status: 400 | 401 | 403 | 409 | 429 | 503,
+  code: string,
+  detail: string,
+  retryAfter?: number,
+): Response {
+  return Response.json({
+    jsonrpc: "2.0",
+    id,
+    error: {
+      code: status,
+      message: detail,
+      data: makeProblem({
+        status,
+        code,
+        detail,
+        requestId: ctx.requestId,
+        ...(retryAfter !== undefined && { retryAfter }),
+      }),
+    },
+  });
+}
+
+const eventStream = (body: ReadableStream<Uint8Array>) =>
+  new Response(body, {
+    headers: { "Content-Type": "text/event-stream", "X-Accel-Buffering": "no" },
+  });
+
+/**
+ * Serves a `subscriptions/listen` request (see `listen.ts`). A 2025-era one
+ * is the SDK's to answer (those revisions have no listen). Otherwise the
+ * SDK validates it as it would serve it (envelope, headers, filter); only a
+ * request it would serve as a stream goes on, its own stream let go unread.
+ * The caller's own feed URI is served while live hints are on, by a live
+ * socket opened before the acknowledgement; anything else asked for is
+ * left out of the acknowledgement.
+ */
+async function serveListen(
+  c: Context<{ Bindings: Env; Variables: AuthVariables }>,
+  ctx: OpContext,
+  request: Request,
+  parsed: unknown,
+  authInfo: AuthInfo,
+): Promise<Response> {
+  const options = { maxRequestBodySize: MAX_JSON_BODY_BYTES };
+  if (await isLegacyRequest(request, parsed))
+    return createMcpHandler(({ era }) => buildServer(ctx, era), options).fetch(request, {
+      authInfo,
+      parsedBody: parsed,
+    });
+  const probe = await createMcpHandler(listenServer, { ...options, keepAliveMs: 0 }).fetch(
+    request,
+    { authInfo, parsedBody: parsed },
+  );
+  if (!probe.headers.get("Content-Type")?.includes("text/event-stream")) return probe;
+  await probe.body?.cancel();
+  const listen = listenRequest(parsed);
+  if (!listen) throw new Error("a served listen request without its id");
+  if (new TextEncoder().encode(JSON.stringify(listen.id)).length > LISTEN_POLICY.idBytes)
+    return listenRefusal(
+      ctx,
+      listen.id,
+      400,
+      "listen_id_too_long",
+      `A listen request's id is at most ${LISTEN_POLICY.idBytes} bytes of JSON.`,
+    );
+  const own = feedResourceUri(ctx.auth.principalId);
+  if (!listen.uris.includes(own) || liveAllowance(c.env) === null)
+    return eventStream(new ListenStream({ id: listen.id, serverInfo: SERVER_INFO }).readable);
+  // Limited by token (or its source), as a write is, before any primary lookup.
+  if (!(await c.env.RATE_LIMIT_WRITE.limit({ key: rateLimitKey(ctx.auth) })).success)
+    return listenRefusal(ctx, listen.id, 429, "rate_limited", "Too many requests for this token.");
+  if (ctx.auth.grantId !== null)
+    return listenRefusal(
+      ctx,
+      listen.id,
+      403,
+      "delegated_listing",
+      "Listen with the user's own credentials.",
+    );
+  const now = clock();
+  const credential = await liveCredential(c.env.DIRECTORY, ctx.auth.id, now);
+  if (!credential)
+    return listenRefusal(
+      ctx,
+      listen.id,
+      401,
+      "invalid_token",
+      "This credential cannot hold a live socket.",
+    );
+  const opened = await openLiveSocket(c.env, credential, `listen:${newId("lsk")}`, ctx.metrics);
+  const socket = opened.ok ? (opened.response.webSocket as WebSocket) : null;
+  // The client left while the socket was opened: it goes at once.
+  if (socket && request.signal.aborted) {
+    socket.accept();
+    socket.close(1000, "done");
+    return new Response(null, { status: 499 });
+  }
+  if (!opened.ok)
+    return listenRefusal(
+      ctx,
+      listen.id,
+      opened.status,
+      opened.code,
+      opened.message,
+      opened.headers["Retry-After"] ? Number(opened.headers["Retry-After"]) : undefined,
+    );
+  if (!socket) throw new Error("an opened live socket without its WebSocket");
+  socket.accept();
+  const stream = new ListenStream({
+    id: listen.id,
+    serverInfo: SERVER_INFO,
+    feed: {
+      uri: own,
+      socket,
+      deadline: Math.min(now + LIVE_POLICY.renewMs, credential.expiresAt),
+    },
+    signal: request.signal,
+  });
+  return eventStream(stream.readable);
 }
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -321,18 +530,19 @@ export function mountMcp(app: Hono<{ Bindings: Env; Variables: AuthVariables }>)
     const request = new Request(c.req.raw, {
       ...(c.req.method !== "GET" && c.req.method !== "HEAD" && { body }),
     });
-    const handler = createMcpHandler(() => buildServer(ctx), {
-      maxRequestBodySize: MAX_JSON_BODY_BYTES,
-    });
-    const answer = await handler.fetch(request, {
-      // The token id, not the token: the SDK never needs the secret.
-      authInfo: {
-        token: auth.id,
-        clientId: auth.principalId,
-        scopes: auth.scopes,
-        expiresAt: Math.floor(auth.expiresAt / 1000),
-      },
-    });
+    // The token id, not the token: the SDK never needs the secret.
+    const authInfo = {
+      token: auth.id,
+      clientId: auth.principalId,
+      scopes: auth.scopes,
+      expiresAt: Math.floor(auth.expiresAt / 1000),
+    };
+    const parsed = c.req.method === "POST" ? parseJson(body) : undefined;
+    const answer = listenRequest(parsed)
+      ? await serveListen(c, ctx, request, parsed, authInfo)
+      : await createMcpHandler(({ era }) => buildServer(ctx, era), {
+          maxRequestBodySize: MAX_JSON_BODY_BYTES,
+        }).fetch(request, { authInfo });
     // Any answer may hold a secret (a git token) or private content: no cache keeps one.
     const response = new Response(answer.body, answer);
     for (const [name, value] of Object.entries(NO_STORE)) response.headers.set(name, value);

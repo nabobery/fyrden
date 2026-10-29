@@ -1,3 +1,4 @@
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { Input, issueLiveTicket, Output } from "@fyrden/api-contract";
 import { hashToken } from "@fyrden/domain";
 import type { Context, Hono } from "hono";
@@ -7,7 +8,7 @@ import { LIVE_POLICY } from "../do/user/live.js";
 import { SESSION_COOKIE, sessionUser } from "../oauth/session.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock, newId } from "../services.js";
-import { liveCredential } from "./credential.js";
+import { type LiveCredential, liveCredential } from "./credential.js";
 import { admit, liveAllowance, release } from "./directory.js";
 
 /*
@@ -50,6 +51,98 @@ export async function issueLiveTicketOperation(
   };
 }
 
+/** Why a live socket was not opened: an HTTP status, a message and its headers. */
+export interface LiveRefusal {
+  readonly ok: false;
+  readonly status: 401 | 409 | 429 | 503;
+  readonly code: "invalid_token" | "live_conflict" | "too_many_sockets" | "live_unavailable";
+  readonly message: string;
+  readonly headers: Record<string, string>;
+}
+
+/**
+ * Opens a live socket of `credential` on its feed's object, once whatever
+ * proved the request is spent (a ticket, or an authenticated MCP listen):
+ * admitted by the directory (the deployment's allowance, the principal's
+ * daily admissions), checked again now that its dependencies are indexed,
+ * then handed to the object, which confirms it and applies the caps. The
+ * object's 101 carries the socket; `ticketId` is unique to the admission.
+ */
+export async function openLiveSocket(
+  env: Env,
+  credential: LiveCredential,
+  ticketId: string,
+  metrics: Metrics | undefined,
+): Promise<{ readonly ok: true; readonly response: Response } | LiveRefusal> {
+  const refused = (
+    status: LiveRefusal["status"],
+    code: LiveRefusal["code"],
+    message: string,
+    headers: Record<string, string> = {},
+  ): LiveRefusal => ({ ok: false, status, code, message, headers });
+  const allowance = liveAllowance(env);
+  if (allowance === null)
+    return refused(503, "live_unavailable", "This deployment sends no live hints.");
+  const now = clock();
+  const socketId = newId("lsk");
+  const expiresAt = Math.min(now + LIVE_POLICY.lifeMs, credential.expiresAt);
+  metrics?.count("d1.query", { db: "directory", op: "live_admit" }, 3);
+  const refusal = await admit(
+    env.DIRECTORY,
+    { id: socketId, ticketId, feed: credential.principalId, expiresAt },
+    credential,
+    allowance,
+    now,
+  );
+  if (refusal === "daily")
+    return refused(429, "too_many_sockets", "Too many live sockets opened today.", {
+      "Retry-After": "3600",
+    });
+  if (refusal === "allowance")
+    return refused(503, "live_unavailable", "The deployment has no room for another live socket.", {
+      "Retry-After": "60",
+    });
+  // Checked again now that its dependencies are indexed: a revocation swept before they were
+  // would have found no socket, so authority changed since the first check refuses it. The
+  // lease is this function's until the object takes the socket: released if this fails.
+  let holds: boolean;
+  try {
+    const again = await liveCredential(env.DIRECTORY, credential.id, clock());
+    holds = again !== null && again.dependencies.join("\n") === credential.dependencies.join("\n");
+  } catch (error) {
+    await release(env.DIRECTORY, [socketId]).catch(() => {});
+    throw error;
+  }
+  if (!holds) {
+    await release(env.DIRECTORY, [socketId]);
+    return refused(401, "invalid_token", "The credential no longer holds.");
+  }
+  const admitted: LiveAdmitted = {
+    socketId,
+    credentialId: credential.id,
+    expiresAt,
+    scopes: credential.scopes,
+    repoIds: credential.repoIds,
+    dependencies: credential.dependencies,
+  };
+  metrics?.count("do.request", { class: "UserDO", method: "fetch" });
+  // From here the object owns it: it releases a socket it refuses, and one whose answer is lost
+  // here closes at its renewal deadline, nothing renewing it.
+  const response = await env.USER.getByName(credential.principalId).fetch(
+    new Request("https://user.internal/live", {
+      headers: { Upgrade: "websocket", [LIVE_ADMITTED]: JSON.stringify(admitted) },
+    }),
+  );
+  if (response.status === 101 && response.webSocket) return { ok: true, response };
+  // The object released its lease: past a cap, its credential revoked or its feed retired, or
+  // its confirmation lost.
+  if (response.status === 429)
+    return refused(429, "too_many_sockets", "This credential or feed holds its most live sockets.");
+  if (response.status === 410)
+    return refused(401, "invalid_token", "The credential no longer holds.");
+  return refused(409, "live_conflict", "The live socket could not be confirmed; try again.");
+}
+
 /** The credential a live upgrade presents: the session of its cookie, or its bearer token. */
 async function presented(c: Context<AppEnv>): Promise<string | null> {
   const authorization = c.req.header("Authorization");
@@ -77,8 +170,7 @@ export function mountLive(app: Hono<AppEnv>): void {
     // Only an upgrade is this route's: any other request goes on to the API, which has no
     // `GET` there (404).
     if (c.req.header("Upgrade") !== "websocket") return next();
-    const allowance = liveAllowance(c.env);
-    if (allowance === null) return c.text("This deployment sends no live hints.", 503);
+    if (liveAllowance(c.env) === null) return c.text("This deployment sends no live hints.", 503);
     const ticket = c.req.query("ticket") ?? "";
     // Nothing is looked up for a request that cannot hold a ticket, or past the client's limit.
     if (!/^[A-Za-z0-9_-]{20,100}$/.test(ticket)) return c.text("No ticket.", 401);
@@ -87,49 +179,19 @@ export function mountLive(app: Hono<AppEnv>): void {
       return c.text("Too many requests.", 429, { "Retry-After": "60" });
     const credentialId = await presented(c);
     if (!credentialId) return c.text("Not signed in as the ticket's credential.", 401);
-    const now = clock();
-    const credential = await liveCredential(c.env.DIRECTORY, credentialId, now);
+    const credential = await liveCredential(c.env.DIRECTORY, credentialId, clock());
     if (!credential) return c.text("The credential no longer holds.", 401);
     const feed = c.env.USER.getByName(credential.principalId);
     c.get("metrics")?.count("do.request", { class: "UserDO", method: "liveRedeem" });
     if (!(await feed.liveRedeem(ticket, credential.id)))
       return c.text("The ticket is not this credential's, used, or expired.", 401);
-    const socketId = newId("lsk");
-    const expiresAt = Math.min(now + LIVE_POLICY.lifeMs, credential.expiresAt);
-    c.get("metrics")?.count("d1.query", { db: "directory", op: "live_admit" }, 3);
-    const refused = await admit(
-      c.env.DIRECTORY,
-      { id: socketId, ticketId: await hashToken(ticket), feed: credential.principalId, expiresAt },
+    const opened = await openLiveSocket(
+      c.env,
       credential,
-      allowance,
-      now,
+      await hashToken(ticket),
+      c.get("metrics"),
     );
-    if (refused === "daily")
-      return c.text("Too many live sockets opened today.", 429, { "Retry-After": "3600" });
-    if (refused === "allowance")
-      return c.text("The deployment has no room for another live socket.", 503, {
-        "Retry-After": "60",
-      });
-    // Checked again now that its dependencies are indexed: a revocation swept before they were
-    // would have found no socket, so authority changed since the first check refuses it.
-    const again = await liveCredential(c.env.DIRECTORY, credential.id, clock());
-    if (!again || again.dependencies.join("\n") !== credential.dependencies.join("\n")) {
-      await release(c.env.DIRECTORY, [socketId]);
-      return c.text("The credential no longer holds.", 401);
-    }
-    const admitted: LiveAdmitted = {
-      socketId,
-      credentialId: credential.id,
-      expiresAt,
-      scopes: credential.scopes,
-      repoIds: credential.repoIds,
-      dependencies: credential.dependencies,
-    };
-    c.get("metrics")?.count("do.request", { class: "UserDO", method: "fetch" });
-    return feed.fetch(
-      new Request(c.req.url, {
-        headers: { Upgrade: "websocket", [LIVE_ADMITTED]: JSON.stringify(admitted) },
-      }),
-    );
+    if (!opened.ok) return c.text(opened.message, opened.status, opened.headers);
+    return opened.response;
   });
 }

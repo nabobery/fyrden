@@ -661,7 +661,8 @@ than a short-lived git token), and repository files as resources
 (`fyrden://repos/{owner}/{repo}/files/{+path}` on the default branch,
 `fyrden://repos/{owner}/{repo}/refs/{ref}/files/{+path}` at a branch, tag or
 commit, a branch's slashes as `%2F`; not listed, a client names the file it
-wants). Each request builds its own
+wants), and the caller's activity feed (`fyrden://feed/{principal id}`,
+listed, read as `sync_feed` answers). Each request builds its own
 server; each tool's JSON Schema is converted once per Worker isolate and
 shared after that.
 
@@ -671,6 +672,7 @@ shared after that.
 | Browser requests | Only from the deployment's own hosts (`Origin`, against DNS rebinding): on `workers.dev`, both Fyrden Workers on the request's account subdomain; the hosts in `FYRDEN_OWN_HOSTS`; loopback. Native clients send no `Origin` |
 | Request body | 8 MiB, as REST |
 | CPU per request | **Measured** on Workers Free (2026-10-14, `wrangler tail`): `tools/list` 5 ms on a warm isolate with 63 tools (45 to 160 ms before tool schemas were converted once per isolate); `whoami` 32 ms and `resources/read` 16 ms (measured before that change) |
+| Feed push | Where live hints are on (below), 2026-07-28's `subscriptions/listen` with the caller's own feed URI in `resourceSubscriptions` (`resources.subscribe` is offered then, and only on 2026-07-28: the 2025 revisions have no listen, and their subscriptions need a session). The request is validated as the MCP SDK serves it; the stream is Fyrden's own. It holds one live socket of the feed's object, opened before the acknowledgement, so a client that listens first and then reads the feed (`resources/read`, or `get_feed` from its cursor) is told of what changes after; each change the credential may read then sends `notifications/resources/updated` for the feed's URI, a hint to read again (what changed is not told; changes not yet sent fold into one). Each answered renewal sends one too (about every 5 minutes): changes whose access could not be decided are passed over, as for browser sockets, which read again on renewal. Any other URI is left out of the acknowledgement and never sent; with none left (or live hints off) the stream is acknowledged empty and ends. Same credentials, admission and caps as the live sockets (a session or the principal's own token; a delegated token is refused, `delegated_listing`, and so is a DPoP-bound one; 5 a credential and 20 a principal at once, browser sockets included; 60 opened a principal a day), and the token's write rate limit. A refusal is a JSON-RPC error whose `code` is the HTTP status and whose `data` is the problem (`status`, `code`, `retry_after`). The request's `id` is stamped on every message, so it is at most 256 bytes of JSON (400 `listen_id_too_long`). Messages are made only as the client reads, one at a time: a client that stops reading acknowledges nothing, so once 8 frames wait the socket's window is full and 2 minutes later its stream ends. Frames are acknowledged every 4 taken, within the socket's control budgets (2 a minute and 4 of its 200 kept for renewals). Every 25 seconds the stream checks its renewal: sent 30 to 55 seconds after the renewal opens (half the deadline), again 60 to 85 seconds later while unanswered. The stream ends gracefully (the `subscriptions/listen` result) when its socket closes (expired, revoked, slow, resynchronized), before its controls run out, and after 2 hours (to the next 25-second check): listen again, then read again. Closing the stream closes the socket; a response the client never read renews nothing, so its socket closes at its deadline (10 minutes). Keepalive comments every 25 seconds while nothing else is sent |
 | First request on a new isolate | **Measured** on Workers Free (2026-10-14): 60 to 190 ms of CPU for `tools/list`, paid once per isolate: loading the Worker's code, the MCP SDK building its protocol schemas on first use, and converting every tool's schema. New isolates are most common right after a deploy and when traffic grows |
 
 On Free, whose nominal CPU limit is 10 ms per request
@@ -975,7 +977,7 @@ A user's notification addresses, managed from Fyrden's web pages signed in: `GET
 
 ## Live hints (off unless turned on)
 
-A WebSocket that hints which of the caller's feed and inbox streams changed, so a page or client rereads them through the REST APIs. Off until the deployment turns it on (`fyrden deploy --live on`), after its workload is measured on the deployment's plan; while off, `POST /notifications/live` answers 503 `live_unavailable`.
+A WebSocket that hints which of the caller's feed and inbox streams changed, so a page or client rereads them through the REST APIs. MCP clients get the same hints for their feed over `subscriptions/listen` (see MCP server), each stream one of these sockets. Off until the deployment turns it on (`fyrden deploy --live on`), after its workload is measured on the deployment's plan; while off, `POST /notifications/live` answers 503 `live_unavailable`.
 
 | What | Value |
 |---|---|

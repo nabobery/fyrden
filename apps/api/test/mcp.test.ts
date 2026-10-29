@@ -308,6 +308,7 @@ describe("MCP resources", () => {
     expect(templates.resourceTemplates.map((t) => t.uriTemplate)).toEqual([
       "fyrden://repos/{owner}/{repo}/files/{+path}",
       "fyrden://repos/{owner}/{repo}/refs/{ref}/files/{+path}",
+      "fyrden://feed/{principal}",
     ]);
     const uri = `fyrden://repos/${owner.handle}/${name}/files/docs/hello.md`;
     const read = await result<{ contents: { uri: string; text?: string; mimeType: string }[] }>(

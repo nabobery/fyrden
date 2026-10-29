@@ -7,8 +7,16 @@ import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../../src/oauth/exchange.js";
 import { api, json, type Who } from "./api.js";
 import { ORIGIN } from "./git-http.js";
 
-/** An agent of `owner`, its own token, and a delegated token under a grant of `scopes`. */
-export async function agentFor(owner: Who, scopes: string[], repositories?: string[]) {
+/**
+ * An agent of `owner`, its own token, and a delegated token under a grant of
+ * `scopes` (for the REST API, or the given resource).
+ */
+export async function agentFor(
+  owner: Who,
+  scopes: string[],
+  repositories?: string[],
+  resource?: string,
+) {
   const agent = await json<{ id: string; handle: string }>(
     api("POST", "/agents", owner.token, { handle: uniqueId("bot").slice(0, 39) }),
   );
@@ -27,6 +35,7 @@ export async function agentFor(owner: Who, scopes: string[], repositories?: stri
       subject_token: own.body.token,
       subject_token_type: ACCESS_TOKEN_TYPE,
       grant_id: granted.body.id,
+      ...(resource !== undefined && { resource }),
     }).toString(),
   });
   expect(res.status).toBe(200);
