@@ -6,6 +6,7 @@
 
 import {
   createExecutionContext,
+  evictDurableObject,
   runDurableObjectAlarm,
   runInDurableObject,
   waitOnExecutionContext,
@@ -19,7 +20,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import type { UserDO } from "../src/do/UserDO.js";
+import { feedHooks, type UserDO } from "../src/do/UserDO.js";
 import { threadId } from "../src/do/user/inbox.js";
 import { LIVE_POLICY } from "../src/do/user/live.js";
 import { LIVE_ADMISSION, sweep } from "../src/live/directory.js";
@@ -33,6 +34,7 @@ import { scopedToken } from "./helpers/principals.js";
 
 afterEach(() => {
   vi.useRealTimers();
+  delete feedHooks.beforeEpochRead;
 });
 
 const ORIGIN = "https://fyrden.test";
@@ -169,6 +171,88 @@ describe("revocations", () => {
 });
 
 describe("a live socket", () => {
+  it("takes its object's epoch before a control is applied after waking, and applies none unread", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    await feedOf(owner).applyFeed([change(owner, repo, 1)]);
+    await runDurableObjectAlarm(feedOf(owner));
+    expect(await socket.next()).toMatchObject({ t: "changed", n: 1 });
+    await evictDurableObject(feedOf(owner));
+    let reached = () => {};
+    const tried = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    feedHooks.beforeEpochRead = async () => {
+      reached();
+      throw new Error("directory unavailable");
+    };
+    socket.ws?.send(JSON.stringify({ t: "ack", n: 1 }));
+    await tried;
+    delete feedHooks.beforeEpochRead;
+    const acked = await runInDurableObject(
+      feedOf(owner),
+      (_: UserDO, state) =>
+        state.storage.sql.exec<{ acked: number }>("SELECT acked FROM live_local").one().acked,
+    );
+    expect(acked).toBe(0);
+  });
+
+  it("applies nothing a socket says once its object was restored, and closes it to reread", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    await feedOf(owner).applyFeed([change(owner, repo, 1)]);
+    await runDurableObjectAlarm(feedOf(owner));
+    expect(await socket.next()).toMatchObject({ t: "changed", n: 1 });
+    // The restore: the directory's epoch for this feed moves; the object wakes cold.
+    await env.DIRECTORY.prepare("INSERT INTO source_epochs (source_id, epoch_gen) VALUES (?, 7)")
+      .bind(`feed:${owner.principalId}`)
+      .run();
+    await evictDurableObject(feedOf(owner));
+    socket.ws?.send(JSON.stringify({ t: "ack", n: 1 }));
+    expect(await socket.closed).toEqual({ code: 4409 });
+    expect(
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+        state.storage.sql.exec("SELECT count(*) AS n FROM live_local").one(),
+      ),
+    ).toEqual({ n: 0 });
+  });
+
+  it("wakes nothing when a socket it already forgot closes", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    // As recovery leaves it: the socket's row gone, no alarm.
+    await runInDurableObject(feedOf(owner), async (_: UserDO, state) => {
+      state.storage.sql.exec("DELETE FROM live_local");
+      state.storage.sql.exec("DELETE FROM user_schedule");
+      await state.storage.deleteAlarm();
+    });
+    await evictDurableObject(feedOf(owner));
+    socket.ws?.close(1000, "done");
+    await socket.closed;
+    const [alarm, leases] = await Promise.all([
+      runInDurableObject(feedOf(owner), (_: UserDO, state) => state.storage.getAlarm()),
+      env.DIRECTORY.prepare("SELECT count(*) AS n FROM live_sockets WHERE feed = ?")
+        .bind(owner.principalId)
+        .first<{ n: number }>(),
+    ]);
+    expect(alarm).toBeNull();
+    // Its lease is the reaper's.
+    expect(leases).toEqual({ n: 1 });
+  });
+
+  it("writes nothing to the live ledger: grants are not wired yet", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    expect(socket.response.status).toBe(101);
+    const count = (table: string) =>
+      env.DIRECTORY.prepare(`SELECT count(*) AS n FROM ${table}`).first<{ n: number }>();
+    expect(await count("live_budget_receipts")).toEqual({ n: 0 });
+    expect(await count("live_recovery_targets")).toEqual({ n: 0 });
+    socket.ws?.close(1000, "done");
+  });
+
   it("is not offered while the deployment has not turned live hints on", async () => {
     const who = await user();
     expect((await ticketFor(who.token, {})).status).toBe(503);

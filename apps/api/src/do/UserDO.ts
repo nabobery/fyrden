@@ -16,8 +16,15 @@ import {
   type Turn,
 } from "../email/notifications.js";
 import { FreshAccess } from "../feed/access.js";
+import { isLiveVector, livePlanError, validateLiveCoverage } from "../live/budget.js";
 import { liveCredential } from "../live/credential.js";
 import { confirm, release } from "../live/directory.js";
+import { beginLiveDuration, finishLiveDuration } from "../live/duration.js";
+import {
+  LIVE_RECOVERY_DURATION,
+  type LiveRecoveryReply,
+  type LiveRecoveryRequest,
+} from "../live/recovery.js";
 import { randomSecret } from "../oauth/params.js";
 import { allowedWithRole, findReposById } from "../repos/directory.js";
 import { MigratingDO } from "./base/MigratingDO.js";
@@ -62,6 +69,7 @@ import {
   type LiveSocket,
   ticketHash,
 } from "./user/live.js";
+import { LiveBudget } from "./user/live-budget.js";
 
 /** The header the Worker hands an admitted live socket's upgrade over in (internal). */
 export const LIVE_ADMITTED = "X-Fyrden-Live-Admitted";
@@ -110,9 +118,13 @@ const KINDS = ["retire", "retain", "cursors"] as const;
  */
 type Kind = (typeof KINDS)[number] | "email" | "live";
 
-/** The feed's restore generation and its principal's lifecycle (bound: the source, the principal). */
+/**
+ * The feed's restore generation, its principal's lifecycle and the live
+ * ledger's incarnation (bound: the source, the principal).
+ */
 export const EPOCH_READ = `SELECT (SELECT epoch_gen FROM source_epochs WHERE source_id = ?1) AS epoch_gen,
-  (SELECT lifecycle FROM principals WHERE id = ?2) AS lifecycle`;
+  (SELECT lifecycle FROM principals WHERE id = ?2) AS lifecycle,
+  (SELECT incarnation FROM live_budget_state WHERE id = 1) AS live_incarnation`;
 
 /**
  * A principal's acknowledged preferences that keep entries from notifying
@@ -134,6 +146,8 @@ export const PREFERENCE_GATE = `SELECT repo_id, NULL AS conversation FROM watch_
 export const feedHooks: {
   beforeEpochRead?: () => Promise<void>;
   beforePreferenceRead?: () => Promise<void>;
+  /** Whether a live authorization is outstanding (its owner arrives with the budgets' wiring). */
+  liveOwnerPending?: () => boolean;
 } = {};
 
 /** Refuses a purge of more repositories than one call takes (see `PURGE_REPOS`). */
@@ -729,6 +743,8 @@ export class UserDO extends MigratingDO {
    * its life; anything else, or past a bound, closes it.
    */
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    // A restored object takes its epoch first; unread, nothing is applied.
+    if (!(await this.#epochTaken())) return;
     const id = socketIdOf(ws);
     const live = this.#live();
     const socket = id === undefined ? undefined : live.socket(id);
@@ -736,6 +752,9 @@ export class UserDO extends MigratingDO {
       ws.close(CLOSE_EXPIRED, "unknown socket");
       return;
     }
+    // State from before a restore (or another ledger incarnation): nothing it says is applied.
+    if (live.stale(id))
+      return this.#closeSocket(id, CLOSE_RESYNC, "restored: reread and reconnect");
     const now = Date.now();
     // Past its deadline or its life: closed, whatever it says.
     if (socket.deadline <= now || socket.expires_at <= now)
@@ -799,6 +818,9 @@ export class UserDO extends MigratingDO {
     }
     const current = live.socket(id);
     if (!current) return;
+    // Restored (or another ledger incarnation) while the credential was checked: not renewed.
+    if (live.stale(id))
+      return this.#closeSocket(id, CLOSE_RESYNC, "restored: reread and reconnect");
     // Its deadline or life passed while the credential was checked: closed, not renewed.
     if (current.deadline <= Date.now() || current.expires_at <= Date.now())
       return this.#closeSocket(id, CLOSE_EXPIRED, "expired: reconnect with a new ticket");
@@ -825,13 +847,31 @@ export class UserDO extends MigratingDO {
   }
 
   override async webSocketClose(ws: WebSocket): Promise<void> {
-    const id = socketIdOf(ws);
-    if (id !== undefined) await this.#forgetSocket(id);
+    await this.#socketGone(ws);
   }
 
   override async webSocketError(ws: WebSocket): Promise<void> {
+    await this.#socketGone(ws);
+  }
+
+  /**
+   * A socket closed or failed: forgotten and its lease released, once the
+   * object took its epoch. One already forgotten (recovery deleted it
+   * before closing it) wakes nothing: no bootstrap, no alarm.
+   */
+  async #socketGone(ws: WebSocket): Promise<void> {
     const id = socketIdOf(ws);
-    if (id !== undefined) await this.#forgetSocket(id);
+    if (id === undefined || !this.#live().socket(id)) return;
+    if (!(await this.#epochTaken())) return;
+    await this.#forgetSocket(id);
+  }
+
+  /** Whether the object took its epoch (false when the directory could not be read). */
+  #epochTaken(): Promise<boolean> {
+    return this.#checkEpoch().then(
+      () => true,
+      () => false,
+    );
   }
 
   /** Closes a socket, forgets it and releases its lease. */
@@ -840,8 +880,10 @@ export class UserDO extends MigratingDO {
     await this.#forgetSocket(id);
   }
 
+  /** Forgets a socket and releases its lease; one already forgotten (by recovery) is left to the reaper. */
   async #forgetSocket(id: string): Promise<void> {
     const live = this.#live();
+    if (!live.socket(id)) return;
     this.ctx.storage.transactionSync(() => live.forget(id));
     await release(this.env.DIRECTORY, [id]);
   }
@@ -1106,9 +1148,12 @@ export class UserDO extends MigratingDO {
    * scheduled. Read and set with no other write between, after every
    * change.
    */
-  async #arm(exact = false): Promise<void> {
+  /** Sets the alarm by the schedule (`liveToo` false: by every kind but live). */
+  async #arm(exact = false, liveToo = true): Promise<void> {
     const earliest = this.ctx.storage.sql
-      .exec<{ at: number | null }>("SELECT min(due_at) AS at FROM user_schedule")
+      .exec<{ at: number | null }>(
+        `SELECT min(due_at) AS at FROM user_schedule${liveToo ? "" : " WHERE kind <> 'live'"}`,
+      )
       .one().at;
     if (earliest === null) {
       await this.ctx.storage.deleteAlarm();
@@ -1143,8 +1188,12 @@ export class UserDO extends MigratingDO {
       const row = await this.env.DIRECTORY.withSession("first-primary")
         .prepare(EPOCH_READ)
         .bind(feedEpochSource(principalId), principalId)
-        .first<{ epoch_gen: number | null; lifecycle: string | null }>();
-      if (row?.epoch_gen) this.#feed().takeEpoch(row.epoch_gen);
+        .first<{
+          epoch_gen: number | null;
+          lifecycle: string | null;
+          live_incarnation: string | null;
+        }>();
+      this.#applyEpoch(row?.epoch_gen ?? null, row?.live_incarnation ?? null);
       // Being deleted, or deleted: an object restored from before its retirement retires again.
       if (row?.lifecycle === "deleting" || row?.lifecycle === "deleted") await this.#retireNow();
     }
@@ -1152,6 +1201,25 @@ export class UserDO extends MigratingDO {
     // earlier alarm Cloudflare gave up retrying, is woken again).
     await this.#arm();
     this.#epochChecked = true;
+  }
+
+  /**
+   * The directory's epoch and ledger incarnation, applied together: the
+   * feed's epoch (only forward) and the live fence it moves, in one
+   * transaction, so restored credit is invalid exactly when restored
+   * cursors are.
+   */
+  #applyEpoch(epochGen: number | null, liveIncarnation: string | null): void {
+    this.ctx.storage.transactionSync(() => {
+      const feed = this.#feed();
+      if (epochGen) feed.takeEpoch(epochGen);
+      const epoch =
+        this.ctx.storage.sql
+          .exec<{ epoch_gen: number }>("SELECT epoch_gen FROM feed_meta WHERE id = 1")
+          .toArray()[0]?.epoch_gen ?? 0;
+      if (liveIncarnation !== null)
+        new LiveBudget(this.ctx.storage.sql).takeEpoch(epoch, liveIncarnation);
+    });
   }
 
   /**
@@ -1186,6 +1254,87 @@ export class UserDO extends MigratingDO {
     });
     await release(this.env.DIRECTORY, sockets);
     await this.#arm();
+  }
+
+  /**
+   * Recovers live state granted through `request.throughSeq`, paid for by
+   * the cleanup grant it carries (checked before anything else, its
+   * duration guarded from before the first await): the epoch fence taken
+   * from the directory's answer (not the ordinary bootstrap), one bounded
+   * page cleaned, sockets it deleted closed, the alarm left to non-live
+   * work. Clean moves the watermark; recovery leaves nothing of its own to
+   * recover. Its completion goes back for settlement.
+   */
+  async recoverLiveV1(request: LiveRecoveryRequest): Promise<LiveRecoveryReply> {
+    const feed = this.ctx.id.name;
+    const text = (v: unknown) => (typeof v === "string" && v.length <= 300 ? v : "");
+    const refuse = (reason: "invalid" | "expired" | "fenced"): LiveRecoveryReply => ({
+      protocol: 1,
+      nonce: text(request?.nonce),
+      feed: text(request?.feed),
+      status: "refused",
+      reason,
+    });
+    const coverage = request?.coverage;
+    const plan = coverage?.plan;
+    if (
+      request?.protocol !== 1 ||
+      !/^[0-9a-f]{32}$/.test(text(request.nonce)) ||
+      feed === undefined ||
+      request.feed !== feed ||
+      typeof request.incarnation !== "string" ||
+      !Number.isSafeInteger(request.throughSeq) ||
+      request.throughSeq < 1 ||
+      typeof plan !== "object" ||
+      plan === null ||
+      plan.kind !== "recovery" ||
+      plan.class !== "cleanup" ||
+      plan.recipientType !== "UserDO" ||
+      plan.recipient !== feed ||
+      plan.producesLocal !== false ||
+      !isLiveVector(plan.localCleanupDebt) ||
+      Object.values(plan.localCleanupDebt).some((n) => n !== 0) ||
+      plan.incarnation !== request.incarnation ||
+      coverage.protocol !== 1 ||
+      typeof coverage.operationId !== "string" ||
+      coverage.operationId.length > 300 ||
+      !Number.isSafeInteger(coverage.seq) ||
+      livePlanError(plan) !== null
+    )
+      return refuse("invalid");
+    const guard = beginLiveDuration(
+      coverage,
+      Date.now(),
+      LIVE_RECOVERY_DURATION.pendingMs,
+      LIVE_RECOVERY_DURATION.tailMs,
+    );
+    if (!guard) return refuse("invalid");
+    const checked = await validateLiveCoverage(this.env.DIRECTORY, coverage, {
+      recipientType: "UserDO",
+      recipient: feed,
+      kind: "recovery",
+    });
+    if (checked.status === "refused") return refuse(checked.reason);
+    this.#applyEpoch(checked.epoch || null, plan.incarnation);
+    const budget = new LiveBudget(this.ctx.storage.sql);
+    const page = this.ctx.storage.transactionSync(() =>
+      budget.recoverPage(request.throughSeq, Date.now(), feedHooks.liveOwnerPending?.() ?? false),
+    );
+    for (const id of page.closedSocketIds)
+      for (const ws of this.ctx.getWebSockets(id)) ws.close(CLOSE_EXPIRED, "expired: reconnect");
+    // The alarm by non-live work alone, exactly (an earlier live one goes).
+    await this.#arm(true, false);
+    const completion = finishLiveDuration(guard, Date.now());
+    if (!completion) return refuse("expired");
+    return {
+      protocol: 1,
+      nonce: request.nonce,
+      feed,
+      incarnation: request.incarnation,
+      throughSeq: request.throughSeq,
+      status: page.status,
+      completion,
+    };
   }
 
   /** Whether the feed was retired (read with no await before the write it guards). */

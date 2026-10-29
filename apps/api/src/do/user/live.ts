@@ -173,6 +173,24 @@ export class Live {
     );
   }
 
+  /**
+   * Whether a socket's state predates the budget fence: its object restored
+   * (an older epoch) or the ledger's incarnation changed since it was
+   * admitted (one admitted before any was learned stays).
+   */
+  stale(socketId: string): boolean {
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 FROM live_local s JOIN live_budget_fence f ON f.id = 1
+           WHERE s.socket_id = ? AND (s.budget_epoch < f.epoch
+             OR (s.budget_incarnation <> '' AND s.budget_incarnation <> f.incarnation))`,
+          socketId,
+        )
+        .toArray().length > 0
+    );
+  }
+
   /** Records a socket being confirmed (not yet seen by the pump). */
   addSocket(
     socket: {
@@ -187,10 +205,13 @@ export class Live {
   ): void {
     const progress = this.seq();
     this.sql.exec(
+      // Stamped with the budget fence it was admitted under: a restore that moves the fence makes
+      // it stale (see `stale`).
       `INSERT INTO live_local (socket_id, credential_id, phase, expires_at, deadline, sent, acked,
          refresh_pending, blocked_since, renew_failures, controls_used, minute_start, minute_count,
-         delivered_seq, retry_at, scopes, repo_ids)
-       VALUES (?, ?, 'confirming', ?, ?, 0, 0, 0, NULL, 0, 0, ?, 0, ?, 0, ?, ?)`,
+         delivered_seq, retry_at, scopes, repo_ids, budget_epoch, budget_incarnation)
+       SELECT ?, ?, 'confirming', ?, ?, 0, 0, 0, NULL, 0, 0, ?, 0, ?, 0, ?, ?, epoch, incarnation
+       FROM live_budget_fence WHERE id = 1`,
       socket.id,
       socket.credentialId,
       socket.expiresAt,

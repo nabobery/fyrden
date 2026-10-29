@@ -476,4 +476,149 @@ export const userSchema: readonly DoMigration[] = [
       CREATE INDEX live_candidates_last ON live_candidates (max(direct_seq, ordinary_seq));
     `,
   },
+  {
+    version: 11,
+    name: "live_budget",
+    // Live budgets' local side (src/do/user/live-budget.ts): the fence a restore or a new
+    // ledger incarnation moves (invalidating every credit held before at once), the grant
+    // each live row was paid by (what recovery may clean), balances of granted credit a
+    // grant a day, the installation pending a grant's answer, terminal provisions and
+    // ordinary duration completions. Nothing funds them yet.
+    sql: `
+      CREATE TABLE live_budget_fence (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        epoch INTEGER NOT NULL CHECK (epoch >= 0),
+        incarnation TEXT NOT NULL,
+        authorization_gen INTEGER NOT NULL CHECK (authorization_gen >= 0),
+        cleanup_through INTEGER NOT NULL CHECK (cleanup_through >= 0)
+      ) STRICT;
+      INSERT INTO live_budget_fence (id, epoch, incarnation, authorization_gen, cleanup_through)
+        SELECT 1, coalesce((SELECT epoch_gen FROM feed_meta WHERE id = 1), 0), '', 0, 0;
+      ALTER TABLE live_tickets ADD COLUMN budget_epoch INTEGER NOT NULL DEFAULT 0 CHECK (budget_epoch >= 0);
+      ALTER TABLE live_tickets ADD COLUMN budget_incarnation TEXT NOT NULL DEFAULT '';
+      ALTER TABLE live_tickets ADD COLUMN budget_seq INTEGER NOT NULL DEFAULT 0 CHECK (budget_seq >= 0);
+      ALTER TABLE live_tickets ADD COLUMN budget_valid_until INTEGER NOT NULL DEFAULT 0 CHECK (budget_valid_until >= 0);
+      CREATE INDEX live_tickets_budget ON live_tickets (budget_incarnation, budget_epoch, budget_seq, ticket_hash);
+      ALTER TABLE live_local ADD COLUMN budget_epoch INTEGER NOT NULL DEFAULT 0 CHECK (budget_epoch >= 0);
+      ALTER TABLE live_local ADD COLUMN budget_incarnation TEXT NOT NULL DEFAULT '';
+      ALTER TABLE live_local ADD COLUMN budget_seq INTEGER NOT NULL DEFAULT 0 CHECK (budget_seq >= 0);
+      ALTER TABLE live_local ADD COLUMN budget_valid_until INTEGER NOT NULL DEFAULT 0 CHECK (budget_valid_until >= 0);
+      CREATE INDEX live_local_budget ON live_local (budget_incarnation, budget_epoch, budget_seq, socket_id);
+      ALTER TABLE live_local_deps ADD COLUMN budget_epoch INTEGER NOT NULL DEFAULT 0 CHECK (budget_epoch >= 0);
+      ALTER TABLE live_local_deps ADD COLUMN budget_incarnation TEXT NOT NULL DEFAULT '';
+      ALTER TABLE live_local_deps ADD COLUMN budget_seq INTEGER NOT NULL DEFAULT 0 CHECK (budget_seq >= 0);
+      ALTER TABLE live_local_deps ADD COLUMN budget_valid_until INTEGER NOT NULL DEFAULT 0 CHECK (budget_valid_until >= 0);
+      CREATE INDEX live_local_deps_budget ON live_local_deps (budget_incarnation, budget_epoch, budget_seq, socket_id, dependency);
+      ALTER TABLE live_dirty ADD COLUMN budget_epoch INTEGER NOT NULL DEFAULT 0 CHECK (budget_epoch >= 0);
+      ALTER TABLE live_dirty ADD COLUMN budget_incarnation TEXT NOT NULL DEFAULT '';
+      ALTER TABLE live_dirty ADD COLUMN budget_seq INTEGER NOT NULL DEFAULT 0 CHECK (budget_seq >= 0);
+      ALTER TABLE live_dirty ADD COLUMN budget_valid_until INTEGER NOT NULL DEFAULT 0 CHECK (budget_valid_until >= 0);
+      CREATE INDEX live_dirty_budget ON live_dirty (budget_incarnation, budget_epoch, budget_seq, stream);
+      ALTER TABLE live_candidates ADD COLUMN budget_epoch INTEGER NOT NULL DEFAULT 0 CHECK (budget_epoch >= 0);
+      ALTER TABLE live_candidates ADD COLUMN budget_incarnation TEXT NOT NULL DEFAULT '';
+      ALTER TABLE live_candidates ADD COLUMN budget_seq INTEGER NOT NULL DEFAULT 0 CHECK (budget_seq >= 0);
+      ALTER TABLE live_candidates ADD COLUMN budget_valid_until INTEGER NOT NULL DEFAULT 0 CHECK (budget_valid_until >= 0);
+      CREATE INDEX live_candidates_budget ON live_candidates (budget_incarnation, budget_epoch, budget_seq, stream, conversation);
+      ALTER TABLE live_revoked ADD COLUMN budget_epoch INTEGER NOT NULL DEFAULT 0 CHECK (budget_epoch >= 0);
+      ALTER TABLE live_revoked ADD COLUMN budget_incarnation TEXT NOT NULL DEFAULT '';
+      ALTER TABLE live_revoked ADD COLUMN budget_seq INTEGER NOT NULL DEFAULT 0 CHECK (budget_seq >= 0);
+      ALTER TABLE live_revoked ADD COLUMN budget_valid_until INTEGER NOT NULL DEFAULT 0 CHECK (budget_valid_until >= 0);
+      CREATE INDEX live_revoked_budget ON live_revoked (budget_incarnation, budget_epoch, budget_seq, dependency);
+      -- What was there before carries the epoch it was made under (the fence's), so only a
+      -- later restore makes it stale.
+      UPDATE live_tickets SET budget_epoch = (SELECT epoch FROM live_budget_fence WHERE id = 1);
+      UPDATE live_local SET budget_epoch = (SELECT epoch FROM live_budget_fence WHERE id = 1);
+      UPDATE live_local_deps SET budget_epoch = (SELECT epoch FROM live_budget_fence WHERE id = 1);
+      UPDATE live_dirty SET budget_epoch = (SELECT epoch FROM live_budget_fence WHERE id = 1);
+      UPDATE live_candidates SET budget_epoch = (SELECT epoch FROM live_budget_fence WHERE id = 1);
+      UPDATE live_revoked SET budget_epoch = (SELECT epoch FROM live_budget_fence WHERE id = 1);
+      CREATE TABLE live_budget_balances (
+        operation_id TEXT NOT NULL,
+        day INTEGER NOT NULL CHECK (day >= 0),
+        kind TEXT NOT NULL CHECK (kind IN ('control', 'mark')),
+        remaining TEXT NOT NULL CHECK (coalesce(
+          json_valid(remaining)
+          AND json(remaining) = json_object('do_requests', json_extract(remaining, '$.do_requests'), 'do_rows_read', json_extract(remaining, '$.do_rows_read'), 'do_rows_written', json_extract(remaining, '$.do_rows_written'), 'do_duration_ms', json_extract(remaining, '$.do_duration_ms'), 'd1_rows_read', json_extract(remaining, '$.d1_rows_read'), 'd1_rows_written', json_extract(remaining, '$.d1_rows_written'), 'queue_ops', json_extract(remaining, '$.queue_ops'))
+          AND json_type(remaining, '$.do_requests') = 'integer'
+          AND json_extract(remaining, '$.do_requests') BETWEEN 0 AND 9007199254740991
+          AND json_type(remaining, '$.do_rows_read') = 'integer'
+          AND json_extract(remaining, '$.do_rows_read') BETWEEN 0 AND 9007199254740991
+          AND json_type(remaining, '$.do_rows_written') = 'integer'
+          AND json_extract(remaining, '$.do_rows_written') BETWEEN 0 AND 9007199254740991
+          AND json_type(remaining, '$.do_duration_ms') = 'integer'
+          AND json_extract(remaining, '$.do_duration_ms') BETWEEN 0 AND 9007199254740991
+          AND json_type(remaining, '$.d1_rows_read') = 'integer'
+          AND json_extract(remaining, '$.d1_rows_read') BETWEEN 0 AND 9007199254740991
+          AND json_type(remaining, '$.d1_rows_written') = 'integer'
+          AND json_extract(remaining, '$.d1_rows_written') BETWEEN 0 AND 9007199254740991
+          AND json_type(remaining, '$.queue_ops') = 'integer'
+          AND json_extract(remaining, '$.queue_ops') BETWEEN 0 AND 9007199254740991
+          AND json_extract(remaining, '$.queue_ops') = 0,
+          0
+        )),
+        budget_epoch INTEGER NOT NULL CHECK (budget_epoch >= 0),
+        budget_incarnation TEXT NOT NULL,
+        budget_seq INTEGER NOT NULL CHECK (budget_seq > 0),
+        budget_valid_until INTEGER NOT NULL CHECK (budget_valid_until >= 0),
+        PRIMARY KEY (operation_id, day)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX live_budget_balances_pool ON live_budget_balances (kind, day, budget_seq);
+      CREATE INDEX live_budget_balances_budget
+        ON live_budget_balances (budget_incarnation, budget_epoch, budget_seq, operation_id, day);
+      CREATE TABLE live_budget_pending (
+        kind TEXT PRIMARY KEY CHECK (kind IN ('install', 'control_refill', 'mark_refill', 'renewal')),
+        operation_id TEXT NOT NULL UNIQUE,
+        intended_at INTEGER NOT NULL CHECK (intended_at >= 0),
+        authorization_gen INTEGER NOT NULL CHECK (authorization_gen >= 0),
+        budget_epoch INTEGER NOT NULL CHECK (budget_epoch >= 0),
+        budget_incarnation TEXT NOT NULL,
+        budget_seq INTEGER NOT NULL CHECK (budget_seq >= 0),
+        budget_valid_until INTEGER NOT NULL CHECK (budget_valid_until >= 0)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX live_budget_pending_budget
+        ON live_budget_pending (budget_incarnation, budget_epoch, budget_seq, kind);
+      CREATE TABLE live_budget_terminal (
+        socket_id TEXT NOT NULL,
+        day INTEGER NOT NULL CHECK (day >= 0),
+        operation_id TEXT NOT NULL,
+        remaining TEXT NOT NULL CHECK (coalesce(
+          json_valid(remaining)
+          AND json(remaining) = json_object('do_requests', json_extract(remaining, '$.do_requests'), 'do_rows_read', json_extract(remaining, '$.do_rows_read'), 'do_rows_written', json_extract(remaining, '$.do_rows_written'), 'do_duration_ms', json_extract(remaining, '$.do_duration_ms'), 'd1_rows_read', json_extract(remaining, '$.d1_rows_read'), 'd1_rows_written', json_extract(remaining, '$.d1_rows_written'), 'queue_ops', json_extract(remaining, '$.queue_ops'))
+          AND json_type(remaining, '$.do_requests') = 'integer'
+          AND json_extract(remaining, '$.do_requests') BETWEEN 0 AND 9007199254740991
+          AND json_type(remaining, '$.do_rows_read') = 'integer'
+          AND json_extract(remaining, '$.do_rows_read') BETWEEN 0 AND 9007199254740991
+          AND json_type(remaining, '$.do_rows_written') = 'integer'
+          AND json_extract(remaining, '$.do_rows_written') BETWEEN 0 AND 9007199254740991
+          AND json_type(remaining, '$.do_duration_ms') = 'integer'
+          AND json_extract(remaining, '$.do_duration_ms') BETWEEN 0 AND 9007199254740991
+          AND json_type(remaining, '$.d1_rows_read') = 'integer'
+          AND json_extract(remaining, '$.d1_rows_read') BETWEEN 0 AND 9007199254740991
+          AND json_type(remaining, '$.d1_rows_written') = 'integer'
+          AND json_extract(remaining, '$.d1_rows_written') BETWEEN 0 AND 9007199254740991
+          AND json_type(remaining, '$.queue_ops') = 'integer'
+          AND json_extract(remaining, '$.queue_ops') BETWEEN 0 AND 9007199254740991
+          AND json_extract(remaining, '$.queue_ops') = 0,
+          0
+        )),
+        budget_epoch INTEGER NOT NULL CHECK (budget_epoch >= 0),
+        budget_incarnation TEXT NOT NULL,
+        budget_seq INTEGER NOT NULL CHECK (budget_seq > 0),
+        budget_valid_until INTEGER NOT NULL CHECK (budget_valid_until >= 0),
+        PRIMARY KEY (socket_id, day)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX live_budget_terminal_budget
+        ON live_budget_terminal (budget_incarnation, budget_epoch, budget_seq, socket_id, day);
+      CREATE TABLE live_budget_completions (
+        operation_id TEXT PRIMARY KEY,
+        completion TEXT NOT NULL CHECK (json_valid(completion) AND json_type(completion) = 'object'),
+        budget_epoch INTEGER NOT NULL CHECK (budget_epoch >= 0),
+        budget_incarnation TEXT NOT NULL,
+        budget_seq INTEGER NOT NULL CHECK (budget_seq > 0),
+        budget_valid_until INTEGER NOT NULL CHECK (budget_valid_until >= 0)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX live_budget_completions_budget
+        ON live_budget_completions (budget_incarnation, budget_epoch, budget_seq, operation_id);
+    `,
+  },
 ];
