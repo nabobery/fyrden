@@ -2,6 +2,7 @@ import type { getSearchStatus, Input, Output } from "@fyrden/api-contract";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import type { OpContext } from "../ops/execute.js";
 import { READ_MODEL_PROTOCOL } from "../read-model/executor.js";
+import { exportAvailability } from "../read-model/export.js";
 import { readModelState } from "../read-model/maintenance.js";
 import { searchIndexing } from "./repairs.js";
 
@@ -71,8 +72,7 @@ export async function getSearchStatusOperation(
       expired: writers.expired,
       earliest_deadline: writers.earliest,
     },
-    // Not before writes outside the executor are refused: a pause cannot wait for them.
-    export: { available: false, reason: "protocol_not_enforced" },
+    export: exportAvailability(directory?.floor ?? null),
     search: {
       day: today.day,
       rows: today.rows,
