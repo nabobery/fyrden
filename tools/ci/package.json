@@ -15,7 +15,7 @@
     "test:schemathesis": "vitest run -c vitest.schemathesis.config.ts"
   },
   "devDependencies": {
-    "@axe-core/playwright": "4.13.0",
+    "@axe-core/playwright": "4.14.0",
     "@fyrden/api-contract": "workspace:*",
     "@fyrden/domain": "workspace:*",
     "@fyrden/sdk": "workspace:*",

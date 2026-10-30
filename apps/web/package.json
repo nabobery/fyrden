@@ -22,16 +22,16 @@
     "@pierre/highlights": "0.2.0",
     "isbot": "5.2.2",
     "mermaid": "12.2.0",
-    "micromark": "4.0.2",
+    "micromark": "4.0.3",
     "micromark-extension-gfm": "3.0.0",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
-    "react-router": "8.4.0"
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router": "8.5.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:",
     "@fyrden/testing": "workspace:*",
-    "@react-router/dev": "8.4.0",
+    "@react-router/dev": "8.5.0",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitest/coverage-istanbul": "catalog:",

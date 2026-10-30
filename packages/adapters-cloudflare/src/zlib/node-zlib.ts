@@ -5,7 +5,7 @@ import { type Zlib, ZlibError } from "@fyrden/git-core";
  * The `Zlib` port over `node:zlib`, which workerd provides under
  * `nodejs_compat`. That flag is on by default from compatibility date
  * 2026-08-04 (verified: `NODEJS_COMPAT_DEFAULT_ON_DATE` in the pinned
- * @cloudflare/vitest-plugin 1.4.0), so the pinned date needs no explicit
+ * @cloudflare/vitest-plugin 1.4.9), so the pinned date needs no explicit
  * flag; `describeZlibContract` runs against it in workerd. Native, so much faster
  * than a TypeScript inflate: 32 MiB inflates in 179 ms inside a Durable
  * Object (measured).
