@@ -12,7 +12,8 @@ import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { reapEmails } from "../src/accounts/emails.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import type { UserDO } from "../src/do/UserDO.js";
+import { feedHooks, type UserDO } from "../src/do/UserDO.js";
+import { ALARM_LIMITS, ALARM_UNITS } from "../src/do/user/alarm-budget.js";
 import { threadId } from "../src/do/user/inbox.js";
 import {
   type Candidate,
@@ -172,6 +173,68 @@ describe("a notification email", () => {
     // Redelivered, or queued again by a restored feed: not again.
     await deliver(owner, told);
     expect(sent).toHaveLength(1);
+    expect(await queued(owner)).toEqual([]);
+  });
+
+  /** The deployment's email attempts and spending, and `who`'s queue: what a refused turn must leave. */
+  const standing = async (who: Who) => ({
+    queue: await queued(who),
+    attempts: await env.DIRECTORY.prepare(
+      "SELECT coalesce(sum(used), 0) AS n FROM email_attempts",
+    ).first(),
+    spend: await env.DIRECTORY.prepare(
+      "SELECT scope, period, used FROM email_spend ORDER BY scope, period",
+    ).all(),
+  });
+
+  it("waits, as it was, while the alarm's budget cannot admit it whole, and is sent at once after", async () => {
+    const told = marked(owner);
+    await feedOf(owner).applyFeed([told]);
+    const before = await standing(owner);
+    // Room for the mandatory steps only: the candidate is not started.
+    feedHooks.alarmLimits = {
+      ...ALARM_LIMITS,
+      d1: ALARM_UNITS.mandatory.d1 + ALARM_UNITS.email.d1 - 1,
+    };
+    try {
+      await runDurableObjectAlarm(feedOf(owner));
+    } finally {
+      delete feedHooks.alarmLimits;
+    }
+    expect(sent).toHaveLength(0);
+    // No attempt, no spending, no try, no new due time: as it was.
+    expect(await standing(owner)).toEqual(before);
+    expect(await delivery(owner, told.eventKey)).toBeNull();
+    // Its run is due at once.
+    const alarm = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.getAlarm(),
+    );
+    expect(alarm).not.toBeNull();
+    expect(alarm as number).toBeLessThanOrEqual(Date.now());
+    await runDurableObjectAlarm(feedOf(owner));
+    expect(sent).toHaveLength(1);
+    expect(await delivery(owner, told.eventKey)).toMatchObject({ state: "sent" });
+  });
+
+  it("admits the next email by what the run has made so far, the rest left for the next run", async () => {
+    const first = marked(owner);
+    const second = marked(owner);
+    await feedOf(owner).applyFeed([first, second]);
+    // Room for one email's ceiling and the mandatory steps, not for another once the first's
+    // statements are counted (it makes some: an empty count would let the second in).
+    feedHooks.alarmLimits = {
+      ...ALARM_LIMITS,
+      d1: ALARM_UNITS.mandatory.d1 + ALARM_UNITS.email.d1 + 7,
+    };
+    try {
+      await runDurableObjectAlarm(feedOf(owner));
+    } finally {
+      delete feedHooks.alarmLimits;
+    }
+    expect(sent).toHaveLength(1);
+    expect(await queued(owner)).toMatchObject([{ event_key: second.eventKey, tries: 0 }]);
+    await runDurableObjectAlarm(feedOf(owner));
+    expect(sent).toHaveLength(2);
     expect(await queued(owner)).toEqual([]);
   });
 

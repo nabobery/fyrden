@@ -2,7 +2,9 @@ import {
   countedD1,
   createLogger,
   createMetrics,
+  currentInvocation,
   measureInvocation,
+  SubrequestTally,
 } from "@fyrden/adapters-cloudflare/obs";
 import type { FeedEntry } from "@fyrden/domain";
 import {
@@ -34,6 +36,7 @@ import { randomSecret } from "../oauth/params.js";
 import { allowedWithRole, findReposById } from "../repos/directory.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { userSchema } from "./schema/user.js";
+import { ALARM_LIMITS, AlarmBudget, type InvocationCost } from "./user/alarm-budget.js";
 import {
   FEED_POLICY,
   Feed,
@@ -158,6 +161,8 @@ export const feedHooks: {
   liveReadiness?: (feed: string) => LiveReadiness | undefined;
   /** Before the alarm is read or written while it is reconciled. */
   beforeAlarmWrite?: () => Promise<void>;
+  /** An alarm run's ceilings (tests: lower than the alarm's own). */
+  alarmLimits?: InvocationCost;
 } = {};
 
 /** Refuses a purge of more repositories than one call takes (see `PURGE_REPOS`). */
@@ -533,6 +538,21 @@ export class UserDO extends MigratingDO {
   }
 
   async #alarm(): Promise<void> {
+    // What the run may still start, by what it made: the mandatory steps' share kept first, until
+    // the alarm is set again.
+    const budget = new AlarmBudget(
+      currentInvocation()?.tally ?? new SubrequestTally(),
+      feedHooks.alarmLimits ?? ALARM_LIMITS,
+    );
+    const mandatory = budget.reserve("mandatory");
+    try {
+      await this.#alarmRun(budget);
+    } finally {
+      mandatory?.physicalComplete();
+    }
+  }
+
+  async #alarmRun(budget: AlarmBudget): Promise<void> {
     // Work waits for the directory (the principal may be deleted): unreachable, it is tried
     // again later rather than left to Cloudflare's few retries.
     try {
@@ -569,7 +589,7 @@ export class UserDO extends MigratingDO {
         }
       }
     }
-    if (this.#dueNow("email") && !this.#retired()) await this.#sendEmails();
+    if (this.#dueNow("email") && !this.#retired()) await this.#sendEmails(budget);
     // A retired feed has no live work: a row left by a run racing the retirement goes.
     if (this.#dueNow("live") && this.#retired()) this.#setDue("live", null);
     if (this.#dueNow("live") && !this.#retired()) {
@@ -603,11 +623,13 @@ export class UserDO extends MigratingDO {
 
   /**
    * Sends the notification emails due (see `sendCandidate`), a few a run,
-   * one at a time; each candidate's row then goes, or is due again. Rows
-   * read again after each send's awaits: a purge or retirement meanwhile
-   * stands.
+   * one at a time, each only once the run's budget admits all of it (one
+   * that does not fit, and those after it, are left as they are for the
+   * next run: no attempt, no try, no new due time); each candidate's row
+   * then goes, or is due again. Rows read again after each send's awaits:
+   * a purge or retirement meanwhile stands.
    */
-  async #sendEmails(): Promise<void> {
+  async #sendEmails(budget: AlarmBudget): Promise<void> {
     const principalId = this.ctx.id.name;
     if (principalId === undefined) return;
     const sql = this.ctx.storage.sql;
@@ -629,30 +651,37 @@ export class UserDO extends MigratingDO {
     for (const { event_key } of due) {
       const candidate = queued(event_key);
       if (!candidate) continue;
-      let turn: Turn;
+      // Admitted whole before anything of it starts, held until its row is settled.
+      const reservation = budget.reserve("email");
+      if (!reservation) break;
       try {
-        turn = await sendCandidate(this.env, principalId, candidate, metrics, () =>
-          Boolean(queued(event_key)),
-        );
-      } catch (error) {
-        logSendFailure(error);
-        turn = {
-          done: false,
-          due: Date.now() + NOTIFICATION_POLICY.backoffMs * 2 ** candidate.tries,
-          tried: true,
-        };
-      }
-      this.ctx.storage.transactionSync(() => {
-        if (turn.done || (turn.tried && candidate.tries + 1 >= NOTIFICATION_POLICY.maxAttempts))
-          sql.exec("DELETE FROM email_queue WHERE event_key = ?", candidate.event_key);
-        else
-          sql.exec(
-            "UPDATE email_queue SET due_at = ?, tries = tries + ? WHERE event_key = ?",
-            turn.due,
-            turn.tried ? 1 : 0,
-            candidate.event_key,
+        let turn: Turn;
+        try {
+          turn = await sendCandidate(this.env, principalId, candidate, metrics, () =>
+            Boolean(queued(event_key)),
           );
-      });
+        } catch (error) {
+          logSendFailure(error);
+          turn = {
+            done: false,
+            due: Date.now() + NOTIFICATION_POLICY.backoffMs * 2 ** candidate.tries,
+            tried: true,
+          };
+        }
+        this.ctx.storage.transactionSync(() => {
+          if (turn.done || (turn.tried && candidate.tries + 1 >= NOTIFICATION_POLICY.maxAttempts))
+            sql.exec("DELETE FROM email_queue WHERE event_key = ?", candidate.event_key);
+          else
+            sql.exec(
+              "UPDATE email_queue SET due_at = ?, tries = tries + ? WHERE event_key = ?",
+              turn.due,
+              turn.tried ? 1 : 0,
+              candidate.event_key,
+            );
+        });
+      } finally {
+        reservation.physicalComplete();
+      }
     }
     this.#setDue("email", nextDue(sql));
   }
