@@ -5,24 +5,33 @@ packages:
 
 # Exact pins for test and deploy tooling: upgrade in dedicated PRs.
 catalog:
-  "@biomejs/biome": 2.5.15
-  "@cloudflare/vite-plugin": 1.63.1
-  "@cloudflare/vitest-plugin": 1.4.0
+  "@biomejs/biome": 2.6.2
+  "@cloudflare/vite-plugin": 1.66.0
+  "@cloudflare/vitest-plugin": 1.4.9
   "@modelcontextprotocol/server": 2.3.1
   "@msw/cloudflare": 0.2.0
   "@stryker-mutator/core": 10.0.0
   "@stryker-mutator/vitest-runner": 10.0.0
   "@types/node": 24.19.1
+  # Vitest stays on 5.0.3 (with its coverage provider): 5.0.4 turned
+  # fsModuleCache on, and with it fyrden-api's Istanbul run in the Workers pool
+  # loses its workerd workers ("Worker exited unexpectedly", 124 of 128 files)
+  # at twice the memory (measured 2026-10-30: 4.6 GiB against 2.5 GiB on 5.0.3),
+  # enough to take down a CI runner.
   "@vitest/coverage-istanbul": 5.0.3
   fast-check: 4.10.2
   hono: 4.13.13
-  msw: 3.0.2
-  turbo: 2.11.7
+  msw: 3.0.3
+  turbo: 2.11.10
   typescript: 7.0.2
+  # Not 8.3.5 yet: with vitest 5.0.5 it crashes formatting any stack trace that
+  # passes through a globalSetup module ("No test files found"; verified:
+  # https://github.com/vitest-dev/vitest/issues/11682). Upgrade it with the
+  # vitest release that carries the fix (vitest-dev/vitest#11709).
   vite: 8.3.4
   vitest: 5.0.3
-  wrangler: 4.149.0
-  zod: 4.6.5
+  wrangler: 4.154.0
+  zod: 4.6.7
 
 # Supply-chain policy. These match or tighten pnpm's defaults and are written
 # out so a pnpm upgrade cannot loosen them silently.
@@ -67,12 +76,12 @@ peerDependencyRules:
 
 overrides:
   "@types/node": "catalog:"
-  # Reviewed 2026-10-14: typed-rest-client 2.3.1 (Stryker's dashboard client,
-  # dev only; Stryker 10.0.0 wants ~2.3.0) pins qs 6.15.1, which has three
+  # Reviewed 2026-10-30: typed-rest-client 2.3.1 (Stryker's dashboard client,
+  # dev only; Stryker 10.0.0 wants ~2.3.0) pins qs 6.15.1, which has four
   # moderate advisories (GHSA-q8mj-m7cp-5q26, GHSA-x5fp-wj9c-mxmx,
-  # GHSA-4mjr-xmp4-gh2g). 6.16.0 is the patched release of the same major.
-  # Drop this once Stryker moves to typed-rest-client 3.
-  "typed-rest-client>qs": "6.16.0"
+  # GHSA-4mjr-xmp4-gh2g, GHSA-6pq8-jhm2-2vcw). 6.16.1 is the patched release
+  # of the same major. Drop this once Stryker moves to typed-rest-client 3.
+  "typed-rest-client>qs": "6.16.1"
   # Reviewed 2026-10-16: the diff renderer asks for shiki "^3.0.0 || ^4.0.0";
   # pinned to a release at least two weeks old instead of the newest in range.
   "@pierre/diffs>shiki": "4.4.3"

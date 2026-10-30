@@ -20,6 +20,16 @@
     "indentWidth": 2,
     "lineWidth": 100
   },
+  "markdown": {
+    "formatter": {
+      "enabled": false
+    }
+  },
+  "yaml": {
+    "formatter": {
+      "enabled": false
+    }
+  },
   "linter": {
     "rules": {
       "preset": "recommended",

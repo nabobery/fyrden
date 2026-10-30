@@ -81,7 +81,9 @@ async function fsckVerdicts(): Promise<Map<string, GitVerdict>> {
       (level === "error" ? get(oid).errors : get(oid).warnings).push(id);
       continue;
     }
-    const unparsable = /^error: ([0-9a-f]{40}): object could not be parsed/.exec(line);
+    // git 2.56 words it "object corrupt or missing" (its fsck moved into the object backends).
+    const unparsable =
+      /^error: ([0-9a-f]{40}): object (?:could not be parsed|corrupt or missing)/.exec(line);
     if (unparsable?.[1]) get(unparsable[1]).unparsable = true;
   }
   return verdicts;
