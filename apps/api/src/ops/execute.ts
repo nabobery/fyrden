@@ -11,6 +11,7 @@ import {
 } from "@fyrden/api-contract";
 import { checkOperation, isPermission, permissionDef } from "@fyrden/domain";
 import type { AuthState } from "../middleware/auth.js";
+import { MAINTENANCE_RETRY_MS, readModelMaintenance } from "../read-model/maintenance.js";
 import {
   type Claim,
   finishIdempotent,
@@ -167,6 +168,17 @@ export async function executeOperation(
   // A web session's only operation refuses every other credential before anything else.
   const refused = sessionRefusal(op, ctx.auth);
   if (refused) return fail(ctx, 403, refused.code, refused.detail);
+
+  // A write may write the read model (directly or through what it starts): none while its
+  // maintenance holds ordinary work back.
+  if (op.method !== "GET" && readModelMaintenance(ctx.env))
+    return fail(
+      ctx,
+      503,
+      "read_model_maintenance",
+      "Writes are paused for maintenance. Try again later.",
+      { retryAfter: MAINTENANCE_RETRY_MS / 1000 },
+    );
 
   const limiter = op.rateLimit === "read" ? ctx.env.RATE_LIMIT_READ : ctx.env.RATE_LIMIT_WRITE;
   if (!(await limiter.limit({ key: rateLimitKey(ctx.auth) })).success) {

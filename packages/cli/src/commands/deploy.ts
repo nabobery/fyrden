@@ -35,6 +35,12 @@ export interface DeployDeps {
    */
   watchAudiences?: true | undefined;
   /**
+   * The read model's maintenance: the work that writes it held back
+   * (`FYRDEN_READ_MODEL_MAINTENANCE=on`); left out, not (each deploy sets the
+   * variables).
+   */
+  readModelMaintenance?: true | undefined;
+  /**
    * Live notification hints, on (`FYRDEN_LIVE=on`, and `FYRDEN_LIVE_SOCKETS`
    * when given); left out, off (each deploy sets the variables).
    */
@@ -159,6 +165,7 @@ const DEPLOY_SWITCHES = new Set([
   "FYRDEN_INTERNAL_CALLS",
   "FYRDEN_DISCRETIONARY_DAILY",
   "FYRDEN_WATCH_AUDIENCES",
+  "FYRDEN_READ_MODEL_MAINTENANCE",
   "FYRDEN_LIVE",
   "FYRDEN_LIVE_SOCKETS",
   "FYRDEN_EMAIL_PROVIDER",
@@ -218,6 +225,7 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
         FYRDEN_DISCRETIONARY_DAILY: deps.discretionary,
       }),
       ...(deps.watchAudiences && { FYRDEN_WATCH_AUDIENCES: "on" }),
+      ...(deps.readModelMaintenance && { FYRDEN_READ_MODEL_MAINTENANCE: "on" }),
       ...(deps.live && { FYRDEN_LIVE: "on" }),
       ...(deps.live?.sockets !== undefined && { FYRDEN_LIVE_SOCKETS: String(deps.live.sockets) }),
       ...(deps.email && {

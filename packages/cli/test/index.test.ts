@@ -306,6 +306,12 @@ describe("envDeployOptions", () => {
     });
     expect(parseDeployArgs(["--watch-audiences", "off"])).toEqual({ plan: "paid" });
     expect(parseDeployArgs(["--watch-audiences", "yes"])).toBeUndefined();
+    expect(parseDeployArgs(["--read-model-maintenance", "on"])).toEqual({
+      plan: "paid",
+      readModelMaintenance: true,
+    });
+    expect(parseDeployArgs(["--read-model-maintenance", "off"])).toEqual({ plan: "paid" });
+    expect(parseDeployArgs(["--read-model-maintenance", "yes"])).toBeUndefined();
   });
 
   it("turns live hints on only when asked, with a socket allowance that fits", () => {

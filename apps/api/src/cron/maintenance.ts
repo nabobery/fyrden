@@ -2,6 +2,7 @@ import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { reapEmails } from "../accounts/emails.js";
 import { reapOAuth } from "../oauth/reaper.js";
 import { pruneFailedEvents } from "../queues/events-dlq.js";
+import { readModelMaintenance, reapExpiredLeases } from "../read-model/maintenance.js";
 import { advanceDeletions } from "../repos/deletion.js";
 import { settleStaleGenerations } from "../repos/generate.js";
 import { advanceTransfers } from "../repos/transfer.js";
@@ -15,12 +16,16 @@ export const MAINTENANCE_OBJECT = "instance";
 /**
  * The five-minute maintenance: archives the directory's audit log, expires
  * repositories and settles abandoned generations (then advances deletions),
- * reaps idempotency keys, OAuth leftovers and failed envelopes kept their
- * time, and advances transfers. Each
+ * reaps idempotency keys, OAuth leftovers, the read model's expired writer
+ * leases and failed envelopes kept their time, and advances transfers;
+ * while the read model's maintenance holds ordinary work back, not the
+ * tasks that write it (deletions' cleanups, abandoned generations'
+ * settling, transfers' fences, pruning failed envelopes). Each
  * task on its own: one failing does not stop the others, and the run then
  * throws. Run by `MaintenanceDO`, where it has a Durable Object's CPU.
  */
 export async function runMaintenance(env: Env, metrics: Metrics): Promise<void> {
+  const writing = !readModelMaintenance(env);
   const results = await Promise.allSettled([
     archiveDirectoryAudit({
       db: env.DIRECTORY,
@@ -33,17 +38,22 @@ export async function runMaintenance(env: Env, metrics: Metrics): Promise<void> 
     (async () => {
       const started = await Promise.allSettled([
         reapExpiredRepos(env, { now: Date.now(), metrics }),
-        settleStaleGenerations(env, { now: Date.now(), metrics }),
+        // An abandoned generation's settling advances its deletion (which writes the read model).
+        writing && settleStaleGenerations(env, { now: Date.now(), metrics }),
       ]);
-      await advanceDeletions(env, { metrics });
+      if (writing) await advanceDeletions(env, { metrics });
       const failed = started.find((r) => r.status === "rejected");
       if (failed) throw failed.reason;
     })(),
     reapIdempotencyKeys(env, { now: Date.now(), metrics }),
-    advanceTransfers(env, { metrics }),
+    writing && advanceTransfers(env, { metrics }),
     reapOAuth(env, { now: Date.now(), metrics }),
     reapEmails(env, { now: Date.now(), metrics }),
-    pruneFailedEvents(env, { now: Date.now(), metrics }),
+    writing && pruneFailedEvents(env, { now: Date.now(), metrics }),
+    (async () => {
+      metrics.count("d1.query", { db: "directory", op: "read_model_lease_reap" });
+      await reapExpiredLeases(env);
+    })(),
   ]);
   const failed = results.filter((r) => r.status === "rejected");
   for (const failure of failed)

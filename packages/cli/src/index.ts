@@ -17,6 +17,7 @@ import { nodeWranglerRunner } from "./wrangler.ts";
 const USAGE = `usage:
   fyrden deploy [--plan free|paid] [--internal-calls N] [--discretionary resource=n,...]
                 [--watch-audiences on|off] [--live on|off [--live-sockets N]]
+                [--read-model-maintenance on|off]
                 [--email resend --email-from ADDRESS --email-secrets-file PATH
                                  [--email-sending on|off] [--email-daily-limit N]
                                  [--email-monthly-limit N] [--email-reserve N]
@@ -36,7 +37,10 @@ const USAGE = `usage:
                                      100 and 3,000: Resend Free's), notifications stopping the
                                      reserve (default 10) short of them; a daily limit of 0: none;
                                      notification emails link to --public-origin, or else to
-                                     the web Worker's URL (the API deployed again with it)
+                                     the web Worker's URL (the API deployed again with it);
+                                     --read-model-maintenance on holds back the work that writes
+                                     the read model (API writes refused, queue messages put back,
+                                     its crons skipped) until a deploy without it
   fyrden doctor                      check login, resources and D1 schemas without changing anything
   fyrden destroy [--yes]             list what deploy created; with --yes delete it all (data loss)
   ${REPAIR_USAGE}
@@ -143,6 +147,7 @@ export function parseDeployArgs(args: readonly string[]):
       email?: EmailArgs;
       live?: LiveArgs;
       watchAudiences?: true;
+      readModelMaintenance?: true;
     }
   | undefined {
   const given = new Map<string, string>();
@@ -151,6 +156,7 @@ export function parseDeployArgs(args: readonly string[]):
     "--internal-calls",
     "--discretionary",
     "--watch-audiences",
+    "--read-model-maintenance",
     "--live",
     "--live-sockets",
     "--email",
@@ -174,6 +180,8 @@ export function parseDeployArgs(args: readonly string[]):
   if (discretionary !== undefined && !validAllowance(discretionary)) return undefined;
   const watch = given.get("--watch-audiences");
   if (watch !== undefined && watch !== "on" && watch !== "off") return undefined;
+  const maintenance = given.get("--read-model-maintenance");
+  if (maintenance !== undefined && maintenance !== "on" && maintenance !== "off") return undefined;
   const live = liveArgs(given);
   if (live === null) return undefined;
   const email = emailArgs(given);
@@ -181,6 +189,7 @@ export function parseDeployArgs(args: readonly string[]):
   const extra = {
     ...(discretionary !== undefined && { discretionary }),
     ...(watch === "on" && { watchAudiences: true as const }),
+    ...(maintenance === "on" && { readModelMaintenance: true as const }),
     ...(live !== undefined && { live }),
     ...(email !== undefined && { email }),
   };
@@ -371,22 +380,23 @@ export async function main(argv: string[]): Promise<number> {
     });
     return result.complete ? 0 : 1;
   }
-  const { plan, internalCalls, discretionary, email, live, watchAudiences } = parseDeployArgs(
-    rest,
-  ) as {
-    plan: Plan;
-    internalCalls?: number;
-    discretionary?: string;
-    email?: EmailArgs;
-    live?: LiveArgs;
-    watchAudiences?: true;
-  };
+  const { plan, internalCalls, discretionary, email, live, watchAudiences, readModelMaintenance } =
+    parseDeployArgs(rest) as {
+      plan: Plan;
+      internalCalls?: number;
+      discretionary?: string;
+      email?: EmailArgs;
+      live?: LiveArgs;
+      watchAudiences?: true;
+      readModelMaintenance?: true;
+    };
   const result = await deploy({
     repoRoot,
     plan,
     internalCalls,
     discretionary,
     watchAudiences,
+    readModelMaintenance,
     live,
     email: email && (await emailDeploy(email)),
     runner,

@@ -55,6 +55,8 @@
   "queues": {
     "producers": [
       { "binding": "EVENTS", "queue": "fyrden-events" },
+      // Only for putting dead letters back during the read model's maintenance.
+      { "binding": "EVENTS_DLQ", "queue": "fyrden-events-dlq" },
       { "binding": "WEBHOOKS", "queue": "fyrden-webhooks" },
       // Each effect sink's queue: the ids of effects the events consumer journaled.
       { "binding": "EFFECTS_WEBHOOKS", "queue": "fyrden-effects-webhooks" },

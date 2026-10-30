@@ -3,9 +3,11 @@ import type { Input, Output, transferRepo } from "@fyrden/api-contract";
 import { actingRoleIn, canUseAccount, findAccount } from "../accounts/account.js";
 import { recordedAccount } from "../accounts/grants.js";
 import { accountLimits } from "../accounts/quotas.js";
-import { readModelFor } from "../events/read-model.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { READ_MODEL_LONE_WRITE, withReadModel } from "../read-model/executor.js";
+import { spentStatement } from "../search/admission.js";
+import { REQUEST_ROWS, repairStatement, searchIndexing } from "../search/repairs.js";
 import { clock, newId } from "../services.js";
 import {
   checkNewRepo,
@@ -354,17 +356,37 @@ async function runStep(
       return "fence";
     }
     case "fence": {
-      // Before the repository lands: no event of an older owner generation applies after it.
-      metrics?.count("do.request", { class: "RepoDO", method: "transferGeneration" });
-      const ownerGen = await stub.transferGeneration(transferId);
-      metrics?.count("d1.query", { db: "org", op: "source_owner" });
-      await readModelFor(env, transfer.org_shard)
-        .prepare(
-          `INSERT INTO source_owner (source_id, owner_gen) VALUES (?, ?)
-           ON CONFLICT (source_id) DO UPDATE SET owner_gen = max(owner_gen, excluded.owner_gen)`,
-        )
-        .bind(transfer.repo_id, ownerGen)
-        .run();
+      // Before the repository lands: no event of an older owner generation applies after it. Its
+      // search projections, written under the old owner, are reconciled (while indexing is on).
+      await withReadModel(env, transfer.org_shard, async (db, writer) => {
+        // The writer's lease before the generation is asked for: a pause begun meanwhile waits
+        // for it (and refuses the fence once it has moved on).
+        metrics?.count("d1.query", { db: "directory", op: "read_model_lease" }, 2);
+        await writer.acquire();
+        metrics?.count("do.request", { class: "RepoDO", method: "transferGeneration" });
+        const ownerGen = await stub.transferGeneration(transferId);
+        await transferHooks.afterGeneration?.();
+        metrics?.count("d1.query", { db: "directory", op: "search_indexing" });
+        const indexing = await searchIndexing(env);
+        metrics?.count("d1.query", { db: "org", op: "source_owner" });
+        await db.batch([
+          db
+            .prepare(
+              `INSERT INTO source_owner (source_id, owner_gen) VALUES (?, ?)
+               ON CONFLICT (source_id) DO UPDATE SET owner_gen = max(owner_gen, excluded.owner_gen)`,
+            )
+            .bind(transfer.repo_id, ownerGen),
+          ...(indexing
+            ? [
+                repairStatement(db, transfer.repo_id, "transferred", clock()),
+                spentStatement(db, {
+                  rows: REQUEST_ROWS + READ_MODEL_LONE_WRITE.rows,
+                  reads: READ_MODEL_LONE_WRITE.reads,
+                }),
+              ]
+            : []),
+        ]);
+      });
       return "repo";
     }
     case "repo": {
@@ -394,7 +416,11 @@ async function runStep(
 }
 
 /** Hooks into a transfer's directory move. For tests. */
-export const transferHooks: { beforeMove?: () => Promise<void> } = {};
+export const transferHooks: {
+  beforeMove?: () => Promise<void>;
+  /** Between the fence's generation and its write to the read model. */
+  afterGeneration?: () => Promise<void>;
+} = {};
 
 /**
  * Moves the repository in the directory and advances the job in one

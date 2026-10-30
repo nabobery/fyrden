@@ -3,6 +3,7 @@ import { createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/ob
 import { runMaintenance } from "../cron/maintenance.js";
 import { recheckSuppressions } from "../email/suppressions.js";
 import { reaping, sweep } from "../live/directory.js";
+import { readModelMaintenance } from "../read-model/maintenance.js";
 import { runSearchRepairs } from "../search/repairs.js";
 
 /**
@@ -23,6 +24,8 @@ export class MaintenanceDO extends DurableObject<Env> {
    */
   repairSearch(): Promise<void> {
     if (this.#repairing) return this.#repairing;
+    // It writes the read model: not while its maintenance holds ordinary work back.
+    if (readModelMaintenance(this.env)) return Promise.resolve();
     const metrics = createMetrics(this.env.METRICS);
     this.#repairing = measureInvocation(
       metrics,

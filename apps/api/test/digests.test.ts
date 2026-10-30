@@ -13,6 +13,7 @@ import type { FeedSubjectKind } from "@fyrden/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { DIGEST_POLICY, type DigestEntry, windowOf } from "../src/do/repo/digests.js";
+import { MAINTENANCE_RETRY_MS } from "../src/read-model/maintenance.js";
 import { api, user, type Who } from "./helpers/api.js";
 import {
   comment,
@@ -55,6 +56,27 @@ async function funded(repo: Repo, opener: Who): Promise<number> {
 }
 
 describe("a repository's digests", () => {
+  it("leave credit asked for while the read model's maintenance holds its writes back", async () => {
+    const { owner, repo } = await digestRepo();
+    startWindow();
+    await open(owner, repo);
+    const maintenance = (on: boolean) =>
+      runInDurableObject(stubOf(repo.id), (instance: RepoDO) => {
+        const object = instance as unknown as { env: Env };
+        object.env = { ...object.env, FYRDEN_READ_MODEL_MAINTENANCE: on ? "on" : "off" } as Env;
+      });
+    await maintenance(true);
+    await drain(repo.id);
+    // Nothing asked of the ledger: the ask waits as it was.
+    expect(await credit(repo.id)).toEqual([]);
+    expect(await job(repo.id, "digest_credit")).toMatchObject({ state: "queued" });
+    await maintenance(false);
+    // Its next look, after the wait maintenance set.
+    vi.setSystemTime(Date.now() + MAINTENANCE_RETRY_MS);
+    await drain(repo.id);
+    expect(await credit(repo.id)).toEqual([{ subject: "issue", units: DIGEST_POLICY.creditBlock }]);
+  });
+
   it("keep a window's threads past the pushed tier, spending credit granted in advance", async () => {
     const { owner, repo } = await digestRepo();
     startWindow();

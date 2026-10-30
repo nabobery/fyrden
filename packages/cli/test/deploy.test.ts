@@ -409,6 +409,14 @@ describe("fyrden deploy", () => {
     expect((await generatedConfig()).vars).not.toHaveProperty("FYRDEN_WATCH_AUDIENCES");
   });
 
+  it("holds the read model's work back when given, and lets it go when a later deploy leaves it out", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner, { readModelMaintenance: true }).d);
+    expect((await generatedConfig()).vars).toMatchObject({ FYRDEN_READ_MODEL_MAINTENANCE: "on" });
+    await deploy(deps(fake.runner).d);
+    expect((await generatedConfig()).vars).not.toHaveProperty("FYRDEN_READ_MODEL_MAINTENANCE");
+  });
+
   it("never keeps a switch it owns from the committed configuration's variables", async () => {
     const path = join(repoRoot, "apps/api/wrangler.jsonc");
     const committed = parseJsonc<Record<string, unknown>>(await readFile(path, "utf8"));

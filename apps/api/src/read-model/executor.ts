@@ -278,6 +278,14 @@ export class ReadModelWriter {
     return lease;
   }
 
+  /**
+   * Takes its lease now, before work that must be seen by a pause before it
+   * writes (a pause waits for the lease); the writes then use it.
+   */
+  async acquire(): Promise<void> {
+    await this.#current();
+  }
+
   /** Extends the lease (only the same one, still live, under a running barrier); else it is over. */
   async renew(): Promise<void> {
     if (this.#ended) throw new ReadModelRefused("lease");

@@ -101,6 +101,7 @@ import {
   viewCompactionHandler,
 } from "../network/view-cap.js";
 import { READ_MODEL_LONE_WRITE } from "../read-model/executor.js";
+import { MAINTENANCE_RETRY_MS, readModelMaintenance } from "../read-model/maintenance.js";
 import { resolveRepo } from "../repos/directory.js";
 import { platformSigner } from "../signing/platform-key.js";
 import { secretKeys } from "../webhooks/secrets.js";
@@ -3591,6 +3592,9 @@ export class RepoDO extends MigratingDO {
       this.ctx.storage.transactionSync(() => this.digests.dropCredit());
       return { done: true };
     }
+    // The read model's maintenance holds its writes back: the asks wait, as they are.
+    if (readModelMaintenance(this.env))
+      return { done: false, cursor: null, runAfterMs: MAINTENANCE_RETRY_MS };
     const asks = this.ctx.storage.transactionSync(() => this.digests.creditAsks());
     for (const ask of asks) {
       const units = DIGEST_POLICY.creditBlock;
