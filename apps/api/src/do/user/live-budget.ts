@@ -1,10 +1,13 @@
 import { DISCRETIONARY_RESOURCES, type ResourceVector } from "../../effects/discretionary.js";
 import {
   canonicalCompletion,
+  canonicalPlan,
   canonicalVector,
   type LiveDurationCompletion,
   type LiveEnvelope,
+  type LiveGrantRequest,
 } from "../../live/budget.js";
+import type { LiveOwnerRef } from "../../live/owners.js";
 
 /*
  * Live budgets in a feed's object (call within its transactions): the fence
@@ -42,6 +45,28 @@ export interface LiveFundingStamp {
 }
 
 type PendingKind = "install" | "control_refill" | "mark_refill" | "renewal";
+
+/** The kinds queued once and dispatched with an owner. */
+export type QueuedKind = "control_refill" | "mark_refill" | "renewal";
+
+/** A queued live installation: its local identity, request, phase, owner and funding. */
+export interface LivePending {
+  readonly identity: string;
+  readonly intendedAt: number;
+  readonly phase: "queued" | "dispatched";
+  readonly request: LiveGrantRequest | null;
+  readonly ownerId: string | null;
+  readonly instance: string | null;
+  readonly funding: LiveFundingStamp;
+}
+
+/** A request's canonical bytes (stored once; a retry sends the same). */
+const requestText = (request: LiveGrantRequest) =>
+  JSON.stringify({
+    operationId: request.operationId,
+    nonce: request.nonce,
+    plan: JSON.parse(canonicalPlan(request.plan)),
+  });
 
 /** The live tables recovery cleans, in order (a socket's dependencies before the socket), each by its primary key. */
 const RECOVERY_TABLES: readonly { readonly table: string; readonly key: readonly string[] }[] = [
@@ -127,7 +152,8 @@ export class LiveBudget {
   /**
    * Records the identity an installation of `kind` will be granted as,
    * paid for by `funding`, under the current authorization generation (a
-   * newer one of the kind replaces it). False when the funding is not current.
+   * newer one of the kind replaces it, unless that one is prepared or
+   * dispatched). False when the funding is not current, or nothing was replaced.
    */
   begin(
     kind: PendingKind,
@@ -137,23 +163,26 @@ export class LiveBudget {
     now: number,
   ): boolean {
     if (this.#fenced(funding) || now >= funding.validUntil) return false;
-    this.sql.exec(
-      `INSERT INTO live_budget_pending (kind, operation_id, intended_at, authorization_gen,
+    return (
+      this.sql.exec(
+        `INSERT INTO live_budget_pending (kind, operation_id, intended_at, authorization_gen,
          budget_epoch, budget_incarnation, budget_seq, budget_valid_until)
        SELECT ?1, ?2, ?3, authorization_gen, ?4, ?5, ?6, ?7 FROM live_budget_fence WHERE id = 1
        ON CONFLICT (kind) DO UPDATE SET operation_id = excluded.operation_id,
          intended_at = excluded.intended_at, authorization_gen = excluded.authorization_gen,
          budget_epoch = excluded.budget_epoch, budget_incarnation = excluded.budget_incarnation,
-         budget_seq = excluded.budget_seq, budget_valid_until = excluded.budget_valid_until`,
-      kind,
-      operationId,
-      intendedAt,
-      funding.epoch,
-      funding.incarnation,
-      funding.seq,
-      funding.validUntil,
+         budget_seq = excluded.budget_seq, budget_valid_until = excluded.budget_valid_until
+       -- Never one prepared or dispatched (its request and owner are its own).
+       WHERE live_budget_pending.phase = 'queued' AND live_budget_pending.request_json IS NULL`,
+        kind,
+        operationId,
+        intendedAt,
+        funding.epoch,
+        funding.incarnation,
+        funding.seq,
+        funding.validUntil,
+      ).rowsWritten > 0
     );
-    return true;
   }
 
   /**
@@ -210,6 +239,207 @@ export class LiveBudget {
       kind,
       grant.operationId,
     );
+    return "installed";
+  }
+
+  /**
+   * Queues `kind` once (call within the caller's transaction): `existing`
+   * when one is queued or dispatched (its identity and time kept), `refused`
+   * when its funding is not current. Nothing is asked of the ledger here.
+   */
+  queueOnce(
+    kind: QueuedKind,
+    identity: string,
+    intendedAt: number,
+    funding: LiveFundingStamp,
+    now: number,
+  ): "queued" | "existing" | "refused" {
+    if (this.sql.exec("SELECT 1 FROM live_budget_pending WHERE kind = ?", kind).toArray().length)
+      return "existing";
+    if (this.#fenced(funding) || now >= funding.validUntil) return "refused";
+    this.sql.exec(
+      `INSERT INTO live_budget_pending (kind, operation_id, intended_at, authorization_gen,
+         budget_epoch, budget_incarnation, budget_seq, budget_valid_until, phase)
+       SELECT ?1, ?2, ?3, authorization_gen, ?4, ?5, ?6, ?7, 'queued'
+       FROM live_budget_fence WHERE id = 1`,
+      kind,
+      identity,
+      intendedAt,
+      funding.epoch,
+      funding.incarnation,
+      funding.seq,
+      funding.validUntil,
+    );
+    return "queued";
+  }
+
+  /**
+   * Stores a queued item's exact request once (its dates and nonce kept on
+   * every retry); true when it is that request's (stored now or before).
+   */
+  preparePending(kind: QueuedKind, identity: string, request: LiveGrantRequest): boolean {
+    const text = requestText(request);
+    const row = this.sql
+      .exec<{ phase: string; request_json: string | null }>(
+        "SELECT phase, request_json FROM live_budget_pending WHERE kind = ? AND operation_id = ?",
+        kind,
+        identity,
+      )
+      .toArray()[0];
+    if (!row) return false;
+    if (row.request_json !== null) return row.request_json === text;
+    if (row.phase !== "queued") return false;
+    this.sql.exec(
+      "UPDATE live_budget_pending SET request_json = ? WHERE kind = ? AND operation_id = ?",
+      text,
+      kind,
+      identity,
+    );
+    return true;
+  }
+
+  /**
+   * Marks a prepared item dispatched, with its owner (bound once) and the
+   * instance holding its work; never back to queued. False otherwise.
+   */
+  dispatchPending(
+    kind: QueuedKind,
+    identity: string,
+    owner: LiveOwnerRef,
+    instance: string,
+  ): boolean {
+    // An instance always names itself: an empty one would match any other.
+    if (instance.length === 0) return false;
+    return (
+      this.sql.exec(
+        `UPDATE live_budget_pending SET phase = 'dispatched', owner_id = ?3, dispatch_instance = ?4
+         WHERE kind = ?1 AND operation_id = ?2 AND phase = 'queued' AND request_json IS NOT NULL
+           AND owner_id IS NULL`,
+        kind,
+        identity,
+        owner.ownerId,
+        instance,
+      ).rowsWritten > 0
+    );
+  }
+
+  /** The item queued as `kind`, if any. */
+  pending(kind: QueuedKind): LivePending | null {
+    const row = this.sql
+      .exec<{
+        operation_id: string;
+        intended_at: number;
+        phase: "queued" | "dispatched";
+        request_json: string | null;
+        owner_id: string | null;
+        dispatch_instance: string | null;
+        budget_epoch: number;
+        budget_incarnation: string;
+        budget_seq: number;
+        budget_valid_until: number;
+      }>("SELECT * FROM live_budget_pending WHERE kind = ?", kind)
+      .toArray()[0];
+    if (!row) return null;
+    return {
+      identity: row.operation_id,
+      intendedAt: row.intended_at,
+      phase: row.phase,
+      request:
+        row.request_json === null ? null : (JSON.parse(row.request_json) as LiveGrantRequest),
+      ownerId: row.owner_id,
+      instance: row.dispatch_instance,
+      funding: {
+        epoch: row.budget_epoch,
+        incarnation: row.budget_incarnation,
+        seq: row.budget_seq,
+        validUntil: row.budget_valid_until,
+      },
+    };
+  }
+
+  /** Removes the item queued as `kind` with `identity`; whether it was there. */
+  finishPending(kind: QueuedKind, identity: string): boolean {
+    return (
+      this.sql.exec(
+        "DELETE FROM live_budget_pending WHERE kind = ? AND operation_id = ?",
+        kind,
+        identity,
+      ).rowsWritten > 0
+    );
+  }
+
+  /**
+   * Installs a refill's grant for the item queued as `kind` with
+   * `identity`: only once dispatched by this `instance`, only the grant
+   * its prepared request asked for (the same operation, of the refill's
+   * kind), for this feed, under the current fence and authorization
+   * generation, after the watermark, valid now; the item goes with it.
+   * A renewal's grant never becomes balance.
+   */
+  installPending(
+    kind: "control_refill" | "mark_refill",
+    identity: string,
+    grant: LiveEnvelope,
+    now: number,
+    recipient: string,
+    instance: string,
+  ): "installed" | "duplicate" | "refused" {
+    if (
+      this.sql
+        .exec(
+          "SELECT 1 FROM live_budget_balances WHERE operation_id = ? LIMIT 1",
+          grant.operationId,
+        )
+        .toArray().length > 0
+    )
+      return "duplicate";
+    const pending = this.pending(kind);
+    const plan = grant.plan;
+    const fence = this.fence();
+    const row = this.sql
+      .exec<{ authorization_gen: number }>(
+        "SELECT authorization_gen FROM live_budget_pending WHERE kind = ? AND operation_id = ?",
+        kind,
+        identity,
+      )
+      .toArray()[0];
+    if (
+      !pending ||
+      !row ||
+      instance.length === 0 ||
+      pending.identity !== identity ||
+      // Dispatched by this instance (a new one never adopts an old one's continuation).
+      pending.phase !== "dispatched" ||
+      pending.instance !== instance ||
+      pending.request?.operationId !== grant.operationId ||
+      plan.kind !== (kind === "mark_refill" ? "mark" : "control") ||
+      !plan.producesLocal ||
+      plan.recipientType !== "UserDO" ||
+      plan.recipient !== recipient ||
+      plan.epoch !== fence.epoch ||
+      plan.incarnation !== fence.incarnation ||
+      row.authorization_gen !== fence.authorizationGen ||
+      grant.seq <= fence.cleanupThrough ||
+      now < plan.validFrom ||
+      now >= plan.validUntil
+    )
+      return "refused";
+    const balance = kind === "mark_refill" ? "mark" : "control";
+    for (const charge of plan.charges)
+      this.sql.exec(
+        `INSERT INTO live_budget_balances (operation_id, day, kind, remaining, budget_epoch,
+           budget_incarnation, budget_seq, budget_valid_until)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+        grant.operationId,
+        charge.day,
+        balance,
+        JSON.stringify(canonicalVector(charge.resources)),
+        plan.epoch,
+        plan.incarnation,
+        grant.seq,
+        plan.validUntil,
+      );
+    this.finishPending(kind, identity);
     return "installed";
   }
 
@@ -370,10 +600,13 @@ export class LiveBudget {
               continue;
             }
           }
+          // A dispatched installation stays: it names the owner whose work may still run, kept
+          // until that owner is quarantined (recovery then cannot be clean).
+          const queuedOnly = table === "live_budget_pending" ? " AND phase = 'queued'" : "";
           const gone = this.sql.exec(
             `DELETE FROM ${table} WHERE ${key.map((k) => `${k} = ?`).join(" AND ")}
                AND budget_incarnation = ? AND budget_epoch = ? AND budget_seq = ?
-               AND budget_valid_until = ?`,
+               AND budget_valid_until = ?${queuedOnly}`,
             ...key.map((k) => row[k] as string | number),
             row.budget_incarnation,
             row.budget_epoch,
@@ -383,7 +616,7 @@ export class LiveBudget {
           if (gone > 0) {
             deleted++;
             if (table === "live_local") closed.push(row.socket_id as string);
-          }
+          } else if (queuedOnly) remains = true;
         }
       }
       if (left === 0) {

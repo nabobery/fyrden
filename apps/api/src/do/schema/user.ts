@@ -621,4 +621,28 @@ export const userSchema: readonly DoMigration[] = [
         ON live_budget_completions (budget_incarnation, budget_epoch, budget_seq, operation_id);
     `,
   },
+  {
+    version: 12,
+    name: "live_scheduling",
+    // Queued live work: a socket's renewal (its nonce, when it was asked, and the socket's
+    // generation, moved on each real request), and a pending installation's phase (queued, then
+    // dispatched with its prepared request, its owner and the instance that held it).
+    sql: `
+      ALTER TABLE live_local
+        ADD COLUMN socket_generation INTEGER NOT NULL DEFAULT 0 CHECK (socket_generation >= 0);
+      ALTER TABLE live_local ADD COLUMN renewal_nonce TEXT;
+      ALTER TABLE live_local
+        ADD COLUMN renewal_intended_at INTEGER
+        CHECK (renewal_intended_at IS NULL OR renewal_intended_at >= 0);
+      ALTER TABLE live_budget_pending
+        ADD COLUMN phase TEXT NOT NULL DEFAULT 'queued' CHECK (phase IN ('queued', 'dispatched'));
+      ALTER TABLE live_budget_pending
+        ADD COLUMN request_json TEXT CHECK (
+          request_json IS NULL
+          OR (json_valid(request_json) AND json_type(request_json) = 'object')
+        );
+      ALTER TABLE live_budget_pending ADD COLUMN owner_id TEXT;
+      ALTER TABLE live_budget_pending ADD COLUMN dispatch_instance TEXT;
+    `,
+  },
 ];

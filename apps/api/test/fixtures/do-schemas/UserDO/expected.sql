@@ -212,7 +212,10 @@ CREATE TABLE live_budget_pending (
         budget_incarnation TEXT NOT NULL,
         budget_seq INTEGER NOT NULL CHECK (budget_seq >= 0),
         budget_valid_until INTEGER NOT NULL CHECK (budget_valid_until >= 0)
-      ) STRICT, WITHOUT ROWID;
+      , phase TEXT NOT NULL DEFAULT 'queued' CHECK (phase IN ('queued', 'dispatched')), request_json TEXT CHECK (
+          request_json IS NULL
+          OR (json_valid(request_json) AND json_type(request_json) = 'object')
+        ), owner_id TEXT, dispatch_instance TEXT) STRICT, WITHOUT ROWID;
 CREATE TABLE live_budget_terminal (
         socket_id TEXT NOT NULL,
         day INTEGER NOT NULL CHECK (day >= 0),
@@ -276,7 +279,8 @@ CREATE TABLE live_local (
         retry_at INTEGER NOT NULL,
         scopes TEXT NOT NULL,
         repo_ids TEXT
-      , budget_epoch INTEGER NOT NULL DEFAULT 0 CHECK (budget_epoch >= 0), budget_incarnation TEXT NOT NULL DEFAULT '', budget_seq INTEGER NOT NULL DEFAULT 0 CHECK (budget_seq >= 0), budget_valid_until INTEGER NOT NULL DEFAULT 0 CHECK (budget_valid_until >= 0)) STRICT, WITHOUT ROWID;
+      , budget_epoch INTEGER NOT NULL DEFAULT 0 CHECK (budget_epoch >= 0), budget_incarnation TEXT NOT NULL DEFAULT '', budget_seq INTEGER NOT NULL DEFAULT 0 CHECK (budget_seq >= 0), budget_valid_until INTEGER NOT NULL DEFAULT 0 CHECK (budget_valid_until >= 0), socket_generation INTEGER NOT NULL DEFAULT 0 CHECK (socket_generation >= 0), renewal_nonce TEXT, renewal_intended_at INTEGER
+        CHECK (renewal_intended_at IS NULL OR renewal_intended_at >= 0)) STRICT, WITHOUT ROWID;
 CREATE TABLE live_local_deps (
         socket_id TEXT NOT NULL,
         dependency TEXT NOT NULL, budget_epoch INTEGER NOT NULL DEFAULT 0 CHECK (budget_epoch >= 0), budget_incarnation TEXT NOT NULL DEFAULT '', budget_seq INTEGER NOT NULL DEFAULT 0 CHECK (budget_seq >= 0), budget_valid_until INTEGER NOT NULL DEFAULT 0 CHECK (budget_valid_until >= 0),

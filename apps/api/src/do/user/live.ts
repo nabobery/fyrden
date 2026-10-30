@@ -71,6 +71,11 @@ export interface LiveSocket {
   readonly retry_at: number;
   readonly scopes: string;
   readonly repo_ids: string | null;
+  /** Moved on each real renewal request: what a captured renewal is checked against. */
+  readonly socket_generation: number;
+  /** The renewal queued (its nonce, and when it was asked), if any. */
+  readonly renewal_nonce: string | null;
+  readonly renewal_intended_at: number | null;
 }
 
 /** A change to signal: its stream, and why (an automatic change of a conversation, or the principal's own). */
@@ -244,6 +249,55 @@ export class Live {
     return this.sql
       .exec("SELECT * FROM live_local ORDER BY socket_id")
       .toArray() as unknown as LiveSocket[];
+  }
+
+  /**
+   * Queues an open socket's renewal (call within the caller's transaction):
+   * nothing earlier than half its deadline; one already queued keeps its
+   * nonce and time (and the socket its generation); a real request moves the
+   * generation. No authorization, grant, deadline or failure count changes here.
+   */
+  queueRenewal(
+    socketId: string,
+    nonce: string,
+    intendedAt: number,
+  ): "queued" | "duplicate" | "early" | "missing" {
+    const socket = this.socket(socketId);
+    if (socket?.phase !== "open") return "missing";
+    if (intendedAt < socket.deadline - LIVE_POLICY.renewMs / 2) return "early";
+    if (socket.renewal_nonce !== null) return "duplicate";
+    this.sql.exec(
+      `UPDATE live_local SET renewal_nonce = ?2, renewal_intended_at = ?3,
+         socket_generation = socket_generation + 1
+       WHERE socket_id = ?1 AND renewal_nonce IS NULL`,
+      socketId,
+      nonce,
+      intendedAt,
+    );
+    return "queued";
+  }
+
+  /** The sockets with a renewal queued, by deadline, then when it was asked. */
+  queuedRenewals(): LiveSocket[] {
+    return this.sql
+      .exec(
+        `SELECT * FROM live_local WHERE renewal_nonce IS NOT NULL
+         ORDER BY deadline, renewal_intended_at, socket_id`,
+      )
+      .toArray() as unknown as LiveSocket[];
+  }
+
+  /** Clears a renewal, only the one queued as `nonce` at `socketGeneration`; whether it was. */
+  finishRenewal(socketId: string, nonce: string, socketGeneration: number): boolean {
+    return (
+      this.sql.exec(
+        `UPDATE live_local SET renewal_nonce = NULL, renewal_intended_at = NULL
+         WHERE socket_id = ?1 AND renewal_nonce = ?2 AND socket_generation = ?3`,
+        socketId,
+        nonce,
+        socketGeneration,
+      ).rowsWritten > 0
+    );
   }
 
   /** The dependencies a socket rests on. */
