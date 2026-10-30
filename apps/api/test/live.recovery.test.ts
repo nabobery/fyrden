@@ -51,9 +51,7 @@ beforeEach(() => {
   vi.setSystemTime(vi.getRealSystemTime());
 });
 
-afterEach(() => {
-  delete feedHooks.liveOwnerPending;
-});
+afterEach(() => {});
 
 const feedOf = (feed: string) => env.USER.getByName(feed);
 
@@ -542,47 +540,157 @@ describe("live recovery", () => {
     });
   });
 
-  it("stays pending while covered credit is valid, or an authorization is outstanding", async () => {
+  it("fences covered credit before deleting it, still valid or not, and is clean once it is gone", async () => {
     await isolated(async () => {
       const feed = `usr_${uniqueId("valid")}`;
       const grant = await ordinaryGrant(feed);
       await seedBalances(feed, grant, 1, Date.now() + 60 * 60_000);
+      const before = await fenceOf(feed);
       expect(
         await recoverLiveTargets(env.DIRECTORY, {
           limit: 10,
           reserveTarget: recoveryCoverage,
           tell,
         }),
-      ).toEqual({
-        attempted: 1,
-        retired: 0,
-        pending: 1,
-        failed: 0,
+      ).toEqual({ attempted: 1, retired: 1, pending: 0, failed: 0 });
+      expect(await localCount(feed, "live_budget_balances")).toBe(0);
+      const after = await fenceOf(feed);
+      expect(after.cleanupThrough).toBe(grant.seq);
+      expect(after.authorizationGen).toBeGreaterThan(before.authorizationGen);
+    });
+  });
+
+  it("quarantines a dispatched installation's owner before forgetting it, its place kept", async () => {
+    await isolated(async () => {
+      const feed = `usr_${uniqueId("orphan")}`;
+      const grant = await ordinaryGrant(feed);
+      // Work dispatched by an instance gone since: its owner in the directory, its row here.
+      const ownerId = `${grant.operationId}/feed`;
+      await env.DIRECTORY.prepare(
+        `INSERT INTO live_duration_owners (owner_id, operation_id, object_type, object_id, class,
+           epoch, incarnation, dispatch_from, dispatch_until, holds, status, instance, started_at,
+           admitted_at)
+         VALUES (?1, ?2, 'UserDO', ?3, 'ordinary', 0, ?4, 0, 1, '[]', 'dispatched', 'gone', 0, 0)`,
+      )
+        .bind(ownerId, grant.operationId, feed, grant.plan.incarnation)
+        .run();
+      await runInDurableObject(feedOf(feed), (_: UserDO, state) => {
+        state.storage.sql.exec(
+          `INSERT INTO live_budget_pending (kind, operation_id, intended_at, authorization_gen,
+             budget_epoch, budget_incarnation, budget_seq, budget_valid_until, phase, request_json,
+             owner_id, dispatch_instance)
+           VALUES ('control_refill', 'q1', 0, 0, 0, ?, ?, ?, 'dispatched', '{}', ?, 'gone')`,
+          grant.plan.incarnation,
+          grant.seq,
+          grant.plan.validUntil,
+          ownerId,
+        );
       });
+      expect(
+        await recoverLiveTargets(env.DIRECTORY, {
+          limit: 10,
+          reserveTarget: recoveryCoverage,
+          tell,
+        }),
+      ).toEqual({ attempted: 1, retired: 1, pending: 0, failed: 0 });
+      expect(await localCount(feed, "live_budget_pending")).toBe(0);
+      // Its place is still held: uncertain, never released by recovery.
+      expect(
+        await env.DIRECTORY.prepare("SELECT status FROM live_duration_owners WHERE owner_id = ?")
+          .bind(ownerId)
+          .first(),
+      ).toEqual({ status: "uncertain" });
+      await env.DIRECTORY.prepare("DELETE FROM live_duration_owners WHERE owner_id = ?")
+        .bind(ownerId)
+        .run();
+    });
+  });
+
+  it("keeps a dispatched installation whose owner the directory does not hold, and stays pending", async () => {
+    await isolated(async () => {
+      const feed = `usr_${uniqueId("unheld")}`;
+      const grant = await ordinaryGrant(feed);
+      await runInDurableObject(feedOf(feed), (_: UserDO, state) => {
+        state.storage.sql.exec(
+          `INSERT INTO live_budget_pending (kind, operation_id, intended_at, authorization_gen,
+             budget_epoch, budget_incarnation, budget_seq, budget_valid_until, phase, request_json,
+             owner_id, dispatch_instance)
+           VALUES ('control_refill', 'q1', 0, 0, 0, ?, ?, ?, 'dispatched', '{}', ?, 'gone')`,
+          grant.plan.incarnation,
+          grant.seq,
+          grant.plan.validUntil,
+          `${grant.operationId}/missing`,
+        );
+      });
+      expect(
+        await recoverLiveTargets(env.DIRECTORY, {
+          limit: 10,
+          reserveTarget: recoveryCoverage,
+          tell,
+        }),
+      ).toEqual({ attempted: 1, retired: 0, pending: 1, failed: 0 });
+      expect(await localCount(feed, "live_budget_pending")).toBe(1);
+    });
+  });
+
+  it("touches nothing under a fence other than the one it was validated under", async () => {
+    await isolated(async () => {
+      const feed = `usr_${uniqueId("moved")}`;
+      const grant = await ordinaryGrant(feed);
+      await seedBalances(feed, grant, 1, grant.plan.validUntil);
+      const page = await runInDurableObject(feedOf(feed), (_: UserDO, state) =>
+        state.storage.transactionSync(() => {
+          const budget = new LiveBudget(state.storage.sql);
+          budget.takeEpoch(0, grant.plan.incarnation);
+          // Validated under another incarnation (a newer one established while it awaited).
+          return budget.recoverPage(grant.seq, new Set(), {
+            epoch: 0,
+            incarnation: "f".repeat(32),
+          });
+        }),
+      );
+      expect(page.status).toBe("fenced");
       expect(await localCount(feed, "live_budget_balances")).toBe(1);
       expect((await fenceOf(feed)).cleanupThrough).toBe(0);
-      // Its credit gone, but an authorization outstanding: still pending.
-      await runInDurableObject(feedOf(feed), (_: UserDO, state) => {
-        state.storage.sql.exec("DELETE FROM live_budget_balances");
-      });
-      feedHooks.liveOwnerPending = () => true;
-      const coverage = await recoveryCoverage(feed);
-      if (coverage.status !== "granted") throw new Error(JSON.stringify(coverage));
-      const captured = await captureLiveRecoveryTarget(env.DIRECTORY, feed);
-      const request: LiveRecoveryRequest = {
-        protocol: 1,
-        nonce: "a".repeat(32),
-        feed,
-        incarnation: captured?.incarnation as string,
-        throughSeq: captured?.throughSeq as number,
-        coverage: coverage.grant,
-      };
-      expect((await tell(request)).status).toBe("pending");
-      feedHooks.liveOwnerPending = () => false;
-      const again = await recoveryCoverage(feed);
-      if (again.status !== "granted") throw new Error(JSON.stringify(again));
-      const reply = await tell({ ...request, nonce: "b".repeat(32), coverage: again.grant });
-      expect(reply.status).toBe("clean");
+    });
+  });
+
+  it("takes a clean acknowledgement with no completion (its holds overrun), refunding nothing", async () => {
+    await isolated(async () => {
+      const feed = `usr_${uniqueId("overrun")}`;
+      await ordinaryGrant(feed);
+      expect(
+        await recoverLiveTargets(env.DIRECTORY, {
+          limit: 10,
+          reserveTarget: recoveryCoverage,
+          tell: async (request) => ({
+            protocol: 1,
+            nonce: request.nonce,
+            feed: request.feed,
+            incarnation: request.incarnation,
+            throughSeq: request.throughSeq,
+            status: "clean",
+            completion: null,
+          }),
+        }),
+      ).toEqual({ attempted: 1, retired: 1, pending: 0, failed: 0 });
+      // A malformed completion still retires nothing.
+      await ordinaryGrant(feed);
+      expect(
+        await recoverLiveTargets(env.DIRECTORY, {
+          limit: 10,
+          reserveTarget: recoveryCoverage,
+          tell: async (request) => ({
+            protocol: 1,
+            nonce: request.nonce,
+            feed: request.feed,
+            incarnation: request.incarnation,
+            throughSeq: request.throughSeq,
+            status: "clean",
+            completion: { protocol: 1 } as never,
+          }),
+        }),
+      ).toMatchObject({ retired: 0, failed: 1 });
     });
   });
 
@@ -597,15 +705,17 @@ describe("live recovery", () => {
         state.storage.transactionSync(() => {
           const budget = new LiveBudget(state.storage.sql);
           budget.takeEpoch(0, grant.plan.incarnation);
-          return budget.recoverPage(grant.seq, Date.now(), false);
+          return budget.recoverPage(grant.seq);
         }),
       );
       expect(page.status).toBe("pending");
       expect(page.inspected).toBeLessThanOrEqual(LIVE_RECOVERY_ROWS);
+      // Fenced before anything was deleted: nothing granted through it applies, though rows remain.
+      expect((await fenceOf(feed)).cleanupThrough).toBe(grant.seq);
       expect(await localCount(feed, "live_budget_balances")).toBe(10);
       const second = await runInDurableObject(feedOf(feed), (_: UserDO, state) =>
         state.storage.transactionSync(() =>
-          new LiveBudget(state.storage.sql).recoverPage(grant.seq, Date.now(), false),
+          new LiveBudget(state.storage.sql).recoverPage(grant.seq),
         ),
       );
       expect(second.status).toBe("clean");
@@ -643,7 +753,7 @@ describe("live recovery", () => {
             state.storage.transactionSync(() => {
               const budget = new LiveBudget(state.storage.sql);
               budget.takeEpoch(0, grant.plan.incarnation);
-              return budget.recoverPage(grant.seq, Date.now(), false);
+              return budget.recoverPage(grant.seq);
             }),
           ),
         );
@@ -679,7 +789,7 @@ describe("live recovery", () => {
             state.storage.transactionSync(() => {
               const budget = new LiveBudget(state.storage.sql);
               budget.takeEpoch(0, grant.plan.incarnation);
-              return budget.recoverPage(grant.seq, Date.now(), false);
+              return budget.recoverPage(grant.seq);
             }),
           ),
         );

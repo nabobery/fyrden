@@ -323,6 +323,16 @@ export class LiveBudget {
     );
   }
 
+  /** The owners of dispatched installations (their work may still run). */
+  dispatchedOwners(): string[] {
+    return this.sql
+      .exec<{ owner_id: string }>(
+        "SELECT owner_id FROM live_budget_pending WHERE phase = 'dispatched' AND owner_id IS NOT NULL",
+      )
+      .toArray()
+      .map((row) => row.owner_id);
+  }
+
   /** The item queued as `kind`, if any. */
   pending(kind: QueuedKind): LivePending | null {
     const row = this.sql
@@ -511,24 +521,43 @@ export class LiveBudget {
   }
 
   /**
-   * One bounded page of recovery through `throughSeq`: at most
-   * `LIVE_RECOVERY_ROWS` rows inspected in all, through each table's stamp
-   * index, invalid ones (older incarnations or epochs) and covered expired
-   * ones deleted by their exact key and stamp (a socket only once its
-   * dependencies are gone; covered completions at once, their duration kept
-   * charged). Clean only when nothing covered is left and no authorization
-   * is outstanding: the watermark then moves to `throughSeq`.
+   * One bounded page of recovery through `throughSeq`. First the fence,
+   * once (durable across pages): the authorization generation moves (no
+   * result captured before applies) and the watermark to `throughSeq`
+   * (nothing granted through it is spent or installed again), before
+   * anything is deleted. Then at most `LIVE_RECOVERY_ROWS` rows inspected
+   * in all, through each table's stamp index, invalid ones (older
+   * incarnations or epochs) and covered ones deleted by their exact key and
+   * stamp (a socket only once its dependencies are gone; a dispatched
+   * installation only once its owner is quarantined). Clean once nothing
+   * covered is left: local state retired, which is not its work's end nor
+   * its places' release (an authorization still running keeps them).
    */
   recoverPage(
     throughSeq: number,
-    now: number,
-    physicalOwnerPending: boolean,
+    /** Owners of dispatched installations the directory has quarantined (their places kept). */
+    quarantined: ReadonlySet<string> = new Set(),
+    /** The fence the recovery was validated under: another since, it touches nothing. */
+    expected?: { readonly epoch: number; readonly incarnation: string },
   ): {
-    readonly status: "pending" | "clean";
+    readonly status: "pending" | "clean" | "fenced";
     readonly closedSocketIds: readonly string[];
     readonly inspected: number;
     readonly deleted: number;
   } {
+    const current = this.fence();
+    if (
+      expected &&
+      (current.epoch !== expected.epoch || current.incarnation !== expected.incarnation)
+    )
+      return { status: "fenced", closedSocketIds: [], inspected: 0, deleted: 0 };
+    // Old authority refused before anything is deleted, durably (across pages): results captured
+    // before now never apply, and nothing granted through `throughSeq` is spent or installed.
+    this.sql.exec(
+      `UPDATE live_budget_fence SET authorization_gen = authorization_gen + 1, cleanup_through = ?1
+       WHERE id = 1 AND cleanup_through < ?1`,
+      throughSeq,
+    );
     const fence = this.fence();
     let left = LIVE_RECOVERY_ROWS;
     let inspected = 0;
@@ -571,15 +600,6 @@ export class LiveBudget {
         left -= rows.length;
         inspected += rows.length;
         for (const row of rows) {
-          // Covered state still valid stays (completions are retired at once, conservatively).
-          if (
-            probe.covered &&
-            table !== "live_budget_completions" &&
-            row.budget_valid_until > now
-          ) {
-            remains = true;
-            continue;
-          }
           if (table === "live_local") {
             // Its dependencies looked for: a row's read of the page too.
             if (left === 0) {
@@ -600,9 +620,12 @@ export class LiveBudget {
               continue;
             }
           }
-          // A dispatched installation stays: it names the owner whose work may still run, kept
-          // until that owner is quarantined (recovery then cannot be clean).
-          const queuedOnly = table === "live_budget_pending" ? " AND phase = 'queued'" : "";
+          // A dispatched installation names the owner whose work may still run: it goes only once
+          // that owner is quarantined (its place kept); until then recovery cannot be clean.
+          const queuedOnly =
+            table === "live_budget_pending"
+              ? " AND (phase = 'queued' OR owner_id IN (SELECT value FROM json_each(?)))"
+              : "";
           const gone = this.sql.exec(
             `DELETE FROM ${table} WHERE ${key.map((k) => `${k} = ?`).join(" AND ")}
                AND budget_incarnation = ? AND budget_epoch = ? AND budget_seq = ?
@@ -612,6 +635,7 @@ export class LiveBudget {
             row.budget_epoch,
             row.budget_seq,
             row.budget_valid_until,
+            ...(queuedOnly ? [JSON.stringify([...quarantined])] : []),
           ).rowsWritten;
           if (gone > 0) {
             deleted++;
@@ -624,15 +648,8 @@ export class LiveBudget {
         break;
       }
     }
-    const clean = !remains && !physicalOwnerPending;
-    if (clean)
-      this.sql.exec(
-        `UPDATE live_budget_fence SET cleanup_through = max(cleanup_through, ?1)
-         WHERE id = 1 AND epoch = ?2 AND incarnation = ?3`,
-        throughSeq,
-        fence.epoch,
-        fence.incarnation,
-      );
+    // Clean: local state retired (not the work's end, nor its places' release).
+    const clean = !remains;
     return { status: clean ? "clean" : "pending", closedSocketIds: closed, inspected, deleted };
   }
 }

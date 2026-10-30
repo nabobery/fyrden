@@ -380,7 +380,8 @@ describe("dispatching and observing an owner", () => {
         instance: "i1",
         startedAt: grant.plan.validFrom,
       });
-      expect(await quarantineLiveOwners(db, [ownerId])).toBe(1);
+      // Held: uncertain now; one never admitted is not.
+      expect(await quarantineLiveOwners(db, [ownerId, "v1.none/feed"])).toEqual([ownerId]);
       // Its receipt expired and days passed: still held.
       const later = at(day + 6).db;
       await expireLiveReceipts(later);

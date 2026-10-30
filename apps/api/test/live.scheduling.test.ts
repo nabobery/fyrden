@@ -289,7 +289,7 @@ describe("a queued live installation", () => {
           budget.preparePending("control_refill", "q1", request);
           budget.dispatchPending("control_refill", "q1", owner(feed, grant.operationId), "i1");
           // Its funding expired: recovery would otherwise delete it.
-          const page = budget.recoverPage(grant.seq, grant.plan.validUntil + 1, false);
+          const page = budget.recoverPage(grant.seq);
           return { status: page.status, kept: budget.pending("control_refill")?.ownerId };
         });
       });

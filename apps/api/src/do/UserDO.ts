@@ -27,6 +27,7 @@ import { isLiveVector, livePlanError, validateLiveCoverage } from "../live/budge
 import { liveCredential } from "../live/credential.js";
 import { confirm, release } from "../live/directory.js";
 import { beginLiveDuration, finishLiveDuration } from "../live/duration.js";
+import { quarantineLiveOwners } from "../live/owners.js";
 import {
   LIVE_RECOVERY_DURATION,
   type LiveRecoveryReply,
@@ -155,8 +156,6 @@ export const PREFERENCE_GATE = `SELECT repo_id, NULL AS conversation FROM watch_
 export const feedHooks: {
   beforeEpochRead?: () => Promise<void>;
   beforePreferenceRead?: () => Promise<void>;
-  /** Whether a live authorization is outstanding (its owner arrives with the budgets' wiring). */
-  liveOwnerPending?: () => boolean;
   /** Funded live work's readiness for a feed (none in production yet: blocked). */
   liveReadiness?: (feed: string) => LiveReadiness | undefined;
   /** Before the alarm is read or written while it is reconciled. */
@@ -1426,17 +1425,33 @@ export class UserDO extends MigratingDO {
     if (checked.status === "refused") return refuse(checked.reason);
     this.#applyEpoch(checked.epoch || null, plan.incarnation);
     const budget = new LiveBudget(this.ctx.storage.sql);
+    // The fence this recovery was validated under: one moved while it awaited touches nothing.
+    const { epoch, incarnation } = budget.fence();
+    // Dispatched work whose end this object cannot show (a restart lost it, or it still runs):
+    // its owners quarantined in the directory first, and only those the directory then holds
+    // (uncertain, or accounted for) may lose their local rows. Unanswered, or not held, they stay
+    // and recovery stays pending.
+    const dispatched = budget.dispatchedOwners();
+    let quarantined: ReadonlySet<string> = new Set();
+    if (dispatched.length > 0)
+      try {
+        quarantined = new Set(await quarantineLiveOwners(this.env.DIRECTORY, dispatched));
+      } catch {
+        quarantined = new Set();
+      }
     const page = this.ctx.storage.transactionSync(() =>
-      budget.recoverPage(request.throughSeq, Date.now(), feedHooks.liveOwnerPending?.() ?? false),
+      budget.recoverPage(request.throughSeq, quarantined, { epoch, incarnation }),
     );
+    if (page.status === "fenced") return refuse("fenced");
     for (const id of page.closedSocketIds)
       for (const ws of this.ctx.getWebSockets(id)) ws.close(CLOSE_EXPIRED, "expired: reconnect");
     // The alarm by non-live work alone (an earlier live one goes) until a live change schedules
     // live work again.
     this.#liveHeld = true;
     await this.#arm();
+    // Ran past what its grant reserved: no completion (its whole hold stays charged), and its
+    // acknowledgement of the local state still stands.
     const completion = finishLiveDuration(guard, Date.now());
-    if (!completion) return refuse("expired");
     return {
       protocol: 1,
       nonce: request.nonce,

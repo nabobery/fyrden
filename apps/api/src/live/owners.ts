@@ -310,21 +310,32 @@ export async function markLiveOwnerDispatched(
 
 /**
  * Marks dispatched owners uncertain (their work's end cannot be shown: the
- * instance that held it is gone). They keep their places; how many changed.
+ * instance that held it is gone), and answers which of `ownerIds` hold
+ * their places now (uncertain, or already observed or accounted): a local
+ * record of one may then go. One missing, or only reserved, is not held.
  */
 export async function quarantineLiveOwners(
   db: D1Database,
   ownerIds: readonly string[],
-): Promise<number> {
-  if (ownerIds.length === 0) return 0;
-  const { meta } = await db
-    .prepare(
-      `UPDATE live_duration_owners SET status = 'uncertain'
-       WHERE owner_id IN (SELECT value FROM json_each(?1)) AND status = 'dispatched'`,
-    )
-    .bind(JSON.stringify(ownerIds))
-    .run();
-  return meta.changes ?? 0;
+): Promise<readonly string[]> {
+  if (ownerIds.length === 0) return [];
+  const ids = JSON.stringify(ownerIds);
+  const [, held] = await db.batch<{ owner_id: string }>([
+    db
+      .prepare(
+        `UPDATE live_duration_owners SET status = 'uncertain'
+         WHERE owner_id IN (SELECT value FROM json_each(?1)) AND status = 'dispatched'`,
+      )
+      .bind(ids),
+    db
+      .prepare(
+        `SELECT owner_id FROM live_duration_owners
+         WHERE owner_id IN (SELECT value FROM json_each(?1))
+           AND status IN ('uncertain', 'observing', 'accounted')`,
+      )
+      .bind(ids),
+  ]);
+  return (held?.results ?? []).map((row) => row.owner_id);
 }
 
 function observationError(o: LiveOwnerObservation): boolean {

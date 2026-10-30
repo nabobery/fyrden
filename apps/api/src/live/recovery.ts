@@ -40,7 +40,8 @@ export type LiveRecoveryReply =
       readonly incarnation: string;
       readonly throughSeq: number;
       readonly status: "pending" | "clean";
-      readonly completion: LiveDurationCompletion;
+      /** What it used of its grant's duration; null when it ran past its holds (all stays charged). */
+      readonly completion: LiveDurationCompletion | null;
     }
   | {
       readonly protocol: 1;
@@ -162,7 +163,11 @@ export async function backoffLiveTarget(
 
 const hex = (bytes: Uint8Array) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 
-/** Whether `reply` acknowledges exactly `request`, with a well-formed completion of its coverage. */
+/**
+ * Whether `reply` acknowledges exactly `request`: its local state's status,
+ * with no completion (it overran its holds) or a well-formed one of its
+ * coverage. A refund is the completion's to earn, never the acknowledgement's.
+ */
 function acknowledges(
   request: LiveRecoveryRequest,
   reply: unknown,
@@ -176,7 +181,7 @@ function acknowledges(
     r.incarnation === request.incarnation &&
     r.throughSeq === request.throughSeq &&
     (r.status === "pending" || r.status === "clean") &&
-    isLiveCompletionOf(request.coverage, r.completion)
+    (r.completion === null || isLiveCompletionOf(request.coverage, r.completion))
   );
 }
 
