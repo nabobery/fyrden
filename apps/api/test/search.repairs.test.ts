@@ -6,6 +6,7 @@
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, describe, expect, inject, it } from "vitest";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../src/events/read-model.js";
 import { reconcileSource } from "../src/search/reconcile.js";
 import { REPAIR_POLICY, repairStatement, runSearchRepairs } from "../src/search/repairs.js";
 import { api, json, user } from "./helpers/api.js";
@@ -14,7 +15,8 @@ import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
 
 const fx = inject("pushFixtures");
-const db = env.ORG_READ;
+// Written as production writes it: through the read model's executor.
+const db = readModelFor(env, DEFAULT_ORG_SHARD);
 
 /** A repository with an issue and its branches pushed: its id. */
 async function repository(): Promise<string> {

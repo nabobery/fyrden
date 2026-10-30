@@ -323,8 +323,9 @@ describe("the feed sink", () => {
       { sink: "test_hook", ids: [1, 2, 3].map((seq) => `${repoId}:1:${seq}:test_hook:hook_1`) },
     ]);
     expect(calls.map((call) => call.entries.length)).toEqual([3]);
-    // A lookup, the batch, marking the sent ones, the feed's claim and its mark.
-    expect(count.queries).toBe(5);
+    // A lookup, the batch, marking the sent ones, the feed's claim and its mark; applied on its
+    // own (no invocation's writer), each of the four writes takes and releases a lease of its own.
+    expect(count.queries).toBe(5 + 4 * 2);
     expect((await effectRows(repoId)).map((row) => row.state).sort()).toEqual([
       "done",
       "done",
@@ -373,7 +374,8 @@ describe("the feed sink", () => {
     expect(INLINE_BATCH_EFFECTS).toBe(8);
     expect(sent).toHaveLength(1);
     expect(sent[0]?.ids).toHaveLength(7);
-    expect(count.queries).toBe(5 * 2 + 1 + 2);
+    // And the invocation's writer's lease, taken and released.
+    expect(count.queries).toBe(5 * 2 + 1 + 2 + 2);
     // The inline effects went in one call per recipient: 8 entries each.
     expect(calls).toHaveLength(100);
     expect(calls.every((call) => call.entries.length === 8)).toBe(true);

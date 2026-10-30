@@ -3,7 +3,8 @@ import { deliverEffects, invocationBudget } from "../effects/dispatcher.js";
 import { type EffectPolicy, type EffectSink, effectPolicy } from "../effects/journal.js";
 import { type EffectMessage, isEffectMessage, type Publish, publisher } from "../effects/queues.js";
 import { EFFECT_QUEUE_NAMES, EFFECT_SINKS, effectQueues } from "../effects/sinks.js";
-import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
+import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
+import { withReadModel } from "../read-model/executor.js";
 
 /** Delay before a message whose outcome could not be recorded is delivered again. Proposed. */
 export const EFFECT_RETRY_DELAY_SECONDS = 10;
@@ -61,20 +62,23 @@ export async function consumeEffects(
   const ours = valid.filter((message) => message.body.sink === name);
   for (const message of valid.filter((m) => m.body.sink !== name)) message.retry();
   try {
-    await deliverEffects(
-      {
-        db: readModelFor(env, DEFAULT_ORG_SHARD),
-        env,
-        sinks,
-        now,
-        publish: options.publish ?? publisher(effectQueues(env), sinks, options.metrics),
-        log,
-        policy,
-        ...(options.metrics && { metrics: options.metrics }),
-      },
-      name,
-      ours.flatMap((message) => message.body.ids),
-      invocationBudget(now(), policy),
+    // One writer for the invocation's writes.
+    await withReadModel(env, DEFAULT_ORG_SHARD, (db) =>
+      deliverEffects(
+        {
+          db,
+          env,
+          sinks,
+          now,
+          publish: options.publish ?? publisher(effectQueues(env), sinks, options.metrics),
+          log,
+          policy,
+          ...(options.metrics && { metrics: options.metrics }),
+        },
+        name,
+        ours.flatMap((message) => message.body.ids),
+        invocationBudget(now(), policy),
+      ),
     );
     options.metrics?.count("effects.consume", { sink: name, outcome: "ok" });
     for (const message of ours) message.ack();

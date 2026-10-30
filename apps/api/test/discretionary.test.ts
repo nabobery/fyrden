@@ -26,6 +26,7 @@ import {
 } from "../src/effects/discretionary.js";
 import { deliverEffects, invocationBudget, recoverEffects } from "../src/effects/dispatcher.js";
 import { MESSAGE_CALLS, type PlannedEffect } from "../src/effects/journal.js";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../src/events/read-model.js";
 import { feedSink, WATCH_PRICE, watchPrice } from "../src/feed/sink.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { recordingPublish } from "./helpers/effects.js";
@@ -631,7 +632,14 @@ describe("a watch effect's price", () => {
         envelope(repoId, [event(repoId, 1, block(1, ["usr_p"], watchers))]),
         { sinks: [feedSink], publish, now: () => t0, inline: { batched: 0 } },
       );
-      const deps = { db, env: deployed, sinks: [feedSink], now: () => t0, publish };
+      // As the effects' consumer and cron write it: through the read model's writer.
+      const deps = {
+        db: readModelFor(deployed, DEFAULT_ORG_SHARD),
+        env: deployed,
+        sinks: [feedSink],
+        now: () => t0,
+        publish,
+      };
       // Overdue: the cron sends it again.
       await recoverEffects({ ...deps, now: () => t0 + 20 * 60 * 1000 });
       const ids = [`${repoId}:1:1:feed:watch`, `${repoId}:1:1:feed:feed`].slice(

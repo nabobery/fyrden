@@ -1,6 +1,7 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { eventKey } from "@fyrden/domain";
 import type { Snapshot } from "../queues/events-consumer.js";
+import { READ_MODEL_ADMISSION } from "../read-model/executor.js";
 import {
   ADMITTED,
   admitStatements,
@@ -31,7 +32,7 @@ import { searchStatement } from "./statements.js";
  * Rows a batch reserves for its bookkeeping besides its statements': the
  * write clock's tick and up to three requests for a reconciliation.
  */
-const BOOKKEEPING_ROWS = 7;
+const BOOKKEEPING_ROWS = 7 + READ_MODEL_ADMISSION.rows;
 
 /** One message's search statements, around the consumer's own in its batch. */
 export interface LiveSearch {
@@ -124,8 +125,16 @@ export function liveSearch(
       const admission = admitting ? results.slice(0, 2) : [];
       const day = (admission[1]?.results[0] as { day?: number } | undefined)?.day;
       const overhead = usedBy(admission);
-      // The epoch's request too (written before the reservation, charged with it).
-      const used = usedBy([...beforeResults, ...results.slice(admission.length)]);
+      // The epoch's request too (written before the reservation, charged with it), and, when
+      // search has statements of its own in the batch, the batch's admission, which the executor
+      // counts with the batch's last result: when statements of others follow search's, that one
+      // is not among these.
+      const after = usedBy([...beforeResults, ...results.slice(admission.length)]);
+      const othersLast = results.length > 0 && last !== undefined && last !== results.at(-1);
+      const used = {
+        rows: after.rows + (othersLast ? READ_MODEL_ADMISSION.rows : 0),
+        reads: after.reads,
+      };
       const tick = (results.at(-1)?.results[0] as { clock?: number } | undefined)?.clock;
       const bytes = last?.meta.size_after;
       const size =
@@ -149,7 +158,8 @@ export function liveSearch(
       const rows = overhead.rows + used.rows + size.length;
       // Nothing written, nothing to observe: nothing to charge.
       if (rows === 0 && size.length === 0) return [];
-      return [spentStatement(db, { rows, reads: 0 }), ...size];
+      // With the admission of the batch it is applied in.
+      return [spentStatement(db, { rows: rows + READ_MODEL_ADMISSION.rows, reads: 0 }), ...size];
     },
   };
 }

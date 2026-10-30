@@ -10,6 +10,7 @@ import { EXPORT_PAGE } from "../do/repo/export.js";
 import { readModelFor } from "../events/read-model.js";
 import { exportStatements } from "../events/rebuild.js";
 import { epochStatement } from "../queues/events-consumer.js";
+import { READ_MODEL_ADMISSION } from "../read-model/executor.js";
 import { clock } from "../services.js";
 import {
   type CallBudget,
@@ -17,6 +18,7 @@ import {
   type Reservation,
   reserve,
   SAME_DAY,
+  SPENDING,
   STATEMENT_ROWS,
   settleStatement,
   sizeStatement,
@@ -107,11 +109,17 @@ export interface ReconcileTarget {
 export async function reconcileSource(
   env: Env,
   target: ReconcileTarget,
-  options: { pages?: number; calls?: CallBudget; metrics?: Metrics } = {},
+  options: {
+    pages?: number;
+    calls?: CallBudget;
+    metrics?: Metrics;
+    /** The read model to write through (the caller's writer); its own writes' otherwise. */
+    readModel?: D1Database;
+  } = {},
 ): Promise<"done" | "more" | "blocked"> {
   const { repoId } = target;
   const { metrics, calls } = options;
-  const org = readModelFor(env, target.shard);
+  const org = options.readModel ?? readModelFor(env, target.shard);
   const db = calls ? counted(org, calls) : org;
   const repo = env.REPO.getByName(repoId);
   const exportPage = async (request: ExportPageRequest) =>
@@ -122,7 +130,10 @@ export async function reconcileSource(
   const end = async <T>(outcome: T): Promise<T> => {
     if (lookups.reads > 0) {
       metrics?.count("d1.query", { db: "org", op: "search_spent" });
-      await spentStatement(db, { rows: 0, reads: lookups.reads }).run();
+      await spentStatement(db, {
+        rows: SPENDING.rows,
+        reads: lookups.reads + SPENDING.reads,
+      }).run();
       lookups.reads = 0;
     }
     return outcome;
@@ -278,8 +289,17 @@ export async function reconcileSource(
  */
 export const STEP_CALLS = 10;
 
+/**
+ * Batches a step writes besides its reservation (its work, its settling and
+ * a spending): each admitted by the executor, at its cost.
+ */
+const STEP_BATCHES = 3;
+
 /** What a step that writes a few rows reserves (a pass's start or last step). */
-const SMALL_STEP = { rows: 50, reads: 200 };
+const SMALL_STEP = {
+  rows: 50 + STEP_BATCHES * READ_MODEL_ADMISSION.rows,
+  reads: 200 + STEP_BATCHES * READ_MODEL_ADMISSION.reads,
+};
 
 /**
  * What a page reserves: every exported entity and every projection row it
@@ -603,7 +623,11 @@ export async function collectTombstones(
   // Removals are made whatever the day's allowance (they shrink the database), and counted.
   const used = usedBy(removed);
   metrics?.count("d1.query", { db: "org", op: "search_spent" });
-  await spentStatement(db, { rows: used.rows, reads: used.reads }).run();
+  // And the spending's own batch.
+  await spentStatement(db, {
+    rows: used.rows + SPENDING.rows,
+    reads: used.reads + SPENDING.reads,
+  }).run();
   return removed.reduce((sum, r) => sum + r.meta.changes, 0);
 }
 
@@ -723,9 +747,10 @@ export async function sweepTombstones(db: D1Database, metrics?: Metrics): Promis
   const removed = await db.batch(statements);
   const used = usedBy([...answered, ...removed]);
   metrics?.count("d1.query", { db: "org", op: "search_spent" });
+  // And the spending's own batch.
   await spentStatement(db, {
-    rows: used.rows,
-    reads: used.reads + (cursorMeta.rows_read ?? 0),
+    rows: used.rows + SPENDING.rows,
+    reads: used.reads + (cursorMeta.rows_read ?? 0) + SPENDING.reads,
   }).run();
   return removed.reduce((sum, r, i) => sum + (removals.has(i) ? r.meta.changes : 0), 0);
 }

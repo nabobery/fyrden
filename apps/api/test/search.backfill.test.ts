@@ -4,14 +4,17 @@
 import { env } from "cloudflare:workers";
 import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
 import { beforeAll, describe, expect, it } from "vitest";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../src/events/read-model.js";
 import type { OpContext } from "../src/ops/execute.js";
+import { READ_MODEL_ADMISSION, READ_MODEL_LONE_WRITE } from "../src/read-model/executor.js";
 import { backfillSearchOperation } from "../src/search/backfill.js";
 import { REQUEST_ROWS, repairStatement } from "../src/search/repairs.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H9";
-const db = env.ORG_READ;
+// Written as production writes it: through the read model's executor.
+const db = readModelFor(env, DEFAULT_ORG_SHARD);
 
 let admin: Who;
 beforeAll(async () => {
@@ -110,8 +113,11 @@ describe("search's backfill", () => {
     const ids = await listed(3);
     // What a request writes, at most: a new one's row and its index entries.
     const probe = await db.batch(ids.map((id) => repairStatement(db, `${id}x`, "probe", 0)));
-    for (const result of probe)
-      expect(result.meta.rows_written ?? 0).toBeLessThanOrEqual(REQUEST_ROWS);
+    // (The batch's last result carries its admission's rows too.)
+    for (const [i, result] of probe.entries())
+      expect(
+        (result.meta.rows_written ?? 0) - (i === probe.length - 1 ? READ_MODEL_ADMISSION.rows : 0),
+      ).toBeLessThanOrEqual(REQUEST_ROWS);
     const before = await spent();
     const pages = await backfill();
     const asked = pages.reduce((n, page) => n + page.requested, 0);
@@ -169,8 +175,10 @@ describe("search's backfill", () => {
     )
       .bind(cursor)
       .first<{ n: number }>();
-    // Each request of the page as if it wrote its row, and the charge itself.
-    expect((await spent()) - before).toBe((page?.n ?? 0) * REQUEST_ROWS + 1);
+    // Each request of the page as if it wrote its row, the batch's admission and lease, and the charge itself.
+    expect((await spent()) - before).toBe(
+      (page?.n ?? 0) * REQUEST_ROWS + READ_MODEL_LONE_WRITE.rows + 1,
+    );
   });
 
   it("is refused while search indexing is off", async () => {

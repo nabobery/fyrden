@@ -76,6 +76,7 @@ either:
   not, so on a table others reference (`principals`, for one) that order
   fails the migration, and so does a rebuild that loses a referenced row.
   A table that no other table references and that was rebuilt by renaming
+  (its indexes and triggers made again: dropping the old table dropped them)
   still passes `fyrden doctor` (see Detecting). Update the expected
   file (`pnpm --filter @fyrden/api exec vitest run test/d1-schema.test.ts -u`),
   review the diff, and deploy.

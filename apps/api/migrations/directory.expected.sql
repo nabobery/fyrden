@@ -429,6 +429,28 @@ CREATE TABLE principals (
   CHECK (type = 'installation' OR handle IS NOT NULL)
 ) STRICT;
 
+-- table read_model_barriers
+CREATE TABLE read_model_barriers (
+  shard TEXT PRIMARY KEY,
+  generation INTEGER NOT NULL CHECK (generation >= 1),
+  phase TEXT NOT NULL CHECK (phase IN ('running', 'pausing', 'paused', 'recovering')),
+  since INTEGER NOT NULL,
+  bookmark TEXT,
+  protocol_version INTEGER NOT NULL CHECK (protocol_version >= 1),
+  executor_version INTEGER NOT NULL DEFAULT 0 CHECK (executor_version >= 0),
+  read_model_protocol_since TEXT
+) STRICT, WITHOUT ROWID;
+
+-- table read_model_writers
+CREATE TABLE read_model_writers (
+  lease_id TEXT PRIMARY KEY,
+  shard TEXT NOT NULL,
+  generation INTEGER NOT NULL CHECK (generation >= 1),
+  protocol_version INTEGER NOT NULL CHECK (protocol_version >= 1),
+  mode TEXT NOT NULL CHECK (mode IN ('ordinary', 'maintenance')),
+  until INTEGER NOT NULL CHECK (until > 0)
+) STRICT, WITHOUT ROWID;
+
 -- table refresh_tokens
 CREATE TABLE refresh_tokens (
   id TEXT PRIMARY KEY,
@@ -757,6 +779,9 @@ CREATE UNIQUE INDEX principals_handle ON principals (handle COLLATE NOCASE) WHER
 
 -- index principals_owner
 CREATE INDEX principals_owner ON principals (owner_id) WHERE owner_id IS NOT NULL;
+
+-- index read_model_writers_drain
+CREATE INDEX read_model_writers_drain ON read_model_writers (shard, generation, until, lease_id);
 
 -- index refresh_tokens_family
 CREATE INDEX refresh_tokens_family ON refresh_tokens (family_id);

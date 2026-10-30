@@ -6,8 +6,9 @@ import {
 } from "@fyrden/adapters-cloudflare/net";
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { HookForDelivery } from "../do/repo/hooks.js";
-import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
+import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
 import { ownHostsOf } from "../git/import/network.js";
+import { withReadModel } from "../read-model/executor.js";
 import { signature } from "./secrets.js";
 import type { DeliveryMessage } from "./sink.js";
 
@@ -130,24 +131,27 @@ export async function consumeWebhooks(
   env: Env,
   options: { readonly metrics?: Metrics } = {},
 ): Promise<void> {
-  const deps: DeliveryDeps = {
-    env,
-    db: readModelFor(env, DEFAULT_ORG_SHARD),
-    now: () => Date.now(),
-    ...(options.metrics && { metrics: options.metrics }),
-  };
-  for (const message of batch.messages) {
-    try {
-      await attemptDelivery(deps, message.body.delivery);
-    } catch (error) {
-      // The delivery keeps its schedule: the cron sends its message again.
-      createLogger({ op: "webhooks.deliver" }).error("a delivery attempt failed to run", {
-        delivery: message.body.delivery,
-        error,
-      });
+  // One writer for the invocation's writes.
+  await withReadModel(env, DEFAULT_ORG_SHARD, async (db) => {
+    const deps: DeliveryDeps = {
+      env,
+      db,
+      now: () => Date.now(),
+      ...(options.metrics && { metrics: options.metrics }),
+    };
+    for (const message of batch.messages) {
+      try {
+        await attemptDelivery(deps, message.body.delivery);
+      } catch (error) {
+        // The delivery keeps its schedule: the cron sends its message again.
+        createLogger({ op: "webhooks.deliver" }).error("a delivery attempt failed to run", {
+          delivery: message.body.delivery,
+          error,
+        });
+      }
+      message.ack();
     }
-    message.ack();
-  }
+  });
 }
 
 /**

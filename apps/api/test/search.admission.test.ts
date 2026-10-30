@@ -5,9 +5,11 @@
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeEach, describe, expect, inject, it } from "vitest";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../src/events/read-model.js";
 import {
   ADMISSION,
   reserve,
+  SETTLING,
   settleStatement,
   sizeStatement,
   tickStatement,
@@ -26,7 +28,8 @@ import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
 
 const fx = inject("pushFixtures");
-const db = env.ORG_READ;
+// Written as production writes it: through the read model's executor.
+const db = readModelFor(env, DEFAULT_ORG_SHARD);
 
 const today = async () =>
   (await db.prepare("SELECT CAST(unixepoch() / 86400 AS INTEGER) AS d").first<{ d: number }>())
@@ -90,7 +93,7 @@ function clocked(
       seen.read = (seen.read ?? 0) + (r.meta.rows_read ?? 0);
     }
   };
-  const org = new Proxy(db, {
+  const org = new Proxy(env.ORG_READ, {
     get(target, prop) {
       if (prop === "batch")
         return async (batch: D1PreparedStatement[]) => {
@@ -157,10 +160,10 @@ describe("search's allowance", () => {
     expect(taken).toMatchObject({ day: await today(), rows: 30_000, reads: 10 });
     if (!taken) throw new Error("not reserved");
     await settleStatement(db, taken, { rows: 1_000, reads: 4 }).run();
-    // What the step used, with what reserving it wrote and read and what settling it may (2 each).
+    // What the step used, with what reserving it wrote and read and what settling it may.
     expect(await budget()).toEqual({
-      rows: 1_000 + taken.overhead.rows + 2,
-      reads: 4 + taken.overhead.reads + 2,
+      rows: 1_000 + taken.overhead.rows + SETTLING.rows,
+      reads: 4 + taken.overhead.reads + SETTLING.reads,
     });
     const spent = (await budget())?.rows ?? 0;
     expect(await reserve(db, { rows: ADMISSION.dailyRows - spent + 1, reads: 0 })).toBeNull();

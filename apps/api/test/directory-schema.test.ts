@@ -52,6 +52,8 @@ describe("D1 directory schema", () => {
       "passkeys",
       "principal_lifecycle",
       "principals",
+      "read_model_barriers",
+      "read_model_writers",
       "refresh_tokens",
       "repo_deletion_cleanups",
       "repo_deletions",

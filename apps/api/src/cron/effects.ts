@@ -3,7 +3,8 @@ import { type DispatchDeps, pruneEffects, recoverEffects } from "../effects/disp
 import type { EffectSink } from "../effects/journal.js";
 import { type Publish, publisher } from "../effects/queues.js";
 import { EFFECT_SINKS, effectQueues } from "../effects/sinks.js";
-import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
+import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
+import { withReadModel } from "../read-model/executor.js";
 import { reconcileWebhooks } from "../webhooks/deliver.js";
 
 /**
@@ -26,36 +27,38 @@ export async function runEffectsCron(
 ): Promise<void> {
   const { metrics, sinks = EFFECT_SINKS } = options;
   const now = options.now ?? (() => Date.now());
-  const db = readModelFor(env, DEFAULT_ORG_SHARD);
-  const log = createLogger({ op: "cron.effects" });
-  const deps: DispatchDeps = {
-    db,
-    env,
-    sinks,
-    now,
-    publish: options.publish ?? publisher(effectQueues(env), sinks, metrics),
-    log,
-    metrics,
-  };
   const failures: unknown[] = [];
-  const task = async (
-    name: "effects.recover" | "webhooks.reconcile",
-    run: () => Promise<unknown>,
-  ) => {
-    try {
-      await run();
-      metrics.count(name, { outcome: "ok" });
-    } catch (error) {
-      metrics.count(name, { outcome: "error" });
-      log.error("an effects cron task failed", { task: name, error });
-      failures.push(error);
-    }
-  };
-  await task("webhooks.reconcile", () => reconcileWebhooks({ env, db, now, metrics }));
-  await task("effects.recover", async () => {
-    // The prune first: a recovery that fails (a queue refusing sends) leaves it done.
-    await pruneEffects(deps);
-    await recoverEffects(deps);
+  // One writer for the run's writes.
+  await withReadModel(env, DEFAULT_ORG_SHARD, async (db) => {
+    const log = createLogger({ op: "cron.effects" });
+    const deps: DispatchDeps = {
+      db,
+      env,
+      sinks,
+      now,
+      publish: options.publish ?? publisher(effectQueues(env), sinks, metrics),
+      log,
+      metrics,
+    };
+    const task = async (
+      name: "effects.recover" | "webhooks.reconcile",
+      run: () => Promise<unknown>,
+    ) => {
+      try {
+        await run();
+        metrics.count(name, { outcome: "ok" });
+      } catch (error) {
+        metrics.count(name, { outcome: "error" });
+        log.error("an effects cron task failed", { task: name, error });
+        failures.push(error);
+      }
+    };
+    await task("webhooks.reconcile", () => reconcileWebhooks({ env, db, now, metrics }));
+    await task("effects.recover", async () => {
+      // The prune first: a recovery that fails (a queue refusing sends) leaves it done.
+      await pruneEffects(deps);
+      await recoverEffects(deps);
+    });
   });
   const [failure, ...more] = failures;
   if (more.length > 0) throw new AggregateError(failures, "effects cron: tasks failed");

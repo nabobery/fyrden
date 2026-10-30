@@ -30,6 +30,7 @@ import { EFFECT_SINKS, effectQueues } from "../effects/sinks.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { feedSink } from "../feed/sink.js";
 import { consumerCalls } from "../invocation-calls.js";
+import { withReadModel } from "../read-model/executor.js";
 import { liveSearch, Settling } from "../search/live.js";
 
 /** The queue repository outboxes send to. */
@@ -133,6 +134,8 @@ export interface ConsumerOptions {
    * its batch.
    */
   readonly settling?: Settling;
+  /** The default shard's read model the invocation writes through (one writer for all of it). */
+  readonly readModel?: D1Database;
   /**
    * Calls the invocation may still make, shared by its messages, how many
    * of them applying the messages after this one needs, and whether one was
@@ -152,6 +155,17 @@ export async function consumeEvents(
   batch: MessageBatch<unknown>,
   env: Env,
   options: ConsumerOptions = {},
+): Promise<void> {
+  // One writer for the invocation's writes to the read model.
+  await withReadModel(env, DEFAULT_ORG_SHARD, (readModel) =>
+    consumeWith(batch, env, { ...options, readModel: options.readModel ?? readModel }),
+  );
+}
+
+async function consumeWith(
+  batch: MessageBatch<unknown>,
+  env: Env,
+  options: ConsumerOptions,
 ): Promise<void> {
   const log = createLogger({ op: "events.consume" });
   // One share of inline deliveries and of calls for the whole invocation.
@@ -375,7 +389,8 @@ export async function applyEnvelope(
   const searched = indexing
     ? await resolveStored(payloads, newestSnapshots(events, SEARCHED_TYPES))
     : undefined;
-  const db = readModelFor(env, shard);
+  const db =
+    shard === DEFAULT_ORG_SHARD && options.readModel ? options.readModel : readModelFor(env, shard);
   // The newest epoch any event shows, projected or not: from then on, older
   // epochs are refused.
   const epochGen = Math.max(...events.map((e) => e.id.epochGen));

@@ -10,6 +10,7 @@ import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import type { ExportPage, ExportPageRequest } from "../src/do/repo/export.js";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../src/events/read-model.js";
 import { epochStatement } from "../src/queues/events-consumer.js";
 import { RECONCILE_POLICY, reconcileSource } from "../src/search/reconcile.js";
 import { repairStatement } from "../src/search/repairs.js";
@@ -20,7 +21,8 @@ import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
 
 const fx = inject("pushFixtures");
-const db = env.ORG_READ;
+// Written as production writes it: through the read model's executor.
+const db = readModelFor(env, DEFAULT_ORG_SHARD);
 
 let owner: Who;
 let repo: { id: string; name: string };
@@ -100,7 +102,7 @@ const cutoff = () =>
 
 /** `env` whose org read model records each page's batch statement count. */
 function recording(batches: number[]): Env {
-  const org = new Proxy(db, {
+  const org = new Proxy(env.ORG_READ, {
     get(target, prop) {
       if (prop === "batch")
         return (statements: D1PreparedStatement[]) => {
@@ -190,8 +192,9 @@ describe("search reconciliation", () => {
     const batches: number[] = [];
     expect(await reconcileSource(recording(batches), target())).toBe("done");
     // Each kind's page: its checkpoint alone (and the write clock's tick); then the
-    // repository's own row with the last checkpoint and the revision covered.
-    expect(batches).toEqual([2, 2, 2, 5]);
+    // repository's own row with the last checkpoint and the revision covered; each batch
+    // between the executor's opening and closing of admission.
+    expect(batches).toEqual([2, 2, 2, 5].map((n) => n + 2));
   });
 
   it("marks deleted what the export lacks, unless an event after it began wrote it", async () => {
@@ -621,8 +624,9 @@ describe("search reconciliation", () => {
       const batches: number[] = [];
       expect(await reconcileSource(recording(batches), target(), { pages: 20 })).toBe("done");
       // The subjects in three pages of at most 3 rows, each its rows the export lacks marked
-      // deleted, its checkpoint and the tick (issue 1, matching, writes nothing).
-      expect(batches.slice(0, 3)).toEqual([4, 5, 4]);
+      // deleted, its checkpoint and the tick (issue 1, matching, writes nothing), between the
+      // executor's opening and closing of admission.
+      expect(batches.slice(0, 3)).toEqual([4, 5, 4].map((n) => n + 2));
     } finally {
       RECONCILE_POLICY.rowsPerPage = rows;
     }

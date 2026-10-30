@@ -1,10 +1,14 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
-import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
+import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
+import { READ_MODEL_LEASE, withReadModel } from "../read-model/executor.js";
 import { clock } from "../services.js";
-import { type CallBudget, counted, spentStatement } from "./admission.js";
+import { type CallBudget, counted, SPENDING, spentStatement } from "./admission.js";
 
-/** What a rotation writes and reads at most: the source's row and its due index entry. */
-const ROTATION = { rows: 2, reads: 4 };
+/**
+ * What a rotation writes and reads at most: the source's row and its due index
+ * entry, and its batch's spending.
+ */
+const ROTATION = { rows: 2 + SPENDING.rows, reads: 4 + SPENDING.reads };
 
 import { reconcileSource, STEP_CALLS, sweepTombstones } from "./reconcile.js";
 
@@ -25,9 +29,9 @@ export const REPAIR_POLICY = {
   /** Pages one source gets a run before the next one's turn. */
   pagesPerSource: 5,
   /**
-   * D1 calls a run makes at most: it runs in an invocation of its own (the
-   * maintenance object's `repairSearch`), of Free's 50 a Worker invocation
-   * (a batch one), with room left for the run's own reads and writes.
+   * D1 calls a run makes at most (a batch is one): it runs in an invocation
+   * of its own (the maintenance object's `repairSearch`). An application
+   * limit, well within the platform's.
    */
   callsPerRun: 40,
 };
@@ -94,61 +98,81 @@ export async function runSearchRepairs(
   metrics?.count("d1.query", { db: "directory", op: "search_indexing" });
   calls.left--;
   if (!(await searchIndexing(env))) return { worked: 0 };
-  const db = counted(readModelFor(env, DEFAULT_ORG_SHARD), calls);
-  let pages = options.pages ?? REPAIR_POLICY.pagesPerRun;
-  const sources = Math.ceil(pages / REPAIR_POLICY.pagesPerSource);
-  metrics?.count("d1.query", { db: "org", op: "search_repairs_due" });
-  const { results, meta } = await db
-    .prepare(
-      `SELECT repo_id FROM search_repairs WHERE dirty > covered
-       ORDER BY next_at, repo_id LIMIT ?`,
-    )
-    .bind(sources)
-    .all<{ repo_id: string }>();
-  // The selection's reads, charged with the first rotation (or on their own).
-  let selected = meta.rows_read ?? 0;
-  let worked = 0;
+  // One writer for the run: its lease taken and released, never renewed (a run's writes past the
+  // lease's deadline are refused: the run fails, and its needs wait for the next).
+  calls.left -= 2;
   const failures: unknown[] = [];
-  for (const { repo_id: repoId } of results) {
-    // A turn needs a step's calls and its rotation's.
-    if (pages <= 0 || calls.left < STEP_CALLS + 1) break;
-    const turn = Math.min(pages, REPAIR_POLICY.pagesPerSource);
-    pages -= turn;
-    worked++;
-    try {
-      const outcome = await reconcileSource(
-        env,
-        { repoId, shard: DEFAULT_ORG_SHARD },
-        { pages: turn, calls, ...(metrics && { metrics }) },
-      );
-      // The day's allowance (or the database's size) holds every source back: until a later run.
-      // Meanwhile removals, which are made whatever the allowance, of any source (they may be
-      // what makes room again).
-      if (outcome === "blocked") {
-        await sweepTombstones(db, metrics);
-        break;
-      }
-    } catch (error) {
-      // Its need stays; the others still get their turns.
-      failures.push(error);
-    }
-    // Its turn is over: behind every source still waiting (past the last one's place, whatever
-    // the clock says), when it still is (a pass not finished, failed, or asked for again).
-    // Charged with search's spending (the row and its due index entry, read as it is placed).
-    metrics?.count("d1.query", { db: "org", op: "search_repairs_rotate" });
-    await db.batch([
-      db
+  let worked = 0;
+  await withReadModel(
+    env,
+    DEFAULT_ORG_SHARD,
+    async (readModel, writer) => {
+      const db = counted(readModel, calls);
+      let pages = options.pages ?? REPAIR_POLICY.pagesPerRun;
+      const sources = Math.ceil(pages / REPAIR_POLICY.pagesPerSource);
+      metrics?.count("d1.query", { db: "org", op: "search_repairs_due" });
+      const { results, meta } = await db
         .prepare(
-          `UPDATE search_repairs SET next_at = max(?2,
+          `SELECT repo_id FROM search_repairs WHERE dirty > covered
+       ORDER BY next_at, repo_id LIMIT ?`,
+        )
+        .bind(sources)
+        .all<{ repo_id: string }>();
+      // The selection's reads, charged with the first rotation (or on their own), and the run's
+      // lease's rows in the directory, once it has one.
+      let selected = meta.rows_read ?? 0;
+      let lease = { rows: READ_MODEL_LEASE.rows as number, reads: 0 };
+      for (const { repo_id: repoId } of results) {
+        // A turn needs a step's calls and its rotation's.
+        if (pages <= 0 || calls.left < STEP_CALLS + 1) break;
+        const turn = Math.min(pages, REPAIR_POLICY.pagesPerSource);
+        pages -= turn;
+        worked++;
+        try {
+          const outcome = await reconcileSource(
+            env,
+            { repoId, shard: DEFAULT_ORG_SHARD },
+            { pages: turn, calls, readModel, ...(metrics && { metrics }) },
+          );
+          // The day's allowance (or the database's size) holds every source back: until a later run.
+          // Meanwhile removals, which are made whatever the allowance, of any source (they may be
+          // what makes room again).
+          if (outcome === "blocked") {
+            await sweepTombstones(db, metrics);
+            break;
+          }
+        } catch (error) {
+          // Its need stays; the others still get their turns.
+          failures.push(error);
+        }
+        // Its turn is over: behind every source still waiting (past the last one's place, whatever
+        // the clock says), when it still is (a pass not finished, failed, or asked for again).
+        // Charged with search's spending (the row and its due index entry, read as it is placed).
+        metrics?.count("d1.query", { db: "org", op: "search_repairs_rotate" });
+        await db.batch([
+          db
+            .prepare(
+              `UPDATE search_repairs SET next_at = max(?2,
              (SELECT max(next_at) + 1 FROM search_repairs WHERE dirty > covered))
            WHERE repo_id = ?1 AND dirty > covered`,
-        )
-        .bind(repoId, clock()),
-      spentStatement(db, { rows: ROTATION.rows, reads: ROTATION.reads + selected }),
-    ]);
-    selected = 0;
-  }
-  if (selected > 0) await spentStatement(db, { rows: 0, reads: selected }).run();
+            )
+            .bind(repoId, clock()),
+          spentStatement(db, {
+            rows: ROTATION.rows + lease.rows,
+            reads: ROTATION.reads + selected,
+          }),
+        ]);
+        selected = 0;
+        lease = { rows: 0, reads: 0 };
+      }
+      if (selected > 0 || (lease.rows > 0 && writer.lease !== null))
+        await spentStatement(db, {
+          rows: SPENDING.rows + lease.rows,
+          reads: selected + SPENDING.reads,
+        }).run();
+    },
+    { renews: false },
+  );
   if (failures.length > 0)
     throw new AggregateError(failures, `${failures.length} search repair(s) failed`);
   return { worked };

@@ -2,6 +2,7 @@ import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { createLogger } from "@fyrden/adapters-cloudflare/obs";
 import { readModelFor } from "../events/read-model.js";
 import { UNLISTED_GRACE_MS } from "../queues/events-consumer.js";
+import { READ_MODEL_LONE_WRITE } from "../read-model/executor.js";
 import { clock } from "../services.js";
 import { spentStatement } from "./admission.js";
 import { REQUEST_ROWS, repairStatement, searchIndexing } from "./repairs.js";
@@ -27,7 +28,10 @@ export async function afterPublication(
     metrics?.count("d1.query", { db: "org", op: "search_published" }, 2);
     await db.batch([
       repairStatement(db, repo.id, "published_late", clock()),
-      spentStatement(db, { rows: REQUEST_ROWS, reads: 0 }),
+      spentStatement(db, {
+        rows: REQUEST_ROWS + READ_MODEL_LONE_WRITE.rows,
+        reads: READ_MODEL_LONE_WRITE.reads,
+      }),
     ]);
   } catch (error) {
     createLogger({ op: "search.published" }).warn(

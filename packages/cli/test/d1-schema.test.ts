@@ -223,8 +223,13 @@ describe("diffSchema", () => {
     db.exec(`INSERT INTO effects_new (${columns}) SELECT ${columns} FROM effects`);
     db.exec("DROP TABLE effects");
     db.exec("ALTER TABLE effects_new RENAME TO effects");
+    // Dropping the old table dropped its indexes and triggers: a rebuild makes them again.
     for (const object of org)
-      if (object.type === "index" && object.sql.includes(" ON effects ")) db.exec(object.sql);
+      if (
+        (object.type === "index" && object.sql.includes(" ON effects ")) ||
+        (object.type === "trigger" && /\bON effects\b/.test(object.sql))
+      )
+        db.exec(object.sql);
     expect(db.prepare("SELECT count(*) AS n FROM effects").get()).toEqual({ n: 1 });
     return schemaOf(db);
   }

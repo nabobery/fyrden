@@ -42,6 +42,7 @@ import {
   discretionaryAllowance,
   type ResourceVector,
 } from "../effects/discretionary.js";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
 import { checkObjectAccess } from "../git/cache/object-check.js";
@@ -99,6 +100,7 @@ import {
   forgetMerged,
   viewCompactionHandler,
 } from "../network/view-cap.js";
+import { READ_MODEL_LONE_WRITE } from "../read-model/executor.js";
 import { resolveRepo } from "../repos/directory.js";
 import { platformSigner } from "../signing/platform-key.js";
 import { secretKeys } from "../webhooks/secrets.js";
@@ -311,7 +313,8 @@ const digestCreditPrice = (units: number): ResourceVector => ({
   do_rows_written: units * 8,
   do_duration_ms: 0,
   d1_rows_read: 30,
-  d1_rows_written: 2,
+  // The grant, and its batch's admission and lease (its own: the shared read model's).
+  d1_rows_written: 2 + READ_MODEL_LONE_WRITE.rows,
   queue_ops: 0,
 });
 const FEED_PAGES_PRUNE_BATCH = 500;
@@ -3598,7 +3601,7 @@ export class RepoDO extends MigratingDO {
       let answer: { admitted: boolean; left: number } | undefined;
       try {
         this.git.context.metrics.count("d1.query", { db: "org", op: "digest_credit" });
-        const db = this.env.ORG_READ;
+        const db = readModelFor(this.env, DEFAULT_ORG_SHARD);
         // The database's time first: the grant is charged to its hour or a later one.
         const [clock, ...results] = await db.batch<{ at?: number; admitted?: string }>([
           db.prepare("SELECT unixepoch() AS at"),

@@ -63,6 +63,34 @@ CREATE TABLE events_failed (
   expires_at INTEGER NOT NULL
 ) STRICT;
 
+-- table read_model_barrier
+CREATE TABLE read_model_barrier (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  phase TEXT NOT NULL CHECK (phase IN ('running', 'pausing', 'paused', 'recovering')),
+  generation INTEGER NOT NULL CHECK (generation >= 1),
+  protocol_version INTEGER NOT NULL CHECK (protocol_version >= 1)
+) STRICT;
+
+-- table read_model_write
+CREATE TABLE read_model_write (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  open INTEGER NOT NULL DEFAULT 0 CHECK (open IN (0, 1)),
+  stray INTEGER NOT NULL DEFAULT 0 CHECK (stray >= 0),
+  seq INTEGER NOT NULL DEFAULT 0 CHECK (seq >= 0),
+  lease_id TEXT,
+  generation INTEGER,
+  protocol_version INTEGER,
+  until INTEGER,
+  mode TEXT CHECK (mode IS NULL OR mode IN ('ordinary', 'maintenance')),
+  CHECK (
+    open = 0 OR coalesce(
+      lease_id IS NOT NULL AND generation >= 1 AND protocol_version >= 1 AND until > 0
+        AND mode IS NOT NULL,
+      0
+    )
+  )
+) STRICT;
+
 -- table repos
 CREATE TABLE repos (
   repo_id TEXT PRIMARY KEY,
@@ -360,3 +388,423 @@ CREATE INDEX webhook_payloads_expiry ON webhook_payloads (expires_at);
 
 -- index webhook_payloads_repo
 CREATE INDEX webhook_payloads_repo ON webhook_payloads (repo_id);
+
+-- trigger read_model_consumer_epochs_delete
+CREATE TRIGGER read_model_consumer_epochs_delete BEFORE DELETE ON consumer_epochs
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_consumer_epochs_insert
+CREATE TRIGGER read_model_consumer_epochs_insert BEFORE INSERT ON consumer_epochs
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_consumer_epochs_update
+CREATE TRIGGER read_model_consumer_epochs_update BEFORE UPDATE ON consumer_epochs
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_discretionary_hours_delete
+CREATE TRIGGER read_model_discretionary_hours_delete BEFORE DELETE ON discretionary_hours
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_discretionary_hours_insert
+CREATE TRIGGER read_model_discretionary_hours_insert BEFORE INSERT ON discretionary_hours
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_discretionary_hours_update
+CREATE TRIGGER read_model_discretionary_hours_update BEFORE UPDATE ON discretionary_hours
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_discretionary_state_delete
+CREATE TRIGGER read_model_discretionary_state_delete BEFORE DELETE ON discretionary_state
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_discretionary_state_insert
+CREATE TRIGGER read_model_discretionary_state_insert BEFORE INSERT ON discretionary_state
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_discretionary_state_update
+CREATE TRIGGER read_model_discretionary_state_update BEFORE UPDATE ON discretionary_state
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_effects_delete
+CREATE TRIGGER read_model_effects_delete BEFORE DELETE ON effects
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_effects_insert
+CREATE TRIGGER read_model_effects_insert BEFORE INSERT ON effects
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_effects_update
+CREATE TRIGGER read_model_effects_update BEFORE UPDATE ON effects
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_events_failed_delete
+CREATE TRIGGER read_model_events_failed_delete BEFORE DELETE ON events_failed
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_events_failed_insert
+CREATE TRIGGER read_model_events_failed_insert BEFORE INSERT ON events_failed
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_events_failed_update
+CREATE TRIGGER read_model_events_failed_update BEFORE UPDATE ON events_failed
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_read_model_barrier_delete
+CREATE TRIGGER read_model_read_model_barrier_delete BEFORE DELETE ON read_model_barrier
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_read_model_barrier_insert
+CREATE TRIGGER read_model_read_model_barrier_insert BEFORE INSERT ON read_model_barrier
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_read_model_barrier_update
+CREATE TRIGGER read_model_read_model_barrier_update BEFORE UPDATE ON read_model_barrier
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_repos_delete
+CREATE TRIGGER read_model_repos_delete BEFORE DELETE ON repos
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_repos_insert
+CREATE TRIGGER read_model_repos_insert BEFORE INSERT ON repos
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_repos_update
+CREATE TRIGGER read_model_repos_update BEFORE UPDATE ON repos
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_budget_delete
+CREATE TRIGGER read_model_search_budget_delete BEFORE DELETE ON search_budget
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_budget_insert
+CREATE TRIGGER read_model_search_budget_insert BEFORE INSERT ON search_budget
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_budget_update
+CREATE TRIGGER read_model_search_budget_update BEFORE UPDATE ON search_budget
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_docs_delete
+CREATE TRIGGER read_model_search_docs_delete BEFORE DELETE ON search_docs
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_docs_insert
+CREATE TRIGGER read_model_search_docs_insert BEFORE INSERT ON search_docs
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_docs_update
+CREATE TRIGGER read_model_search_docs_update BEFORE UPDATE ON search_docs
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_labels_delete
+CREATE TRIGGER read_model_search_labels_delete BEFORE DELETE ON search_labels
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_labels_insert
+CREATE TRIGGER read_model_search_labels_insert BEFORE INSERT ON search_labels
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_labels_update
+CREATE TRIGGER read_model_search_labels_update BEFORE UPDATE ON search_labels
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_milestones_delete
+CREATE TRIGGER read_model_search_milestones_delete BEFORE DELETE ON search_milestones
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_milestones_insert
+CREATE TRIGGER read_model_search_milestones_insert BEFORE INSERT ON search_milestones
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_milestones_update
+CREATE TRIGGER read_model_search_milestones_update BEFORE UPDATE ON search_milestones
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_reconciles_delete
+CREATE TRIGGER read_model_search_reconciles_delete BEFORE DELETE ON search_reconciles
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_reconciles_insert
+CREATE TRIGGER read_model_search_reconciles_insert BEFORE INSERT ON search_reconciles
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_reconciles_update
+CREATE TRIGGER read_model_search_reconciles_update BEFORE UPDATE ON search_reconciles
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_repairs_delete
+CREATE TRIGGER read_model_search_repairs_delete BEFORE DELETE ON search_repairs
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_repairs_insert
+CREATE TRIGGER read_model_search_repairs_insert BEFORE INSERT ON search_repairs
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_repairs_update
+CREATE TRIGGER read_model_search_repairs_update BEFORE UPDATE ON search_repairs
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_size_delete
+CREATE TRIGGER read_model_search_size_delete BEFORE DELETE ON search_size
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_size_insert
+CREATE TRIGGER read_model_search_size_insert BEFORE INSERT ON search_size
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_size_update
+CREATE TRIGGER read_model_search_size_update BEFORE UPDATE ON search_size
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_sources_delete
+CREATE TRIGGER read_model_search_sources_delete BEFORE DELETE ON search_sources
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_sources_insert
+CREATE TRIGGER read_model_search_sources_insert BEFORE INSERT ON search_sources
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_sources_update
+CREATE TRIGGER read_model_search_sources_update BEFORE UPDATE ON search_sources
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_sweep_delete
+CREATE TRIGGER read_model_search_sweep_delete BEFORE DELETE ON search_sweep
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_sweep_insert
+CREATE TRIGGER read_model_search_sweep_insert BEFORE INSERT ON search_sweep
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_search_sweep_update
+CREATE TRIGGER read_model_search_sweep_update BEFORE UPDATE ON search_sweep
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_source_owner_delete
+CREATE TRIGGER read_model_source_owner_delete BEFORE DELETE ON source_owner
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_source_owner_insert
+CREATE TRIGGER read_model_source_owner_insert BEFORE INSERT ON source_owner
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_source_owner_update
+CREATE TRIGGER read_model_source_owner_update BEFORE UPDATE ON source_owner
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_webhook_attempts_delete
+CREATE TRIGGER read_model_webhook_attempts_delete BEFORE DELETE ON webhook_attempts
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_webhook_attempts_insert
+CREATE TRIGGER read_model_webhook_attempts_insert BEFORE INSERT ON webhook_attempts
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_webhook_attempts_update
+CREATE TRIGGER read_model_webhook_attempts_update BEFORE UPDATE ON webhook_attempts
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_webhook_deliveries_delete
+CREATE TRIGGER read_model_webhook_deliveries_delete BEFORE DELETE ON webhook_deliveries
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_webhook_deliveries_insert
+CREATE TRIGGER read_model_webhook_deliveries_insert BEFORE INSERT ON webhook_deliveries
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_webhook_deliveries_update
+CREATE TRIGGER read_model_webhook_deliveries_update BEFORE UPDATE ON webhook_deliveries
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_webhook_payloads_delete
+CREATE TRIGGER read_model_webhook_payloads_delete BEFORE DELETE ON webhook_payloads
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_webhook_payloads_insert
+CREATE TRIGGER read_model_webhook_payloads_insert BEFORE INSERT ON webhook_payloads
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;
+
+-- trigger read_model_webhook_payloads_update
+CREATE TRIGGER read_model_webhook_payloads_update BEFORE UPDATE ON webhook_payloads
+WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+BEGIN
+  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+END;

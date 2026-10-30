@@ -1,3 +1,4 @@
+import { READ_MODEL_ADMISSION } from "../read-model/executor.js";
 /*
  * What search may spend of the org database: each UTC day's allowance of
  * projection rows written and of rows its maintenance reads, and room under
@@ -51,7 +52,19 @@ export interface Reservation {
  * What settling a reservation writes and reads at most (its own update and
  * the size observation), charged with it.
  */
-const SETTLING = { rows: 2, reads: 2 };
+export const SETTLING = {
+  rows: 2 + READ_MODEL_ADMISSION.rows,
+  reads: 6 + READ_MODEL_ADMISSION.reads,
+};
+
+/**
+ * What a spending made in a batch of its own costs besides what it charges:
+ * its row and the reads of its upsert (measured), and its admission.
+ */
+export const SPENDING = {
+  rows: 1 + READ_MODEL_ADMISSION.rows,
+  reads: 4 + READ_MODEL_ADMISSION.reads,
+};
 
 /**
  * Reserves `rows` and `reads` from the database's day; null when the day's
@@ -74,7 +87,11 @@ export async function reserve(
     cost.reads += used.reads;
   };
   const refused = async () => {
-    await spentStatement(db, cost).run();
+    // With the spending's own batch.
+    await spentStatement(db, {
+      rows: cost.rows + SPENDING.rows,
+      reads: cost.reads + SPENDING.reads,
+    }).run();
     return null;
   };
   {
@@ -178,7 +195,7 @@ export function admitStatements(
   ];
 }
 
-/** D1 calls an invocation may still make (Free allows 50 a Worker invocation, a batch one). */
+/** D1 calls an invocation may still make (a batch is one). */
 export interface CallBudget {
   left: number;
 }

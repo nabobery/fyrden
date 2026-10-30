@@ -1,6 +1,7 @@
 import type { backfillSearch, Input, Output, setSearchIndexing } from "@fyrden/api-contract";
 import { readModelFor } from "../events/read-model.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { READ_MODEL_LONE_WRITE } from "../read-model/executor.js";
 import { clock } from "../services.js";
 import { spentStatement } from "./admission.js";
 import { REQUEST_ROWS, repairStatement, searchIndexing } from "./repairs.js";
@@ -46,7 +47,10 @@ export async function backfillSearchOperation(
     ctx.metrics.count("d1.query", { db: "org", op: "search_backfill" }, ids.length + 1);
     const done = await db.batch([
       ...ids.map((id) => repairStatement(db, id, "backfill", now)),
-      spentStatement(db, { rows: ids.length * REQUEST_ROWS, reads: 0 }),
+      spentStatement(db, {
+        rows: ids.length * REQUEST_ROWS + READ_MODEL_LONE_WRITE.rows,
+        reads: READ_MODEL_LONE_WRITE.reads,
+      }),
     ]);
     requested += done
       .slice(0, ids.length)

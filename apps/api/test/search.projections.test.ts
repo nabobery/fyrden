@@ -14,7 +14,9 @@ import {
   secureRandomBytes,
 } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../src/events/read-model.js";
 import { epochStatement } from "../src/queues/events-consumer.js";
+import { READ_MODEL_ADMISSION } from "../src/read-model/executor.js";
 import { CLEANUP_POLICY, REPO_CLEANUPS } from "../src/repos/cleanups.js";
 import { repairStatement } from "../src/search/repairs.js";
 import {
@@ -26,7 +28,8 @@ import {
 } from "../src/search/statements.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
-const db = env.ORG_READ;
+// Written as production writes it: through the read model's executor.
+const db = readModelFor(env, DEFAULT_ORG_SHARD);
 const SHA = "a".repeat(40);
 
 const issue = (number: number, overrides: Partial<IssueRow> = {}): IssueRow => ({
@@ -455,7 +458,8 @@ describe("search projections' write costs", () => {
     const written = async (position: SearchPosition, snapshot: EntitySnapshot) => {
       const statement = searchStatement(db, position, snapshot);
       if (!statement) throw new Error("not projected");
-      return (await statement.run()).meta.rows_written;
+      // Less its batch's admission (the read model writes each statement under one).
+      return ((await statement.run()).meta.rows_written ?? 0) - READ_MODEL_ADMISSION.rows;
     };
     const edited = issue(1, { title: "Renamed", updatedAt: 21 });
     expect({

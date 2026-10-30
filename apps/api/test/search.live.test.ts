@@ -22,6 +22,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { applyEnvelope, consumeEvents, EVENTS_QUEUE } from "../src/queues/events-consumer.js";
+import { READ_MODEL_ADMISSION } from "../src/read-model/executor.js";
 import { ADMISSION } from "../src/search/admission.js";
 import { liveSearch } from "../src/search/live.js";
 
@@ -293,13 +294,15 @@ describe("search's live projection, admitted", () => {
     const repoId = await listedRepo();
     await deliver([{ sourceId: repoId, events: [issueEvent(repoId, 1, issue(1))] }]);
     const first = await spent();
-    // A document's insert (its indexes included) and the bookkeeping (11 as measured), less than
-    // the 13 reserved (6 for the statement, 7 for bookkeeping) before what reserving cost.
+    // A document's insert (its indexes included) and the bookkeeping (11 as measured), with the
+    // admissions of its batch and of the settlement's, less than the 15 reserved (6 for the
+    // statement, 9 for bookkeeping) and the settlement's charge.
+    const admissions = 2 * READ_MODEL_ADMISSION.rows;
     expect(first).toBeGreaterThan(0);
-    expect(first).toBeLessThanOrEqual(12);
+    expect(first).toBeLessThanOrEqual(12 + admissions);
     // A duplicate writes no projection row: only the bookkeeping is charged (4 as measured).
     await deliver([{ sourceId: repoId, events: [issueEvent(repoId, 1, issue(1))] }]);
-    expect((await spent()) - first).toBeLessThanOrEqual(5);
+    expect((await spent()) - first).toBeLessThanOrEqual(5 + admissions);
   });
 
   it("refuses additions past the day's allowance, still removes, and asks for a reconciliation", async () => {
@@ -386,8 +389,24 @@ describe("search's live projection, admitted", () => {
     );
     const before = await spent();
     await db.batch(settlement);
-    // 6 written, the size observation 1 and the charge itself 1.
-    expect((await spent()) - before).toBe(8);
+    // 6 written, the batch's admission (counted with another's statement, last in it), the size
+    // observation 1, the charge itself 1, and the admission of the batch the charge is applied in.
+    expect((await spent()) - before).toBe(
+      6 + READ_MODEL_ADMISSION.rows + 1 + 1 + READ_MODEL_ADMISSION.rows,
+    );
+  });
+
+  it("charges nothing for a batch without search's statements", () => {
+    // An envelope with nothing to project, nothing missing, and no epoch advanced.
+    const live = liveSearch(db, newId("rep"), [], { epochGen: 1, now: 0, missing: false });
+    expect(live.after).toEqual([]);
+    const epochRequest = {
+      results: [],
+      success: true,
+      meta: { rows_written: 0 },
+    } as unknown as D1Result;
+    const others = { results: [], success: true, meta: { rows_written: 5 } } as unknown as D1Result;
+    expect(live.settlement([epochRequest], [], others)).toEqual([]);
   });
 
   it("refuses additions while the database is at its size threshold", async () => {
@@ -424,8 +443,32 @@ describe("search's live projection, admitted", () => {
         sinks: [],
       },
     );
-    expect(await spent()).toBeLessThanOrEqual(12);
+    expect(await spent()).toBeLessThanOrEqual(12 + 2 * READ_MODEL_ADMISSION.rows);
     expect(await docs(repoId)).toMatchObject([{ number: 1 }]);
+  });
+
+  it("charges its batch's admission when statements of others follow search's", async () => {
+    // A sink journaling an effect for every event: its statements come last in the batch.
+    const trailing = {
+      name: "trailing",
+      plan: () => [{ target: "t", payload: {} }],
+      deliver: async () => {},
+    };
+    const apply = async (sinks: (typeof trailing)[]) => {
+      const repoId = await listedRepo();
+      const before = await spent();
+      await applyEnvelope(
+        env,
+        { sourceId: repoId, events: [issueEvent(repoId, 1, issue(1))] },
+        {
+          sinks,
+        },
+      );
+      return (await spent()) - before;
+    };
+    // (The day's row made first: each charge below is a document's alone.)
+    await apply([]);
+    expect(await apply([trailing])).toBe(await apply([]));
   });
 
   it("makes one call more an invocation, none more a message", async () => {
