@@ -1,6 +1,6 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
-import { READ_MODEL_LEASE, withReadModel } from "../read-model/executor.js";
+import { READ_MODEL_LEASE, READ_MODEL_OBSERVATION, withReadModel } from "../read-model/executor.js";
 import { clock } from "../services.js";
 import { type CallBudget, counted, SPENDING, spentStatement } from "./admission.js";
 
@@ -99,8 +99,9 @@ export async function runSearchRepairs(
   calls.left--;
   if (!(await searchIndexing(env))) return { worked: 0 };
   // One writer for the run: its lease taken and released, never renewed (a run's writes past the
-  // lease's deadline are refused: the run fails, and its needs wait for the next).
-  calls.left -= 2;
+  // lease's deadline are refused: the run fails, and its needs wait for the next), and the size its
+  // work left recorded as it ends.
+  calls.left -= 3;
   const failures: unknown[] = [];
   let worked = 0;
   await withReadModel(
@@ -108,6 +109,8 @@ export async function runSearchRepairs(
     DEFAULT_ORG_SHARD,
     async (readModel, writer) => {
       const db = counted(readModel, calls);
+      // Room for the selection and the run's own accounting at least, or nothing is begun.
+      if (calls.left < 2) return;
       let pages = options.pages ?? REPAIR_POLICY.pagesPerRun;
       const sources = Math.ceil(pages / REPAIR_POLICY.pagesPerSource);
       metrics?.count("d1.query", { db: "org", op: "search_repairs_due" });
@@ -121,7 +124,11 @@ export async function runSearchRepairs(
       // The selection's reads, charged with the first rotation (or on their own), and the run's
       // lease's rows in the directory, once it has one.
       let selected = meta.rows_read ?? 0;
-      let lease = { rows: READ_MODEL_LEASE.rows as number, reads: 0 };
+      // (and the size its work leaves, recorded as it ends).
+      let lease = {
+        rows: READ_MODEL_LEASE.rows + READ_MODEL_OBSERVATION.rows,
+        reads: READ_MODEL_OBSERVATION.reads as number,
+      };
       for (const { repo_id: repoId } of results) {
         // A turn needs a step's calls and its rotation's.
         if (pages <= 0 || calls.left < STEP_CALLS + 1) break;
@@ -159,7 +166,7 @@ export async function runSearchRepairs(
             .bind(repoId, clock()),
           spentStatement(db, {
             rows: ROTATION.rows + lease.rows,
-            reads: ROTATION.reads + selected,
+            reads: ROTATION.reads + selected + lease.reads,
           }),
         ]);
         selected = 0;
@@ -168,7 +175,7 @@ export async function runSearchRepairs(
       if (selected > 0 || (lease.rows > 0 && writer.lease !== null))
         await spentStatement(db, {
           rows: SPENDING.rows + lease.rows,
-          reads: selected + SPENDING.reads,
+          reads: selected + SPENDING.reads + lease.reads,
         }).run();
     },
     { renews: false },

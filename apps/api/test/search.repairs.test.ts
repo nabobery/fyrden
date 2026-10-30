@@ -242,4 +242,16 @@ describe("the search repair job", () => {
     expect(seen.calls).toBeGreaterThan(REPAIR_POLICY.callsPerRun / 2);
     expect(seen.calls).toBeLessThanOrEqual(REPAIR_POLICY.callsPerRun);
   });
+
+  it("keeps within a small call budget, its own accounting and recorded size included", async () => {
+    await db.prepare("DELETE FROM search_repairs").run();
+    await repairStatement(db, await repository(), "backfill", 0).run();
+    await indexing(true);
+    // Below a reconciliation's turn, at it and past it.
+    for (const calls of [1, 4, 5, 6, 7, 9, 15, 16, 17, 20]) {
+      const seen = { calls: 0 };
+      await runSearchRepairs(countingCalls(seen), { calls });
+      expect({ calls, made: Math.min(seen.calls, calls) }).toEqual({ calls, made: seen.calls });
+    }
+  });
 });

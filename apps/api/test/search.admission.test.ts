@@ -6,12 +6,15 @@ import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeEach, describe, expect, inject, it } from "vitest";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../src/events/read-model.js";
+import { withReadModel } from "../src/read-model/executor.js";
 import {
   ADMISSION,
   reserve,
   SETTLING,
+  SPENDING,
   settleStatement,
   sizeStatement,
+  spentStatement,
   tickStatement,
 } from "../src/search/admission.js";
 import {
@@ -173,6 +176,31 @@ describe("search's allowance", () => {
     expect(await reserve(db, { rows: 1, reads: 0 })).toBeNull();
   });
 
+  it("settles in what its settling costs, written as production writes it", async () => {
+    const taken = await reserve(db, { rows: 10, reads: 10 });
+    if (!taken) throw new Error("not reserved");
+    await withReadModel(env, DEFAULT_ORG_SHARD, async (readModel, writer) => {
+      const { results } = await writer.write([
+        settleStatement(readModel, taken, { rows: 1, reads: 1 }),
+      ]);
+      // Its own update, with its admission's rows (counted with a batch's last statement).
+      expect(results[0]?.meta.rows_written).toBe(SETTLING.rows);
+      expect(results[0]?.meta.rows_read).toBe(SETTLING.reads);
+    });
+  });
+
+  it("charges a spending made alone what it writes and reads, once", async () => {
+    await reserve(db, { rows: 1, reads: 1 });
+    const before = await budget();
+    await withReadModel(env, DEFAULT_ORG_SHARD, async (readModel, writer) => {
+      const { usage } = await writer.write([spentStatement(readModel, SPENDING)]);
+      expect(await budget()).toEqual({
+        rows: (before?.rows ?? 0) + usage.rowsWritten,
+        reads: (before?.reads ?? 0) + usage.rowsRead,
+      });
+    });
+  });
+
   it("allows removals only once the database is at its size threshold, and keeps the latest batch's size", async () => {
     const threshold = ADMISSION.maxBytes;
     // Any database is above a threshold of a byte: looked at again, still there, so the
@@ -196,6 +224,38 @@ describe("search's allowance", () => {
       observed: later,
       bytes: 2_000,
     });
+  });
+
+  it("orders a refresh's size after every executor commit before it", async () => {
+    const threshold = ADMISSION.maxBytes;
+    ADMISSION.maxBytes = 1;
+    try {
+      await withReadModel(env, DEFAULT_ORG_SHARD, async (readModel, writer) => {
+        // A writer's commit, its observation not yet recorded.
+        const { sequence } = await writer.write([
+          readModel.prepare("UPDATE search_size SET bytes = bytes WHERE id = 1"),
+        ]);
+        await db.prepare("UPDATE search_size SET bytes = 1 WHERE id = 1").run();
+        // The refresh looks after it: its size is held.
+        expect(await reserve(db, { rows: 1, reads: 1 })).toMatchObject({ removalsOnly: true });
+        const refreshed = await db
+          .prepare("SELECT observed, bytes FROM search_size WHERE id = 1")
+          .first<{ observed: number; bytes: number }>();
+        expect(refreshed?.observed).toBeGreaterThan(sequence);
+        // The writer's earlier observation, recorded late, does not replace it.
+        await writer.flushObservation();
+        expect(
+          await db.prepare("SELECT observed, bytes FROM search_size WHERE id = 1").first(),
+        ).toEqual(refreshed);
+        // And a commit after the refresh is ordered after it.
+        const after = await writer.write([
+          readModel.prepare("UPDATE search_size SET bytes = bytes WHERE id = 1"),
+        ]);
+        expect(after.sequence).toBeGreaterThan(refreshed?.observed ?? 0);
+      });
+    } finally {
+      ADMISSION.maxBytes = threshold;
+    }
   });
 
   it("charges a refused reservation's own reads", async () => {
@@ -244,9 +304,14 @@ describe("search's allowance", () => {
     expect((await budget())?.reads ?? 0).toBeGreaterThanOrEqual(seen.read);
   });
 
-  it("is settled by a reconciliation to what it used, and the size it reported recorded", async () => {
+  it("is settled by a reconciliation to what it used, and the size it left recorded", async () => {
     const repoId = await repository();
-    expect(await reconcileSource(env, { repoId, shard: "default" })).toBe("done");
+    // As the repair job runs it: one writer, whose size observation is recorded as it ends.
+    expect(
+      await withReadModel(env, "default", (readModel) =>
+        reconcileSource(env, { repoId, shard: "default" }, { readModel }),
+      ),
+    ).toBe("done");
     const used = await budget();
     // Rows written (the issue, nine labels, bookkeeping) and read: far below what was reserved.
     expect(used?.rows).toBeGreaterThan(10);
@@ -448,6 +513,8 @@ describe("search's allowance", () => {
     // And an issue the projection does not have yet.
     await db.prepare("DELETE FROM search_docs WHERE repo_id = ? AND number = 1").bind(repoId).run();
     await repairStatement(db, repoId, "lost", 1).run();
+    // The database's size last observed (any is past a threshold of a byte).
+    await db.prepare("UPDATE search_size SET bytes = 4096 WHERE id = 1").run();
     const threshold = ADMISSION.maxBytes;
     ADMISSION.maxBytes = 1;
     try {

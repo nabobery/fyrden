@@ -374,8 +374,8 @@ describe("the feed sink", () => {
     expect(INLINE_BATCH_EFFECTS).toBe(8);
     expect(sent).toHaveLength(1);
     expect(sent[0]?.ids).toHaveLength(7);
-    // And the invocation's writer's lease, taken and released.
-    expect(count.queries).toBe(5 * 2 + 1 + 2 + 2);
+    // And the invocation's writer's lease, taken and released, and the size it left recorded.
+    expect(count.queries).toBe(5 * 2 + 1 + 2 + 2 + 1);
     // The inline effects went in one call per recipient: 8 entries each.
     expect(calls).toHaveLength(100);
     expect(calls.every((call) => call.entries.length === 8)).toBe(true);

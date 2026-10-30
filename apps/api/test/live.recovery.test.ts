@@ -10,7 +10,6 @@ import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UserDO } from "../src/do/UserDO.js";
-import { feedHooks } from "../src/do/UserDO.js";
 import { LIVE_RECOVERY_ROWS, LiveBudget } from "../src/do/user/live-budget.js";
 import {
   expireLiveReceipts,

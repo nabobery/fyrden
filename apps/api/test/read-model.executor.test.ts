@@ -12,6 +12,7 @@ import {
   READ_MODEL_ADMISSION,
   READ_MODEL_LEASE,
   READ_MODEL_LEASE_MS,
+  READ_MODEL_OBSERVATION,
   ReadModelRefused,
   ReadModelWriter,
   withReadModel,
@@ -281,6 +282,47 @@ describe("a read model writer", () => {
       lease: READ_MODEL_LEASE.rows,
       renewed: READ_MODEL_LEASE.renewal,
     });
+  });
+
+  it("keeps the size its latest commit left, records it once, and its own write observes nothing", async () => {
+    const writer = new ReadModelWriter(env, "default");
+    await writer.write([epochRow(uniqueId("obs1"), 1)]);
+    const first = writer.observation;
+    await writer.write([epochRow(uniqueId("obs2"), 1)]);
+    const latest = writer.observation;
+    expect(latest?.sequence).toBeGreaterThan(first?.sequence ?? 0);
+    expect(latest?.bytes).toBeGreaterThan(0);
+    // What recording it costs, as charged.
+    const usage = await writer.flushObservation();
+    expect({ rows: usage?.rowsWritten, reads: usage?.rowsRead }).toEqual(READ_MODEL_OBSERVATION);
+    const size = () =>
+      org.prepare("SELECT observed, bytes FROM search_size WHERE id = 1").first<{
+        observed: number;
+        bytes: number;
+      }>();
+    expect(await size()).toEqual({ observed: latest?.sequence, bytes: latest?.bytes });
+    // Its recording was a commit of its own, not observed; nothing new to record again.
+    expect(writer.observation).toEqual(latest);
+    const sequence = (await admission())?.seq;
+    expect(await writer.flushObservation()).toBeNull();
+    expect((await admission())?.seq).toBe(sequence);
+    await writer.release();
+  });
+
+  it("records the size a piece of work left as it ends", async () => {
+    const before = await org.prepare("SELECT observed FROM search_size WHERE id = 1").first<{
+      observed: number;
+    }>();
+    await withReadModel(env, "default", (db) =>
+      db
+        .prepare("INSERT INTO consumer_epochs (source_id, epoch_gen, updated_at) VALUES (?, 1, 0)")
+        .bind(uniqueId("work"))
+        .run(),
+    );
+    const after = await org.prepare("SELECT observed FROM search_size WHERE id = 1").first<{
+      observed: number;
+    }>();
+    expect(after?.observed).toBeGreaterThan(before?.observed ?? 0);
   });
 
   it("releases its lease when the work ends, whether it returns or throws", async () => {

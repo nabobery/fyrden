@@ -191,10 +191,10 @@ describe("search reconciliation", () => {
     expect(await reconcileSource(env, target())).toBe("done");
     const batches: number[] = [];
     expect(await reconcileSource(recording(batches), target())).toBe("done");
-    // Each kind's page: its checkpoint alone (and the write clock's tick); then the
-    // repository's own row with the last checkpoint and the revision covered; each batch
-    // between the executor's opening and closing of admission.
-    expect(batches).toEqual([2, 2, 2, 5].map((n) => n + 2));
+    // Each kind's page: its checkpoint alone; then the repository's own row with the last
+    // checkpoint and the revision covered; each batch between the executor's opening and closing
+    // of admission.
+    expect(batches).toEqual([1, 1, 1, 4].map((n) => n + 2));
   });
 
   it("marks deleted what the export lacks, unless an event after it began wrote it", async () => {
@@ -624,9 +624,9 @@ describe("search reconciliation", () => {
       const batches: number[] = [];
       expect(await reconcileSource(recording(batches), target(), { pages: 20 })).toBe("done");
       // The subjects in three pages of at most 3 rows, each its rows the export lacks marked
-      // deleted, its checkpoint and the tick (issue 1, matching, writes nothing), between the
-      // executor's opening and closing of admission.
-      expect(batches.slice(0, 3)).toEqual([4, 5, 4].map((n) => n + 2));
+      // deleted and its checkpoint (issue 1, matching, writes nothing), between the executor's
+      // opening and closing of admission.
+      expect(batches.slice(0, 3)).toEqual([3, 4, 3].map((n) => n + 2));
     } finally {
       RECONCILE_POLICY.rowsPerPage = rows;
     }

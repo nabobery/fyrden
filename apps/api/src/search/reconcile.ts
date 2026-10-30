@@ -21,9 +21,7 @@ import {
   SPENDING,
   STATEMENT_ROWS,
   settleStatement,
-  sizeStatement,
   spentStatement,
-  tickStatement,
   usedBy,
 } from "./admission.js";
 import {
@@ -259,7 +257,6 @@ export async function reconcileSource(
           )
           .bind(repoId, pass.gen),
       );
-    statements.push(tickStatement(db));
     metrics?.count("d1.query", { db: "org", op: "reconcile_page" });
     const results = await db.batch(statements);
     await account(db, reservation, results, read, metrics, lookups);
@@ -316,7 +313,7 @@ function pageStep(): { rows: number; reads: number } {
 
 /**
  * Settles a step's reservation to what its batch (and `read` rows read
- * before it) used, and records the database's size the batch reported.
+ * before it) used (the size it left is its writer's observation).
  */
 async function account(
   db: D1Database,
@@ -329,12 +326,9 @@ async function account(
   const used = usedBy(results);
   read += lookups?.reads ?? 0;
   if (lookups) lookups.reads = 0;
-  const tick = (results.at(-1)?.results[0] as { clock?: number } | undefined)?.clock;
   const statements = [
     settleStatement(db, reservation, { rows: used.rows, reads: used.reads + read }),
   ];
-  if (tick !== undefined && used.bytes !== undefined)
-    statements.push(sizeStatement(db, tick, used.bytes));
   metrics?.count("d1.query", { db: "org", op: "search_settle" }, statements.length);
   await db.batch(statements);
 }
@@ -420,10 +414,9 @@ async function start(
          WHERE repo_id = ?1 AND ${FENCES} AND ${SAME_DAY(4)}`,
       )
       .bind(repoId, page.epochGen, page.ownerGen, reservation.day),
-    tickStatement(db),
   ]);
   await account(db, reservation, results, 0, metrics);
-  const gen = results.at(-3)?.results[0]?.gen;
+  const gen = results[2]?.results[0]?.gen;
   if (gen === undefined) return undefined;
   return {
     gen,

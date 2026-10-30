@@ -425,12 +425,15 @@ export async function applyEnvelope(
   );
   if (live) {
     const start = live.before.length + 1 + snapshots.length;
-    const settlement = live.settlement(
-      results.slice(0, live.before.length),
-      results.slice(start, start + live.after.length),
-      results.at(-1),
-    );
-    if (options.settling) options.settling.add(db, settlement);
+    const settle = (admitted: boolean) =>
+      live.settlement(
+        results.slice(0, live.before.length),
+        results.slice(start, start + live.after.length),
+        results.at(-1),
+        admitted,
+      );
+    const settlement = options.settling ? [] : settle(true);
+    if (options.settling) options.settling.add(db, settle);
     else if (settlement.length > 0) {
       options.metrics?.count("d1.query", { db: "org", op: "search_settle" });
       await db.batch(settlement);

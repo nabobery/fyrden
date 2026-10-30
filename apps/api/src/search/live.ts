@@ -7,9 +7,7 @@ import {
   admitStatements,
   STATEMENT_ROWS,
   settleStatement,
-  sizeStatement,
   spentStatement,
-  tickStatement,
   usedBy,
 } from "./admission.js";
 import { repairStatement } from "./repairs.js";
@@ -29,10 +27,11 @@ import { searchStatement } from "./statements.js";
  */
 
 /**
- * Rows a batch reserves for its bookkeeping besides its statements': the
- * write clock's tick and up to three requests for a reconciliation.
+ * Rows a batch reserves for its bookkeeping besides its statements': up to
+ * three requests for a reconciliation (two rows each), and its admission.
+ * (The size it leaves is its writer's observation, recorded once an invocation.)
  */
-const BOOKKEEPING_ROWS = 7 + READ_MODEL_ADMISSION.rows;
+const BOOKKEEPING_ROWS = 6 + READ_MODEL_ADMISSION.rows;
 
 /** One message's search statements, around the consumer's own in its batch. */
 export interface LiveSearch {
@@ -42,14 +41,16 @@ export interface LiveSearch {
   readonly after: readonly D1PreparedStatement[];
   /**
    * What settles the batch's reservation (or counts what it wrote, when it
-   * reserved nothing or was refused) and records the size the batch left
-   * the database at, from the results of `before` and `after` and the
-   * batch's last.
+   * reserved nothing or was refused), from the results of `before` and
+   * `after` and the batch's last; charged with the admission of the batch
+   * they are applied in unless `admitted` is false (another in that batch
+   * is charged with it).
    */
   settlement(
     before: readonly D1Result[],
     after: readonly D1Result[],
     last: D1Result | undefined,
+    admitted?: boolean,
   ): D1PreparedStatement[];
 }
 
@@ -112,16 +113,11 @@ export function liveSearch(
   const after =
     writes.length === 0
       ? []
-      : [
-          ...(admitting ? admitStatements(db, token, reserved) : []),
-          ...writes,
-          // Last of search's: the batch's place among the size observations.
-          tickStatement(db),
-        ];
+      : [...(admitting ? admitStatements(db, token, reserved) : []), ...writes];
   return {
     before,
     after,
-    settlement(beforeResults, results, last) {
+    settlement(beforeResults, results, last, admitted = true) {
       const admission = admitting ? results.slice(0, 2) : [];
       const day = (admission[1]?.results[0] as { day?: number } | undefined)?.day;
       const overhead = usedBy(admission);
@@ -135,12 +131,8 @@ export function liveSearch(
         rows: after.rows + (othersLast ? READ_MODEL_ADMISSION.rows : 0),
         reads: after.reads,
       };
-      const tick = (results.at(-1)?.results[0] as { clock?: number } | undefined)?.clock;
-      const bytes = last?.meta.size_after;
-      const size =
-        tick !== undefined && bytes !== undefined ? [sizeStatement(db, tick, bytes)] : [];
       if (day !== undefined)
-        // Settling charges its own statements (the size observation's included).
+        // Settling charges its own statements.
         return [
           settleStatement(
             db,
@@ -152,36 +144,42 @@ export function liveSearch(
               removalsOnly: false,
             },
             { rows: used.rows, reads: 0 },
+            admitted,
           ),
-          ...size,
         ];
-      const rows = overhead.rows + used.rows + size.length;
-      // Nothing written, nothing to observe: nothing to charge.
-      if (rows === 0 && size.length === 0) return [];
-      // With the admission of the batch it is applied in.
-      return [spentStatement(db, { rows: rows + READ_MODEL_ADMISSION.rows, reads: 0 }), ...size];
+      const rows = overhead.rows + used.rows;
+      // Nothing written: nothing to charge.
+      if (rows === 0) return [];
+      // With the admission of the batch it is applied in, when charged with it.
+      const batch = admitted ? READ_MODEL_ADMISSION : { rows: 0, reads: 0 };
+      return [spentStatement(db, { rows: rows + batch.rows, reads: batch.reads })];
     },
   };
 }
 
 /**
- * What an invocation's batches leave of search's bookkeeping (settlements
- * and size observations), by read model, applied together after its
- * messages: one call an invocation. What is not applied leaves its
- * reservation spent.
+ * What an invocation's batches leave of search's settlements, by read
+ * model, applied together after its messages: one call an invocation, its
+ * admission charged once. What is not applied leaves its reservation spent.
  */
 export class Settling {
-  readonly #statements = new Map<D1Database, D1PreparedStatement[]>();
+  readonly #settlements = new Map<
+    D1Database,
+    ((admitted: boolean) => readonly D1PreparedStatement[])[]
+  >();
 
-  add(db: D1Database, statements: readonly D1PreparedStatement[]): void {
-    const list = this.#statements.get(db);
-    if (list) list.push(...statements);
-    else this.#statements.set(db, [...statements]);
+  /** A batch's settlement, built once it is known whether it is charged with the admission. */
+  add(db: D1Database, settle: (admitted: boolean) => readonly D1PreparedStatement[]): void {
+    const list = this.#settlements.get(db);
+    if (list) list.push(settle);
+    else this.#settlements.set(db, [settle]);
   }
 
   /** Never throws: a failure is logged. */
   async apply(metrics?: Metrics): Promise<void> {
-    for (const [db, statements] of this.#statements) {
+    for (const [db, settlements] of this.#settlements) {
+      const statements: D1PreparedStatement[] = [];
+      for (const settle of settlements) statements.push(...settle(statements.length === 0));
       if (statements.length === 0) continue;
       try {
         metrics?.count("d1.query", { db: "org", op: "search_settle" });
@@ -190,6 +188,6 @@ export class Settling {
         createLogger({ op: "search.live" }).warn("settling search's allowance failed", { error });
       }
     }
-    this.#statements.clear();
+    this.#settlements.clear();
   }
 }

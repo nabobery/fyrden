@@ -294,15 +294,28 @@ describe("search's live projection, admitted", () => {
     const repoId = await listedRepo();
     await deliver([{ sourceId: repoId, events: [issueEvent(repoId, 1, issue(1))] }]);
     const first = await spent();
-    // A document's insert (its indexes included) and the bookkeeping (11 as measured), with the
-    // admissions of its batch and of the settlement's, less than the 15 reserved (6 for the
-    // statement, 9 for bookkeeping) and the settlement's charge.
+    // A document's insert (its indexes included) and the bookkeeping (9 as measured), with the
+    // admissions of its batch and of the settlement's, less than the 14 reserved (6 for the
+    // statement, 8 for bookkeeping) and the settlement's charge.
     const admissions = 2 * READ_MODEL_ADMISSION.rows;
-    expect(first).toBeGreaterThan(0);
-    expect(first).toBeLessThanOrEqual(12 + admissions);
-    // A duplicate writes no projection row: only the bookkeeping is charged (4 as measured).
+    expect(first).toBe(9 + admissions);
+    // A duplicate writes no projection row: only the bookkeeping is charged (2 as measured).
     await deliver([{ sourceId: repoId, events: [issueEvent(repoId, 1, issue(1))] }]);
-    expect((await spent()) - first).toBeLessThanOrEqual(5 + admissions);
+    expect((await spent()) - first).toBe(2 + admissions);
+  });
+
+  it("charges the admission of an invocation's settlements once", async () => {
+    const [a, b] = [await listedRepo(), await listedRepo()];
+    const before = await spent();
+    await deliver([
+      { sourceId: a, events: [issueEvent(a, 1, issue(1))] },
+      { sourceId: b, events: [issueEvent(b, 1, issue(1))] },
+    ]);
+    // Each message's as one alone (today's row made by the first only), but one settlement
+    // batch: its admission charged once.
+    expect((await spent()) - before).toBe(
+      2 * (9 + READ_MODEL_ADMISSION.rows) - 1 + READ_MODEL_ADMISSION.rows,
+    );
   });
 
   it("refuses additions past the day's allowance, still removes, and asks for a reconciliation", async () => {
@@ -389,10 +402,10 @@ describe("search's live projection, admitted", () => {
     );
     const before = await spent();
     await db.batch(settlement);
-    // 6 written, the batch's admission (counted with another's statement, last in it), the size
-    // observation 1, the charge itself 1, and the admission of the batch the charge is applied in.
+    // 6 written, the batch's admission (counted with another's statement, last in it), the
+    // charge itself 1, and the admission of the batch the charge is applied in.
     expect((await spent()) - before).toBe(
-      6 + READ_MODEL_ADMISSION.rows + 1 + 1 + READ_MODEL_ADMISSION.rows,
+      6 + READ_MODEL_ADMISSION.rows + 1 + READ_MODEL_ADMISSION.rows,
     );
   });
 
@@ -420,7 +433,7 @@ describe("search's live projection, admitted", () => {
     expect(await repair(repoId)).toMatchObject({ reason: "admission" });
   });
 
-  it("records the database's size its batch reported", async () => {
+  it("records the size its invocation left the database at, by the executor's sequence", async () => {
     const repoId = await listedRepo();
     const before = await db
       .prepare("SELECT clock, observed FROM search_size WHERE id = 1")
@@ -429,8 +442,9 @@ describe("search's live projection, admitted", () => {
     const after = await db
       .prepare("SELECT clock, observed, bytes FROM search_size WHERE id = 1")
       .first<{ clock: number; observed: number; bytes: number }>();
-    expect(after?.clock).toBe((before?.clock ?? 0) + 1);
-    expect(after?.observed).toBe(after?.clock);
+    // No clock of its own any more: the writer's commit sequence orders observations.
+    expect(after?.clock).toBe(before?.clock);
+    expect(after?.observed).toBeGreaterThan(before?.observed ?? 0);
     expect(after?.bytes).toBeGreaterThan(0);
   });
 

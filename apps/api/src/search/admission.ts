@@ -49,22 +49,25 @@ export interface Reservation {
 }
 
 /**
- * What settling a reservation writes and reads at most (its own update and
- * the size observation), charged with it.
+ * What settling a reservation writes and reads (its own update, measured,
+ * and its admission), charged with it.
  */
 export const SETTLING = {
-  rows: 2 + READ_MODEL_ADMISSION.rows,
-  reads: 6 + READ_MODEL_ADMISSION.reads,
+  rows: 1 + READ_MODEL_ADMISSION.rows,
+  reads: 3 + READ_MODEL_ADMISSION.reads,
 };
 
 /**
- * What a spending made in a batch of its own costs besides what it charges:
- * its row and the reads of its upsert (measured), and its admission.
+ * What a spending made in a batch of its own costs besides what it charges
+ * and its own statement (which it charges itself): its admission.
  */
 export const SPENDING = {
-  rows: 1 + READ_MODEL_ADMISSION.rows,
-  reads: 4 + READ_MODEL_ADMISSION.reads,
+  rows: READ_MODEL_ADMISSION.rows,
+  reads: READ_MODEL_ADMISSION.reads,
 };
+
+/** A spending's own statement: its row and the reads of its upsert (measured). */
+const SPENT = { rows: 1, reads: 4 };
 
 /**
  * Reserves `rows` and `reads` from the database's day; null when the day's
@@ -136,9 +139,17 @@ export function settleStatement(
   db: D1Database,
   reservation: Reservation,
   used: { rows: number; reads: number },
+  /** Whether the batch it is applied in is charged with it (others in that batch charge none). */
+  admitted = true,
 ): D1PreparedStatement {
-  const rows = used.rows + reservation.overhead.rows + SETTLING.rows;
-  const reads = used.reads + reservation.overhead.reads + SETTLING.reads;
+  const settling = admitted
+    ? SETTLING
+    : {
+        rows: SETTLING.rows - READ_MODEL_ADMISSION.rows,
+        reads: SETTLING.reads - READ_MODEL_ADMISSION.reads,
+      };
+  const rows = used.rows + reservation.overhead.rows + settling.rows;
+  const reads = used.reads + reservation.overhead.reads + settling.reads;
   return db
     .prepare(
       `UPDATE search_budget SET rows = rows - ?2 + ?4, reads = reads - ?3 + ?5 WHERE day = ?1`,
@@ -147,8 +158,8 @@ export function settleStatement(
       reservation.day,
       reservation.rows,
       reservation.reads,
-      Math.min(rows, reservation.rows + reservation.overhead.rows + SETTLING.rows),
-      Math.min(reads, reservation.reads + reservation.overhead.reads + SETTLING.reads),
+      Math.min(rows, reservation.rows + reservation.overhead.rows + settling.rows),
+      Math.min(reads, reservation.reads + reservation.overhead.reads + settling.reads),
     );
 }
 
@@ -165,7 +176,7 @@ export function spentStatement(
       `INSERT INTO search_budget (day, rows, reads) VALUES (${TODAY}, ?1, ?2)
        ON CONFLICT (day) DO UPDATE SET rows = rows + excluded.rows, reads = reads + excluded.reads`,
     )
-    .bind(used.rows + 1, used.reads + 1);
+    .bind(used.rows + SPENT.rows, used.reads + SPENT.reads);
 }
 
 /**
@@ -239,9 +250,17 @@ export function counted(db: D1Database, calls: CallBudget): D1Database {
   });
 }
 
-/** The statement a search batch ends with: the write clock's next tick, returned. */
+/**
+ * The write clock's next tick, returned: past every executor commit's
+ * sequence (and every executor commit after it is past the tick), so a
+ * refresh's size and a writer's observation are ordered as they committed.
+ */
 export function tickStatement(db: D1Database): D1PreparedStatement {
-  return db.prepare("UPDATE search_size SET clock = clock + 1 WHERE id = 1 RETURNING clock");
+  return db.prepare(
+    `UPDATE search_size SET clock = max(clock, observed,
+       coalesce((SELECT seq FROM read_model_write WHERE id = 1), 0)) + 1
+     WHERE id = 1 RETURNING clock`,
+  );
 }
 
 /**

@@ -45,6 +45,16 @@ export const READ_MODEL_LONE_WRITE = {
   reads: READ_MODEL_ADMISSION.reads,
 } as const;
 
+/**
+ * What recording a writer's size observation costs (its one row and the
+ * reads of its update, its guard's included, measured; and the write's
+ * admission): once a piece of work.
+ */
+export const READ_MODEL_OBSERVATION = {
+  rows: 1 + READ_MODEL_ADMISSION.rows,
+  reads: 3 + READ_MODEL_ADMISSION.reads,
+} as const;
+
 /** A lease's life; a writer renews it once less than half is left. */
 export const READ_MODEL_LEASE_MS = 900_000;
 
@@ -83,6 +93,13 @@ export interface ReadModelWrite<T> {
   };
 }
 
+export interface WriteOptions {
+  /** The reservation's UTC day: refused on another of the database's days. */
+  readonly reservationDay?: number;
+  /** Whether its size after counts as an observation (not for the observation's own write). */
+  readonly observe?: boolean;
+}
+
 export interface WriterOptions {
   readonly leasePerWrite?: boolean;
   readonly renews?: boolean;
@@ -99,6 +116,9 @@ export class ReadModelWriter {
   /** Writes under way: a release waits for them before its lease goes. */
   readonly #writing = new Set<Promise<unknown>>();
   #directoryWritten = 0;
+  #observed: { sequence: number; bytes: number } | null = null;
+  /** The sequence of the observation last recorded. */
+  #flushed = 0;
   readonly #directory: D1Database;
   readonly #org: D1Database;
   readonly #shard: string;
@@ -140,7 +160,7 @@ export class ReadModelWriter {
    */
   async write<T = Record<string, unknown>>(
     statements: readonly D1PreparedStatement[],
-    options: { readonly reservationDay?: number } = {},
+    options: WriteOptions = {},
   ): Promise<ReadModelWrite<T>> {
     if (statements.length === 0)
       return { results: [], sequence: 0, usage: { rowsRead: 0, rowsWritten: 0 } };
@@ -155,7 +175,7 @@ export class ReadModelWriter {
 
   async #write<T>(
     statements: readonly D1PreparedStatement[],
-    options: { readonly reservationDay?: number },
+    options: WriteOptions,
   ): Promise<ReadModelWrite<T>> {
     // A writer of rare writes takes a lease of each write's own (concurrent writes never share one).
     const lease = this.#leasePerWrite ? await this.#take() : await this.#current();
@@ -220,11 +240,47 @@ export class ReadModelWriter {
           (last.meta?.rows_written ?? 0) +
           admission.reduce((n, r) => n + (r?.meta?.rows_written ?? 0), 0),
       };
+    const sequence = (out[0]?.results[0] as { seq: number } | undefined)?.seq ?? 0;
+    // The database's size after the latest commit this writer made (the highest sequence wins).
+    if (
+      options.observe !== false &&
+      bytes !== undefined &&
+      sequence > (this.#observed?.sequence ?? 0)
+    )
+      this.#observed = { sequence, bytes };
     return {
       results: out.slice(1, -1) as D1Result<T>[],
-      sequence: (out[0]?.results[0] as { seq: number } | undefined)?.seq ?? 0,
+      sequence,
       usage: { rowsRead, rowsWritten, ...(bytes !== undefined && { bytes }) },
     };
+  }
+
+  /** The database's size its latest commit left, with that commit's sequence (none yet: null). */
+  get observation(): { readonly sequence: number; readonly bytes: number } | null {
+    return this.#observed;
+  }
+
+  /**
+   * Records its latest observation in the read model (`search_size`, held
+   * unless a later commit's is already there), once: the write records
+   * nothing of its own, so accounting never observes itself. What it used
+   * (none recorded: null).
+   */
+  async flushObservation(): Promise<ReadModelWrite<unknown>["usage"] | null> {
+    const observed = this.#observed;
+    if (!observed || observed.sequence <= this.#flushed) return null;
+    const { usage } = await this.write(
+      [
+        this.#org
+          .prepare(
+            "UPDATE search_size SET observed = ?1, bytes = ?2 WHERE id = 1 AND observed < ?1",
+          )
+          .bind(observed.sequence, observed.bytes),
+      ],
+      { observe: false },
+    );
+    this.#flushed = observed.sequence;
+    return usage;
   }
 
   /** A newly taken lease (refused unless the shard's barrier is running and admits this protocol). */
@@ -448,6 +504,8 @@ export async function withReadModel<T>(
   try {
     return await work(writerDatabase(rawReadModel(env, shard), writer), writer);
   } finally {
+    // The size its work left, once for all of it (a failure leaves it to a later one).
+    await writer.flushObservation().catch(() => {});
     await writer.release();
   }
 }
