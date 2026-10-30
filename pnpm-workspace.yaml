@@ -19,7 +19,11 @@ catalog:
   msw: 3.0.3
   turbo: 2.11.10
   typescript: 7.0.2
-  vite: 8.3.5
+  # Not 8.3.5 yet: with vitest 5.0.5 it crashes formatting any stack trace that
+  # passes through a globalSetup module ("No test files found"; verified:
+  # https://github.com/vitest-dev/vitest/issues/11682). Upgrade with the vitest
+  # release that carries the fix (vitest-dev/vitest#11709).
+  vite: 8.3.4
   vitest: 5.0.5
   wrangler: 4.154.0
   zod: 4.6.7
