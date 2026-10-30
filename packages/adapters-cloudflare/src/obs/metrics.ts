@@ -187,6 +187,8 @@ export function createMetrics(dataset: AnalyticsEngineDataset): Metrics {
       if (invocation === undefined) writeOutsideInvocation(dataset, point);
       else invocation.record(dataset, point, METRIC_AGGREGATION[name] ?? "sum");
       const budget = SUBREQUEST_BUDGETS[name];
+      // D1's calls are counted by the bindings themselves where they count them.
+      if (name === "d1.query" && invocation?.d1Counting === "binding") return;
       if (budget !== undefined) countSubrequests(budget, value);
     },
   };

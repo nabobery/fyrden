@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
+import { countedD1, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { runMaintenance } from "../cron/maintenance.js";
 import { recheckSuppressions } from "../email/suppressions.js";
 import { reaping, sweep } from "../live/directory.js";
@@ -13,6 +13,11 @@ import { runSearchRepairs } from "../search/repairs.js";
  * asked for while one is under way joins it.
  */
 export class MaintenanceDO extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    // Every D1 statement counted against the invocation's tally.
+    super(ctx, { ...env, DIRECTORY: countedD1(env.DIRECTORY), ORG_READ: countedD1(env.ORG_READ) });
+  }
+
   #running: Promise<void> | null = null;
   #repairing: Promise<void> | null = null;
   #rechecking: Promise<void> | null = null;

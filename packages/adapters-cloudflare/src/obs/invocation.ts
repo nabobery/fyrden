@@ -48,7 +48,17 @@ export interface InvocationOptions {
   /** For a Durable Object: its class, to record the invocation's wall time as `do.active_ms`. */
   readonly doClass?: string;
   readonly now?: () => number;
+  /**
+   * How D1 counts against the internal calls: by the `d1.query` metric
+   * (`metrics`, the default), or by the bindings themselves (`binding`: an
+   * invocation whose D1 bindings are all counted, see `countedD1`, each
+   * execution an internal call and a batch one, whatever its metrics say).
+   * One measured inside another takes the outer one's.
+   */
+  readonly d1Counting?: D1Counting;
 }
+
+export type D1Counting = "metrics" | "binding";
 
 const scope = new AsyncLocalStorage<Invocation>();
 
@@ -138,6 +148,8 @@ export class Invocation {
   readonly pointBudget: PointBudget;
   /** The subrequests of the platform invocation this one runs in. */
   readonly tally: SubrequestTally;
+  /** How its D1 calls are counted (the outermost invocation's). */
+  readonly d1Counting: D1Counting;
   readonly #metrics: Metrics;
   readonly #options: InvocationOptions;
   readonly #now: () => number;
@@ -161,6 +173,7 @@ export class Invocation {
     const outer = scope.getStore();
     this.pointBudget = outer?.pointBudget ?? new PointBudget();
     this.tally = outer?.tally ?? new SubrequestTally();
+    this.d1Counting = outer?.d1Counting ?? options.d1Counting ?? "metrics";
     this.#outermost = outer === undefined;
     this.pointBudget.open++;
   }
@@ -325,10 +338,16 @@ export function d1StatementsRun(): number {
   return scope.getStore()?.tally.d1 ?? 0;
 }
 
-/** Counts `n` D1 statements in the current invocation (none: not counted). */
+/**
+ * Counts one D1 execution of `n` statements (a batch, or one statement) in
+ * the current invocation (none: not counted): its statements, and, where
+ * the bindings count (`binding`), its internal call.
+ */
 export function countD1Statements(n = 1): void {
   const invocation = scope.getStore();
-  if (invocation) invocation.tally.d1 += n;
+  if (!invocation) return;
+  invocation.tally.d1 += n;
+  if (invocation.d1Counting === "binding") invocation.add("internal", 1);
 }
 
 /** Counts `n` calls against `budget` in the current invocation (none: not counted). */

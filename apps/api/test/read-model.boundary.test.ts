@@ -11,13 +11,22 @@ const SOURCES = import.meta.glob("../src/**/*.ts", {
   eager: true,
 });
 
+/** The Durable Objects that wrap the binding to count their calls, and use it for nothing else. */
+const COUNTING = ["RepoDO", "UserDO", "OrgDO", "MaintenanceDO"].map(
+  (name) => `../src/do/${name}.ts`,
+);
+
 /** Where the binding or the raw database may be named, and why. */
 const ALLOWED: Record<string, string> = {
   "../src/events/read-model.ts": "where the raw database comes from",
   "../src/read-model/executor.ts": "the executor",
   "../src/read-model/maintenance.ts": "the barrier's steps (its tables are not guarded)",
-  "../src/do/RepoDO.ts":
-    "counting an invocation's calls (countedD1), its writes still through the executor",
+  ...Object.fromEntries(
+    COUNTING.map((path) => [
+      path,
+      "counting an invocation's calls (countedD1), its writes still through the executor",
+    ]),
+  ),
 };
 
 /**
@@ -70,9 +79,11 @@ describe("the read model's binding", () => {
       expect(reaches(source), source).toBe(false);
   });
 
-  it("is used by RepoDO only to count its calls", () => {
-    const repo = code(SOURCES["../src/do/RepoDO.ts"] ?? "");
-    const uses = repo.match(/[^\n]*\bORG_READ\b[^\n]*/g) ?? [];
-    expect(uses.map((line) => line.trim())).toEqual(["ORG_READ: countedD1(env.ORG_READ),"]);
+  it("is used by the Durable Objects only to count their calls", () => {
+    for (const path of COUNTING) {
+      const source = code(SOURCES[path] ?? "");
+      expect(source, path).toContain("ORG_READ: countedD1(env.ORG_READ)");
+      expect(reaches(source.replaceAll("ORG_READ: countedD1(env.ORG_READ)", "")), path).toBe(false);
+    }
   });
 });

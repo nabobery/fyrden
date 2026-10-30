@@ -1,4 +1,9 @@
-import { createLogger, createMetrics } from "@fyrden/adapters-cloudflare/obs";
+import {
+  countedD1,
+  createLogger,
+  createMetrics,
+  measureInvocation,
+} from "@fyrden/adapters-cloudflare/obs";
 import type { FeedEntry } from "@fyrden/domain";
 import {
   type Candidate,
@@ -172,6 +177,11 @@ const NOTHING_APPLIED: FeedApplied = { changed: 0, notified: 0 };
  */
 export class UserDO extends MigratingDO {
   static readonly schema = userSchema;
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    // Every D1 execution counted against the invocation's tally (an alarm counts by its bindings).
+    super(ctx, { ...env, DIRECTORY: countedD1(env.DIRECTORY), ORG_READ: countedD1(env.ORG_READ) });
+  }
 
   #feed(): Feed {
     return new Feed(this.ctx.storage.sql, () => Date.now());
@@ -507,7 +517,17 @@ export class UserDO extends MigratingDO {
    * transaction with its schedule row; then sets the alarm to the earliest
    * row. A step that throws is due again a minute on, the others still run.
    */
-  override async alarm(): Promise<void> {
+  override alarm(): Promise<void> {
+    // One measured invocation, its D1 counted by the bindings: what it may still start is judged
+    // by what it made.
+    return measureInvocation(
+      createMetrics(this.env.METRICS),
+      { where: "do", op: "alarm", doClass: "UserDO", d1Counting: "binding" },
+      () => this.#alarm(),
+    );
+  }
+
+  async #alarm(): Promise<void> {
     // Work waits for the directory (the principal may be deleted): unreachable, it is tried
     // again later rather than left to Cloudflare's few retries.
     try {

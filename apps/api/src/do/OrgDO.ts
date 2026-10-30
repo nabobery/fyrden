@@ -1,4 +1,9 @@
-import { createLogger, createMetrics } from "@fyrden/adapters-cloudflare/obs";
+import {
+  countedD1,
+  createLogger,
+  createMetrics,
+  measureInvocation,
+} from "@fyrden/adapters-cloudflare/obs";
 import {
   atLeast,
   GITHUB_DEFAULT_LABELS,
@@ -307,6 +312,11 @@ const AUDIT_RETRY_MS = 60_000;
 export class OrgDO extends MigratingDO {
   static readonly schema = orgSchema;
 
+  constructor(ctx: DurableObjectState, env: Env) {
+    // Every D1 execution counted against the invocation's tally.
+    super(ctx, { ...env, DIRECTORY: countedD1(env.DIRECTORY), ORG_READ: countedD1(env.ORG_READ) });
+  }
+
   #now(): number {
     return Date.now();
   }
@@ -522,7 +532,19 @@ export class OrgDO extends MigratingDO {
    * principal's membership of them by its key); past that, its roles are
    * "unknown", never a guess (the caller passes over what it cannot decide).
    */
-  async confirmReadersLive(
+  confirmReadersLive(
+    repoIds: readonly string[],
+    principals: readonly string[],
+  ): Promise<LiveReaderConfirmation> {
+    // Its own invocation's work (the caller counts the call), its D1 counted by the bindings.
+    return measureInvocation(
+      createMetrics(this.env.METRICS),
+      { where: "do", op: "confirmReadersLive", doClass: "OrgDO", d1Counting: "binding" },
+      () => this.#confirmReadersLive(repoIds, principals),
+    );
+  }
+
+  async #confirmReadersLive(
     repoIds: readonly string[],
     principals: readonly string[],
   ): Promise<LiveReaderConfirmation> {

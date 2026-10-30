@@ -7,10 +7,20 @@ import { countD1Statements } from "./invocation.js";
  * invocation can be admitted against what the invocation has run.
  */
 
-/** `db` (and the sessions it opens), each statement counted as it runs, each of a batch too. */
+/** Marks a binding (or session) already counted: wrapping it again counts nothing twice. */
+const COUNTED = Symbol("countedD1");
+
+/**
+ * `db` (and the sessions it opens), each execution counted as it runs (its
+ * statements, and in an invocation counting by its bindings, its internal
+ * call: a batch is one), counted before it is sent, so one that throws
+ * counts too. Wrapping a counted binding again returns it as it is.
+ */
 export function countedD1<T extends D1Database | D1DatabaseSession>(db: T): T {
+  if ((db as unknown as Record<symbol, unknown>)[COUNTED]) return db;
   return new Proxy(db, {
     get(target, prop) {
+      if (prop === COUNTED) return true;
       if (prop === "prepare") return (query: string) => countedStatement(target.prepare(query));
       if (prop === "batch")
         return (statements: D1PreparedStatement[]) => {
@@ -32,8 +42,10 @@ export function countedD1<T extends D1Database | D1DatabaseSession>(db: T): T {
 }
 
 function countedStatement(statement: D1PreparedStatement): D1PreparedStatement {
+  if ((statement as unknown as Record<symbol, unknown>)[COUNTED]) return statement;
   return new Proxy(statement, {
     get(target, prop) {
+      if (prop === COUNTED) return true;
       if (prop === "bind")
         return (...values: unknown[]) => countedStatement(target.bind(...values));
       const value = Reflect.get(target, prop);
