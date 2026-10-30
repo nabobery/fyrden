@@ -45,6 +45,8 @@ function deps(runner: WranglerRunner, overrides: Partial<DeployDeps> = {}) {
     randomSecret: () => "s3cret-value",
     onSecretGenerated: (s) => generated.push(s),
     log: (l) => lines.push(l),
+    // The deployed API, asked which read model protocol it serves.
+    fetch: async () => Response.json({ readModel: { protocol: 1 } }),
     ...overrides,
   };
   return { d, generated, lines };
@@ -409,6 +411,60 @@ describe("fyrden deploy", () => {
     expect((await generatedConfig()).vars).not.toHaveProperty("FYRDEN_WATCH_AUDIENCES");
   });
 
+  it("records the read model protocol the deployed API serves, only when it says", async () => {
+    const fake = fakeWrangler();
+    const recorded: string[] = [];
+    let barriers = [{ shard: "default" }];
+    fake.state.d1Query = (db, sql) => {
+      if (!sql.includes("read_model_barriers")) return undefined;
+      recorded.push(`${db}: ${sql.replace(/\s+/g, " ")}`);
+      return barriers;
+    };
+    const asked: string[] = [];
+    const answered = deps(fake.runner, {
+      fetch: async (url) => {
+        asked.push(String(url));
+        return Response.json(
+          { ok: false, error: "rate_limited", readModel: { protocol: 1 } },
+          {
+            status: 429,
+          },
+        );
+      },
+    });
+    await deploy(answered.d);
+    expect(asked).toEqual(["https://fyrden-api.acct.workers.dev/healthz"]);
+    // Its own shard's barrier only.
+    expect(recorded).toEqual([
+      "fyrden-directory: UPDATE read_model_barriers SET executor_version = 1 WHERE shard = 'default' RETURNING shard",
+    ]);
+    expect(answered.lines).toContain("ok   fyrden-api serves read model protocol 1 (recorded)");
+    // No barrier row to record it in: not said to be recorded.
+    barriers = [];
+    const missing = deps(fake.runner, {
+      fetch: async () => Response.json({ readModel: { protocol: 1 } }),
+    });
+    await deploy(missing.d);
+    expect(missing.lines).not.toContain("ok   fyrden-api serves read model protocol 1 (recorded)");
+    expect(missing.lines).toContain(
+      "WARN the read model protocol the API serves is not verified: the directory has no barrier for its read model",
+    );
+    barriers = [{ shard: "default" }];
+    // An API that does not answer, or names no protocol: nothing recorded, and said so.
+    for (const fetch of [
+      async () => {
+        throw new TypeError("fetch failed");
+      },
+      async () => Response.json({ ok: true }),
+    ]) {
+      recorded.length = 0;
+      const silent = deps(fake.runner, { fetch });
+      await deploy(silent.d);
+      expect(recorded).toEqual([]);
+      expect(silent.lines.some((l) => l.startsWith("WARN the read model protocol"))).toBe(true);
+    }
+  });
+
   it("holds the read model's work back when given, and lets it go when a later deploy leaves it out", async () => {
     const fake = fakeWrangler();
     await deploy(deps(fake.runner, { readModelMaintenance: true }).d);
@@ -507,7 +563,9 @@ describe("fyrden deploy", () => {
     const { d, lines } = deps(fake.runner);
     await deploy(d);
     const applied = fake.calls.findIndex((c) => c.args.join(" ").includes("migrations apply"));
-    const checks = fake.calls.filter((c) => c.args[1] === "execute");
+    const checks = fake.calls.filter(
+      (c) => c.args[1] === "execute" && c.args.join(" ").includes("sqlite_schema"),
+    );
     expect(checks.map((c) => [c.args[2], c.args.at(-1)])).toEqual([
       ["fyrden-directory", API_DEPLOY_CONFIG],
       ["fyrden-org", API_DEPLOY_CONFIG],

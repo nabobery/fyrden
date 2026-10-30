@@ -35,9 +35,15 @@ export interface DeletionsCheck extends HealthCheck {
   overdueS?: number;
 }
 
+/** The org read model's write protocol this deployment serves (its executor's version). */
+export interface ReadModelServing {
+  protocol: number;
+}
+
 /** `ok` covers the storage tiers only: late effects or deletions leave the API serving (degraded). */
 export interface HealthReport {
   ok: boolean;
+  readModel: ReadModelServing;
   checks: {
     d1: HealthCheck;
     durableObject: HealthCheck;

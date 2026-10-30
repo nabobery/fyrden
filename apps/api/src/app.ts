@@ -14,6 +14,7 @@ import type { AuthVariables } from "./middleware/auth.js";
 import { obs } from "./middleware/obs.js";
 import { wellKnownRouter } from "./oauth/metadata.js";
 import { oauthRouter } from "./oauth/token.js";
+import { READ_MODEL_PROTOCOL } from "./read-model/executor.js";
 import { mountArchives } from "./rest/archive.js";
 import { mountRest } from "./rest/mount.js";
 import { mountRaw } from "./rest/raw.js";
@@ -37,7 +38,12 @@ export function createApp() {
 
   app.get("/healthz", async (c) => {
     const result = await deepHealth(c.env, requestMeta(c.get("log")), c.get("metrics"));
-    if (result.rateLimited) return c.json({ ok: false, error: "rate_limited" }, 429);
+    // The version served needs no check: a deploy reads it here even when the checks are limited.
+    if (result.rateLimited)
+      return c.json(
+        { ok: false, error: "rate_limited", readModel: { protocol: READ_MODEL_PROTOCOL } },
+        429,
+      );
     return c.json(
       { ...result.report, requestId: c.get("requestId") },
       result.report.ok ? 200 : 503,

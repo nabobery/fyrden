@@ -7,6 +7,7 @@ import type {
   HealthResult,
 } from "@fyrden/api-contract";
 import { DEFAULT_ORG_SHARD, readModelFor } from "./events/read-model.js";
+import { READ_MODEL_PROTOCOL } from "./read-model/executor.js";
 
 async function timed(check: () => Promise<boolean>): Promise<HealthCheck> {
   const start = performance.now();
@@ -148,6 +149,7 @@ async function checkHealth(env: Env, meta: RequestMeta, metrics: Metrics): Promi
   ]);
   return {
     ok: d1.ok && durableObject.ok && r2.ok,
+    readModel: { protocol: READ_MODEL_PROTOCOL },
     checks: { d1, durableObject, r2, effects, deletions },
   };
 }

@@ -9,6 +9,7 @@ import {
   OLDEST_PENDING_EFFECT,
   RECENTLY_FAILED_EFFECT,
 } from "../src/health.js";
+import { READ_MODEL_PROTOCOL } from "../src/read-model/executor.js";
 
 describe("GET /healthz", () => {
   it("round-trips D1, a RepoDO and R2 and returns the request id", async () => {
@@ -20,10 +21,13 @@ describe("GET /healthz", () => {
     const body = await res.json<{
       ok: boolean;
       requestId: string;
+      readModel: { protocol: number };
       checks: Record<string, { ok: boolean; ms: number }>;
     }>();
     expect(body.ok).toBe(true);
     expect(body.requestId).toBe("req-healthz-1");
+    // The read model's write protocol this deployment serves (a deploy verifies it).
+    expect(body.readModel).toEqual({ protocol: READ_MODEL_PROTOCOL });
     expect(Object.keys(body.checks).sort()).toEqual([
       "d1",
       "deletions",

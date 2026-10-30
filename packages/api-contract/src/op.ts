@@ -14,6 +14,8 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /** Only an instance administrator may call the operation. */
 export const INSTANCE_ADMIN = "instance:admin" satisfies Permission;
+/** Reading the instance's operational state (instance administrators). */
+export const INSTANCE_READ = "instance:read" satisfies Permission;
 
 /**
  * One operation, declared once. REST routes, the OpenAPI document, MCP

@@ -502,6 +502,341 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/admin/search/status": {
+      "get": {
+        "description": "Fyrden: the org read model's write protocol and search's state, for operators. \`protocol\`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, and whether writes outside the executor are only counted (\`compatibility\`) or refused (\`enforced\`). \`barrier\`: the directory's and the read model's barriers (null where a row is missing, and then not \`consistent\`). \`admission\`: whether a write is under way, writes made outside the executor (\`stray\`), and the read model's write sequence. \`writers\`: leases live and expired, and the earliest deadline. \`export\`: whether a coherent export of the read model can be made (not before writes outside the executor are refused). \`search\`: today's spent allowance, the size last observed, whether reconciliations are waiting, and since when the one due next has. Instance administrators only.",
+        "operationId": "admin.search.status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "admission": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "open": {
+                          "type": [
+                            "boolean",
+                            "null",
+                          ],
+                        },
+                        "sequence": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                        },
+                        "stray": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                        },
+                      },
+                      "required": [
+                        "open",
+                        "stray",
+                        "sequence",
+                      ],
+                      "type": "object",
+                    },
+                    "barrier": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "consistent": {
+                          "type": "boolean",
+                        },
+                        "directory_generation": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                        },
+                        "directory_phase": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "running",
+                                "pausing",
+                                "paused",
+                                "recovering",
+                              ],
+                              "type": "string",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                        },
+                        "org_generation": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                        },
+                        "org_phase": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "running",
+                                "pausing",
+                                "paused",
+                                "recovering",
+                              ],
+                              "type": "string",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                        },
+                      },
+                      "required": [
+                        "directory_phase",
+                        "directory_generation",
+                        "org_phase",
+                        "org_generation",
+                        "consistent",
+                      ],
+                      "type": "object",
+                    },
+                    "export": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "available": {
+                          "type": "boolean",
+                        },
+                        "reason": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "protocol_not_enforced",
+                              ],
+                              "type": "string",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                        },
+                      },
+                      "required": [
+                        "available",
+                        "reason",
+                      ],
+                      "type": "object",
+                    },
+                    "indexing": {
+                      "type": "boolean",
+                    },
+                    "protocol": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "deployed_version": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                        },
+                        "mode": {
+                          "enum": [
+                            "compatibility",
+                            "enforced",
+                          ],
+                          "type": "string",
+                        },
+                        "required_version": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                        },
+                        "restore_floor": {
+                          "type": [
+                            "string",
+                            "null",
+                          ],
+                        },
+                        "serving_version": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "serving_version",
+                        "deployed_version",
+                        "required_version",
+                        "mode",
+                        "restore_floor",
+                      ],
+                      "type": "object",
+                    },
+                    "search": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "bytes": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "day": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "next_repair_since": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                        },
+                        "observed_sequence": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "reads": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "repair_pending": {
+                          "type": "boolean",
+                        },
+                        "rows": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "day",
+                        "rows",
+                        "reads",
+                        "bytes",
+                        "observed_sequence",
+                        "repair_pending",
+                        "next_repair_since",
+                      ],
+                      "type": "object",
+                    },
+                    "writers": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "earliest_deadline": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                        },
+                        "expired": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "live": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "live",
+                        "expired",
+                        "earliest_deadline",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "indexing",
+                    "protocol",
+                    "barrier",
+                    "admission",
+                    "writers",
+                    "export",
+                    "search",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get the read model's and search's state",
+        "x-fyrden-permission": "instance:read",
+        "x-fyrden-principals": [
+          "user",
+        ],
+      },
+    },
     "/admin/users": {
       "post": {
         "description": "Creates a user account. Instance administrators only.",
@@ -621,6 +956,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "items": {
                       "enum": [
                         "instance:admin",
+                        "instance:read",
                         "repos:create",
                         "members:read",
                         "members:write",
@@ -1578,6 +1914,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "items": {
                       "enum": [
                         "instance:admin",
+                        "instance:read",
                         "repos:create",
                         "members:read",
                         "members:write",
@@ -2966,6 +3303,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "items": {
                       "enum": [
                         "instance:admin",
+                        "instance:read",
                         "repos:create",
                         "members:read",
                         "members:write",
@@ -38281,6 +38619,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "items": {
                       "enum": [
                         "instance:admin",
+                        "instance:read",
                         "repos:create",
                         "members:read",
                         "members:write",

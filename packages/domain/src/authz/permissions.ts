@@ -41,8 +41,15 @@ export const PERMISSIONS = {
     resource: "instance",
     summary: "Administer this instance: create users and mint their tokens.",
     principals: ["user"],
-    implies: [],
+    implies: ["instance:read"],
     writes: true,
+  },
+  "instance:read": {
+    resource: "instance",
+    summary: "See this instance's operational state.",
+    principals: ["user"],
+    implies: [],
+    writes: false,
   },
   "repos:create": {
     resource: "account",

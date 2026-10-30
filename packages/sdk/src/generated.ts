@@ -152,7 +152,7 @@ export type UsersTokensListOutput = {
 export type UsersTokensCreateInput = {
   type?: "pat" | "git";
   /** Permissions it is limited to (and what they imply). Empty: your token's. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -217,7 +217,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -373,7 +373,7 @@ export type AgentsTokensCreateInput = {
   agent: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
-  scopes?: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   expires_in_days?: number;
 };
 
@@ -441,7 +441,7 @@ export type GrantsCreateInput = {
   /** The agent's handle. */
   agent: string;
   /** Permissions the agent may use for you (and what they imply). */
-  scopes: ("instance:admin" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
   /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
   repositories?: string[];
   expires_in_days?: number;
@@ -1740,6 +1740,51 @@ export type AdminSearchIndexingInput = {
 /** Output of `admin.search.indexing`. */
 export type AdminSearchIndexingOutput = {
   enabled: boolean;
+};
+
+/** Input of `admin.search.status`: Get the read model's and search's state. */
+export type AdminSearchStatusInput = Record<string, never>;
+
+/** Output of `admin.search.status`. */
+export type AdminSearchStatusOutput = {
+  indexing: boolean;
+  protocol: {
+    serving_version: number;
+    deployed_version: number | null;
+    required_version: number | null;
+    mode: "compatibility" | "enforced";
+    restore_floor: string | null;
+  };
+  barrier: {
+    directory_phase: "running" | "pausing" | "paused" | "recovering" | null;
+    directory_generation: number | null;
+    org_phase: "running" | "pausing" | "paused" | "recovering" | null;
+    org_generation: number | null;
+    consistent: boolean;
+  };
+  admission: {
+    open: boolean | null;
+    stray: number | null;
+    sequence: number | null;
+  };
+  writers: {
+    live: number;
+    expired: number;
+    earliest_deadline: number | null;
+  };
+  export: {
+    available: boolean;
+    reason: "protocol_not_enforced" | null;
+  };
+  search: {
+    day: number;
+    rows: number;
+    reads: number;
+    bytes: number;
+    observed_sequence: number;
+    repair_pending: boolean;
+    next_repair_since: number | null;
+  };
 };
 
 /** Input of `pulls.list`: List pull requests. */
@@ -7637,6 +7682,7 @@ export const OPERATIONS = {
   "admin.webhooks.reseal": { method: "POST", path: "/admin/webhooks/reseal", pathParams: [], idempotent: true },
   "admin.search.backfill": { method: "POST", path: "/admin/search/backfill", pathParams: [], idempotent: true },
   "admin.search.indexing": { method: "PUT", path: "/admin/search/indexing", pathParams: [], idempotent: true },
+  "admin.search.status": { method: "GET", path: "/admin/search/status", pathParams: [], idempotent: false },
   "pulls.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: false, items: "pull_requests" },
   "pulls.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: true },
   "pulls.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: false },
@@ -7896,6 +7942,8 @@ export interface Operations {
   "admin.search.backfill": { input: AdminSearchBackfillInput; output: AdminSearchBackfillOutput };
   /** Turn search indexing on or off. Fyrden: turns the deployment's search indexing on (`enabled: true`: events project issues, pull requests, labels and milestones into search, and the five-minute maintenance repairs them within search's daily allowance) or off (nothing more is projected or repaired, though an event batch or repair run already past its check may finish; what is projected stays). Projections miss what happens while it is off: after turning it on, ask for a backfill (`POST /admin/search/backfill`). Setting the state it is in changes nothing. Instance administrators only. */
   "admin.search.indexing": { input: AdminSearchIndexingInput; output: AdminSearchIndexingOutput };
+  /** Get the read model's and search's state. Fyrden: the org read model's write protocol and search's state, for operators. `protocol`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, and whether writes outside the executor are only counted (`compatibility`) or refused (`enforced`). `barrier`: the directory's and the read model's barriers (null where a row is missing, and then not `consistent`). `admission`: whether a write is under way, writes made outside the executor (`stray`), and the read model's write sequence. `writers`: leases live and expired, and the earliest deadline. `export`: whether a coherent export of the read model can be made (not before writes outside the executor are refused). `search`: today's spent allowance, the size last observed, whether reconciliations are waiting, and since when the one due next has. Instance administrators only. */
+  "admin.search.status": { input: AdminSearchStatusInput; output: AdminSearchStatusOutput };
   /** List pull requests. The repository's pull requests, newest first. */
   "pulls.list": { input: PullsListInput; output: PullsListOutput };
   /** Create a pull request. Proposes merging one branch of the repository into another. Anyone who can read the repository may open one. Refused when the head has no commits the base lacks, or when a pull request between the two branches is already open. While open, `refs/pull/{number}/head` follows the head branch. The head may be a branch of a fork in the same network (`owner:branch`): its revision is imported first, and later pushes to it reach the pull request shortly after. */

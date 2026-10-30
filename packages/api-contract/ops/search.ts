@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineOperation, INSTANCE_ADMIN } from "../src/op.js";
+import { defineOperation, INSTANCE_ADMIN, INSTANCE_READ } from "../src/op.js";
 
 export const backfillSearch = defineOperation({
   id: "admin.search.backfill",
@@ -35,5 +35,62 @@ export const setSearchIndexing = defineOperation({
   principals: ["user"],
   rateLimit: "write",
   idempotency: "key",
+  mcp: false,
+});
+
+const BarrierPhase = z.enum(["running", "pausing", "paused", "recovering"]);
+
+export const getSearchStatus = defineOperation({
+  id: "admin.search.status",
+  method: "GET",
+  path: "/admin/search/status",
+  summary: "Get the read model's and search's state",
+  description:
+    "Fyrden: the org read model's write protocol and search's state, for operators. `protocol`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, and whether writes outside the executor are only counted (`compatibility`) or refused (`enforced`). `barrier`: the directory's and the read model's barriers (null where a row is missing, and then not `consistent`). `admission`: whether a write is under way, writes made outside the executor (`stray`), and the read model's write sequence. `writers`: leases live and expired, and the earliest deadline. `export`: whether a coherent export of the read model can be made (not before writes outside the executor are refused). `search`: today's spent allowance, the size last observed, whether reconciliations are waiting, and since when the one due next has. Instance administrators only.",
+  input: z.object({}),
+  output: z.object({
+    indexing: z.boolean(),
+    protocol: z.object({
+      serving_version: z.number().int(),
+      deployed_version: z.number().int().nullable(),
+      required_version: z.number().int().nullable(),
+      mode: z.enum(["compatibility", "enforced"]),
+      restore_floor: z.string().nullable(),
+    }),
+    barrier: z.object({
+      directory_phase: BarrierPhase.nullable(),
+      directory_generation: z.number().int().nullable(),
+      org_phase: BarrierPhase.nullable(),
+      org_generation: z.number().int().nullable(),
+      consistent: z.boolean(),
+    }),
+    admission: z.object({
+      open: z.boolean().nullable(),
+      stray: z.number().int().nullable(),
+      sequence: z.number().int().nullable(),
+    }),
+    writers: z.object({
+      live: z.number().int(),
+      expired: z.number().int(),
+      earliest_deadline: z.number().int().nullable(),
+    }),
+    export: z.object({
+      available: z.boolean(),
+      reason: z.enum(["protocol_not_enforced"]).nullable(),
+    }),
+    search: z.object({
+      day: z.number().int(),
+      rows: z.number().int(),
+      reads: z.number().int(),
+      bytes: z.number().int(),
+      observed_sequence: z.number().int(),
+      repair_pending: z.boolean(),
+      next_repair_since: z.number().int().nullable(),
+    }),
+  }),
+  permission: INSTANCE_READ,
+  principals: ["user"],
+  rateLimit: "read",
+  idempotency: "none",
   mcp: false,
 });

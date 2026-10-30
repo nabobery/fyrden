@@ -241,3 +241,63 @@ export async function reapExpiredLeases(env: Pick<Env, "DIRECTORY">): Promise<nu
     .run();
   return meta.changes ?? 0;
 }
+
+/** The barriers, admission and leases as the status operation reports them (null: a row missing). */
+export interface ReadModelState {
+  readonly directory:
+    | (Barrier & { readonly executorVersion: number; readonly floor: string | null })
+    | null;
+  readonly local: (Barrier & { readonly protocolVersion: number }) | null;
+  readonly admission: {
+    readonly open: boolean;
+    readonly stray: number;
+    readonly sequence: number;
+  } | null;
+  readonly writers: {
+    readonly live: number;
+    readonly expired: number;
+    readonly earliest: number | null;
+  };
+}
+
+/** The shard's barriers, admission and leases: a few singleton reads and the shard's leases. */
+export async function readModelState(
+  env: Pick<Env, "DIRECTORY" | "ORG_READ">,
+  shard: string,
+): Promise<ReadModelState> {
+  const [barrier, writers] = await env.DIRECTORY.batch([
+    env.DIRECTORY.prepare(
+      `SELECT phase, generation, executor_version AS executorVersion,
+         read_model_protocol_since AS floor FROM read_model_barriers WHERE shard = ?`,
+    ).bind(shard),
+    env.DIRECTORY.prepare(
+      `SELECT count(*) FILTER (WHERE until > ${NOW}) AS live,
+         count(*) FILTER (WHERE until <= ${NOW}) AS expired,
+         min(until) FILTER (WHERE until > ${NOW}) AS earliest
+       FROM read_model_writers WHERE shard = ?`,
+    ).bind(shard),
+  ]);
+  const org = rawReadModel(env, shard);
+  const [local, admission] = await org.batch([
+    org.prepare(
+      "SELECT phase, generation, protocol_version AS protocolVersion FROM read_model_barrier WHERE id = 1",
+    ),
+    org.prepare("SELECT open, stray, seq AS sequence FROM read_model_write WHERE id = 1"),
+  ]);
+  const counted = writers?.results[0] as
+    | { live: number; expired: number; earliest: number | null }
+    | undefined;
+  const written = admission?.results[0] as
+    | { open: number; stray: number; sequence: number }
+    | undefined;
+  return {
+    directory: (barrier?.results[0] as ReadModelState["directory"] | undefined) ?? null,
+    local: (local?.results[0] as ReadModelState["local"] | undefined) ?? null,
+    admission: written ? { ...written, open: written.open === 1 } : null,
+    writers: {
+      live: counted?.live ?? 0,
+      expired: counted?.expired ?? 0,
+      earliest: counted?.earliest ?? null,
+    },
+  };
+}

@@ -28,6 +28,8 @@ export function fakeWrangler() {
     d1Query: undefined as ((db: string, sql: string) => unknown[] | undefined) | undefined,
     /** fyrden-api's versions, latest last, with the vars each was deployed with. */
     apiVersions: [] as { id: string; vars: Record<string, string> }[],
+    /** The read model protocol a deploy recorded as served (fyrden-directory). */
+    executorVersion: 0,
     r2: new Set<string>(),
     /** Object counts of buckets that are not empty. */
     r2Objects: new Map<string, number>(),
@@ -214,7 +216,10 @@ export function fakeWrangler() {
           if (!migrations) return fail("no such table: d1_migrations: SQLITE_ERROR [code: 7500]");
           results = migrations.map((name) => ({ name }));
         } else if (sql.includes("FROM sqlite_schema")) results = schema;
-        else if (sql.includes("FROM effects") && schema.some((o) => o.name === "effects"))
+        else if (sql.startsWith("UPDATE read_model_barriers SET executor_version")) {
+          state.executorVersion = Number(/executor_version = (\d+)/.exec(sql)?.[1]);
+          results = [{ shard: "default" }];
+        } else if (sql.includes("FROM effects") && schema.some((o) => o.name === "effects"))
           results = state.effects;
         else return fail("no such table: effects: SQLITE_ERROR [code: 7500]");
         return ok(JSON.stringify([{ results, success: true, meta: {} }]));

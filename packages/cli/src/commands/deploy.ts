@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertConfigAccount, pinAccount, resolveAccount } from "../account.ts";
-import { checkD1Schema, driftMessage, SCHEMA_RUNBOOK } from "../d1-schema.ts";
+import { checkD1Schema, driftMessage, queryRemote, SCHEMA_RUNBOOK } from "../d1-schema.ts";
 import { parseJsonc } from "../jsonc.ts";
 import { readApiConfig, resourcePlan } from "../resources.ts";
 import { commitLabel, type SourceState } from "../source.ts";
@@ -40,6 +40,8 @@ export interface DeployDeps {
    * variables).
    */
   readModelMaintenance?: true | undefined;
+  /** How the deployed API is asked which read model protocol it serves (default: fetch). */
+  fetch?: typeof fetch;
   /**
    * Live notification hints, on (`FYRDEN_LIVE=on`, and `FYRDEN_LIVE_SOCKETS`
    * when given); left out, off (each deploy sets the variables).
@@ -376,7 +378,50 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
     if (origin !== undefined) log(`set FYRDEN_PUBLIC_ORIGIN to ${origin} on ${config.name}`);
   }
 
+  await verifyReadModelProtocol(deps, runner, apiDir, plan, apiUrl);
   return { created: resources.created, apiUrl, webUrl };
+}
+
+/**
+ * Asks the deployed API which protocol its read model executor serves
+ * (`/healthz`, answered even when its checks are rate limited) and records
+ * it in the directory (`read_model_barriers.executor_version`), what a later
+ * change to the protocol checks before it applies. Not answered (no
+ * workers.dev URL, the API unreachable): nothing recorded, and said so.
+ */
+async function verifyReadModelProtocol(
+  deps: DeployDeps,
+  runner: WranglerRunner,
+  apiDir: string,
+  plan: ReturnType<typeof resourcePlan>,
+  apiUrl: string | undefined,
+): Promise<void> {
+  const directory = plan.d1.find((d) => d.binding === "DIRECTORY")?.name;
+  const unverified = (why: string) =>
+    deps.log(`WARN the read model protocol the API serves is not verified: ${why}`);
+  if (directory === undefined) return unverified("no directory database is configured");
+  if (apiUrl === undefined) return unverified("fyrden-api has no workers.dev URL");
+  let protocol: unknown;
+  try {
+    const response = await (deps.fetch ?? fetch)(new URL("/healthz", apiUrl));
+    protocol = ((await response.json()) as { readModel?: { protocol?: unknown } }).readModel
+      ?.protocol;
+  } catch (error) {
+    return unverified(`its health check did not answer (${String(error)})`);
+  }
+  if (!Number.isSafeInteger(protocol) || (protocol as number) < 1)
+    return unverified("its health check names no protocol");
+  // The shard this deployment's read model is (one database: the default shard).
+  const recorded = await queryRemote(
+    runner,
+    apiDir,
+    directory,
+    `UPDATE read_model_barriers SET executor_version = ${protocol as number}
+     WHERE shard = 'default' RETURNING shard`,
+    ["-c", API_DEPLOY_CONFIG],
+  );
+  if (recorded.length !== 1) return unverified("the directory has no barrier for its read model");
+  deps.log(`ok   fyrden-api serves read model protocol ${protocol as number} (recorded)`);
 }
 
 /** 32 random bytes as unpadded base64url. */
